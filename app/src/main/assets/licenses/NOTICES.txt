@@ -1,0 +1,29 @@
+Spare
+Copyright (c) 2026 mot1us
+MIT License
+https://github.com/mot1us/spare
+
+AndroidX Core, RecyclerView, Media3, and supporting AndroidX components
+The Android Open Source Project and AndroidX contributors
+Apache License, Version 2.0
+https://android.googlesource.com/platform/frameworks/support/
+https://github.com/androidx/media
+
+Kotlin standard library and kotlinx.coroutines
+JetBrains and Kotlin contributors
+Apache License, Version 2.0
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.coroutines
+
+Guava, failureaccess, and JSpecify annotations
+Google and project contributors
+Apache License, Version 2.0
+https://github.com/google/guava
+https://github.com/jspecify/jspecify
+
+JetBrains annotations
+JetBrains
+Apache License, Version 2.0
+https://github.com/JetBrains/java-annotations
+
+Complete license texts follow. Exact dependency versions are recorded in app/gradle.lockfile in the public source repository. Test-only dependencies are excluded from production APKs.
