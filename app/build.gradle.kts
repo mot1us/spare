@@ -35,7 +35,8 @@ android {
     lint {
         abortOnError = true; warningsAsErrors = true; checkReleaseBuilds = true
         // These are update suggestions, not defects: the compatible toolchain is deliberately pinned.
-        disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
+        disable += setOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion", "OldTargetApi")
+        // API 36 is the tested compatibility baseline; adopting API 37 is a separate tested migration.
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
