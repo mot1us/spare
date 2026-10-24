@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
@@ -76,8 +77,15 @@ class SpareDeviceTest {
                 device.pressDPadUp(); instrumentation.waitForIdleSync()
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == true }
-                device.executeShellCommand("input keyevent --longpress 23")
+                waitFor(scenario) { activity ->
+                    find<RecyclerView>(activity.window.decorView)?.let { list ->
+                        list.isShown && list.findFocus() is GuideAdapter.Row
+                    } == true
+                }
+                // Hold beyond the threshold: --longpress releases at that exact threshold,
+                // which can race View's queued long-click callback on a busy CI emulator.
+                val holdMillis = ViewConfiguration.getLongPressTimeout() + 500
+                device.executeShellCommand("input dpad keyevent --duration $holdMillis 23")
                 instrumentation.waitForIdleSync()
                 waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == true && store.favorites(source).size == 1 }
                 assertEquals(1, store.favorites(source).size)
@@ -127,6 +135,8 @@ class SpareDeviceTest {
             if (ready.get()) return
             Thread.sleep(100)
         }
+        device.takeScreenshot(File(context.getExternalFilesDir(null), "failure.png"))
+        device.dumpWindowHierarchy(File(context.getExternalFilesDir(null), "failure.xml"))
         fail("Timed out waiting for app state")
     }
     private inline fun <reified T : View> find(root: View): T? {
