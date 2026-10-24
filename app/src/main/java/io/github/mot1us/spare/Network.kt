@@ -21,7 +21,7 @@ object Network {
             val count = input.read(buffer)
             if (count < 0) break
             total += count
-            require(total <= limit) { "Download exceeds safety limit" }
+            if (total > limit) throw SourceFailure(SourceProblem.LIMIT)
             result.write(buffer, 0, count)
         }
         return result.toByteArray()
@@ -30,7 +30,8 @@ object Network {
     fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024): ByteArray {
         var destination = url
         repeat(6) {
-            require(allowed(destination, http)) { "Unsupported or insecure address" }
+            if (!allowed(destination, http)) throw SourceFailure(
+                if (runCatching { URI(destination).scheme.equals("http", true) }.getOrDefault(false) && !http) SourceProblem.HTTP_REQUIRED else SourceProblem.ADDRESS)
             val connection = URI(destination).toURL().openConnection() as HttpURLConnection
             try {
                 connection.instanceFollowRedirects = false
@@ -43,14 +44,15 @@ object Network {
                     val location = connection.getHeaderField("Location") ?: error("Invalid redirect")
                     destination = URI(destination).resolve(location).toString()
                 } else {
-                    require(status in 200..299) { "Provider request failed" }
-                    require(connection.contentLengthLong <= limit) { "Download exceeds safety limit" }
+                    if (status !in 200..299) throw HttpFailure(status)
+                    if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
                     val deadline = System.nanoTime() + 60000000000L
                     val bounded = object : java.io.FilterInputStream(connection.inputStream) {
                         var consumed = 0L
                         fun count(amount: Int) {
                             if (amount > 0) consumed += amount
-                            require(consumed <= limit && System.nanoTime() <= deadline) { "Download exceeds safety limits" }
+                            if (consumed > limit) throw SourceFailure(SourceProblem.LIMIT)
+                            if (System.nanoTime() > deadline) throw java.net.SocketTimeoutException("Download deadline exceeded")
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
                         }
                         override fun read(): Int = super.read().also { count(if (it < 0) 0 else 1) }

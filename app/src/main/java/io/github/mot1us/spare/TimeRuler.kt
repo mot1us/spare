@@ -9,7 +9,7 @@ import android.view.View
 class TimeRuler(context: Context, private val start: () -> Long) : View(context) {
     constructor(context: Context) : this(context, { System.currentTimeMillis() })
     private val scale = resources.displayMetrics.density
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 13f * scale }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.LTGRAY; textSize = 12f * scale }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val left = 220 * scale

@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.text.TextPaint
 import android.text.TextUtils
 import android.view.KeyEvent
@@ -37,9 +38,10 @@ class GuideAdapter(
         private val density = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val logoBounds = RectF()
-        private val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 15f * this@Row.density }
+        private val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 14f * this@Row.density }
+        private val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         init {
-            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (48 * density).toInt())
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (42 * density).toInt())
             isFocusable = true; isFocusableInTouchMode = false; isClickable = true; isLongClickable = true
             setOnClickListener { channel?.let(selected) }
             setOnLongClickListener { channel?.let(favorite); true }
@@ -56,20 +58,22 @@ class GuideAdapter(
             val channel = channel ?: return
             val leftWidth = 220 * density
             val base = height / 2f + text.textSize * .35f
-            paint.color = if (hasFocus()) Color.WHITE else Color.BLACK
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+            paint.color = if (hasFocus()) Color.WHITE else Color.rgb(24, 24, 24)
+            canvas.drawRoundRect(0f, 2 * density, width.toFloat(), height - 2 * density, 6 * density, 6 * density, paint)
             val ink = if (hasFocus()) Color.BLACK else Color.WHITE
             text.color = ink
             val logo = logos.get(channel.logo, source()?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
             if (logo != null) {
-                val size = 38 * density
+                val size = 32 * density
                 val ratio = minOf(size / logo.width, size / logo.height)
                 val w = logo.width * ratio; val h = logo.height * ratio
                 logoBounds.set(8 * density + (size - w) / 2, (height - h) / 2, 8 * density + (size + w) / 2, (height + h) / 2)
                 canvas.drawBitmap(logo, null, logoBounds, null)
             }
             val name = (if (channel.id in favorites()) "★ " else "") + channel.name
+            text.typeface = medium
             canvas.drawText(TextUtils.ellipsize(name, text, leftWidth - 62 * density, TextUtils.TruncateAt.END).toString(), 54 * density, base, text)
+            text.typeface = Typeface.DEFAULT
             val start = windowStart(); val duration = 3 * 3600000L
             val available = width - leftWidth
             val programmes = guide().programmes[channel.guideId].orEmpty()
@@ -82,7 +86,7 @@ class GuideAdapter(
                 if (p.end <= start || p.start >= start + duration) return@forEach
                 val x1 = leftWidth + (maxOf(p.start, start) - start).toFloat() / duration * available
                 val x2 = leftWidth + (minOf(p.end, start + duration) - start).toFloat() / duration * available
-                paint.color = if (hasFocus()) Color.DKGRAY else Color.GRAY
+                paint.color = if (hasFocus()) Color.LTGRAY else Color.rgb(56, 56, 56)
                 canvas.drawLine(x1, 6 * density, x1, height - 6 * density, paint)
                 if (x2 - x1 > 20 * density) canvas.drawText(TextUtils.ellipsize(p.title, text, x2 - x1 - 16 * density, TextUtils.TruncateAt.END).toString(), x1 + 8 * density, base, text)
             }
@@ -93,8 +97,6 @@ class GuideAdapter(
                 canvas.drawLine(x, 0f, x, height.toFloat(), paint)
             }
             canvas.restoreToCount(save)
-            paint.color = if (hasFocus()) Color.DKGRAY else Color.GRAY
-            canvas.drawLine(0f, height - 1f, width.toFloat(), height - 1f, paint)
             contentDescription = "${channel.name}. ${guide().at(channel, now)?.title ?: "No programme information"}${if (channel.id in favorites()) ". Favorite" else ""}"
         }
     }

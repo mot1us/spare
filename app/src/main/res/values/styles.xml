@@ -7,5 +7,48 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:colorControlHighlight">#444444</item>
+        <item name="android:alertDialogTheme">@style/SpareDialogTheme</item>
+        <item name="android:editTextStyle">@style/SpareEditText</item>
+        <item name="android:radioButtonStyle">@style/SpareRadioButton</item>
+        <item name="android:checkboxStyle">@style/SpareCheckBox</item>
+    </style>
+    <style name="SpareDialogTheme" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">#FFFFFF</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:colorBackground">#000000</item>
+        <item name="android:buttonBarButtonStyle">@style/SpareDialogButton</item>
+        <item name="android:listSelector">@drawable/focus_list</item>
+        <item name="android:editTextStyle">@style/SpareEditText</item>
+        <item name="android:radioButtonStyle">@style/SpareRadioButton</item>
+        <item name="android:checkboxStyle">@style/SpareCheckBox</item>
+    </style>
+    <style name="SpareDialogButton" parent="android:style/Widget.Material.Button.Borderless">
+        <item name="android:background">@drawable/focus_button</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">@color/focus_button_text</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:minWidth">88dp</item>
+    </style>
+    <style name="SpareEditText" parent="android:style/Widget.Material.EditText">
+        <item name="android:background">@drawable/focus_control</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textColorHint">#AAAAAA</item>
+    </style>
+    <style name="SpareRadioButton" parent="android:style/Widget.Material.CompoundButton.RadioButton">
+        <item name="android:background">@drawable/focus_control</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:buttonTint">#FFFFFF</item>
+        <item name="android:minHeight">48dp</item>
+    </style>
+    <style name="SpareCheckBox" parent="android:style/Widget.Material.CompoundButton.CheckBox">
+        <item name="android:background">@drawable/focus_control</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:buttonTint">#FFFFFF</item>
+        <item name="android:minHeight">48dp</item>
     </style>
 </resources>

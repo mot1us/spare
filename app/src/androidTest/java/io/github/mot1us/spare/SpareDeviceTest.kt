@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.app.AlertDialog
+import android.widget.CheckBox
+import android.widget.EditText
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
@@ -122,6 +125,73 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun xtreamCategoryFailureStillLoadsLiveVideo() {
+        FixtureServer(failCategories = true).use { server ->
+            val source = Source(name = "Category Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.playbackState == Player.STATE_READY && it.videoSize.width > 0 } == true }
+                assertEquals("/live/test/test-secret/1.mp4", playingPath(scenario))
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun dialogRemoteFocusIsVisibleAndHttpConsentPreservesHttps() {
+        FixtureServer().use { server ->
+            val seed = Source(name = "UI Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(seed)); store.active = seed.id
+            val https = Source(name = "HTTPS Test", kind = "xtream", url = "https://provider.example:8443/panel", username = "test", password = "test-secret")
+            var dialog: AlertDialog? = null
+            var saved: Source? = null
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_READY }
+                scenario.onActivity { activity ->
+                    dialog = SourceDialog.show(activity, https, { saved = it }, {})
+                    dialog!!.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+                }
+                waitFor(scenario) { dialog?.window?.decorView?.hasWindowFocus() == true }
+                assertTrue(device.wait(Until.hasObject(By.text("Save").focused(true)), 5000))
+                device.waitForIdle()
+                instrumentation.waitForIdleSync()
+                scenario.onActivity {
+                    val save = dialog!!.getButton(AlertDialog.BUTTON_POSITIVE)
+                    assertTrue(save.hasFocus())
+                    assertEquals(Color.BLACK, save.currentTextColor)
+                    val bitmap = Bitmap.createBitmap(save.width, save.height, Bitmap.Config.ARGB_8888)
+                    save.background.draw(Canvas(bitmap))
+                    assertEquals(Color.WHITE, bitmap.getPixel(save.width / 2, save.height / 2))
+                    bitmap.recycle()
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "source-save.png"))
+                device.pressDPadRight(); instrumentation.waitForIdleSync()
+                scenario.onActivity {
+                    val cancel = dialog!!.getButton(AlertDialog.BUTTON_NEGATIVE)
+                    assertTrue("D-pad right from Save must reach the adjacent Cancel action", cancel.hasFocus())
+                    assertEquals(Color.BLACK, cancel.currentTextColor)
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "source-cancel.png"))
+                device.pressDPadCenter(); instrumentation.waitForIdleSync()
+                assertNull("Cancel must not save", saved)
+                scenario.onActivity { activity ->
+                    dialog = SourceDialog.show(activity, https, { saved = it }, {})
+                    val root = dialog!!.window!!.decorView
+                    assertTrue(root.findViewWithTag<EditText>("Xtream password").transformationMethod is android.text.method.PasswordTransformationMethod)
+                    find<CheckBox>(root)!!.performClick()
+                    assertEquals(https.url, root.findViewWithTag<EditText>("Playlist URL").text.toString())
+                    dialog!!.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+                }
+                waitFor(scenario) { dialog?.window?.decorView?.hasWindowFocus() == true }
+                assertTrue(device.wait(Until.hasObject(By.text("Save").focused(true)), 5000))
+                device.pressDPadCenter(); instrumentation.waitForIdleSync()
+                assertNotNull(saved)
+                assertEquals(https.url, saved!!.url)
+                assertTrue(saved!!.allowHttp)
+            }
+            store.saveSources(emptyList()); store.removeCache(seed)
+        }
+    }
+
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
@@ -153,7 +223,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -192,7 +262,8 @@ class SpareDeviceTest {
                             else -> video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
-                        output.write("HTTP/1.1 200 OK\r\nContent-Type: $mime\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                        val status = if (failCategories && target.contains("get_live_categories")) "404 Not Found" else "200 OK"
+                        output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                         output.write(body); output.flush()
                     }
                 }

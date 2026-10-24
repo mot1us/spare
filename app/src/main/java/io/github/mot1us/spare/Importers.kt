@@ -1,6 +1,8 @@
 package io.github.mot1us.spare
 
 import org.json.JSONArray
+import org.json.JSONObject
+import org.json.JSONTokener
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.net.URI
@@ -13,7 +15,7 @@ object Importers {
     private val attribute = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     private fun attrs(line: String) = attribute.findAll(line).associate { it.groupValues[1].lowercase(Locale.ROOT) to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
     fun m3u(text: String, http: Boolean): Lineup {
-        require(text.trimStart('\uFEFF', ' ', '\n', '\r').startsWith("#EXTM3U")) { "Not an M3U playlist" }
+        if (!text.trimStart('\uFEFF', ' ', '\n', '\r').startsWith("#EXTM3U")) throw SourceFailure(SourceProblem.PLAYLIST)
         val result = ArrayList<Channel>()
         var metadata: Map<String, String> = emptyMap()
         var title = ""
@@ -56,32 +58,57 @@ object Importers {
                 }
             }
         }
-        require(result.isNotEmpty()) { "No supported live channels" }
+        if (result.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return Lineup(result.distinctBy { it.id }, epg.takeIf { Network.allowed(it, http) }.orEmpty())
     }
 
     private fun encoded(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+    fun serverBase(value: String): String {
+        val base = value.trim().trimEnd('/')
+        val uri = URI(base)
+        require(uri.rawQuery == null && uri.fragment == null) { "Use the server base address" }
+        val leaf = uri.path.substringAfterLast('/')
+        return if (leaf in setOf("player_api.php", "get.php", "xmltv.php")) base.substringBeforeLast('/') else base
+    }
     fun endpoint(source: Source, file: String, action: String = ""): String {
-        val base = source.url.trimEnd('/')
+        val base = serverBase(source.url)
         require(Network.allowed(base, source.allowHttp))
         require(URI(base).rawQuery == null && URI(base).fragment == null) { "Use the server base address" }
         return "$base/$file?username=${encoded(source.username)}&password=${encoded(source.password)}" + if (action.isEmpty()) "" else "&action=$action"
     }
+    fun xtreamArray(text: String): JSONArray {
+        val value = try { JSONTokener(text.trimStart('\uFEFF')).nextValue() }
+        catch (_: org.json.JSONException) { throw SourceFailure(SourceProblem.RESPONSE) }
+        if (value is JSONArray) return value
+        if (value is JSONObject) {
+            val account = value.optJSONObject("user_info") ?: value
+            if (account.has("auth") && account.optString("auth") in setOf("0", "false")) throw SourceFailure(SourceProblem.AUTH)
+            val status = account.optString("status")
+            if (status.equals("Expired", true) || status.equals("Disabled", true) || status.equals("Banned", true)) throw SourceFailure(SourceProblem.INACTIVE)
+        }
+        throw SourceFailure(SourceProblem.RESPONSE)
+    }
     fun xtream(source: Source): Lineup {
-        val categories = JSONArray(Network.get(endpoint(source, "player_api.php", "get_live_categories"), source.allowHttp).toString(Charsets.UTF_8))
-        val names = (0 until categories.length()).associate { i -> categories.getJSONObject(i).let { it.optString("category_id") to it.optString("category_name").take(128) } }
-        val streams = JSONArray(Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp).toString(Charsets.UTF_8))
+        val streams = xtreamArray(Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp).toString(Charsets.UTF_8))
+        // Categories are optional metadata. A provider may serve live streams while
+        // rejecting or omitting this separate endpoint.
+        val names = runCatching {
+            val categories = xtreamArray(Network.get(endpoint(source, "player_api.php", "get_live_categories"), source.allowHttp).toString(Charsets.UTF_8))
+            require(categories.length() <= 20000)
+            (0 until categories.length()).mapNotNull { i -> categories.optJSONObject(i)?.let { it.optString("category_id") to it.optString("category_name").take(128) } }.toMap()
+        }.getOrDefault(emptyMap())
         require(streams.length() <= 20000)
+        val base = serverBase(source.url)
         val channels = (0 until streams.length()).mapNotNull { index ->
             val j = streams.getJSONObject(index)
             val id = j.optString("stream_id")
             if (!id.matches(Regex("[0-9]{1,20}"))) return@mapNotNull null
             val extension = j.optString("container_extension", "ts").takeIf { it in listOf("ts", "m3u8", "mp4") } ?: "ts"
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
-                "${source.url.trimEnd('/')}/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
+                "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
                 j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), j.optString("epg_channel_id").take(256))
         }
-        require(channels.isNotEmpty())
+        if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return Lineup(channels.distinctBy { it.id }, endpoint(source, "xmltv.php"))
     }
 

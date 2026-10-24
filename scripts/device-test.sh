@@ -9,7 +9,7 @@ collect_reports() {
   if [ "$result" != 0 ]; then
     "$adb" -s "$serial" logcat -d -t 1500 > app/build/reports/device/logcat.txt 2>&1 || true
   fi
-  for file in guide.png guide-all.png failure.png failure.xml; do
+  for file in guide.png guide-all.png source-save.png source-cancel.png failure.png failure.xml; do
     "$adb" -s "$serial" pull "/sdcard/Android/data/io.github.mot1us.spare.debug/files/$file" "app/build/reports/device/$file" >/dev/null 2>&1 || true
   done
   if [ -n "${RUNNER_TEMP:-}" ] && [ -f "$RUNNER_TEMP/emulator.log" ]; then
@@ -26,4 +26,4 @@ test "$("$adb" -s "$serial" shell getprop sys.boot_completed | tr -d '\r')" = 1
 "$adb" -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk
 "$adb" -s "$serial" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 "$adb" -s "$serial" shell am instrument -w io.github.mot1us.spare.debug.test/androidx.test.runner.AndroidJUnitRunner | tee app/build/reports/device/results.txt
-grep -q '^OK (3 tests)' app/build/reports/device/results.txt
+grep -q '^OK (5 tests)' app/build/reports/device/results.txt

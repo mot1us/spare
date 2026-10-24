@@ -2,6 +2,8 @@
 
 Automated local checks cover importer behavior, hostile data, the optimized APK, lint, encrypted storage, and a private Android TV emulator. The emulator uses a local fixture server and the AndroidX Media3 sample video; no real source credentials or personal accounts are required.
 
+Five device tests cover encrypted storage, M3U/remote/favorites/resume, Xtream playback, playback when categories fail, and Save/Cancel focus plus unchanged HTTPS addresses after HTTP consent. The focus test checks actual button foreground/background contrast, D-pad navigation, Cancel behavior, and saved source data. Screenshots and failure diagnostics are retained as CI artifacts.
+
 ## 2026 onn 4K Pro + Samsung checklist
 
 1. Install the signed initial prerelease APK. Record the onn firmware/Android version, Samsung model, and whether HDMI goes directly to the TV or through an AVR/soundbar.

@@ -11,6 +11,7 @@ android {
         targetSdk = 36
         versionCode = releaseVersion.getProperty("versionCode").toInt()
         versionName = releaseVersion.getProperty("versionName")
+        buildConfigField("boolean", "PRERELEASE_UPDATES", (releaseVersion.getProperty("releaseChannel") == "prerelease").toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

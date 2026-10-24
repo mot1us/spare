@@ -2,13 +2,13 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Initial version: **0.1.0**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.1.1**. License: MIT.
 
 ## What it does
 
 - M3U playlist URLs or Xtream Codes server/username/password.
 - Several saved sources, one active at a time.
-- Black-and-white channel/time guide with channel logos and a small preview of the current channel.
+- A restrained dark channel/time guide with channel logos, clear remote focus, and a small preview of the current channel.
 - Provider groups, channel-name search, and Favorites; provider channel order is preserved.
 - Automatic provider XMLTV guide or an optional XMLTV URL override; three days of guide data, cached privately.
 - Last-channel resume, audio/subtitle selection, and automatic frame-rate matching where supported.
@@ -45,7 +45,7 @@ After the first stable release, this permanent link will install the latest stab
 
 A Downloader code can point to that URL. Register it once through [AFTVnews](https://go.aftvnews.com/) after a stable release exists. A code is a shortcut; it does not host the APK. CAPTCHA registration requires a human.
 
-The app checks the stable `update.json` attachment at most daily, without interrupting playback. It downloads only when asked, checks SHA-256, package ID, increasing version code, and the installed signing identity, then hands off to Android’s installer. Android may require enabling “install unknown apps” separately for Spare, even if it is already enabled for Downloader. Prereleases are deliberately excluded from stable update discovery.
+The app checks for updates at most daily, without interrupting playback. Stable builds use the latest stable `update.json`; prerelease builds use GitHub's public Releases API to find the newest published testing or stable manifest. Drafts and foreign manifest URLs are rejected. It downloads only when asked, checks SHA-256, package ID, increasing version code, and the installed signing identity, then hands off to Android’s installer. Android may require enabling “install unknown apps” separately for Spare, even if it is already enabled for Downloader. Prereleases remain excluded from stable update discovery. Version 0.1.0 needs one manual update to 0.1.1 to fix testing-channel discovery.
 
 ## Build and verify
 
@@ -61,7 +61,7 @@ Production dependencies are locked in `app/gradle.lockfile`. Deliberate dependen
 
 Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites and last-channel IDs stay in private preferences. Removing a source removes its cached guide. Uninstalling clears local app data.
 
-Provider traffic, guide downloads, and logos contact the URLs supplied by your provider. Update checks and APK downloads contact GitHub. There is no Spare credential service or telemetry endpoint. Provider data never becomes HTML or executable instructions.
+Provider traffic, guide downloads, and logos contact the URLs supplied by your provider. Update checks and APK downloads contact GitHub (including api.github.com for prerelease discovery). There is no Spare credential service or telemetry endpoint. Provider data never becomes HTML or executable instructions.
 
 HTTPS is the default. HTTP requires explicit consent for each source and exposes data in transit. Every media manifest, segment, key, subtitle, image, and guide request is restricted to HTTP/HTTPS and the source’s HTTP policy; file/content/executable schemes are rejected. HTTP redirect downgrades are rejected for HTTPS-only sources. Imports, decompressed data, XML nesting, logos, and field lengths have size limits; DTDs and custom XML entities are rejected. Import work runs off the UI thread. App and Media3 release logging omit provider credentials and URLs.
 

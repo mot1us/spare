@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
@@ -60,6 +61,7 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var guidePanel: LinearLayout
     private lateinit var channelInfo: TextView
+    private lateinit var programmeInfo: TextView
     private lateinit var status: TextView
     private lateinit var times: TimeRuler
     private lateinit var nowPlaying: TextView
@@ -137,21 +139,23 @@ class MainActivity : Activity() {
     private fun text(value: String, size: Float = 16f) = TextView(this).apply { text = value; textSize = size; setTextColor(Color.WHITE) }
     private fun button(value: String, click: () -> Unit) = Button(this).apply {
         text = value; textSize = 13f; isAllCaps = false; setPadding(dp(14), 0, dp(14), 0)
-        minHeight = dp(44); minimumHeight = dp(44)
+        minHeight = dp(44); minimumHeight = dp(44); typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))
-        fun shape(color: Int) = GradientDrawable().apply { setColor(color); setStroke(dp(1), Color.WHITE) }
-        background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.BLACK)) }
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)).apply { marginEnd = dp(8) }
+        fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(8).toFloat() }
+        background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
+        stateListAnimator = null
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)).apply { marginEnd = dp(8) }
         setOnClickListener { click() }
     }
     private fun buildUi() {
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }; setContentView(root)
-        guidePanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.BLACK); setPadding(dp(28), dp(20), dp(28), dp(20)) }
+        guidePanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(10, 10, 10)); setPadding(dp(32), dp(24), dp(32), dp(16)) }
         root.addView(guidePanel, FrameLayout.LayoutParams(-1, -1))
-        val heading = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(260), 0) }
-        heading.addView(text("Spare", 25f))
-        channelInfo = text("A minimal, free IPTV player", 17f).apply { maxLines = 4 }; heading.addView(channelInfo)
-        status = text("", 14f); heading.addView(status)
+        val heading = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(256), 0) }
+        heading.addView(text("spare", 21f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(0, 0, 0, dp(12)) })
+        channelInfo = text("Your TV, kept simple.", 25f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }; heading.addView(channelInfo)
+        programmeInfo = text("Add your playlist to start watching.", 14f).apply { maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) }; heading.addView(programmeInfo)
+        status = text("", 13f).apply { setTextColor(Color.LTGRAY); maxLines = 2; setPadding(0, dp(6), 0, 0) }; heading.addView(status)
         guidePanel.addView(heading, LinearLayout.LayoutParams(-1, dp(140)))
         val actions = LinearLayout(this)
         actions.addView(button("Sources") { showSources() })
@@ -160,9 +164,9 @@ class MainActivity : Activity() {
         groupBar = LinearLayout(this); actions.addView(groupBar)
         actions.addView(button("Playback") { playbackMenu() })
         updateButton = button("Updates") { updater.offer() }; actions.addView(updateButton)
-        guidePanel.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(actions) }, LinearLayout.LayoutParams(-1, dp(48)))
+        guidePanel.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(actions) }, LinearLayout.LayoutParams(-1, dp(54)))
         times = TimeRuler(this) { windowStart }
-        guidePanel.addView(times, LinearLayout.LayoutParams(-1, dp(28)))
+        guidePanel.addView(times, LinearLayout.LayoutParams(-1, dp(30)))
         list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@MainActivity); itemAnimator = null; clipToPadding = false }
         adapter = GuideAdapter(this, logos, { source }, { guide }, { favorites }, { windowStart },
             { tune(it); showGuide(false) }, { channel ->
@@ -173,6 +177,7 @@ class MainActivity : Activity() {
             })
         list.adapter = adapter
         guidePanel.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+        guidePanel.addView(text("OK  Watch     Hold OK  Favorite     ←  →  Browse time", 12f).apply { setTextColor(Color.GRAY); setPadding(0, dp(8), 0, 0) })
         video = PlayerView(this).apply {
             useController = false; isFocusable = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
@@ -215,9 +220,12 @@ class MainActivity : Activity() {
                 val fresh = Guide(initial.channels, programmes.getOrDefault(cached?.programmes.orEmpty()))
                 if (!Thread.currentThread().isInterrupted && generation == epoch) runCatching { store.cache(selected, fresh) }
                 ui(epoch) { accept(fresh, resume = false); status.text = if (programmes.isFailure) "Channels ready · guide refresh failed" else "" }
-            }.onFailure { ui(epoch) {
-                status.text = if (cached != null) "Provider unavailable · using saved guide" else "Could not load source. Check its address and credentials."
-                if (cached == null) notice("Source unavailable", "Could not load live channels. Check the source settings, HTTP consent, and your provider connection.")
+            }.onFailure { failure -> ui(epoch) {
+                val detail = SourceErrors.message(failure)
+                status.text = if (cached != null) "Using saved guide · $detail" else detail
+                if (cached == null && !isFinishing) AlertDialog.Builder(this).setTitle("Could not load source").setMessage(detail)
+                    .setPositiveButton("Edit source") { _, _ -> editSource(selected) }
+                    .setNeutralButton("Retry") { _, _ -> load(selected) }.setNegativeButton("Close", null).show()
             } }
         }
     }
@@ -242,7 +250,8 @@ class MainActivity : Activity() {
     }
     private fun showInfo(channel: Channel) {
         val programme = guide.at(channel, System.currentTimeMillis())
-        channelInfo.text = channel.name + (programme?.let { "\n${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}  ${it.title}\n${it.description}" } ?: "\nNo programme information")
+        channelInfo.text = programme?.title ?: channel.name
+        programmeInfo.text = channel.name + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${it.description}" } ?: "\nNo programme information")
     }
     private fun applyFilter() {
         val filtered = guide.channels.filter { (!favoritesOnly || it.id in favorites) && (group.isBlank() || it.group == group) && (query.isBlank() || it.name.contains(query, true)) }
@@ -254,7 +263,7 @@ class MainActivity : Activity() {
     private fun updateGroups() {
         groupBar.removeAllViews()
         val groups = listOf("") + guide.channels.map { it.group }.distinct()
-        groupBar.addView(button("Group: " + group.ifBlank { "All" }.take(24)) {
+        groupBar.addView(button(group.ifBlank { "All groups" }.take(24)) {
             AlertDialog.Builder(this).setTitle("Channel group").setSingleChoiceItems(groups.map { it.ifBlank { "All groups" } }.toTypedArray(), groups.indexOf(group)) { dialog, index ->
                 group = groups[index]; dialog.dismiss(); updateGroups(); applyFilter()
             }.setNegativeButton("Close", null).show()
@@ -268,7 +277,7 @@ class MainActivity : Activity() {
         guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         handler.removeCallbacks(hideNowPlaying)
         nowPlaying.visibility = View.GONE
-        video.layoutParams = if (show) FrameLayout.LayoutParams(dp(240), dp(135), Gravity.TOP or Gravity.END).apply { topMargin = dp(20); marginEnd = dp(28) }
+        video.layoutParams = if (show) FrameLayout.LayoutParams(dp(232), dp(130), Gravity.TOP or Gravity.END).apply { topMargin = dp(24); marginEnd = dp(32) }
         else FrameLayout.LayoutParams(-1, -1)
         if (show) {
             val position = adapter.channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)

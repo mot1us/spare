@@ -11,6 +11,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.Executors
@@ -33,8 +34,14 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
         busy = true
         worker.execute {
             val result = runCatching {
-                val j = JSONObject(Network.get("https://github.com/mot1us/spare/releases/latest/download/update.json", limit = 16384).toString(Charsets.UTF_8))
-                Release.parse(j).takeIf { it.code > BuildConfig.VERSION_CODE }
+                val metadata = if (BuildConfig.PRERELEASE_UPDATES) {
+                    val releases = JSONArray(Network.get("https://api.github.com/repos/mot1us/spare/releases?per_page=10", limit = 256 * 1024).toString(Charsets.UTF_8))
+                    Release.testingManifest(releases)
+                } else "https://github.com/mot1us/spare/releases/latest/download/update.json"
+                metadata?.let { url ->
+                    val j = JSONObject(Network.get(url, limit = 16384).toString(Charsets.UTF_8))
+                    Release.parse(j).takeIf { it.code > BuildConfig.VERSION_CODE }
+                }
             }
             if (!closed) handler.post {
                 busy = false
