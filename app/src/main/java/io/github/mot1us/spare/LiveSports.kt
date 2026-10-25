@@ -5,14 +5,14 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long)
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList())
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {
         if (!fresh(now)) return emptyList()
         return games.filter { game ->
             game.teams.first().league in leagues && events.any { event ->
-                event.teams == game.teams.map { it.id }.toSet() && kotlin.math.abs(game.start - event.start) < 12 * 3600000L
+                event.state == "in" && event.teams == game.teams.map { it.id }.toSet() && kotlin.math.abs(game.start - event.start) < 12 * 3600000L
             }
         }
     }
@@ -36,7 +36,7 @@ object LiveSports {
         }
         return LiveSportsSnapshot(events.distinctBy { it.id }, now, leagues)
     }
-    fun parse(text: String, league: String, now: Long): List<LiveEvent> {
+    fun parse(text: String, league: String, now: Long, onlyLive: Boolean = true): List<LiveEvent> {
         require(league in setOf("NFL", "MLB"))
         val entries = JSONObject(text).getJSONArray("events"); require(entries.length() <= 500)
         val result = mutableListOf<LiveEvent>()
@@ -47,17 +47,28 @@ object LiveSports {
                 val competition = competitions.optJSONObject(match) ?: continue
                 val status = (competition.optJSONObject("status") ?: event.optJSONObject("status"))?.optJSONObject("type") ?: continue
                 val state = status.optString("name")
-                if (status.optString("state") != "in" || status.optBoolean("completed") || state !in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION")) continue
+                val live = status.optString("state") == "in" && !status.optBoolean("completed") && state in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION")
+                val upcoming = !onlyLive && status.optString("state") == "pre" && state == "STATUS_SCHEDULED" && !status.optBoolean("completed")
+                if (!live && !upcoming) continue
                 val start = runCatching { Instant.parse(competition.optString("date").ifBlank { event.optString("date") }).toEpochMilli() }.getOrNull() ?: continue
                 // A malformed or stale schedule cannot turn a future/old listing into a live event.
-                if (start > now + 60000L || start < now - 18 * 3600000L) continue
+                if (live && (start > now + 60000L || start < now - 18 * 3600000L)) continue
+                if (upcoming && (start < now - 300000L || start > now + 370 * 86400000L)) continue
                 val competitors = competition.optJSONArray("competitors") ?: continue
                 if (competitors.length() != 2) continue
                 val teams = (0 until competitors.length()).mapNotNull { i ->
                     val team = competitors.optJSONObject(i)?.optJSONObject("team") ?: return@mapNotNull null
                     resolve(league, team.optString("abbreviation"), team.optString("displayName"))
                 }.toSet()
-                if (teams.size == 2) result.add(LiveEvent(event.optString("id").take(80), teams, start))
+                if (teams.size == 2) {
+                    val networks = mutableListOf<String>()
+                    competition.optJSONArray("broadcasts")?.let { array -> for (i in 0 until minOf(array.length(), 20)) {
+                        val names = array.optJSONObject(i)?.optJSONArray("names") ?: continue
+                        for (n in 0 until minOf(names.length(), 20)) networks.add(names.optString(n).take(80))
+                    } }
+                    competition.optJSONArray("geoBroadcasts")?.let { array -> for (i in 0 until minOf(array.length(), 20)) array.optJSONObject(i)?.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { networks.add(it.take(80)) } }
+                    result.add(LiveEvent(event.optString("id").take(80), teams, start, if (live) "in" else "pre", networks.distinct()))
+                }
             }
         }
         return result.distinctBy { it.id }

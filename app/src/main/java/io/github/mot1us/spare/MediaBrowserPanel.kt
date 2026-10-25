@@ -3,6 +3,7 @@ package io.github.mot1us.spare
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import androidx.core.graphics.drawable.toDrawable
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -12,13 +13,16 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.DiffUtil
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val select: () -> Unit)
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit)
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -40,6 +44,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var group: String? = null
     private var pending: RecyclerView? = null
     private var focusEpoch = 0
+    private var columns = 4
+    private var grid = true
+    private val images = LogoLoader(512, 12 * 1024 * 1024)
+    private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
+    private val body = LinearLayout(context)
+    private var artworkHttp = false
+    private var rememberedKey: String? = null
     private val tabs = listOf("Movies" to "movie", "Series" to "series", "Continue" to "continue", "Catch-up" to "catchup")
     init {
         orientation = VERTICAL; tag = "library-panel"; visibility = GONE; setPadding(dp(24), dp(18), dp(24), dp(18)); setBackgroundColor(0xEE0B1018.toInt())
@@ -49,10 +60,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         toolbar.addView(button("Refresh", refresh).apply { tag = "library-refresh" })
         addView(toolbar, LayoutParams(-1, dp(42))); addView(heading, LayoutParams(-1, dp(36))); addView(message, LayoutParams(-1, dp(32))); addView(loading, LayoutParams(-1, dp(3)))
         addView(search, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(10) })
-        val body = LinearLayout(context)
+        body.orientation = HORIZONTAL
         body.addView(categories, LayoutParams(dp(190), -1).apply { marginEnd = dp(16) })
         body.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(empty); addView(rows, LayoutParams(-1, 0, 1f)) }, LayoutParams(0, -1, 1f))
-        addView(body, LayoutParams(-1, 0, 1f))
+        addView(body, LayoutParams(-1, 0, 1f)); addView(detailPane, LayoutParams(-1, 0, 1f))
         categories.adapter = object : RecyclerView.Adapter<Holder>() {
             override fun getItemCount() = categoryNames.size + 1
             override fun onCreateViewHolder(parent: ViewGroup, type: Int) = Holder(cell(13f, 42))
@@ -69,21 +80,45 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 } }
             }
         }
-        rows.adapter = object : RecyclerView.Adapter<Holder>() {
+        rows.adapter = object : RecyclerView.Adapter<PosterHolder>() {
             init { setHasStableIds(true) }
             override fun getItemId(position: Int) = Channel.stableId(shownRows[position].key).take(16).toULong(16).toLong()
             override fun getItemCount() = shownRows.size
-            override fun onCreateViewHolder(parent: ViewGroup, type: Int) = Holder(cell(13f, 55))
-            override fun onBindViewHolder(holder: Holder, position: Int) {
-                val item = shownRows[position]; holder.text.text = item.title + if (item.detail.isBlank()) "" else "\n${item.detail}"
-                holder.text.tag = "library-item:${item.key}"; holder.text.setOnClickListener { hideKeyboard(); item.select() }
-                holder.text.setOnKeyListener { _, key, event -> when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (position == 0 && key == KeyEvent.KEYCODE_DPAD_UP && event.repeatCount == 0) search.requestFocus() else focusAt(rows, position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) focusAt(categories, 0); true }
+            override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder {
+                val box = LinearLayout(context).apply { orientation = VERTICAL; isFocusableInTouchMode = true; isClickable = true; setPadding(dp(7), dp(7), dp(7), dp(7)); background = GuideTheme.background(resources.displayMetrics.density, 0x44323D4B) }
+                val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
+                val text = label(12f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(4), dp(5), dp(4), 0) }
+                box.addView(image, LayoutParams(-1, 0, 1f)); box.addView(text, LayoutParams(-1, dp(42)))
+                return PosterHolder(box, image, text)
+            }
+            override fun onBindViewHolder(holder: PosterHolder, position: Int) {
+                val item = shownRows[position]
+                holder.box.layoutParams = RecyclerView.LayoutParams(-1, dp(if (grid) 210 else 55)).apply { marginEnd = dp(7); bottomMargin = dp(7) }
+                holder.box.orientation = if (grid) VERTICAL else HORIZONTAL
+                holder.image.visibility = if (grid || item.poster.isNotBlank()) VISIBLE else GONE
+                holder.image.layoutParams = if (grid) LayoutParams(-1, 0, 1f) else LayoutParams(dp(70), -1).apply { marginEnd = dp(8) }
+                holder.text.text = item.title + if (item.detail.isBlank()) "" else "\n${item.detail}"
+                holder.text.layoutParams = if (grid) LayoutParams(-1, dp(45)) else LayoutParams(0, -1, 1f)
+                holder.text.setTextColor(if (holder.box.hasFocus()) Color.BLACK else Color.WHITE)
+                holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}"
+                holder.box.setOnClickListener { hideKeyboard(); item.select() }
+                holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) Color.BLACK else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
+                val poster = item.poster
+                fun draw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
+                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::draw))
+                holder.box.setOnKeyListener { _, key, event -> when (key) {
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) {
+                        val step = if (grid) columns else 1
+                        val next = position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) step else -step
+                        if (next < 0) { if (event.repeatCount == 0) search.requestFocus() } else focusAt(rows, next.coerceAtMost(shownRows.lastIndex))
+                    }; true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusAt(categories, 0) else focusAt(rows, position - 1) }; true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && grid && position % columns < columns - 1) focusAt(rows, position + 1); true }
                     else -> false
                 } }
             }
         }
+        rows.layoutManager = GridLayoutManager(context, columns)
         search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { filter() }; override fun afterTextChanged(s: Editable?) {} })
         search.setOnEditorActionListener { _, _, _ -> hideKeyboard(); focusAt(rows, 0); true }
         search.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_DOWN) { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusAt(rows, 0) }; true } else false }
@@ -96,8 +131,11 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.visibility = if (busy) VISIBLE else GONE }
     @SuppressLint("NotifyDataSetChanged")
-    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true) {
-        if (reset) { group = null; search.setText("") }
+    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true) {
+        browse()
+        grid = posters; columns = if (grid) 4 else 1
+        (rows.layoutManager as? GridLayoutManager)?.spanCount = columns
+        if (reset) { group = null; search.setText(""); rememberedKey = null }
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct()
         if (group !in categoryNames) group = null
         categories.adapter?.notifyDataSetChanged(); filter()
@@ -105,10 +143,17 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     @SuppressLint("NotifyDataSetChanged")
     private fun filter() {
         val query = search.text.toString().trim()
-        shownRows = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isBlank() || it.title.contains(query, true)) }
-        rows.adapter?.notifyDataSetChanged(); empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
+        val previous = shownRows
+        val next = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isBlank() || it.title.contains(query, true)) }
+        val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize() = previous.size
+            override fun getNewListSize() = next.size
+            override fun areItemsTheSame(a: Int, b: Int) = previous[a].key == next[b].key
+            override fun areContentsTheSame(a: Int, b: Int) = previous[a].let { x -> next[b].let { y -> x.title == y.title && x.detail == y.detail && x.poster == y.poster && x.description == y.description } }
+        })
+        shownRows = next; rows.adapter?.let(diff::dispatchUpdatesTo); empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }
-    fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, 0) }
+    fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
         val epoch = ++focusEpoch; val item = list.findViewHolderForAdapterPosition(position)?.itemView
@@ -122,5 +167,31 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun hideKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0) }
     fun appearance() { AppFont.apply(this); categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1); rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
+    fun allowArtworkHttp(value: Boolean) { artworkHttp = value }
+    fun browse() { detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE }
+    fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, back: () -> Unit, busy: Boolean) {
+        val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
+        hideKeyboard(); body.visibility = GONE; search.visibility = GONE; detailPane.visibility = VISIBLE
+        // Keep focus on the toolbar while replacing focused detail controls.
+        if (detailPane.hasFocus()) findViewWithTag<View>("library-tab:movie")?.requestFocus()
+        detailPane.removeAllViews(); detailPane.background = null; page(item.title, listOf(item.year, item.genre, item.runtime).filter { it.isNotBlank() }.joinToString(" · "), busy)
+        if (item.backdrop.isNotBlank()) {
+            fun background() { images.get(item.backdrop, artworkHttp) {}?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } } }
+            images.get(item.backdrop, artworkHttp, ::background)?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } }
+        }
+        val hero = LinearLayout(context)
+        val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
+        fun redraw() { cover.setImageBitmap(images.get(item.poster, artworkHttp) {}) }
+        cover.setImageBitmap(images.get(item.poster, artworkHttp, ::redraw)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
+        val copy = LinearLayout(context).apply { orientation = VERTICAL }
+        copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 9 }, LayoutParams(-1, -2))
+        if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
+        hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
+        val actions = LinearLayout(context)
+        val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start); actions.addView(makeButton("Back to catalog", back)); detailPane.addView(actions, LayoutParams(-1, dp(40)))
+        if (restore) start.requestFocus()
+    }
+    fun closeImages() { images.close() }
+    private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box)
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
 }

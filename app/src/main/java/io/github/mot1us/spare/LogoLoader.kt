@@ -8,8 +8,8 @@ import android.util.LruCache
 import java.util.Collections
 import java.util.concurrent.Executors
 
-class LogoLoader {
-    private val cache = object : LruCache<String, Bitmap>(4 * 1024 * 1024) {
+class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024) {
+    private val cache = object : LruCache<String, Bitmap>(cacheBytes) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
     private val pending = Collections.synchronizedSet(HashSet<String>())
@@ -22,12 +22,12 @@ class LogoLoader {
         cache.get(url)?.let { return it }
         if (!closed && url !in failed && pending.add(url)) workers.execute {
             val bitmap = runCatching {
-                val bytes = Network.get(url, http, 512 * 1024)
+                val bytes = Network.get(url, http, 2 * 1024 * 1024, timeoutMs = 5000)
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                 require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
                 val options = BitmapFactory.Options().apply {
-                    inSampleSize = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= 256 }
+                    inSampleSize = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= maxDimension }
                 }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             }.getOrNull()

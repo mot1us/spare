@@ -3,10 +3,10 @@ package io.github.mot1us.spare
 import kotlin.math.abs
 
 data class SportsBroadcast(val channel: Channel, val programme: Programme)
-data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>) {
-    val key: String get() = teams.map { it.id }.sorted().joinToString("|") + ":$start"
+data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList()) {
+    val key: String get() = eventId.ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
-    fun live(now: Long) = start <= now && end > now
+    fun live(now: Long) = if (eventId.isNotBlank()) state == "in" && start <= now + 60000 else start <= now && end > now
 }
 
 /** Conservative EPG matching. A listing is evidence of a broadcast, not a guarantee that a stream is online. */

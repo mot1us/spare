@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 — 2026-10-25
+
+- Follow bounded HTTP redirects explicitly for provider media, preserving byte ranges/resume and checking source HTTP consent before every hop. Report blocked HTTP downgrades clearly and strip sensitive headers when origins change.
+- Give guide/category lists a single scrolling owner and center the focused row as navigation advances. Make Library reachable from Sports, and define explicit navigation between Sports controls, team selectors and results.
+- Build Sports from external MLB/NFL schedules instead of waiting for a provider EPG scan. All live shows confirmed games even without matched channels; each followed team shows its live or next game. Cache schedules, show incremental results, and distinguish EPG-confirmed channels from possible broadcaster matches.
+- Show cached/in-memory Library catalogs immediately, fetch titles before optional categories, and move catalog writes off the first-render path. Add poster grids, movie detail pages, provider artwork/descriptions and episode thumbnails/details.
+- Add optional encrypted AIO Metadata configuration for movie/series and identifiable live-programme enrichment. Use provider IDs or conservative exact title/year matching, preserve provider playback, and keep optional enrichment off the playback path.
+- Prefer measured frame cadence over misleading declared FPS. Recognize H.264 interlaced sequence information, label field cadence explicitly, and use the corrected cadence for filters and refresh-rate requests while preserving progressive 30 fps.
+
 ## 0.6.0 — 2026-10-25
 
 - Verify current MLB/NFL provider matchups against ESPN live event state. Hide future, delayed, suspended, finished, stale, and unverified games; retain progress and manual retry without sending playlist data to the sports service.

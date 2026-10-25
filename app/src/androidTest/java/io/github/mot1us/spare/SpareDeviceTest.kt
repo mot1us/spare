@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default" }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -649,7 +649,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-scope").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }
-                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                device.pressDPadDown(); device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 repeat(6) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
@@ -743,27 +743,27 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun liveSportsShowsProgressAndEarlyResultsWithoutWaitingForWholeScan() {
-        FixtureServer(channelCount = 12, slowSportsGuide = true).use { server ->
-            val source = Source(name = "Live scan fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+    @Test fun sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable() {
+        FixtureServer(channelCount = 12).use { server ->
+            val source = Source(name = "Schedule fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             val channels = (1..12).map { Channel("xc:$it", "ESPN $it", "Sports", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it") }
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
-            store.setFilters(source, GuideFilters(minHeight = 1080))
+            store.setFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
-                scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-loading")?.isShown == true }
-                waitFor(scenario) { server.sportsTailBlocked.count == 0L }
-                device.pressMenu(); activateSetting(scenario, "Guide filters"); activateSetting(scenario, "Reset filters"); leaveSettings(scenario)
+                scenario.onActivity { activity -> activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
+                    LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), now - 300000), LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), now + 4 * 86400000L, "pre")), now, setOf("NFL", "MLB")) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
-                scenario.onActivity { assertTrue("Results must appear while later provider responses are still pending", it.window.decorView.findViewWithTag<View>("sports-loading").isShown) }
-                assertTrue("Live discovery requests a small current guide, not 72 future listings", server.epgTargets.all { it.contains("limit=4") })
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)?.itemView?.isShown == true }
-                instrumentation.waitForIdleSync(); device.waitForIdle()
-                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-loading.png"))
-                server.finishSportsGuide.countDown()
-                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-loading").isShown }
-                assertFalse(device.hasObject(By.text("Buffalo Bills vs Kansas City Chiefs")))
+                assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
+                assertTrue(device.hasObject(By.textContains("Channel not matched yet")))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
+                waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) && device.hasObject(By.textContains("NEXT")) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library").hasFocus() }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -781,6 +781,8 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.playbackState == Player.STATE_READY }
                 scenario.onActivity {
                     assertTrue(it.window.decorView.findViewWithTag<View>("on-demand-controls").isShown)
@@ -854,6 +856,25 @@ class SpareDeviceTest {
             store.cacheCatalog(source, "movie", listOf(item)); assertEquals(item, SecureStore(context).catalog(source, "movie")!!.second.single())
         } finally { store.removeCache(source) }
         assertFalse(File(context.filesDir, "watch-${source.id}.enc").exists()); assertFalse(File(context.filesDir, "library-${source.id}-movie.enc").exists())
+    }
+
+    @Test fun providerRedirectChainPreservesByteRangeAndEncryptedAddonSettings() {
+        FixtureServer().use { server ->
+            val source = ProviderDataSource { true }
+            val spec = androidx.media3.datasource.DataSpec.Builder().setUri("${server.base}/redirect.mp4").setPosition(12).setLength(40).build()
+            try {
+                assertEquals(40, source.open(spec)); val bytes = ByteArray(40); var read = 0
+                while (read < bytes.size) { val count = source.read(bytes, read, bytes.size - read); assertTrue(count > 0); read += count }
+                val expected = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }.copyOfRange(12, 52)
+                assertArrayEquals(expected, bytes); assertEquals(-1, source.read(ByteArray(1), 0, 1)); assertEquals("/channel1.mp4", source.uri!!.path)
+                assertEquals(1, server.requests["/redirect.mp4"]); assertEquals(1, server.requests["/redirect-relative.mp4"])
+            } finally { source.close() }
+        }
+        val url = "https://metadata.example/private-config-token/manifest.json"
+        store.saveMetadataAddon(url)
+        assertEquals(url, SecureStore(context).metadataAddon())
+        assertFalse(File(context.filesDir, "metadata-addon.enc").readBytes().toString(Charsets.UTF_8).contains("private-config-token"))
+        store.saveMetadataAddon("")
     }
 
     private fun fixtureLiveSports(activity: MainActivity) {
@@ -1078,6 +1099,10 @@ class SpareDeviceTest {
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
+                        if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {
+                            val location = if (path == "/redirect.mp4") "$base/redirect-relative.mp4" else "/channel1.mp4"
+                            connection.getOutputStream().write("HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); return@use
+                        }
                         var sportsPayload: ByteArray? = null
                         if (slowSportsGuide && target.contains("get_short_epg")) {
                             epgTargets.add(target)
@@ -1099,7 +1124,8 @@ class SpareDeviceTest {
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
                             "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) """[{"category_id":"vod","category_name":"Fixture cinema"}]""".toByteArray()
-                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"vod","container_extension":"mp4"}]""".toByteArray()
+                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"vod","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
+                                else if (target.contains("get_vod_info")) """{"info":{"plot":"A provider-supplied film description.","cover_big":"$base/logo.png","releasedate":"2025-01-01","duration":"01:30:00","genre":"Drama"}}""".toByteArray()
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
                                 else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"vod"}]""".toByteArray()
                                 else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"Archived fixture","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }

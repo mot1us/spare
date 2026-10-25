@@ -57,9 +57,13 @@ class SecureStore(private val context: Context) {
             root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
         }
     }
+    fun richCatalog(source: Source, kind: String) = preferences.getInt("catalog-schema-${source.id}-$kind", 0) >= 2
+    fun metadataAddon(): String = read("metadata-addon.enc")?.toString(Charsets.UTF_8).orEmpty()
+    fun saveMetadataAddon(value: String) { write("metadata-addon.enc", value.toByteArray()) }
     fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) {
         require(kind in setOf("movie", "series"))
         write("library-${source.id}-$kind.enc", JSONObject().put("updated", System.currentTimeMillis()).put("entries", JSONArray(entries.map { it.json() })).toString().toByteArray())
+        preferences.edit { putInt("catalog-schema-${source.id}-$kind", 2) }
     }
     @Synchronized fun watchProgress(source: Source): List<WatchProgress> = read("watch-${source.id}.enc")?.let { bytes ->
         val entries = JSONArray(bytes.toString(Charsets.UTF_8)); require(entries.length() <= 100)

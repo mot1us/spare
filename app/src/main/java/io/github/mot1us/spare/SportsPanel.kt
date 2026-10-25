@@ -35,6 +35,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var focusEpoch = 0
     private var pendingEnter = false
     private var teamSignature: Set<String>? = null
+    private val toolbarControls = mutableListOf<View>()
+    private var teamIndex = 0
     private val cards = object : RecyclerView.Adapter<Card>() {
         init { setHasStableIds(true) }
         override fun getItemId(position: Int) = Channel.stableId(games[position].key).take(16).toULong(16).toLong()
@@ -45,7 +47,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                     val at = games.indexOfFirst { it.key == tag }
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> { leave(); return true }
-                        KeyEvent.KEYCODE_DPAD_UP -> { if (at <= 0) { if (event.repeatCount == 0) teamsButton.requestFocus() } else focusAt(at - 1); return true }
+                        KeyEvent.KEYCODE_DPAD_UP -> { if (at <= 0) { if (event.repeatCount == 0) teamBar.getChildAt(teamIndex)?.requestFocus() } else focusAt(at - 1); return true }
                         KeyEvent.KEYCODE_DPAD_DOWN -> { if (at < games.lastIndex) focusAt(at + 1); return true }
                     }
                     return super.onKeyDown(keyCode, event)
@@ -61,7 +63,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
         override fun onBindViewHolder(holder: Card, position: Int) {
             val game = games[position]; holder.box.tag = game.key; holder.title.text = game.title
-            holder.detail.text = "LIVE · ${game.teams.first().league} · ${game.broadcasts.size} ${if (game.broadcasts.size == 1) "channel" else "channels"} · ${game.broadcasts.first().channel.name}"
+            holder.detail.text = "${if (game.live(System.currentTimeMillis())) "LIVE" else "NEXT · ${time(game.start)}"} · ${game.teams.first().league} · " + if (game.broadcasts.isNotEmpty()) "${game.broadcasts.size} matched channels" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible channels" else "Channel not matched yet"
             holder.box.contentDescription = "${holder.title.text}. ${holder.detail.text}"
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x222D3542)
             fun ink(active: Boolean) { holder.title.setTextColor(if (active) Color.BLACK else Color.WHITE); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY) }
@@ -76,29 +78,34 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val refreshButton = button("Refresh", refresh).apply { tag = "sports-refresh" }
         val filtersButton = button("Filters", filters).apply { tag = "sports-filters" }
         toolbar.addView(teamsButton); toolbar.addView(refreshButton); toolbar.addView(filtersButton)
-        listOf(teamsButton, refreshButton, filtersButton).forEach(::linkControl)
+        toolbarControls.addAll(listOf(teamsButton, refreshButton, filtersButton)); toolbarControls.forEach(::linkControl)
         addView(toolbar, LayoutParams(-1, dp(38))); addView(teamScroll, LayoutParams(-1, dp(38)))
         addView(progressBar, LayoutParams(-1, dp(3))); addView(progress, LayoutParams(-1, -2)); addView(empty, LayoutParams(-1, -2))
         rows.adapter = cards; addView(rows, LayoutParams(-1, 0, 1f))
     }
     private fun linkControl(control: View) { control.setOnKeyListener { _, key, event -> when (key) {
-        KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusGames(); true }
+        KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) teamBar.getChildAt(teamIndex)?.requestFocus(); true }
         KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) leave(); true }
-        KeyEvent.KEYCODE_DPAD_LEFT -> if (control === teamsButton) { if (event.action == KeyEvent.ACTION_DOWN) leave(); true } else false
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) {
+            val next = toolbarControls.indexOf(control) + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+            if (next < 0) leave() else toolbarControls.getOrNull(next)?.requestFocus()
+        }; true }
         else -> false
     } } }
-    fun loading(message: String) { progressBar.visibility = VISIBLE; progress.text = message; if (games.isEmpty()) { empty.text = "Finding live games… Results appear as channels are checked."; empty.visibility = VISIBLE } }
+    fun loading(message: String) { progressBar.visibility = VISIBLE; progress.text = message; if (games.isEmpty()) { empty.text = "Loading schedules… Saved results appear immediately when available."; empty.visibility = VISIBLE } }
     fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean, hiddenGames: Int, guideChannels: Int) {
         val signature = followed
         if (teamSignature != signature) {
             teamSignature = signature; teamBar.removeAllViews()
             val teams = listOf<String?>(null) + followed.sortedBy { SportsCatalog.byId[it]?.name }
-            teams.forEach { team ->
+            teams.forEachIndexed { index, team ->
                 val chip = button(team?.let { SportsCatalog.byId[it]!!.name } ?: "All live") { pendingEnter = false; remembered = null; chooseTeam(team) }
+                chip.setOnFocusChangeListener { _, active -> if (active) teamIndex = index }
                 chip.tag = team?.let { "sports-team:$it" } ?: "sports-scope"; chip.isSelected = team == selected
                 chip.setOnKeyListener { _, key, event -> when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) teamsButton.requestFocus(); true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) toolbarControls.getOrNull(index.coerceAtMost(toolbarControls.lastIndex))?.requestFocus(); true }
                     KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusGames(); true }
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { val next = index + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1; if (next < 0) leave() else teamBar.getChildAt(next)?.requestFocus() }; true }
                     else -> false
                 } }; teamBar.addView(chip)
             }
@@ -109,12 +116,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
         progressBar.visibility = if (scanning) VISIBLE else GONE; progress.text = message
         empty.text = when {
-            message.contains("status unavailable") -> "Live game status could not be verified. Unverified matchups stay hidden; choose Refresh to retry."
-            scanning -> "Finding live games… Results appear as channels are checked."
+            message.contains("Schedule unavailable") -> "Live game status could not be verified. Unverified matchups stay hidden; choose Refresh to retry."
+            scanning -> "Loading schedules… Saved results appear immediately when available."
             hiddenGames > 0 -> "$hiddenGames live ${if (hiddenGames == 1) "game is" else "games are"} hidden by your guide filters or unavailable channels. Open Filters to adjust."
-            guideChannels == 0 -> "No current sports guide data. Refresh checks likely game networks; your provider must name the teams in its live listings."
-            selected != null -> "No live game found for ${SportsCatalog.byId[selected]?.name}. Choose All live or another team."
-            else -> "No live MLB/NFL matchups found in your provider’s current guide."
+            selected != null -> "No upcoming game has been announced for ${SportsCatalog.byId[selected]?.name}. Try Refresh or choose another team."
+            else -> "No MLB/NFL games are currently in progress. Choose a team to see its next game."
         }
         empty.visibility = if (next.isEmpty()) VISIBLE else GONE
         if (games != next) {
@@ -126,7 +132,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                 override fun areContentsTheSame(a: Int, b: Int) = old[a] == next[b]
             })
             games = next; diff.dispatchUpdatesTo(cards)
-            if (hadFocus || (pendingEnter && games.isNotEmpty())) post { focusGames() }
+            if ((pendingEnter && games.isNotEmpty()) || hadFocus && rows.findFocus() == null) post { focusGames() }
         }
     }
     fun focusGames() { if (games.isEmpty()) { pendingEnter = true; teamsButton.requestFocus() } else { pendingEnter = false; focusAt(games.indexOfFirst { it.key == remembered }.coerceAtLeast(0)) } }
