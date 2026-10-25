@@ -695,6 +695,9 @@ class SpareDeviceTest {
     }
 
     @Test fun favoritesClearSearchAndImmediatelyConfirmAndRedrawChanges() {
+        // This test edits a query; the separate voice test covers microphone/recognition behavior.
+        // A clean CI install must not route the Favorites activation into a permission prompt.
+        device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
         FixtureServer().use { server ->
             val source = Source(name = "Favorites fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val channels = (1..3).map { Channel("favorite:$it", listOf("One", "Two", "Three")[it - 1], "News", "${server.base}/channel$it.mp4") }
