@@ -30,7 +30,8 @@ data class Programme(val channel: String, val title: String, val start: Long, va
 }
 data class Lineup(val channels: List<Channel>, val epgUrl: String = "")
 data class Guide(val channels: List<Channel>, val programmes: Map<String, List<Programme>>) {
-    fun at(channel: Channel, time: Long): Programme? = programmes[channel.guideId]?.firstOrNull { time >= it.start && time < it.end }
+    fun key(channel: Channel) = channel.guideId.ifBlank { channel.id }
+    fun at(channel: Channel, time: Long): Programme? = programmes[key(channel)]?.firstOrNull { time >= it.start && time < it.end }
     fun json(): JSONObject = JSONObject().put("channels", JSONArray(channels.map { it.json() }))
         .put("programmes", JSONArray(programmes.values.flatten().map { it.json() }))
     companion object {

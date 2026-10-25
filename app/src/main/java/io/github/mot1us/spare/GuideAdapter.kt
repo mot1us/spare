@@ -78,7 +78,7 @@ class GuideAdapter(
             text.typeface = Typeface.DEFAULT
             val start = windowStart(); val duration = 3 * 3600000L
             val available = width - leftWidth
-            val programmes = guide().programmes[channel.guideId].orEmpty()
+            val programmes = guide().programmes[guide().key(channel)].orEmpty()
             val save = canvas.save()
             canvas.clipRect(leftWidth, 0f, width.toFloat(), height.toFloat())
             if (programmes.none { it.end > start && it.start < start + duration }) {

@@ -6,6 +6,7 @@ import androidx.media3.datasource.HttpDataSource
 
 @UnstableApi
 object PlaybackErrors {
+    fun httpFailure(error: Throwable) = generateSequence(error) { it.cause }.take(12).filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
     fun message(error: PlaybackException): String {
         val causes = generateSequence<Throwable>(error) { it.cause }.take(12).toList()
         causes.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()?.let {

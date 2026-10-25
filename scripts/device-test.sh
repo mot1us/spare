@@ -9,7 +9,7 @@ collect_reports() {
   if [ "$result" != 0 ]; then
     "$adb" -s "$serial" logcat -d -t 1500 > app/build/reports/device/logcat.txt 2>&1 || true
   fi
-  for file in guide.png guide-all.png source-save.png source-cancel.png failure.png failure.xml; do
+  for file in guide.png guide-all.png guide-preview.png source-save.png source-cancel.png failure.png failure.xml; do
     "$adb" -s "$serial" pull "/sdcard/Android/data/io.github.mot1us.spare.debug/files/$file" "app/build/reports/device/$file" >/dev/null 2>&1 || true
   done
   if [ -n "${RUNNER_TEMP:-}" ] && [ -f "$RUNNER_TEMP/emulator.log" ]; then
@@ -23,7 +23,20 @@ for attempt in $(seq 1 120); do
   sleep 1
 done
 test "$("$adb" -s "$serial" shell getprop sys.boot_completed | tr -d '\r')" = 1
-"$adb" -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk
-"$adb" -s "$serial" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+install_checked_apk() {
+  local apk="$1" install_log="app/build/reports/device/install-$(basename "$1").txt"
+  for attempt in 1 2 3; do
+    "$adb" -s "$serial" wait-for-device
+    if "$adb" -s "$serial" install -r "$apk" >"$install_log" 2>&1; then cat "$install_log"; return 0; fi
+    cat "$install_log"
+    # Package validation failures are definitive. Only transient transport/service
+    # startup errors get a bounded installation retry; tests are never retried.
+    if grep -q 'INSTALL_FAILED' "$install_log"; then return 1; fi
+    sleep 2
+  done
+  return 1
+}
+install_checked_apk app/build/outputs/apk/debug/app-debug.apk
+install_checked_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 "$adb" -s "$serial" shell am instrument -w io.github.mot1us.spare.debug.test/androidx.test.runner.AndroidJUnitRunner | tee app/build/reports/device/results.txt
-grep -q '^OK (8 tests)' app/build/reports/device/results.txt
+grep -q '^OK (12 tests)' app/build/reports/device/results.txt

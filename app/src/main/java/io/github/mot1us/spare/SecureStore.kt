@@ -51,11 +51,11 @@ class SecureStore(private val context: Context) {
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        preferences.edit { listOf("min-height", "sixty", "groups", "stream-format", "video-info", "favorites", "last").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last").forEach { remove("$it-${source.id}") } }
     }
-    fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), preferences.getBoolean("sixty-${source.id}", false), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
+    fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
-        putInt("min-height-${source.id}", value.minHeight); putBoolean("sixty-${source.id}", value.sixtyOnly); putStringSet("groups-${source.id}", value.groups)
+        putInt("min-height-${source.id}", value.minHeight); remove("sixty-${source.id}"); putStringSet("excluded-fps-${source.id}", value.excludedFps.map { it.toString() }.toSet()); putStringSet("groups-${source.id}", value.groups)
     } }
     fun streamFormat(source: Source) = preferences.getString("stream-format-${source.id}", "auto").orEmpty()
     fun setStreamFormat(source: Source, value: String) { preferences.edit { putString("stream-format-${source.id}", value) } }
@@ -67,6 +67,16 @@ class SecureStore(private val context: Context) {
         val j = JSONObject(); values.entries.toList().takeLast(5000).forEach { j.put(it.key, it.value.json()) }
         preferences.edit { putString("video-info-${source.id}", j.toString()) }
     }
+    fun unavailable(source: Source): UnavailableChannels = runCatching {
+        val json = JSONObject(preferences.getString("unavailable-${source.id}", "{}").orEmpty())
+        UnavailableChannels(json.keys().asSequence().associateWith { json.getLong(it) }.toMutableMap())
+    }.getOrDefault(UnavailableChannels())
+    fun saveUnavailable(source: Source, channels: UnavailableChannels) {
+        preferences.edit { putString("unavailable-${source.id}", JSONObject(channels.snapshot()).toString()) }
+    }
+    var smallPreview: Boolean
+        get() = preferences.getBoolean("small-preview", false)
+        set(value) { preferences.edit { putBoolean("small-preview", value) } }
     var active: String
         get() = preferences.getString("active", "").orEmpty()
         set(value) { preferences.edit { putString("active", value) } }

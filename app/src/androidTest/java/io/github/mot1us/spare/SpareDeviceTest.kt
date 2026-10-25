@@ -21,6 +21,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
@@ -41,6 +42,8 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
+    @Before fun resetGuideStyle() { store.smallPreview = false }
+
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
         try {
@@ -52,6 +55,18 @@ class SpareDeviceTest {
             try { store.read("test-security.enc"); fail("Tampered ciphertext accepted") } catch (_: java.security.GeneralSecurityException) { }
             assertEquals(0, context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_ALLOW_BACKUP)
         } finally { context.deleteFile("test-security.enc") }
+    }
+
+    @Test fun legacyFpsSettingsMigrateAndNewExclusionsPersist() {
+        val source = Source(name = "Migration", kind = "xtream", url = "https://example.com")
+        context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).edit().putBoolean("sixty-${source.id}", true).commit()
+        try {
+            assertEquals(FrameRateFilter.onlySixty, store.filters(source).excludedFps)
+            val profile = GuideFilters(1080, setOf(25, 50), setOf("US | Sports"))
+            store.setFilters(source, profile)
+            assertEquals(profile, SecureStore(context).filters(source))
+            assertFalse(context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).contains("sixty-${source.id}"))
+        } finally { store.removeCache(source) }
     }
 
     @Test fun networkImportPreviewRemoteFavoritesAndResume() {
@@ -96,7 +111,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "guide.png"))
-                device.pressBack()
+                holdBack()
                 waitFor(scenario) { channelList(it)?.isShown == false }
                 scenario.recreate()
                 waitFor(scenario) { activity ->
@@ -119,6 +134,8 @@ class SpareDeviceTest {
                 assertEquals("/live/test/test-secret/1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.isShown == true }
+                waitFor(scenario) { device.hasObject(By.textContains("World News")) }
+                assertNull("Xtream must not require the whole provider XMLTV", server.requests["/xmltv.php"])
                 scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
@@ -205,7 +222,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 device.pressDPadLeft(); instrumentation.waitForIdleSync()
                 assertTrue(device.wait(Until.hasObject(By.text("My guide").focused(true)), 5000))
-                repeat(3) { device.pressDPadDown() }; device.pressDPadCenter()
+                repeat(2) { device.pressDPadDown() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 4 }
                 assertEquals("Category browsing must keep the current video", "/channel1.ts", playingPath(scenario))
                 scenario.onActivity { activity ->
@@ -235,7 +252,7 @@ class SpareDeviceTest {
         FixtureServer().use { server ->
             val source = Source(name = "Filters Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
-            val profile = GuideFilters(1080, true, setOf("News")); store.setFilters(source, profile)
+            val profile = GuideFilters(1080, FrameRateFilter.onlySixty, setOf("News")); store.setFilters(source, profile)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
                 scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
@@ -260,6 +277,133 @@ class SpareDeviceTest {
     }
 
     private fun channelList(activity: MainActivity): RecyclerView? = activity.window.decorView.findViewWithTag("channel-guide")
+    @Test fun missingChannelIsHiddenWithoutRetryLoopAndAuthIsNotHidden() {
+        listOf(404, 401).forEach { status -> FixtureServer(channelCount = 2, missingStatus = status).use { server ->
+            val source = Source(name = "Missing Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.videoSize.width > 0 && it.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressDPadDown(); device.pressDPadCenter()
+                if (status == 404) {
+                    waitFor(scenario) { store.unavailable(source).contains("xc:2", System.currentTimeMillis()) && channelList(it)?.isShown == true }
+                    waitFor(scenario) { playingPath(scenario) == "/live/test/test-secret/1.ts" }
+                    scenario.onActivity { assertEquals(1, channelList(it)!!.adapter!!.itemCount) }
+                    assertEquals(1, server.requests["/live/test/test-secret/2.ts"])
+                    assertEquals(1, server.requests["/live/test/test-secret/2.m3u8"])
+                    scenario.recreate(); waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 }
+                    assertTrue(store.unavailable(source).contains("xc:2", System.currentTimeMillis()))
+                } else {
+                    assertTrue(device.wait(Until.hasObject(By.textContains("HTTP 401")), 10000))
+                    assertTrue(store.unavailable(source).snapshot().isEmpty())
+                    assertEquals(1, server.requests["/live/test/test-secret/2.ts"])
+                    assertNull(server.requests["/live/test/test-secret/2.m3u8"])
+                }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        } }
+    }
+
+    @Test fun topControlsUsaOrderingAndBothGuideVideoModesKeepPlayback() {
+        FixtureServer(regionGroups = true).use { server ->
+            val source = Source(name = "Guide Modes", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
+                    assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(2)!!.itemView as android.widget.TextView).text.toString())
+                    assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
+                    val toolbar = activity.window.decorView.findViewWithTag<View>("guide-toolbar")
+                    val a = IntArray(2); val b = IntArray(2); toolbar.getLocationOnScreen(a); categories.getLocationOnScreen(b)
+                    assertTrue(a[1] + toolbar.height <= b[1])
+                    assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
+                    activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
+                }
+                device.pressDPadCenter(); assertTrue(device.wait(Until.hasObject(By.text("Guide video")), 5000))
+                device.findObject(By.text("Guide video")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Small live preview")), 5000))
+                device.findObject(By.text("Small live preview")).click()
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
+                assertTrue(store.smallPreview)
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
+                val before = server.requests["/channel1.mp4"]
+                device.pressDPadCenter(); waitFor(scenario) { channelList(it)?.isShown == false }
+                assertEquals("Expanding the current channel must not reconnect", before, server.requests["/channel1.mp4"])
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                val bitmap = instrumentation.uiAutomation.takeScreenshot()
+                scenario.onActivity { activity ->
+                    val rect = android.graphics.Rect(); find<PlayerView>(activity.window.decorView)!!.getGlobalVisibleRect(rect)
+                    val colors = mutableSetOf<Int>()
+                    for (x in rect.left + rect.width()/4 until rect.right - rect.width()/4 step 8) for (y in rect.top + 10 until rect.bottom - 45 step 8) colors.add(bitmap.getPixel(x, y))
+                    assertTrue("Preview must contain rendered video, not an empty black surface", colors.size > 10)
+                }; bitmap.recycle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "guide-preview.png"))
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                assertEquals(before, server.requests["/channel1.mp4"])
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun actualStreamStallUsesBufferingAndResumesWithoutReconnect() {
+        FixtureServer(stalled = true).use { server ->
+            val source = Source(name = "Stall Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_BUFFERING }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("playback-status")?.let { text -> text.isShown && text.text.toString() == "Buffering…" } == true }
+                assertEquals(1, server.requests["/channel1.ts"])
+                server.resumeStream.countDown()
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.isPlaying == true && activity.window.decorView.findViewWithTag<View>("playback-status")?.isShown == false }
+                assertEquals("A recoverable buffer underrun must keep the existing stream", 1, server.requests["/channel1.ts"])
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    private fun holdBack() { device.executeShellCommand("input dpad keyevent --duration ${ViewConfiguration.getLongPressTimeout() + 500} 4"); instrumentation.waitForIdleSync() }
+    private fun repeatTransport(input: ByteArray, cycles: Int): ByteArray {
+        val result = ByteArray(input.size * cycles); val counters = mutableMapOf<Int, Int>()
+        fun timestamp(bytes: ByteArray, offset: Int, delta: Long) {
+            val a = (0..4).map { bytes[offset + it].toInt() and 255 }
+            val pts = ((a[0].toLong() shr 1 and 7) shl 30) or (a[1].toLong() shl 22) or ((a[2].toLong() shr 1) shl 15) or (a[3].toLong() shl 7) or (a[4].toLong() shr 1)
+            val shifted = (pts + delta) and 0x1ffffffffL
+            bytes[offset] = ((a[0] and 0xf1) or (((shifted shr 30).toInt() and 7) shl 1)).toByte()
+            bytes[offset + 1] = (shifted shr 22).toByte(); bytes[offset + 2] = (((shifted shr 15).toInt() and 127) shl 1 or 1).toByte()
+            bytes[offset + 3] = (shifted shr 7).toByte(); bytes[offset + 4] = ((shifted.toInt() and 127) shl 1 or 1).toByte()
+        }
+        repeat(cycles) { cycle ->
+            val bytes = input.copyOf(); val delta = cycle * 225000L
+            for (offset in bytes.indices step 188) {
+                if (offset + 188 > bytes.size) break
+                val pid = ((bytes[offset + 1].toInt() and 31) shl 8) or (bytes[offset + 2].toInt() and 255)
+                val flags = bytes[offset + 3].toInt() and 255
+                if (flags and 16 != 0) { val count = counters[pid] ?: 0; bytes[offset + 3] = ((flags and 240) or count).toByte(); counters[pid] = (count + 1) % 16 }
+                var payload = offset + 4
+                if (flags and 32 != 0) {
+                    val length = bytes[payload].toInt() and 255
+                    if (length >= 7 && bytes[payload + 1].toInt() and 16 != 0) {
+                        val start = payload + 2
+                        var base = 0L; for (index in 0..3) base = (base shl 8) or (bytes[start + index].toLong() and 255)
+                        base = (base shl 1) or (bytes[start + 4].toLong() ushr 7 and 1); base = (base + delta) and 0x1ffffffffL
+                        for (index in 0..3) bytes[start + index] = (base shr (25 - index * 8)).toByte()
+                        bytes[start + 4] = ((bytes[start + 4].toInt() and 127) or ((base.toInt() and 1) shl 7)).toByte()
+                    }
+                    payload += length + 1
+                }
+                if (bytes[offset + 1].toInt() and 64 != 0 && payload + 14 < offset + 188 && bytes[payload] == 0.toByte() && bytes[payload + 1] == 0.toByte() && bytes[payload + 2] == 1.toByte()) {
+                    val ptsFlags = bytes[payload + 7].toInt() and 192
+                    if (ptsFlags and 128 != 0) timestamp(bytes, payload + 9, delta)
+                    if (ptsFlags == 192 && payload + 19 < offset + 188) timestamp(bytes, payload + 14, delta)
+                }
+            }
+            bytes.copyInto(result, cycle * input.size)
+        }
+        return result
+    }
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
@@ -291,14 +435,18 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
+        val requests = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        val resumeStream = java.util.concurrent.CountDownLatch(1)
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
         private val transport = instrumentation.context.assets.open("no-aud.ts").use { it.readBytes() }
+        private val avTransport by lazy { instrumentation.context.assets.open("stall-av.ts").use { it.readBytes() } }
+        private val longTransport by lazy { repeatTransport(avTransport, 16) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
-            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"${if (fallbackHls) "ts" else "mp4"}","epg_channel_id":"test1"}"""
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1"}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
@@ -307,11 +455,13 @@ class SpareDeviceTest {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); bitmap.recycle()
         }.toByteArray()
         private val playlist = ("#EXTM3U url-tvg=\"$base/guide.xml\"\n" + (1..8).joinToString("\n") {
-            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (tsMode) "ts" else "mp4"}"
+            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (tsMode || stalled) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
+        private val shortEpg: ByteArray
         init {
             val now = System.currentTimeMillis() / 1800000L * 1800000L
+            shortEpg = """{"epg_listings":[{"title":"V29ybGQgTmV3cw==","description":"U3BhcmUgcHJvZ3JhbW1lIGd1aWRlIHRlc3Qu","start_timestamp":"${now / 1000}","stop_timestamp":${(now + 3600000) / 1000}}]}""".toByteArray()
             val format = DateTimeFormatter.ofPattern("uuuuMMddHHmmss Z").withZone(ZoneOffset.UTC)
             xml = ("<tv>" + (1..8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
                 "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${listOf("World News", "Live Report", "Evening Update")[slot % 3]}</title><desc>Spare playback and guide test fixture.</desc></programme>"
@@ -324,26 +474,32 @@ class SpareDeviceTest {
                         val request = reader.readLine().orEmpty()
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
-                        val path = target.substringBefore('?')
+                        val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
                         val (body, mime) = when (path) {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
                             "/logo.png" -> logo to "image/png"
-                            "/player_api.php" -> (if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""".toByteArray() else streams) to "application/json"
+                            "/player_api.php" -> (if (target.contains("get_short_epg")) shortEpg else if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""".toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
-                            else -> if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
+                            else -> if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
-                        val status = if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
-                        output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
-                        if (slowPlaylist && path == "/playlist.m3u") {
+                        val status = if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
+                        val length = if (stalled && path == "/channel1.ts") "" else "Content-Length: ${body.size}\r\n"
+                        output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\n${length}Connection: close\r\n\r\n".toByteArray())
+                        if (stalled && path == "/channel1.ts") {
+                            val split = avTransport.size * 2
+                            output.write(body, 0, split); output.flush()
+                            resumeStream.await(14, java.util.concurrent.TimeUnit.SECONDS)
+                            output.write(body, split, body.size - split); output.flush()
+                        } else if (slowPlaylist && path == "/playlist.m3u") {
                             for (chunk in body.asList().chunked(200)) { output.write(chunk.toByteArray()); output.flush(); Thread.sleep(200) }
                         } else { output.write(body); output.flush() }
                     }
                 }
             }
         }
-        override fun close() { socket.close(); worker.shutdownNow() }
+        override fun close() { resumeStream.countDown(); socket.close(); worker.shutdownNow() }
     }
 }

@@ -45,7 +45,7 @@ object Importers {
                 line.isNotEmpty() && !line.startsWith('#') -> {
                     if (Network.allowed(line, http)) {
                         val name = title.ifBlank { metadata["tvg-name"] ?: "Channel ${result.size + 1}" }
-                        val guideId = metadata["tvg-id"].orEmpty().take(256)
+                        val guideId = metadata["tvg-id"].orEmpty().trim().take(256)
                         val stable = "$guideId|$name|${URI(line).let { uri ->
                             val secretKeys = setOf("username", "user", "password", "pass", "token", "auth", "signature", "expires")
                             val query = uri.rawQuery.orEmpty().split('&').filter { it.substringBefore('=').lowercase(Locale.ROOT) !in secretKeys }.sorted().joinToString("&")
@@ -114,7 +114,7 @@ object Importers {
             val extension = j.optString("container_extension", "ts").takeIf { it in listOf("ts", "m3u8", "mp4") } ?: "ts"
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
-                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), j.optString("epg_channel_id").take(256))
+                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" })
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }
@@ -141,7 +141,7 @@ object Importers {
                     require(++elements <= 2_000_000 && parser.depth <= 32) { "Guide exceeds safety limits" }
                     when (parser.name) {
                         "programme" -> {
-                            channel = parser.getAttributeValue(null, "channel").orEmpty().take(256)
+                            channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
                             start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
                             end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
                             title = ""; description = ""; inside = true
@@ -168,10 +168,10 @@ object Importers {
         return result.groupBy { it.channel }.mapValues { (_, list) -> list.distinctBy { it.start }.sortedBy { it.start } }
     }
     fun timestamp(value: String): Long = runCatching {
-        val parts = value.trim().split(Regex("\\s+"))
-        val digits = parts[0]
-        if (digits.length != 14) return 0L
-        val zone = if (parts.size > 1) ZoneOffset.of(parts[1]) else ZoneOffset.UTC
+        val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L
+        val digits = match.groupValues[1].padEnd(14, '0')
+        val zoneText = match.groupValues[2].uppercase(Locale.ROOT)
+        val zone = if (zoneText in setOf("", "UTC", "GMT")) ZoneOffset.UTC else ZoneOffset.of(zoneText)
         java.time.LocalDateTime.parse(digits, DateTimeFormatter.ofPattern("uuuuMMddHHmmss", Locale.ROOT).withResolverStyle(java.time.format.ResolverStyle.STRICT)).toInstant(zone).toEpochMilli()
     }.getOrDefault(0L)
 }

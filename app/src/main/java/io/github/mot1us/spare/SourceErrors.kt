@@ -19,6 +19,7 @@ enum class SourceProblem(val detail: String) {
     RESPONSE("The server did not return a supported Xtream channel list. Check the server address and that the provider supports Xtream Codes."),
     AUTH("The provider rejected the account credentials. Check the username and password."),
     INACTIVE("The provider reports that this account is inactive or expired. Check the account with your provider."),
+    GUIDE_RESPONSE("The provider did not return a supported programme guide response (GUIDE_DATA)."),
     NO_CHANNELS("The provider returned no supported live channels. Check the account's live-TV access and source settings."),
     LIMIT("The provider response exceeds the app's import limits."),
     CHANNEL_LIMIT("The provider's channel list contains more than 100,000 entries, which exceeds Spare's current channel limit."),

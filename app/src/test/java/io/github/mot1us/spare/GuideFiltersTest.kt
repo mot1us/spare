@@ -8,21 +8,29 @@ class GuideFiltersTest {
     @Test fun strictFiltersNeverTrustLabelsOrUnknownMetadata() {
         assertTrue(GuideFilters().matches(channel, null))
         assertFalse(GuideFilters(1080).matches(channel, null))
-        assertFalse(GuideFilters(sixtyOnly = true).matches(channel, null))
-        assertFalse(GuideFilters(1080, true).matches(channel, VideoInfo(1280, 720, 60f)))
-        assertFalse(GuideFilters(1080, true).matches(channel, VideoInfo(3840, 2160, 50f)))
+        assertFalse(GuideFilters(excludedFps = FrameRateFilter.onlySixty).matches(channel, null))
+        assertFalse(GuideFilters(1080, FrameRateFilter.onlySixty).matches(channel, VideoInfo(1280, 720, 60f)))
+        assertFalse(GuideFilters(1080, FrameRateFilter.onlySixty).matches(channel, VideoInfo(3840, 2160, 50f)))
     }
     @Test fun acceptsBroadcastSixtyRatesAndRejectsLowerOrUnknownRates() {
-        val filters = GuideFilters(1080, true)
+        val filters = GuideFilters(1080, FrameRateFilter.onlySixty)
         listOf(59.94f, 60f).forEach { assertTrue(filters.matches(channel, VideoInfo(1920, 1080, it))) }
         listOf(0f, 23.976f, 25f, 29.97f, 30f, 50f, Float.NaN).forEach { assertFalse(filters.matches(channel, VideoInfo(1920, 1080, it))) }
     }
     @Test fun resolutionThresholdsAndCategoriesIntersect() {
-        val filters = GuideFilters(1080, true, setOf("NFL", "MLB"))
+        val filters = GuideFilters(1080, FrameRateFilter.onlySixty, setOf("NFL", "MLB"))
         assertTrue(filters.matches(channel, VideoInfo(3840, 2160, 60f)))
         assertTrue(filters.matches(channel, VideoInfo(1080, 1920, 60f)))
         assertFalse(filters.matches(channel.copy(group = "News"), VideoInfo(1920, 1080, 60f)))
         assertFalse(GuideFilters(2160).matches(channel, VideoInfo(1920, 1080, 60f)))
+    }
+    @Test fun fpsExclusionsKeepTheOtherBroadcastFamilies() {
+        val profile = GuideFilters(excludedFps = setOf(25, 50))
+        listOf(23.976f, 24f, 29.97f, 30f, 59.94f, 60f).forEach { assertTrue(profile.matches(channel, VideoInfo(1920, 1080, it))) }
+        listOf(25f, 50f, 0f, Float.NaN).forEach { assertFalse(profile.matches(channel, VideoInfo(1920, 1080, it))) }
+        assertFalse(profile.matches(channel, null))
+        assertTrue(GuideFilters().matches(channel, null))
+        assertFalse(GuideFilters(excludedFps = setOf(24)).matches(channel, VideoInfo(1920, 1080, 23.976f)))
     }
     @Test fun streamFormatChangePreservesEncodedCredentialsAndQuery() {
         val url = "https://example.com:8443/live/user%2Fname/p%40ss/123.ts?token=a%2Fb"

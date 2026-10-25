@@ -17,6 +17,7 @@ data class GuideSection(val title: String, val key: String, val active: Boolean 
 class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
     @SuppressLint("NotifyDataSetChanged") fun submit(next: List<GuideSection>) { items = next; notifyDataSetChanged() }
+    fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val d = context.resources.displayMetrics.density

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 — 2026-10-24
+
+- Separate startup, buffering, alternate-format, and reconnect status. Add a delayed corner buffering indicator, a larger resume cushion, a bounded buffer target, a conservative adaptive-live offset, and bounded reconnects.
+- Stop retrying terminal HTTP errors. Temporarily hide channels only when their attempted startup endpoints all return 404/410; retain network/account failures and restore hidden channels after 15 minutes or on demand. Return to the last working channel when available.
+- Put general controls above the guide and order USA categories first. Preserve the active category when returning to the sidebar.
+- Offer transparent overlay and small live preview in Settings. Keep one player running while browsing; hold Back or click the current channel to expand without reconnecting.
+- Replace the sports preset and 60-only toggle with FPS exclusions, grouping fractional broadcast rates with their nominal rates. Preserve existing 60-only preferences during migration.
+- Load bounded per-channel Xtream EPG for visible channels and the current stream instead of requiring a whole-provider XMLTV download. Decode programme text, handle missing EPG IDs, cache data, and explain guide failures. Accept additional XMLTV time formats without relaxing entity or size protections.
+- Extend regression coverage for actual network stalls, 404 versus account failures, preview rendering, hold-Back, guide modes, category ordering, FPS exclusions, and EPG responses.
+
 ## 0.2.0 — 2026-10-24
 
 - Add a compact translucent guide over live video, provider categories and Favorites on the left, smaller text, separated controls, and Back-to-guide navigation.
