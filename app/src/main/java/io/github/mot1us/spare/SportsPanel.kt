@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -30,6 +31,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val progress = label(10f).apply { tag = "sports-status"; maxLines = 2; setPadding(0, dp(5), 0, dp(5)) }
     private val empty = label(12f).apply { tag = "sports-empty"; setPadding(dp(8), dp(12), dp(8), dp(12)) }
     private val rows = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-games" }
+    private val logos = LogoLoader(96)
     private var games = emptyList<SportsGame>()
     private var remembered: String? = null
     private var focusEpoch = 0
@@ -53,17 +55,25 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                     return super.onKeyDown(keyCode, event)
                 }
             }.apply {
-                orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(6))
+                orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(6))
                 isFocusableInTouchMode = true; isClickable = true
-                layoutParams = RecyclerView.LayoutParams(-1, dp(58)).apply { bottomMargin = dp(5) }
+                layoutParams = RecyclerView.LayoutParams(-1, dp(68)).apply { bottomMargin = dp(5) }
             }
             val title = label(13f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
             val detail = label(11f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-            box.addView(title); box.addView(detail); return Card(box, title, detail)
+            val first = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER }; val second = ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
+            box.addView(first, LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(6) }); box.addView(second, LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+            box.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(title); addView(detail) }, LayoutParams(0, -2, 1f)); return Card(box, title, detail, first, second)
         }
         override fun onBindViewHolder(holder: Card, position: Int) {
-            val game = games[position]; holder.box.tag = game.key; holder.title.text = game.title
-            holder.detail.text = "${if (game.live(System.currentTimeMillis())) "LIVE" else "NEXT · ${time(game.start)}"} · ${game.teams.first().league} · " + if (game.broadcasts.isNotEmpty()) "${game.broadcasts.size} matched channels" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible channels" else "Channel not matched yet"
+            val game = games[position]; holder.box.tag = game.key; holder.title.text = game.scoreLine
+            holder.detail.text = "${game.statusLine(System.currentTimeMillis())} · ${game.teams.first().league} · ${game.networks.joinToString(" / ").ifBlank { "Broadcast TBA" }}"
+            listOf(holder.first, holder.second).forEachIndexed { index, view ->
+                val url = game.logos[game.teams[index].id].orEmpty()
+                fun redraw() { if (holder.box.tag == game.key) view.setImageBitmap(logos.get(url, false) {}) }
+                view.setImageBitmap(logos.get(url, false, ::redraw))
+                view.contentDescription = game.teams[index].name
+            }
             holder.box.contentDescription = "${holder.title.text}. ${holder.detail.text}"
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x222D3542)
             fun ink(active: Boolean) { holder.title.setTextColor(if (active) Color.BLACK else Color.WHITE); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY) }
@@ -97,9 +107,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val signature = followed
         if (teamSignature != signature) {
             teamSignature = signature; teamBar.removeAllViews()
-            val teams = listOf<String?>(null) + followed.sortedBy { SportsCatalog.byId[it]?.name }
+            val teams = listOf(null, "league:NFL", "league:MLB") + followed.sortedBy { SportsCatalog.byId[it]?.name }
             teams.forEachIndexed { index, team ->
-                val chip = button(team?.let { SportsCatalog.byId[it]!!.name } ?: "All live") { pendingEnter = false; remembered = null; chooseTeam(team) }
+                val chip = button(when (team) { null -> "All games"; "league:NFL" -> "NFL"; "league:MLB" -> "MLB"; else -> SportsCatalog.byId[team]!!.name }) { pendingEnter = false; remembered = null; chooseTeam(team) }
                 chip.setOnFocusChangeListener { _, active -> if (active) teamIndex = index }
                 chip.tag = team?.let { "sports-team:$it" } ?: "sports-scope"; chip.isSelected = team == selected
                 chip.setOnKeyListener { _, key, event -> when (key) {
@@ -116,11 +126,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
         progressBar.visibility = if (scanning) VISIBLE else GONE; progress.text = message
         empty.text = when {
-            message.contains("Schedule unavailable") -> "Live game status could not be verified. Unverified matchups stay hidden; choose Refresh to retry."
+            message.contains("Schedule unavailable") -> "Scores could not be refreshed. Saved results may be shown; choose Refresh to retry."
             scanning -> "Loading schedules… Saved results appear immediately when available."
             hiddenGames > 0 -> "$hiddenGames live ${if (hiddenGames == 1) "game is" else "games are"} hidden by your guide filters or unavailable channels. Open Filters to adjust."
-            selected != null -> "No upcoming game has been announced for ${SportsCatalog.byId[selected]?.name}. Try Refresh or choose another team."
-            else -> "No MLB/NFL games are currently in progress. Choose a team to see its next game."
+            selected != null -> "No upcoming game has been announced for ${SportsCatalog.byId[selected]?.name ?: selected.substringAfter(':')}. Try Refresh or choose another team."
+            else -> "No games in this scoreboard yet. Choose Refresh to retry."
         }
         empty.visibility = if (next.isEmpty()) VISIBLE else GONE
         if (games != next) {
@@ -146,6 +156,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }; attempt(15)
     }
     fun refreshTheme() { cards.notifyItemRangeChanged(0, cards.itemCount); teamSignature = null }
-    private class Card(val box: LinearLayout, val title: TextView, val detail: TextView) : RecyclerView.ViewHolder(box)
+    fun pauseImages() { logos.pause() }
+    fun resumeImages() { logos.resume(); cards.notifyItemRangeChanged(0, cards.itemCount) }
+    fun closeImages() { logos.close() }
+    private class Card(val box: LinearLayout, val title: TextView, val detail: TextView, val first: ImageView, val second: ImageView) : RecyclerView.ViewHolder(box)
     companion object { fun time(epoch: Long): String = GuideClock.dayTime(epoch) }
 }

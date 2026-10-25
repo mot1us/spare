@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList())
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true)
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {
@@ -36,7 +36,7 @@ object LiveSports {
         }
         return LiveSportsSnapshot(events.distinctBy { it.id }, now, leagues)
     }
-    fun parse(text: String, league: String, now: Long, onlyLive: Boolean = true): List<LiveEvent> {
+    fun parse(text: String, league: String, now: Long, onlyLive: Boolean = true, includeCompleted: Boolean = false): List<LiveEvent> {
         require(league in setOf("NFL", "MLB"))
         val entries = JSONObject(text).getJSONArray("events"); require(entries.length() <= 500)
         val result = mutableListOf<LiveEvent>()
@@ -49,11 +49,13 @@ object LiveSports {
                 val state = status.optString("name")
                 val live = status.optString("state") == "in" && !status.optBoolean("completed") && state in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION")
                 val upcoming = !onlyLive && status.optString("state") == "pre" && state == "STATUS_SCHEDULED" && !status.optBoolean("completed")
-                if (!live && !upcoming) continue
-                val start = runCatching { Instant.parse(competition.optString("date").ifBlank { event.optString("date") }).toEpochMilli() }.getOrNull() ?: continue
+                if (!live && !upcoming && !includeCompleted) continue
+                val date = competition.optString("date").ifBlank { event.optString("date") }
+                val start = runCatching { java.time.OffsetDateTime.parse(date).toInstant().toEpochMilli() }.getOrNull() ?: continue
                 // A malformed or stale schedule cannot turn a future/old listing into a live event.
                 if (live && (start > now + 60000L || start < now - 18 * 3600000L)) continue
-                if (upcoming && (start < now - 300000L || start > now + 370 * 86400000L)) continue
+                if (upcoming && !includeCompleted && (start < now - 300000L || start > now + 370 * 86400000L)) continue
+                if (kotlin.math.abs(start - now) > 370 * 86400000L) continue
                 val competitors = competition.optJSONArray("competitors") ?: continue
                 if (competitors.length() != 2) continue
                 val teams = (0 until competitors.length()).mapNotNull { i ->
@@ -67,7 +69,16 @@ object LiveSports {
                         for (n in 0 until minOf(names.length(), 20)) networks.add(names.optString(n).take(80))
                     } }
                     competition.optJSONArray("geoBroadcasts")?.let { array -> for (i in 0 until minOf(array.length(), 20)) array.optJSONObject(i)?.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { networks.add(it.take(80)) } }
-                    result.add(LiveEvent(event.optString("id").take(80), teams, start, if (live) "in" else "pre", networks.distinct()))
+                    val scores = linkedMapOf<String, String>(); val logos = linkedMapOf<String, String>()
+                    for (i in 0 until competitors.length()) {
+                        val side = competitors.getJSONObject(i); val team = side.getJSONObject("team")
+                        val id = resolve(league, team.optString("abbreviation"), team.optString("displayName")) ?: continue
+                        val score = side.optJSONObject("score")?.optString("displayValue") ?: side.optString("score")
+                        if (score.matches(Regex("[0-9]{1,3}"))) scores[id] = score
+                        val logo = team.optString("logo").ifBlank { team.optJSONArray("logos")?.optJSONObject(0)?.optString("href").orEmpty() }
+                        if (logo.length <= 2048 && Network.allowed(logo, false)) logos[id] = logo
+                    }
+                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100)))
                 }
             }
         }

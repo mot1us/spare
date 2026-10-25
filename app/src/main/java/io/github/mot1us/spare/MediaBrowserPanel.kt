@@ -15,7 +15,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import androidx.recyclerview.widget.GridLayoutManager
-import androidx.recyclerview.widget.DiffUtil
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -35,7 +34,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     private val search = EditText(context).apply { hint = "Search this list"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
     private val categories = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-categories" }
-    private val rows = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
+    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
@@ -143,25 +142,23 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     @SuppressLint("NotifyDataSetChanged")
     private fun filter() {
         val query = search.text.toString().trim()
-        val previous = shownRows
-        val next = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isBlank() || it.title.contains(query, true)) }
-        val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
-            override fun getOldListSize() = previous.size
-            override fun getNewListSize() = next.size
-            override fun areItemsTheSame(a: Int, b: Int) = previous[a].key == next[b].key
-            override fun areContentsTheSame(a: Int, b: Int) = previous[a].let { x -> next[b].let { y -> x.title == y.title && x.detail == y.detail && x.poster == y.poster && x.description == y.description } }
-        })
-        shownRows = next; rows.adapter?.let(diff::dispatchUpdatesTo); empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
+        // Filtering preserves provider order. A full Myers diff becomes quadratic when
+        // a large catalog loses most entries; only visible holders need rebinding.
+        ++focusEpoch; pending = null; rows.stopScroll()
+        shownRows = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isBlank() || it.title.contains(query, true)) }
+        rows.adapter?.notifyDataSetChanged()
+        empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }
+
     fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
-        val epoch = ++focusEpoch; val item = list.findViewHolderForAdapterPosition(position)?.itemView
+        val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
         if (item != null) { item.requestFocus(); return }
         pending = list; list.stopScroll(); list.scrollToPosition(position)
         fun attempt(left: Int) {
             if (!isShown || epoch != focusEpoch) { pending = null; return }
-            val row = list.findViewHolderForAdapterPosition(position)?.itemView
+            val row = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
             if (row != null) { pending = null; row.requestFocus() } else if (left > 0) list.postOnAnimation { attempt(left - 1) } else pending = null
         }; list.postOnAnimation { attempt(25) }
     }
@@ -191,6 +188,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start); actions.addView(makeButton("Back to catalog", back)); detailPane.addView(actions, LayoutParams(-1, dp(40)))
         if (restore) start.requestFocus()
     }
+    fun pauseImages() { ++focusEpoch; pending = null; images.pause() }
+    fun resumeImages() { images.resume() }
     fun closeImages() { images.close() }
     private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box)
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)

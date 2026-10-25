@@ -3,9 +3,11 @@ package io.github.mot1us.spare
 import kotlin.math.abs
 
 data class SportsBroadcast(val channel: Channel, val programme: Programme)
-data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList()) {
+data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "") {
     val key: String get() = eventId.ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
+    val scoreLine: String get() = if (scores.isEmpty()) title else teams.joinToString("   —   ") { it.name + (scores[it.id]?.let { score -> "  $score" } ?: "") }
+    fun statusLine(now: Long): String = when { state == "post" -> status.ifBlank { "Final" }; live(now) -> "LIVE · ${status.ifBlank { "In progress" }}"; state == "pre" -> "${GuideClock.dayTime(start)}"; else -> status.ifBlank { "Status unavailable" } }
     fun live(now: Long) = if (eventId.isNotBlank()) state == "in" && start <= now + 60000 else start <= now && end > now
 }
 

@@ -15,7 +15,7 @@ class FrameRates(private val activity: Activity, private val view: SurfaceView) 
     @Volatile private var rate = 0f
     init { view.holder.addCallback(this) }
     fun request(value: Float) {
-        if (!value.isFinite() || value !in 10f..120f || abs(value - rate) < .01f) return
+        if (!value.isFinite() || value !in 10f..120f || abs(value - rate) < .1f) return
         rate = value
         handler.post { apply() }
     }

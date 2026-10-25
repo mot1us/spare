@@ -20,6 +20,16 @@ class LiveSportsTest {
         assertTrue(LiveSports.parse(event(state = "pre"), "NFL", now).isEmpty()); assertTrue(LiveSports.parse(event(completed = true), "NFL", now).isEmpty())
         assertTrue(LiveSports.parse(event(start = now + 3600000), "NFL", now).isEmpty())
     }
+    @Test fun realFeedMinutePrecisionDatesAndFinalScoresAreAccepted() {
+        val json = JSONObject(event(state = "post", name = "STATUS_FINAL", completed = true))
+        val item = json.getJSONArray("events").getJSONObject(0)
+        item.put("date", java.time.Instant.ofEpochMilli(now - 600000).atOffset(java.time.ZoneOffset.UTC).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mmX")))
+        val sides = item.getJSONArray("competitions").getJSONObject(0).getJSONArray("competitors")
+        sides.getJSONObject(0).put("score", "27"); sides.getJSONObject(1).put("score", "24")
+        val parsed = LiveSports.parse(json.toString(), "NFL", now, onlyLive = false, includeCompleted = true).single()
+        assertEquals("post", parsed.state); assertEquals("27", parsed.scores["nfl:SEA"])
+        assertTrue(LiveSports.parse(json.toString(), "NFL", now).isEmpty())
+    }
     @Test fun currentProviderListingCannotTurnFutureSeahawksGameIntoLiveMatch() {
         val channel = Channel("1", "NFL Seahawks", "Sports", "https://example.com/live")
         val guide = Guide(listOf(channel), mapOf("1" to listOf(Programme("1", "Seahawks vs 49ers", now - 3600000, now + 10 * 3600000))))

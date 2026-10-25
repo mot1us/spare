@@ -6,6 +6,27 @@ import java.io.IOException
 
 class RefinementTest {
     private val now = 1800000000000L
+    @Test fun providerQualityFiltersBeforePlaybackButObservedDataWins() {
+        val quality = ProviderQuality.parse(org.json.JSONObject("""{"video":{"width":1920,"height":1080,"r_frame_rate":"60000/1001"}}"""))!!
+        val channel = Channel("1", "A channel", "USA", "https://example.com/live", reportedQuality = quality)
+        val filter = GuideFilters(1080, FrameRateFilter.onlySixty)
+        assertTrue(filter.matches(channel, null))
+        assertTrue(filter.matches(channel, VideoInfo(1920, 1080, 0f)))
+        assertFalse(filter.matches(channel, VideoInfo(1280, 720, 60f)))
+        assertFalse(filter.matches(channel, VideoInfo(1920, 1080, 50f)))
+        assertEquals(channel, Channel.from(channel.json()))
+        val labelled = ProviderQuality.parse(org.json.JSONObject(), "USA ESPN FHD 60fps")!!
+        assertEquals(1080, labelled.height); assertEquals(60f, labelled.fps, .01f)
+        assertFalse(filter.matches(channel.copy(reportedQuality = ProviderQuality.parse(org.json.JSONObject(), "FHD")), null))
+        assertNull(ProviderQuality.parse(org.json.JSONObject(), "Channel 60"))
+    }
+    @Test fun scoreboardKeepsFinalScoresAndLogos() {
+        val event = LiveEvent("final", setOf("nfl:SEA", "nfl:SF"), now - 3600000, "post", scores = mapOf("nfl:SEA" to "27", "nfl:SF" to "24"), logos = mapOf("nfl:SEA" to "https://images.example/sea.png"), status = "Final")
+        val snapshot = LiveSportsSnapshot(listOf(event), now, setOf("NFL"))
+        assertEquals(snapshot, SportsSchedule.from(SportsSchedule.json(snapshot)))
+        val game = SportsSchedule.games(snapshot, Guide.EMPTY, "league:NFL", emptySet(), now).single()
+        assertFalse(game.live(now)); assertEquals("Final", game.statusLine(now)); assertTrue(game.scoreLine.contains("27"))
+    }
     @Test fun measuredSixtyOverridesMisdeclaredThirtyPointThreeWithoutDoublingProgressiveThirty() {
         assertEquals(59.94f, VideoRate.resolve(30.3f, 59.94f), .001f)
         assertEquals(30f, VideoRate.resolve(30.3f, 30f), .001f)
@@ -31,11 +52,11 @@ class RefinementTest {
         val next = LiveEvent("next", setOf("mlb:NYY", "mlb:BOS"), now + 5 * 86400000L, "pre", listOf("ESPN"))
         val feed = LiveSportsSnapshot(listOf(live, next), now, setOf("NFL", "MLB"))
         val all = SportsSchedule.games(feed, Guide.EMPTY, null, emptySet(), now)
-        assertEquals(listOf("live"), all.map { it.eventId }); assertTrue(all.single().broadcasts.isEmpty())
+        assertEquals(listOf("live", "next"), all.map { it.eventId }); assertTrue(all.all { it.broadcasts.isEmpty() })
         val followed = SportsSchedule.games(feed, Guide.EMPTY, "mlb:NYY", emptySet(), now)
         assertEquals("next", followed.single().eventId); assertFalse(followed.single().live(now))
         assertEquals(feed, SportsSchedule.from(SportsSchedule.json(feed)))
-        assertTrue(SportsSchedule.games(feed.copy(checked = now - 120001), Guide.EMPTY, null, emptySet(), now).isEmpty())
+        assertTrue(SportsSchedule.games(feed.copy(checked = now - 120001), Guide.EMPTY, null, emptySet(), now).none { it.live(now) })
     }
     @Test fun broadcasterMatchesAreExplicitCandidatesUntilEpgConfirmsGame() {
         val channel = Channel("one", "USA FOX FHD", "USA", "https://example.com/live")

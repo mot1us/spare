@@ -20,10 +20,12 @@ object FrameRateFilter {
 }
 
 data class GuideFilters(val minHeight: Int = 0, val excludedFps: Set<Int> = emptySet(), val groups: Set<String> = emptySet()) {
-    fun matches(channel: Channel, info: VideoInfo?): Boolean =
-        (groups.isEmpty() || channel.group in groups) &&
+    fun matches(channel: Channel, observed: VideoInfo?): Boolean {
+        val info = channel.quality(observed)
+        return (groups.isEmpty() || channel.group in groups) &&
             (minHeight == 0 || (info != null && minOf(info.width, info.height) >= minHeight)) &&
             (excludedFps.isEmpty() || (info != null && info.fps.isFinite() && info.fps > 0 && FrameRateFilter.bucket(info.fps) !in excludedFps))
+    }
     fun summary(): String = listOfNotNull(
         if (groups.isNotEmpty()) "${groups.size} categories" else null,
         when (minHeight) { 720 -> "HD+"; 1080 -> "FHD+"; 2160 -> "4K"; else -> null },

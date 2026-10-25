@@ -57,7 +57,7 @@ object Importers {
                             metadata["tvg-logo"].orEmpty().takeIf { Network.allowed(it, http) }.orEmpty(), guideId,
                             (metadata["catchup-days"] ?: metadata["timeshift"])?.toIntOrNull()?.coerceIn(0, 30) ?: 0,
                             metadata["catchup"].orEmpty().ifBlank { if (metadata.containsKey("timeshift")) "shift" else "" }, metadata["catchup-source"].orEmpty().take(8192),
-                            metadata["media"] == "true" || metadata.containsKey("media-dir")))
+                            metadata["media"] == "true" || metadata.containsKey("media-dir"), reportedQuality = ProviderQuality.parse(JSONObject(metadata), name)))
                         if (result.size > MAX_CHANNELS) throw SourceFailure(SourceProblem.CHANNEL_LIMIT)
                     }
                     metadata = emptyMap(); title = ""; group = ""
@@ -121,7 +121,7 @@ object Importers {
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
                 j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" },
-                if (j.optInt("tv_archive") == 1) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc")
+                if (j.optInt("tv_archive") == 1) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc", reportedQuality = ProviderQuality.parse(j, j.optString("name")))
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }

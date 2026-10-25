@@ -18,12 +18,13 @@ data class Source(
     }
 }
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
-    val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false) {
+    val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null) {
+    fun quality(observed: VideoInfo?): VideoInfo? = if (observed == null) reportedQuality else if (observed.fps <= 0 && (reportedQuality?.fps ?: 0f) > 0) observed.copy(fps = reportedQuality!!.fps) else observed
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
-        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media)
+        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.json())
     companion object {
         fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
-            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"))
+            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), j.optJSONObject("quality")?.let(VideoInfo::from) ?: ProviderQuality.parse(JSONObject(), j.optString("name")))
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }

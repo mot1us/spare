@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-10-25
+
+- Return directly to live TV with Back from on-demand playback; reopen Library at the cached catalog and pause the movie while browsing.
+- Replace large Library category/search diffs on the UI thread with linear filtering and a visible-row refresh; defer focus until pending adapter changes settle.
+- Restore the previous Media3 HTTP transport for live streams while retaining consent-aware VOD redirects. Avoid whole-playlist refiltering for ordinary FPS updates, save observations off the UI thread, and suppress tiny refresh-rate fluctuations.
+- Pause queued artwork downloads when Library/Sports is hidden.
+- Import provider-reported stream dimensions/FPS and explicit quality labels for immediate filtering. Prefer observed playback, hide unknown quality, and add a direct FHD+ / 60 fps preset.
+- Accept the feed’s minute-precision timestamps and replace live-only Sports with NFL current-week and MLB daily scoreboards, including team logos, scores, final/live/scheduled status, and local start times. Match playlist channels only when a game is selected; label broadcaster-only matches as possible coverage.
+
 ## 0.7.0 — 2026-10-25
 
 - Follow bounded HTTP redirects explicitly for provider media, preserving byte ranges/resume and checking source HTTP consent before every hop. Report blocked HTTP downgrades clearly and strip sensitive headers when origins change.

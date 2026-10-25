@@ -269,7 +269,7 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id
             val profile = GuideFilters(1080, FrameRateFilter.onlySixty, setOf("News")); store.setFilters(source, profile)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
                 scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
                 assertTrue(store.videoInfo(source).isEmpty())
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
@@ -288,7 +288,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 0 }
                 assertEquals(profile, store.filters(source))
                 scenario.recreate()
-                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
                 assertEquals(profile, store.filters(source)); assertFalse(store.videoInfo(source).isEmpty())
             }
             store.saveSources(emptyList()); store.removeCache(source)
@@ -756,20 +756,20 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
             store.setFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
                 scenario.onActivity { activity -> activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
                     LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), now - 300000), LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), now + 4 * 86400000L, "pre")), now, setOf("NFL", "MLB")) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
                 assertTrue(device.hasObject(By.textContains("Channel not matched yet")))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
-                waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) && device.hasObject(By.textContains("NEXT")) }
+                waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
-                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }
+                repeat(3) { device.pressDPadLeft() }; waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library").hasFocus() }
                 device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
-                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -808,8 +808,19 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-pause").performClick() }
                 waitFor(scenario) { samePlayer?.playbackState == Player.STATE_READY && samePlayer?.isPlaying == true }
                 scenario.onActivity { samePlayer!!.repeatMode = Player.REPEAT_MODE_ONE }
-                device.pressBack(); device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true && samePlayer?.playWhenReady == false }
+                // Reproduce a large category reduction without a quadratic UI-thread diff.
+                scenario.onActivity { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel")
+                    val entries = (1..25000).map { BrowserRow("bulk:$it", "Title $it") {} }
+                    panel.submit(entries, entries.associate { it.key to if (it.key.substringAfter(':').toInt() % 2 == 0) "Science fiction" else "Drama" })
+                }
+                assertTrue(device.wait(Until.hasObject(By.desc("Category · Science fiction")), 5000))
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(2)!!.itemView.requestFocus() }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 && it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                device.pressDPadDown()
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-live").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" && channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick(); it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
@@ -822,9 +833,9 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-next").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/202.mp4" && samePlayer?.playbackState == Player.STATE_READY }
                 assertEquals("On-demand titles must not replace live channel history", "xc:1", store.last(source))
-                device.pressBack(); device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.isShown == true && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick(); it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:xc:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:xc:1").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Archived fixture")) && !it.window.decorView.findViewWithTag<View>("library-loading").isShown }

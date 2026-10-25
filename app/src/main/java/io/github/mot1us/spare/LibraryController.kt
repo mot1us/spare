@@ -32,7 +32,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() }, { dismiss(); live() })
     val opened get() = panel.isVisible
     fun open(mode: String = kind) {
-        parentSeries = null; archive = null; detailItem = null; kind = mode; panel.visibility = View.VISIBLE
+        parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = source()
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
         if (selected == null) { panel.submit(emptyList()); panel.page("Library", "Add a playlist in Settings first.", false); panel.focusRows(); return }
@@ -90,7 +90,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         task?.cancel(true); val token = ++epoch
         positions.execute {
             val position = runCatching { store.watchProgress(selected).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
-            ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId } else emptyList(); panel.hideKeyboard(); panel.visibility = View.GONE; play(item, position) }
+            ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item, position) }
         }
     }
     private fun openDetails(selected: Source, item: OnDemand) {
@@ -141,7 +141,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.submit(channels.map { channel -> BrowserRow(channel.id, channel.name, "${channel.catchupDays} days · ${channel.group}") { openCatchup(channel) } }, channels.associate { it.id to it.group }, posters = false); panel.focusRows()
     }
     fun openCatchup(channel: Channel) {
-        kind = "catchup"; archive = channel; parentSeries = null; panel.visibility = View.VISIBLE
+        kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
         task?.cancel(true); ++epoch
         val selected = source() ?: return
         fun show(entries: List<Programme>, message: String, busy: Boolean) {
@@ -161,11 +161,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
     fun clearMetadata() { details.clear() }
-    fun reopen() { panel.visibility = View.VISIBLE; val item = detailItem; val selected = source(); if (item != null && selected != null) openDetails(selected, item) else panel.focusRows() }
+    fun reopen() { open(kind) }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
     fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!); parentSeries != null -> episodes(selected, parentSeries!!); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() { when { detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
-    fun dismiss() { panel.hideKeyboard(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
+    fun dismiss() { panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
     fun destroy() { panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

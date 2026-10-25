@@ -74,12 +74,14 @@ class SecureStore(private val context: Context) {
         if (!ended && position >= 10000 && (duration <= 0 || position < duration - 30000)) entries.add(WatchProgress(item, position, duration.coerceAtLeast(0), System.currentTimeMillis()))
         write("watch-${source.id}.enc", JSONArray(entries.takeLast(100).map { it.json() }).toString().toByteArray())
     }
+    fun providerQualityReady(source: Source) = preferences.getBoolean("provider-quality-${source.id}", false)
+    fun markProviderQuality(source: Source) { preferences.edit { putBoolean("provider-quality-${source.id}", true) } }
     fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
-    fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true) } }
+    fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
         listOf("library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
@@ -90,7 +92,7 @@ class SecureStore(private val context: Context) {
     fun usaFirst(source: Source) = preferences.getBoolean("category-order-${source.id}", false)
     fun setUsaFirst(source: Source, value: Boolean) { preferences.edit { putBoolean("category-order-${source.id}", value) } }
     fun playlistRefreshed(source: Source) = preferences.getLong("playlist-refreshed-${source.id}", 0)
-    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true) } }
+    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
         j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
