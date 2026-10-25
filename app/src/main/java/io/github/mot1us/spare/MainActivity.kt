@@ -74,6 +74,20 @@ class MainActivity : Activity() {
         val selected = source; val snapshot = guide
         if (selected != null && snapshot.channels.isNotEmpty()) cacheWrites.execute { runCatching { store.cache(selected, snapshot) } }
     }
+    private val sportsWorker = Executors.newSingleThreadExecutor()
+    private var sportsTask: java.util.concurrent.Future<*>? = null
+    private var sportsEpoch = 0
+    private var sportsVisible = false
+    private var sportsFollowing = true
+    private var sportsChannels = emptyList<Channel>()
+    private var selectedGame: SportsGame? = null
+    private var sportsBackoffUntil = 0L
+    private var sportsFailures = 0
+    private val sportsForcedEpg = mutableSetOf<String>()
+    private var sportsWarmSignature: List<Any>? = null
+    private val renderSports = Runnable { refreshSports() }
+    private lateinit var sportsPanel: SportsPanel
+    private lateinit var timeline: LinearLayout
     private val logos = LogoLoader()
     private lateinit var store: SecureStore
     private lateinit var updater: Updater
@@ -93,6 +107,7 @@ class MainActivity : Activity() {
     private lateinit var sidebar: RecyclerView
     private lateinit var sidebarAdapter: SidebarAdapter
     private lateinit var filterInfo: TextView
+    private lateinit var remoteHint: TextView
     private lateinit var emptyInfo: TextView
     private lateinit var loadingPanel: LinearLayout
     private lateinit var loadingText: TextView
@@ -178,7 +193,7 @@ class MainActivity : Activity() {
     private val backHold = Runnable { if (guideVisible && current != null) { backLongPressed = true; showGuide(false) } }
     private val hideNowPlaying = Runnable { nowPlaying.visibility = View.GONE }
     private val minuteTick = object : Runnable {
-        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.notifyItemRangeChanged(0, adapter.itemCount); (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
+        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.notifyItemRangeChanged(0, adapter.itemCount); if (sportsVisible) scheduleSports() else (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -334,8 +349,10 @@ class MainActivity : Activity() {
         navigation.addView(toolbar, LinearLayout.LayoutParams(-1, dp(48)))
         sidebar = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@MainActivity); itemAnimator = null; tag = "guide-categories" }
         sidebarAdapter = SidebarAdapter(this, { section ->
+            sportsVisible = section.key == "sports"
             favoritesOnly = section.key == "favorites"
             group = if (section.key.startsWith("group:")) section.key.removePrefix("group:") else null
+            if (sportsVisible) { query = ""; guideSearch.setQuery(""); guideSearch.visibility = View.GONE; showGuide(true) }
             applyFilter(); focusChannel()
         }, { focusChannel() }, { ++focusEpoch; searchButton.requestFocus() }, ::focusCategoryAt)
         sidebar.adapter = sidebarAdapter
@@ -351,7 +368,7 @@ class MainActivity : Activity() {
         status = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 2 }
         headerInfo.addView(status, LinearLayout.LayoutParams(-1, -2))
         content.addView(headerInfo, LinearLayout.LayoutParams(-1, dp(188)))
-        val timeline = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        timeline = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         filterInfo = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         timeline.addView(filterInfo, LinearLayout.LayoutParams(0, dp(30), 1f))
         timeline.addView(button("‹") { moveTime(-1) }.apply { contentDescription = "Earlier guide" })
@@ -373,7 +390,13 @@ class MainActivity : Activity() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) { if (newState == RecyclerView.SCROLL_STATE_IDLE) scheduleEpg() }
         })
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
-        content.addView(text("← Categories · ← again Search / Settings     OK Preview / expand     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
+        sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { sportsFollowing = !sportsFollowing; scheduleSports() }, {
+            if (System.currentTimeMillis() < sportsBackoffUntil) toast("Provider guide requests are paused. Try again in a few minutes.")
+            else { sportsChannels.filter { "$generation:${it.id}" !in epgInFlight }.forEach { epgCheckedAt.remove(it.id); sportsForcedEpg.add(it.id) }; scheduleSports(); scheduleEpg() }
+        }, ::selectGame, ::showGameInfo, { focusSidebar() })
+        content.addView(sportsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
+        remoteHint = text("← Categories · ← again Search / Settings     OK Preview / expand     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) }
+        content.addView(remoteHint)
         previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; isFocusableInTouchMode = true; isClickable = true; setOnClickListener { if (current != null) showGuide(false) }; setOnFocusChangeListener { _, focused -> setTextColor(if (focused) Color.BLACK else Color.WHITE); setBackgroundColor(if (focused) GuideTheme.current.accent else 0xCC0B1018.toInt()) }; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(previewCaption, FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178); marginEnd = dp(18) })
         nowPlaying = text("", 15f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(16), dp(10), dp(16), dp(10)); visibility = View.GONE }
@@ -404,6 +427,7 @@ class MainActivity : Activity() {
         updateTimes(); adapter.notifyItemRangeChanged(0, adapter.itemCount)
     }
     private fun focusChannel() {
+        if (sportsVisible) { ++focusEpoch; sportsPanel.focusGames(); return }
         val index = adapter.channels.indexOfFirst { it.id == (focused ?: current)?.id }.takeIf { it >= 0 }
             ?: adapter.channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
         focusChannelAt(index)
@@ -444,6 +468,8 @@ class MainActivity : Activity() {
     private fun load(selected: Source, force: Boolean = false) {
         cacheEpg.run(); cachedStartup = false
         val epoch = ++generation
+        sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsWarmSignature = null; sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
+        ++sportsEpoch; sportsTask?.cancel(true); handler.removeCallbacks(renderSports)
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
         importTask?.cancel(true)
@@ -490,7 +516,7 @@ class MainActivity : Activity() {
             val last = source?.let { selected -> adapter.channels.firstOrNull { it.id == store.last(selected) } } ?: adapter.channels.firstOrNull()
             if (last != null) { tune(last); showGuide(false) }
         } else current = next.channels.firstOrNull { it.id == current?.id } ?: current
-        (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+        if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
         scheduleEpg()
     }
     private fun tune(channel: Channel) {
@@ -577,6 +603,10 @@ class MainActivity : Activity() {
     private fun collectVisibleEpg() {
         val selected = source ?: return
         if (selected.kind != "xtream" || selected.epgUrl.isNotBlank() || !started) return
+        if (sportsVisible && guideVisible) {
+            epgWanted = (listOfNotNull(current) + sportsChannels).distinctBy { guide.key(it) }.take(SportsGuide.MAX_WARM_CHANNELS + 1)
+            pumpEpg(); return
+        }
         val channels = adapter.channels
         val layout = list.layoutManager as LinearLayoutManager
         val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
@@ -591,24 +621,33 @@ class MainActivity : Activity() {
         val selected = source ?: return
         if (closed || !started || selected.kind != "xtream" || selected.epgUrl.isNotBlank()) return
         val epoch = generation; val now = System.currentTimeMillis()
+        if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
+        val lookAhead = if (sportsVisible && guideVisible) 6 * 3600000L else 30 * 60000L
         while (epgActive < 2) {
-            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && (guide.at(it, now) == null || guide.programmes[guide.key(it)].orEmpty().maxOfOrNull { programme -> programme.end }?.let { end -> end < now + 30 * 60000L } != false) && now - (epgCheckedAt[it.id] ?: 0) >= 5 * 60000L } ?: return
-            val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgActive++
+            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && ((sportsVisible && guideVisible && it.id in sportsForcedEpg) || guide.at(it, now) == null || guide.programmes[guide.key(it)].orEmpty().maxOfOrNull { programme -> programme.end }?.let { end -> end < now + lookAhead } != false) && now - (epgCheckedAt[it.id] ?: 0) >= 5 * 60000L } ?: return
+            val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; sportsForcedEpg.remove(channel.id); epgActive++
             epgWorkers.execute {
                 val result = runCatching { XtreamEpg.load(selected, channel) }
                 handler.post {
                     epgActive--; epgInFlight.remove(request)
                     if (!closed && epoch == generation) {
                         result.onSuccess { entries ->
+                            sportsFailures = 0
                             if (entries.isNotEmpty()) {
                                 val programmes = LinkedHashMap(guide.programmes); programmes[guide.key(channel)] = entries
                                 while (programmes.size > 5000) programmes.remove(programmes.keys.first())
                                 guide = Guide(guide.channels, programmes, guide.categoryOrder); epgErrors.remove(channel.id)
                                 handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
                             } else epgErrors[channel.id] = "Provider supplied no current programme data."
-                        }.onFailure { epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(it)}" }
+                        }.onFailure { failure ->
+                            epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(failure)}"
+                            if (sportsVisible && guideVisible) {
+                                sportsFailures++
+                                if ((failure as? HttpFailure)?.status in setOf(401, 403, 429) || sportsFailures >= 3) sportsBackoffUntil = System.currentTimeMillis() + 5 * 60000L
+                            }
+                        }
                         adapter.notifyItemRangeChanged(0, adapter.itemCount)
-                        (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                        if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
                         if (details.isVisible) refreshDetails()
                     }
                     if (!closed) pumpEpg()
@@ -617,6 +656,7 @@ class MainActivity : Activity() {
         }
     }
     private fun showInfo(channel: Channel) {
+        if (sportsVisible && guideVisible && selectedGame != null) { showGameInfo(selectedGame!!); return }
         val programme = guide.at(channel, System.currentTimeMillis())
         channelInfo.text = programme?.title ?: channel.name
         val quality = videoInfo[channel.id]?.label() ?: "Quality unverified"
@@ -641,6 +681,15 @@ class MainActivity : Activity() {
         emptyInfo.text = if (!browseAll && (filters.excludedFps.isNotEmpty() || filters.minHeight > 0)) "No verified channels match yet. In Settings, choose Show unverified channels to play and verify them, or adjust Guide filters."
             else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
         updateGroups()
+        if (::sportsPanel.isInitialized) {
+            sportsPanel.visibility = if (sportsVisible) View.VISIBLE else View.GONE
+            timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
+            times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
+            list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
+            remoteHint.text = if (sportsVisible) "← Categories · ← again Search / Settings     OK Choose channel     Hold Back Full screen"
+                else "← Categories · ← again Search / Settings     OK Preview / expand     Hold OK Favorite     Hold Back Full screen"
+            if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
+        }
     }
     private fun updateGroups() {
         if (groupsForChannels !== guide.channels || groupsForOrder !== guide.categoryOrder) {
@@ -649,8 +698,8 @@ class MainActivity : Activity() {
             groupsForChannels = guide.channels; groupsForOrder = guide.categoryOrder
         }
         val visibleGroups = providerGroups.filter { browseAll || filters.groups.isEmpty() || it in filters.groups }
-        sidebarAdapter.submit(listOf(GuideSection("All channels", "all", !favoritesOnly && (group == null)),
-            GuideSection("Favorites", "favorites", favoritesOnly)) + visibleGroups.map { GuideSection(it.ifBlank { "Uncategorized" }, "group:$it", !favoritesOnly && group == it && (group != null)) })
+        sidebarAdapter.submit(listOf(GuideSection("All channels", "all", !sportsVisible && !favoritesOnly && (group == null)),
+            GuideSection("Favorites", "favorites", !sportsVisible && favoritesOnly), GuideSection("Sports", "sports", sportsVisible)) + visibleGroups.map { GuideSection(if (it in setOf("Sports", "Favorites", "All channels")) "Category · $it" else it.ifBlank { "Uncategorized" }, "group:$it", !sportsVisible && !favoritesOnly && group == it && (group != null)) })
     }
     private fun updateTimes() { times.invalidate() }
     private fun showGuide(show: Boolean) {
@@ -669,7 +718,7 @@ class MainActivity : Activity() {
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
         previewCaption.text = if (current == null) "Select a channel" else "Full screen · ${current?.name}"
         positionPlaybackLoading()
-        if (show) focusChannel() else { ++focusEpoch; showNowPlaying() }
+        if (show) { focusChannel(); if (sportsVisible) scheduleSports() } else { ++focusEpoch; showNowPlaying() }
         scheduleEpg()
     }
     private fun showNowPlaying() {
@@ -680,6 +729,7 @@ class MainActivity : Activity() {
         handler.postDelayed(hideNowPlaying, 1800)
     }
     private fun search() {
+        sportsVisible = false
         showGuide(true); group = null; favoritesOnly = false; applyFilter()
         guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true); guideSearch.voice.requestFocus()
         voiceSearch()
@@ -706,6 +756,72 @@ class MainActivity : Activity() {
         if (!guideSearch.isVisible || !started) return
         if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) voiceInput.start()
         else guideSearch.message("Microphone permission is off. Select the field to type, or enable it in Android app permissions.")
+    }
+    private fun scheduleSports() {
+        if (!sportsVisible || !guideVisible || closed) return
+        handler.removeCallbacks(renderSports); handler.postDelayed(renderSports, 300)
+    }
+    private fun refreshSports() {
+        if (!sportsVisible || !guideVisible || !started || closed) return
+        val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
+        val followed = store.followedTeams; val following = sportsFollowing; val favoriteSnapshot = favorites
+        val profile = if (browseAll) GuideFilters() else filters
+        val quality = videoInfo.toMap(); val now = System.currentTimeMillis(); val hidden = unavailable.snapshot().filterValues { it > now }.keys
+        val signature = listOf(snapshot.channels, profile, favoriteSnapshot, followed, hidden, quality)
+        val knownWarm = sportsChannels.takeIf { sportsWarmSignature == signature }
+        sportsTask?.cancel(true)
+        sportsTask = sportsWorker.submit {
+            val eligible = snapshot.channels.filter { it.id !in hidden && profile.matches(it, quality[it.id]) }
+            val matchingGuide = Guide(eligible, snapshot.programmes)
+            val warm = knownWarm ?: SportsGuide.warmChannels(eligible, favoriteSnapshot, followed)
+            val games = SportsGuide.find(matchingGuide, if (following) followed else emptySet(), favoriteSnapshot, now)
+            handler.post {
+                if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
+                sportsChannels = warm; sportsWarmSignature = signature
+                selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
+                val checked = warm.count { (epgCheckedAt.containsKey(it.id) && "$generation:${it.id}" !in epgInFlight) || guide.programmes[guide.key(it)].orEmpty().maxOfOrNull { p -> p.end }?.let { it >= now + 6 * 3600000L } == true }
+                val progress = when {
+                    now < sportsBackoffUntil -> "Provider guide requests paused · showing saved listings. Try again in a few minutes."
+                    source?.kind == "xtream" && source?.epgUrl.isNullOrBlank() && checked < warm.size -> "Checking sports guide · $checked / ${warm.size} channels · next 48 hours"
+                    else -> "From your provider’s guide · next 48 hours · times on this TV"
+                }
+                val names = followed.mapNotNull { SportsCatalog.byId[it]?.name }
+                val summary = if (names.isEmpty()) "MLB & NFL · Follow your teams" else "${names.size} ${if (names.size == 1) "team" else "teams"} followed"
+                sportsPanel.submit(games, summary, progress, following, followed.isNotEmpty(), profile != GuideFilters())
+                selectedGame?.let(::showGameInfo) ?: run {
+                    channelInfo.text = "Sports"; programmeInfo.text = "Follow MLB and NFL teams to find their games on your channels. No extra account needed."
+                }
+                scheduleEpg()
+            }
+        }
+    }
+    private fun sportsTeams() {
+        AlertDialog.Builder(this).setTitle("Follow teams").setItems(arrayOf("MLB · Baseball", "NFL · Football")) { _, leagueIndex ->
+            val teams = SportsCatalog.teams.filter { it.league == if (leagueIndex == 0) "MLB" else "NFL" }.sortedBy { it.name }
+            val chosen = store.followedTeams.toMutableSet()
+            AlertDialog.Builder(this).setTitle("Follow ${teams.first().league} teams")
+                .setMultiChoiceItems(teams.map { it.name }.toTypedArray(), teams.map { it.id in chosen }.toBooleanArray()) { _, which, checked ->
+                    if (checked) chosen.add(teams[which].id) else chosen.remove(teams[which].id)
+                }.setPositiveButton("Save") { _, _ -> store.followedTeams = chosen; sportsFollowing = true; scheduleSports() }
+                .setNegativeButton("Cancel", null).show()
+        }.setNegativeButton("Close", null).show()
+    }
+    private fun showGameInfo(game: SportsGame) {
+        selectedGame = game; channelInfo.text = game.title
+        programmeInfo.text = "${game.teams.first().league} · ${if (game.live(System.currentTimeMillis())) "Live now" else SportsPanel.time(game.start)}\n" +
+            game.broadcasts.take(3).joinToString(" · ") { it.channel.name } + "\nOK Choose channel · Hold Back Full screen"
+    }
+    private fun selectGame(game: SportsGame) {
+        val now = System.currentTimeMillis()
+        val broadcasts = game.broadcasts.filter { it.programme.end > now && !unavailable.contains(it.channel.id, now) }
+        if (broadcasts.isEmpty()) { toast("These guide listings have ended or their channels are temporarily unavailable"); scheduleSports(); return }
+        val names = broadcasts.map { b -> (if (b.channel.id in favorites) "★ " else "") + b.channel.name + " · " + (videoInfo[b.channel.id]?.label() ?: "Quality unverified") }
+        AlertDialog.Builder(this).setTitle(if (game.live(now)) "Watch · ${game.title}" else "${SportsPanel.time(game.start)} · Watch channel now")
+            .setItems(names.toTypedArray()) { _, which ->
+                val channel = broadcasts[which].channel
+                if (channel.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(channel)
+                showGameInfo(game) // Keep the game list and current preview; fullscreen remains explicit.
+            }.setNegativeButton("Cancel", null).show()
     }
     private fun previousChannel(): Channel? {
         val selected = source ?: return null
@@ -748,7 +864,7 @@ class MainActivity : Activity() {
         runCatching { val next = sources.filterNot { it.id == removed.id }; store.saveSources(next); cacheWrites.execute { store.removeCache(removed) }; sources = next }
             .onSuccess {
                 sources.firstOrNull()?.let { load(it) } ?: run {
-                    ++generation; importTask?.cancel(true); handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); playbackToken++; player.stop(); frameRates.clear(); loadingPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; source = null; current = null; filters = GuideFilters(); videoInfo.clear(); guide = Guide.EMPTY; updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
+                    ++generation; importTask?.cancel(true); handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); playbackToken++; player.stop(); frameRates.clear(); loadingPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; source = null; current = null; filters = GuideFilters(); videoInfo.clear(); guide = Guide.EMPTY; sportsVisible = false; sportsChannels = emptyList(); ++sportsEpoch; updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
                 }
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
@@ -849,6 +965,7 @@ class MainActivity : Activity() {
             if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
         visit(root); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        if (::sportsPanel.isInitialized) sportsPanel.refreshTheme()
         sidebarAdapter.notifyItemRangeChanged(0, sidebarAdapter.itemCount); list.invalidate(); for (i in 0 until list.childCount) list.getChildAt(i).invalidate()
     }
     private fun streamFormatMenu() {
@@ -977,13 +1094,13 @@ class MainActivity : Activity() {
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
         else if (!guideVisible) showGuide(true)
-        else if (list.hasFocus()) focusSidebar()
+        else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg() }
+    override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports() }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); ++sportsEpoch; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun nowWindow() = System.currentTimeMillis() / 1800000L * 1800000L

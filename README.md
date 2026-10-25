@@ -2,7 +2,7 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.3.1**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.4.0**. License: MIT.
 
 ## What it does
 
@@ -11,6 +11,7 @@ Spare plays your own live-TV sources. It includes no channels, subscriptions, ad
 - Up to 100,000 channel entries per source, within bounded download sizes. Larger lists produce an explicit limit message.
 - A compact guide with channel logos, clear remote focus, and a choice of translucent video overlay or small live preview.
 - Provider categories in a dedicated left sidebar, inline channel-name search with TV voice input, and Favorites. Category order follows the Xtream category array or M3U first appearance; Settings offers USA-first grouping without alphabetizing either region. Provider channel order is preserved.
+- Sports: follow MLB/NFL teams and find their live/upcoming games in your provider’s EPG. Matching broadcasts are grouped into channel choices; Favorites appear first. Games open in the existing preview.
 - Xtream programme data cached and prefetched for the current channel, visible/nearby rows, and up to 24 favorites, with at most two concurrent requests. M3U XMLTV and explicit XMLTV overrides remain supported. Guide data stays in private encrypted cache.
 - Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and FPS exclusions. Uncheck 25/50 fps while keeping 24/30/60, for example; 23.976, 29.97, and 59.94 belong to their nominal families. Unknown FPS stays hidden while FPS filtering is active. Streams without FPS metadata are measured from stable media timestamps, not the TV output rate.
 - Quality comes from observed playback, never channel names. Unknown quality is hidden when quality filters are active. Settings → Show unverified channels temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
@@ -46,6 +47,10 @@ Search and Settings icons sit above the category sidebar; the guide has a larger
 
 Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles and the channel-details Subtitles button save choices for the current channel: use the app default, Off, Automatic, or a specific track. App default changes the default for channels without an override. Automatic selects supported text tracks even without language/default labels. For transport streams without caption declarations, CC1 and Digital 1 compatibility readers are available; Automatic tries them for at most six eight-second intervals and stops once captions arrive, without reconnecting video. Compatibility services are guesses, not proof that a programme carries captions. Real provider caption descriptors and separate subtitle renditions take precedence. No captions can be created when the provider supplies none.
 
+Sports lives in the sidebar next to Favorites. Choose Teams, select MLB or NFL, and save the teams you follow. My teams shows their games; All games includes other matched MLB/NFL games. Select a game to choose a channel, keep browsing with the preview playing, and hold Back to expand. Upcoming games show the TV’s local time; choosing one lets you watch its channel now and does not schedule a recording or automatic tune.
+
+Sports uses your provider’s listings for the next 48 hours. It recognizes full team names, common nicknames, and league-qualified abbreviations, skips ambiguous matchups/replays/highlights, and combines alternative channels. It needs actual team matchups in the EPG; generic “Live Sports” listings cannot identify a game, and a listing cannot prove a stream is online. There is no external schedule account/service or viewing-history inference. Followed teams stay on-device across playlists. Category and verified-quality filters also apply; Settings → Show unverified channels can temporarily reveal unmeasured channels. Xtream Sports warms at most 160 likely sports/favorite guide entries with two workers while open, reuses cached data, and pauses requests for five minutes on account/rate-limit errors or three consecutive failures. XMLTV uses the imported guide. Refresh retries eligible guide entries without scanning streams.
+
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 
 ## Install and update
@@ -74,7 +79,7 @@ Production dependencies are locked in `app/gradle.lockfile`. Deliberate dependen
 
 ## Privacy and security
 
-Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites, current/previous watched-channel IDs, quality observations (up to 5,000 channels), temporary unavailability, guide video style, and guide preferences stay in private preferences. Removing a source removes its cached guide and preferences. Uninstalling clears local app data.
+Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites, current/previous watched-channel IDs, quality observations (up to 5,000 channels), temporary unavailability, guide video style, followed MLB/NFL teams, per-channel subtitle choices, and guide preferences stay in private preferences. Removing a source removes its cached guide and preferences. Uninstalling clears local app data.
 
 Voice search requests RECORD_AUDIO only when Search/Voice is selected. The configured Android recognition service captures/processes speech; its privacy policy applies and it may use its own network service. Spare stores no audio, restores playback volume when listening ends, and stops listening when search closes or the app leaves the foreground. Permission denial or recognition failure leaves text search available. Voice availability and the dedicated remote Assistant button are controlled by the TV's software; Spare's Search action requests in-app channel transcription rather than a web search.
 

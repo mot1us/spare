@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet() }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -148,7 +148,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { store.cached(source)?.categoryOrder == expected }
                 scenario.onActivity { activity ->
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
-                    expected.forEachIndexed { index, name -> assertEquals(name, (categories.findViewHolderForAdapterPosition(index + 2)!!.itemView as android.widget.TextView).text.toString()) }
+                    expected.forEachIndexed { index, name -> assertEquals(name, (categories.findViewHolderForAdapterPosition(index + 3)!!.itemView as android.widget.TextView).text.toString()) }
                 }
                 scenario.recreate()
                 waitFor(scenario) { store.cached(source)?.categoryOrder == expected && channelList(it)?.adapter?.itemCount == 25001 }
@@ -237,7 +237,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 device.pressDPadLeft(); instrumentation.waitForIdleSync()
                 assertTrue(device.wait(Until.hasObject(By.text("All channels").focused(true)), 5000))
-                repeat(2) { device.pressDPadDown() }; device.pressDPadCenter()
+                repeat(3) { device.pressDPadDown() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 4 }
                 assertEquals("Category browsing must keep the current video", "/channel1.ts", playingPath(scenario))
                 scenario.onActivity { activity ->
@@ -333,8 +333,8 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { activity ->
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
-                    assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(2)!!.itemView as android.widget.TextView).text.toString())
-                    assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
+                    assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
+                    assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(4)!!.itemView as android.widget.TextView).text.toString())
                     val toolbar = activity.window.decorView.findViewWithTag<View>("guide-toolbar")
                     val a = IntArray(2); val b = IntArray(2); toolbar.getLocationOnScreen(a); categories.getLocationOnScreen(b)
                     assertTrue(a[1] + toolbar.height <= b[1]); assertEquals(2, (toolbar as ViewGroup).childCount)
@@ -549,7 +549,7 @@ class SpareDeviceTest {
                 var attempt = ""
                 scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
-                repeat(30) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
+                repeat(31) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
                 waitFor(scenario) { device.hasObject(By.text("Category 29").focused(true)) }
                 var first = -1
                 scenario.onActivity { first = (it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition() }
@@ -595,6 +595,66 @@ class SpareDeviceTest {
             }
             store.saveSources(emptyList()); store.removeCache(source)
         } }
+    }
+
+    @Test fun sportsFindsFollowedGamesSelectsPreviewAndPreservesRemoteFocus() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = (1..4).map { Channel("sports:$it", listOf("News", "ESPN", "YES", "CBS")[it - 1], if (it == 1) "News" else "Sports", "${server.base}/channel$it.mp4") }
+            val now = System.currentTimeMillis()
+            val programmes = mapOf(
+                "sports:2" to listOf(Programme("sports:2", "Yankees vs Red Sox", now - 300000, now + 3600000), Programme("sports:2", "Yankees vs Red Sox", now + 5 * 3600000, now + 8 * 3600000)),
+                "sports:3" to listOf(Programme("sports:3", "MLB: NYY @ BOS", now - 300000, now + 3600000)),
+                "sports:4" to listOf(Programme("sports:4", "NFL: Bills at Chiefs", now + 1800000, now + 4 * 3600000)),
+            )
+            store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true
+            store.followedTeams = setOf("mlb:NYY"); store.toggleFavorite(source, channels[2])
+            store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var samePlayer: Player? = null
+                scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
+                repeat(2) { device.pressDPadDown() }; device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { r -> r.isShown && r.adapter?.itemCount == 2 && r.hasFocus() } == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
+                device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("★ YES · Quality unverified")), 5000))
+                device.findObject(By.text("★ YES · Quality unverified")).click()
+                waitFor(scenario) { store.last(source) == "sports:3" }
+                assertEquals("/channel3.mp4", playingPath(scenario))
+                scenario.onActivity {
+                    assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player)
+                    assertTrue(it.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                    assertTrue(find<PlayerView>(it.window.decorView)!!.width < it.window.decorView.width / 2)
+                    it.window.decorView.findViewWithTag<View>("sports-scope").requestFocus()
+                }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("NFL · Football")), 5000)); device.findObject(By.text("NFL · Football")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Buffalo Bills")), 5000)); device.findObject(By.text("Buffalo Bills")).click()
+                device.findObject(By.text("Save")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Save").focused(true)), 5000)); device.pressDPadCenter()
+                waitFor(scenario) { SecureStore(context).followedTeams == setOf("mlb:NYY", "nfl:BUF") }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                repeat(6) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
+                device.pressDPadRight(); device.pressDPadDown(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
+                device.pressDPadRight(); holdBack()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
+                scenario.recreate()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                assertEquals(setOf("mlb:NYY", "nfl:BUF"), SecureStore(context).followedTeams)
+            }
+            store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet()
+        }
     }
 
     private fun holdBack() { device.executeShellCommand("input dpad keyevent --duration ${ViewConfiguration.getLongPressTimeout() + 500} 4"); instrumentation.waitForIdleSync() }
