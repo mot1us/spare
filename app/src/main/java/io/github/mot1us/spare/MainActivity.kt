@@ -855,8 +855,9 @@ class MainActivity : Activity() {
     private fun applyFilter() {
         val now = System.currentTimeMillis()
         val hidden = guide.channels.count { unavailable.contains(it.id, now) }
+        val searchTerm = ChannelSearch.key(query)
         val filtered = guide.channels.filter { !it.media && !unavailable.contains(it.id, now) && (!favoritesOnly || it.id in favorites) && ((group == null) || it.group == group) &&
-            (query.isBlank() || it.name.contains(query, true)) && (browseAll || filters.matches(it, videoInfo[it.id])) }
+            (searchTerm.isEmpty() || it.searchKey.contains(searchTerm)) && (browseAll || filters.matches(it, videoInfo[it.id])) }
         adapter.submit(filtered)
         if (guideVisible) {
             if (focused != null && filtered.none { it.id == focused?.id }) focused = filtered.firstOrNull()

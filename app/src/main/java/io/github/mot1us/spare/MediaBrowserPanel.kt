@@ -21,7 +21,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit)
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title) }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -141,11 +141,11 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     @SuppressLint("NotifyDataSetChanged")
     private fun filter() {
-        val query = search.text.toString().trim()
+        val query = ChannelSearch.key(search.text.toString())
         // Filtering preserves provider order. A full Myers diff becomes quadratic when
         // a large catalog loses most entries; only visible holders need rebinding.
         ++focusEpoch; pending = null; rows.stopScroll()
-        shownRows = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isBlank() || it.title.contains(query, true)) }
+        shownRows = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isEmpty() || it.searchKey.contains(query)) }
         rows.adapter?.notifyDataSetChanged()
         empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }

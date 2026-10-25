@@ -6,6 +6,12 @@ import java.io.IOException
 
 class RefinementTest {
     private val now = 1800000000000L
+    @Test fun channelSearchIgnoresProviderSpacingAndStyling() {
+        listOf("US | KING5 FHD", "KING-5 Seattle", "ＫＩＮＧ ５ NBC", "𝙆𝙄𝙉𝙂𝟱").forEach { assertTrue(it, ChannelSearch.matches(it, "king 5")) }
+        assertTrue(ChannelSearch.matches("US KING 5 FHD", "king5"))
+        assertFalse(ChannelSearch.matches("KING 7", "king 5"))
+        assertTrue(ChannelSearch.matches("Channel 2", "Channel 2"))
+    }
     @Test fun providerQualityFiltersBeforePlaybackButObservedDataWins() {
         val quality = ProviderQuality.parse(org.json.JSONObject("""{"video":{"width":1920,"height":1080,"r_frame_rate":"60000/1001"}}"""))!!
         val channel = Channel("1", "A channel", "USA", "https://example.com/live", reportedQuality = quality)

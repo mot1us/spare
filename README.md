@@ -1,115 +1,41 @@
 # Spare
 
-A minimal, free, open-source IPTV player for Android TV.
+A minimal, free, open-source IPTV player for Android TV. Native, lightweight, and built for a remote. MIT licensed.
 
-Spare plays your own live-TV sources and provider-supplied movies, series, and catch-up archives. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.8.0**. License: MIT.
+## Features
 
-## What it does
+- M3U playlists and Xtream Codes accounts; multiple saved playlists.
+- Live TV guide, channel categories, favorites, text and voice search.
+- Live preview or a translucent guide over full-screen video.
+- Frame-rate matching, audio tracks, and per-channel subtitles.
+- Resolution/FPS filters, including an FHD+ / 60 fps preset. Provider-reported quality is labelled; playback readings take priority.
+- NFL/MLB scoreboards with scores, team logos, start times, and playlist channel matching.
+- Provider movies, series, catch-up, and Continue watching.
+- Themes, fonts, 12/24-hour time, and optional AIO Metadata.
+- In-app signed updates. No ads, analytics, or Spare account.
 
-- M3U playlist URLs or Xtream Codes server/username/password.
-- Several saved sources, one active at a time.
-- Up to 100,000 channel entries per source, within bounded download sizes. Larger lists produce an explicit limit message.
-- A compact guide with channel logos, clear remote focus, and a choice of translucent video overlay or small live preview.
-- Provider categories in a dedicated left sidebar, inline channel-name search with TV voice input, and Favorites. Category order follows the Xtream category array or M3U first appearance; Settings offers USA-first grouping without alphabetizing either region. Provider channel order is preserved.
-- Sports: public MLB/NFL schedules appear before channel matching. All games shows the scoreboard; each followed team shows its live or next game. Matching broadcasts are grouped into channel choices; Favorites appear first. Games open in the existing preview.
-- Xtream programme data cached and prefetched for the current channel, visible/nearby rows, and up to 24 favorites, with at most two concurrent requests. M3U XMLTV and explicit XMLTV overrides remain supported. Guide data stays in private encrypted cache.
-- Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and FPS exclusions. Uncheck 25/50 fps while keeping 24/30/60, for example; 23.976, 29.97, and 59.94 belong to their nominal families. Unknown FPS stays hidden while FPS filtering is active. Interlaced field cadence is labelled separately and grouped with its temporal rate. Streams without FPS metadata are measured from stable media timestamps, not the TV output rate.
-- Quality filters prefer observed playback, then provider-declared dimensions/rates or explicit quality labels such as FHD 60fps. Provider readings are labelled as reported and corrected after playback. Channels without enough quality data stay hidden. The FHD+ / 60 fps preset applies both criteria directly. Settings → Guide filters → Show unverified channels temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
-- Terminal 404/410 channels are hidden for 15 minutes after startup endpoints confirm they are missing, without bulk probing. Settings can retry or restore them. Network, account, and missing-segment errors do not prove a channel is absent.
-- MPEG-TS access-unit detection, Xtream TS/HLS fallback, a manual stream-format setting, and a visible startup timeout with safe diagnostics. Channel opening/buffering uses a thin progress bar without status text; initial playback requests a 1.5-second buffer. Buffering has a delayed indicator and an eight-second resume target; adaptive live playback requests a 12-second target offset when the provider window allows it. Recovery is bounded to two reconnects in two minutes. These improve tolerance of short disruptions but cannot fix a provider outage or inadequate throughput. Playlist and guide downloads show their current stage and byte progress when known.
-- Last-channel resume, one-press recall between two watched channels, programme/channel details, audio/subtitle selection, and automatic frame-rate matching where supported.
-- A separate Library for Xtream movies and series, category browsing, inline text search, season/episode selection, continue-watching, and next-episode controls. M3U entries explicitly marked as media also appear as movies.
-- Provider catch-up archives: Library → Catch-up lists supported channels; the channel-details Catch-up action opens that channel directly. Xtream archive metadata/history and declared M3U `xc`, `default`, `append`, and `shift` catch-up formats are supported. Only completed programmes inside the advertised archive window are offered. Unsupported template placeholders are rejected.
-- On-demand pause, seeking when the stream permits it, start over, audio/subtitle selection, and return to Library or Live TV. Movie/episode positions are saved locally; finished titles leave Continue watching. Live channel history, quality filters, and missing-channel rules stay separate from on-demand playback.
-- Quiet update badge, signed APK updates initiated in the app, and Android installation confirmation when required.
+Spare includes no channels or subscriptions. Provider features and device support vary.
 
-Target hardware for first physical validation: **2026 onn 4K Pro with a 75-inch Samsung 4K TV**. Android TV 8.0/API 26 or newer is required. Full refresh-rate requests use Android 12/API 31 or newer; older systems use available display-mode selection. TV/HDMI modes and Android preferences can prevent a match. Switching may briefly blank the picture.
+## Remote controls
 
-Settings → Font (also reachable from Theme) offers Default, Compact, Casual, Serif, and Monospace using built-in device fonts. Changes apply immediately and persist without recreating the player. Settings → Time format switches the guide, details, and Sports between 12-hour and 24-hour time. Long-press OK confirms favorite changes with a visible message and high-contrast star.
-
-Cached playlists resume before network work, with a six-hour lineup refresh interval and an explicit refresh in Settings. Cached EPG is reused and nearby rows are warmed in the background with two workers; a 20,000-channel provider is never bulk-probed. First-time imports retain a progress indicator.
-
-## Remote
-
-| Where | Control | Result |
+| Where | Control | Action |
 | --- | --- | --- |
-| Full-screen player | Up / Down | Previous / next channel in the current guide filter |
-| Full-screen player | OK | Show programme/channel details; the Guide action opens the guide |
-| Full-screen player | Left | Toggle between the last two successfully played channels |
-| Details | Back | Close details and keep watching |
-| Guide | Up / Down | Browse channels without changing the stream |
-| Guide | OK | Tune a different channel in the preview; select the playing channel to expand |
-| Guide | Long-press OK | Toggle favorite |
-| Categories | Left / Down from controls | Jump to Search/Settings / return to the same category without scrolling |
-| Anywhere | Menu (if present) | Open Settings |
-| Guide | Left / Right | Rewind / advance this channel by 30 minutes; Left at live opens categories. Back resets a future row to live; Up from the first row reaches Now. |
-| Guide | Back / hold Back | Move between channel/sidebar focus / expand the current channel |
-| Full-screen live player | Back | Open guide |
-| Library | Movies / Series / Continue / Catch-up | Switch provider content type |
-| Library | Left / Right | Move between categories and titles |
-| Series / channel archive | Back | Return to series / archive channels |
-| On-demand player | OK | Show playback controls and seek bar |
-| On-demand player | Back | Return directly to Live TV |
-| On-demand player | Media Play/Pause / Rewind / Fast-forward | Pause or seek 30 seconds when supported |
-| Search | Down / Done | Browse the live-filtered channel results |
-| Search | Back | Close inline search; the query remains active until cleared |
+| Watching live | Up / Down | Change channel |
+| Watching live | OK | Programme details |
+| Watching live | Left | Previous watched channel |
+| Watching live | Back | Open guide |
+| Guide | OK | Tune preview; select playing channel for full screen |
+| Guide | Hold OK | Toggle favorite |
+| Guide | Hold Back | Full screen |
+| Guide | Left / Right | Categories or programme times |
+| Category sidebar | Left | Jump to Search / Settings |
+| Movie / episode / catch-up | Back | Return to live TV |
+| Library | Library action during playback | Pause and browse |
 
-Search and Settings icons sit above the category sidebar; the guide has a larger 320×180 dp live preview. Playlists and Updates are inside Settings. Search requests microphone permission once, then listens inline using the configured speech service. There is no speech-app chooser or external recognition activity. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. Settings → Playlists adds, switches, edits, or removes playlists. Settings contains guide video style, guide filters, visible-category presets/custom choices, category order, five color themes, a built-in font picker, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
+## Install
 
-Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles and the channel-details Subtitles button save choices for the current channel: use the app default, Off, Automatic, or a specific track. App default changes the default for channels without an override. Automatic selects supported text tracks even without language/default labels. For transport streams without caption declarations, CC1 and Digital 1 compatibility readers are available; Automatic tries them for at most six eight-second intervals and stops once captions arrive, without reconnecting video. Compatibility services are guesses, not proof that a programme carries captions. Real provider caption descriptors and separate subtitle renditions take precedence. No captions can be created when the provider supplies none.
+Download **spare.apk** from [Releases](https://github.com/mot1us/spare/releases), sideload it, then add your playlist in **Settings → Playlists**. Enable HTTP there only if your provider requires it.
 
-Guide and Sports have separate fixed controls above provider categories. From All channels, press Up to reach them; Left from any category jumps to Search/Settings. Sports shows live games or a followed team’s next scheduled game. Teams adds followed-team selectors; All games shows the scoreboard even before a channel is matched. Select a game to choose an available channel, keep browsing with the preview playing, and hold Back to expand.
+Updates appear inside Spare. Android may require permission to install apps or an installation confirmation. Current builds are prereleases for testing on the onn 4K Pro.
 
-Sports loads public ESPN scoreboards independently of playlist guide data. NFL shows the current week, and MLB shows the current/previous day, including live, scheduled and finished games with scores and team logos. Select NFL/MLB or a followed team; selecting a game starts playlist channel matching. A broadcaster-only match is possible coverage, not a guarantee. Each followed team shows its live game or next scheduled game. Live state is refreshed at most once per minute and expires after two minutes; upcoming team schedules are cached for six hours. Team schedule responses arrive incrementally with at most two concurrent requests. No playlist URLs, credentials or channel lists are sent to ESPN. The public web feed can change; failures explain when current status cannot be verified.
-
-Provider EPG is used to match channels after schedules appear. A broadcaster-name match alone is labelled as a possible channel; regional coverage can differ. Only a few focused candidate channels request current guide data, instead of a 64-channel Sports scan. Guide filters affect viewing choices and do not erase a scheduled game. Scheduled and finished games remain visible with their actual status; they are never labelled live. Followed-team views can show the next scheduled game and its local start time.
-
-Library uses in-memory and encrypted cached catalogs before network refresh. Titles appear before optional category labels or disk writes finish. Movies and series use a poster grid; movie details show available provider artwork, description, year, genre, runtime and cast, with explicit Play / Resume. Series episodes show available descriptions and thumbnails. Missing artwork or metadata leaves the provider title usable. A first uncached catalog still depends on provider response speed.
-
-Settings → Metadata optionally connects a configured HTTPS AIO Metadata/Stremio manifest URL. The URL is stored encrypted. Metadata queries contain media IDs or title searches, never IPTV credentials or playback URLs. Provider IDs are preferred; title/year search accepts only an exact, unambiguous result. Missing or ambiguous matches retain provider data. Identifiable live movies/series can receive enriched descriptions after a focus delay; EPG schedules and sports event status remain separate. Optional metadata work never blocks Play. No debrid credentials or new server are required.
-
-FPS measurement prefers stable presentation timestamps over misleading declared rates, and waits for measurements when declarations are nonstandard. H.264 sequence information identifies interlaced-capable coding; the UI explicitly labels its temporal field cadence as fields/s (for example 1080i · 59.94 fields/s). This cadence drives filters and refresh requests. Progressive 29.97/30 fps remains distinct from 59.94/60. HDMI output and the decoder’s actual deinterlacing behavior still require the physical onn/TV check.
-
-Settings is a full-screen translucent panel over the same player: navigate settings on the left and change values on the right. Left returns to settings navigation; Back from navigation closes it. Category choices are virtualized for large playlists. Android TV launcher resources use one pixel SPARE wordmark: the TV glyph forms S, followed by PARE.
-
-Provider archives and on-demand content require the provider to supply them; Spare does not record streams or create missing archives. Recording, multiview, and local live-TV timeshifting remain out of scope. Library catalogs load on demand, use an encrypted six-hour cache, and never delay live startup. Series episode lists load only when selected.
-
-## Install and update
-
-Use APK attachments from [GitHub Releases](https://github.com/mot1us/spare/releases). Development APKs use a separate `.debug` app ID and do not self-update into production.
-
-Trusted main-branch pushes build, test, sign, and publish automatically. The initial tracked release channel is `prerelease` pending the onn/Samsung checklist; the stable channel is enabled in a subsequent versioned update after that checkpoint.
-
-After the first stable release, this permanent link will install the latest stable APK:
-
-`https://github.com/mot1us/spare/releases/latest/download/spare.apk`
-
-A Downloader code can point to that URL. Register it once through [AFTVnews](https://go.aftvnews.com/) after a stable release exists. A code is a shortcut; it does not host the APK. CAPTCHA registration requires a human.
-
-The app checks for updates at most daily, without interrupting playback. Stable builds use the latest stable `update.json`; prerelease builds use GitHub's public Releases API to find the newest published testing or stable manifest. Drafts and foreign manifest URLs are rejected. It downloads only when asked, checks SHA-256, package ID, increasing version code, and the installed signing identity, then stages a native PackageInstaller self-update. Android 12+ is asked to install without another confirmation, with the Android confirmation prompt retained when required. Android closes Spare to finish installation; reopen it from your apps. The update that first installs 0.3.0 still uses the older updater; this path takes effect for subsequent updates. Android may require enabling “install unknown apps” separately for Spare, even if it is already enabled for Downloader. Prereleases remain excluded from stable update discovery. Version 0.1.0 needs one manual update to 0.1.1 to fix testing-channel discovery.
-
-## Build and verify
-
-Use JDK 17 or 21 and Android SDK 36. The checked-in Gradle wrapper downloads the pinned build tool and checks its SHA-256. Configure `ANDROID_HOME` or an ignored `local.properties` file with `sdk.dir`.
-
-```sh
-./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest
-```
-
-Production dependencies are locked in `app/gradle.lockfile`. Deliberate dependency updates must refresh that file with `--write-locks` and pass checks. The unsigned optimized APK is built unless release-signing environment variables are configured. See [releasing](docs/RELEASING.md) and [device testing](docs/TESTING.md).
-
-## Privacy and security
-
-Sources, credentials, guide/library caches, and on-demand watch history (up to 100 titles per playlist) are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites, current/previous watched-channel IDs, quality observations (up to 5,000 channels), temporary unavailability, guide video style, followed MLB/NFL teams, per-channel subtitle choices, and guide preferences stay in private preferences. Removing a source removes its cached guide, Library catalogs, watch history, and preferences. Uninstalling clears local app data.
-
-Voice search requests RECORD_AUDIO only when Search/Voice is selected. The configured Android recognition service captures/processes speech; its privacy policy applies and it may use its own network service. Spare stores no audio, restores playback volume when listening ends, and stops listening when search closes or the app leaves the foreground. Permission denial or recognition failure leaves text search available. Voice availability and the dedicated remote Assistant button are controlled by the TV's software; Spare's Search action requests in-app channel transcription rather than a web search.
-
-Provider traffic, guide downloads, and logos contact the URLs supplied by your provider. Sports contacts ESPN’s public scoreboard and team-schedule feeds while Sports is visible or followed teams are changed. These requests contain league/date/team queries and no playlist or credential data. Optional metadata and artwork contact the configured addon and its image URLs. Update checks and APK downloads contact GitHub (including api.github.com for prerelease discovery). There is no Spare credential service or telemetry endpoint. Provider data never becomes HTML or executable instructions.
-
-On-demand media redirects are followed explicitly with a bounded hop count, per-hop scheme/consent checks, sensitive-header stripping across origins, and preserved byte ranges for seeking. HTTPS upgrades work; HTTP downgrades require the source’s existing explicit HTTP consent.
-
-HTTPS is the default. HTTP requires explicit consent for each source and exposes data in transit. Every media manifest, segment, key, subtitle, image, and guide request is restricted to HTTP/HTTPS and the source’s HTTP policy; file/content/executable schemes are rejected. HTTP redirect downgrades are rejected for HTTPS-only sources. Imports, decompressed data, XML nesting, logos, and field lengths have size limits; DTDs and custom XML entities are rejected. Import work runs off the UI thread. App and Media3 release logging omit provider credentials and URLs.
-
-Report security issues using the process in [SECURITY.md](SECURITY.md). See [third-party notices](THIRD_PARTY_NOTICES.md).
-
-Back from a movie, episode or catch-up returns directly to the live guide. The Library action pauses on-demand playback and restores the cached catalog; artwork downloads pause when browsing closes. Live streams use the Media3 HTTP transport used before 0.7.0; on-demand requests retain explicit redirect/HTTP-consent checks.
+[Build and device testing](docs/TESTING.md) · [Releasing](docs/RELEASING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)

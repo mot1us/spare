@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1 — 2026-10-25
+
+- Make guide and Library search ignore spacing, punctuation and provider text styling, so KING 5 also finds KING5.
+- Reduce the README to key features, remote controls and installation.
+
 ## 0.8.0 — 2026-10-25
 
 - Return directly to live TV with Back from on-demand playback; reopen Library at the cached catalog and pause the movie while browsing.
