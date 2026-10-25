@@ -18,9 +18,13 @@ object GuideTheme {
     var current = palettes.first()
         private set
     fun select(name: String) { current = palettes.firstOrNull { it.name == name } ?: palettes.first() }
+    fun glass(density: Float) = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+        intArrayOf(0xEE202936.toInt(), 0xE80D131D.toInt())).apply {
+        cornerRadius = 12 * density; setStroke(density.toInt().coerceAtLeast(1), 0x40FFFFFF)
+    }
     fun ink() = ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE))
     fun background(density: Float, idle: Int = Color.TRANSPARENT, selected: Int = 0x553F4754): StateListDrawable {
-        fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = 4 * density }
+        fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = 6 * density; setStroke(density.toInt().coerceAtLeast(1), if (color == Color.TRANSPARENT) Color.TRANSPARENT else 0x22FFFFFF) }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
             addState(intArrayOf(android.R.attr.state_selected), shape(selected))

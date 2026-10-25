@@ -2,7 +2,7 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.4.0**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.4.1**. License: MIT.
 
 ## What it does
 
@@ -22,6 +22,8 @@ Spare plays your own live-TV sources. It includes no channels, subscriptions, ad
 
 Target hardware for first physical validation: **2026 onn 4K Pro with a 75-inch Samsung 4K TV**. Android TV 8.0/API 26 or newer is required. Full refresh-rate requests use Android 12/API 31 or newer; older systems use available display-mode selection. TV/HDMI modes and Android preferences can prevent a match. Switching may briefly blank the picture.
 
+Settings → Time format switches the guide, details, and Sports between 12-hour and 24-hour time. Long-press OK confirms favorite changes with a visible message and high-contrast star.
+
 Cached playlists resume before network work, with a six-hour lineup refresh interval and an explicit refresh in Settings. Cached EPG is reused and nearby rows are warmed in the background with two workers; a 20,000-channel provider is never bulk-probed. First-time imports retain a progress indicator.
 
 ## Remote
@@ -37,7 +39,7 @@ Cached playlists resume before network work, with a six-hour lineup refresh inte
 | Guide | Long-press OK | Toggle favorite |
 | Categories | Left / Down from controls | Jump to Search/Settings / return to the same category without scrolling |
 | Anywhere | Menu (if present) | Open Settings |
-| Guide | Left / Right | Open categories / move the guide window forward by 30 minutes; timeline buttons move earlier or return to Now |
+| Guide | Left / Right | Rewind / advance this channel by 30 minutes; Left at live opens categories. Back resets a future row to live; Up from the first row reaches Now. |
 | Guide | Back / hold Back | Move between channel/sidebar focus / expand the current channel |
 | Full-screen player | Back | Open guide |
 | Search | Down / Done | Browse the live-filtered channel results |
@@ -47,9 +49,9 @@ Search and Settings icons sit above the category sidebar; the guide has a larger
 
 Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles and the channel-details Subtitles button save choices for the current channel: use the app default, Off, Automatic, or a specific track. App default changes the default for channels without an override. Automatic selects supported text tracks even without language/default labels. For transport streams without caption declarations, CC1 and Digital 1 compatibility readers are available; Automatic tries them for at most six eight-second intervals and stops once captions arrive, without reconnecting video. Compatibility services are guesses, not proof that a programme carries captions. Real provider caption descriptors and separate subtitle renditions take precedence. No captions can be created when the provider supplies none.
 
-Sports lives in the sidebar next to Favorites. Choose Teams, select MLB or NFL, and save the teams you follow. My teams shows their games; All games includes other matched MLB/NFL games. Select a game to choose a channel, keep browsing with the preview playing, and hold Back to expand. Upcoming games show the TV’s local time; choosing one lets you watch its channel now and does not schedule a recording or automatic tune.
+Guide and Sports have separate fixed controls above the provider categories. From All channels, press Up to reach them; Left from any category still jumps straight to Search/Settings. Choose Teams, select MLB or NFL, and save the teams you follow. My teams shows their games; All games includes other matched MLB/NFL games. Select a game to choose a channel, keep browsing with the preview playing, and hold Back to expand. Upcoming games show the TV’s local time; choosing one lets you watch its channel now and does not schedule a recording or automatic tune.
 
-Sports uses your provider’s listings for the next 48 hours. It recognizes full team names, common nicknames, and league-qualified abbreviations, skips ambiguous matchups/replays/highlights, and combines alternative channels. It needs actual team matchups in the EPG; generic “Live Sports” listings cannot identify a game, and a listing cannot prove a stream is online. There is no external schedule account/service or viewing-history inference. Followed teams stay on-device across playlists. Category and verified-quality filters also apply; Settings → Show unverified channels can temporarily reveal unmeasured channels. Xtream Sports warms at most 160 likely sports/favorite guide entries with two workers while open, reuses cached data, and pauses requests for five minutes on account/rate-limit errors or three consecutive failures. XMLTV uses the imported guide. Refresh retries eligible guide entries without scanning streams.
+Sports uses your provider’s listings for the next 48 hours. It recognizes full team names, common nicknames, league-qualified abbreviations, and unambiguous city names, skips ambiguous matchups/replays/highlights, and combines alternative channels. It needs actual team matchups in the EPG; generic “Live Sports” listings cannot identify a game, and a listing cannot prove a stream is online. There is no external schedule account/service or viewing-history inference. Followed teams stay on-device across playlists. Category and verified-quality filters also apply; Settings → Show unverified channels can temporarily reveal unmeasured channels. Xtream Sports warms at most 160 likely sports/favorite guide entries with two workers while open, reuses cached data, and pauses requests for five minutes on account/rate-limit errors or three consecutive failures. Sports checks guide data independently of quality filters, then applies those filters to playable results and explains hidden games. If no matchups are available, followed-team channels are clearly labeled as unconfirmed team channels. Xtream short guides use stream-specific IDs and request up to 72 bounded entries; network variants share the warmup budget fairly. Refresh retries eligible guide entries or downloads XMLTV again without restarting playback or scanning streams.
 
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 

@@ -13,14 +13,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 @SuppressLint("SetTextI18n", "ViewConstructor") // Constructed in Kotlin with activity callbacks; never inflated from XML.
 class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, chooseTeams: () -> Unit,
     toggle: () -> Unit, refresh: () -> Unit, private val select: (SportsGame) -> Unit,
-    private val focused: (SportsGame) -> Unit, private val leave: () -> Unit) : LinearLayout(context) {
+    private val focused: (SportsGame) -> Unit, private val selectChannel: (Channel) -> Unit, private val focusChannel: (Channel) -> Unit, filters: () -> Unit, private val leave: () -> Unit) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.LTGRAY) }
     val teamsButton = button("Teams", chooseTeams).apply { tag = "sports-teams" }
@@ -29,7 +26,10 @@ class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, choo
     private val progress = label(10f).apply { tag = "sports-status"; maxLines = 2; setPadding(0, dp(4), 0, dp(4)) }
     private val empty = label(12f).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }
     private val rows = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context); itemAnimator = null; tag = "sports-games" }
-    private var games = emptyList<SportsGame>()
+    private data class Entry(val game: SportsGame? = null, val channel: Channel? = null) {
+        val key get() = game?.key ?: "team:${channel!!.id}"
+    }
+    private var games = emptyList<Entry>()
     private var remembered: String? = null
     private var focusEpoch = 0
     private val cards = object : RecyclerView.Adapter<Card>() {
@@ -56,25 +56,26 @@ class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, choo
             return Card(box, title, detail)
         }
         override fun onBindViewHolder(holder: Card, position: Int) {
-            val game = games[position]; holder.box.tag = game.key
-            holder.title.text = game.title
-            val live = game.live(System.currentTimeMillis())
-            holder.detail.text = "${if (live) "LIVE" else time(game.start)} · ${game.teams.first().league} · ${game.broadcasts.size} ${if (game.broadcasts.size == 1) "channel" else "channels"} · ${game.broadcasts.first().channel.name}"
+            val entry = games[position]; val game = entry.game; holder.box.tag = entry.key
+            holder.title.text = game?.title ?: entry.channel!!.name
+            holder.detail.text = if (game != null) "${if (game.live(System.currentTimeMillis())) "LIVE" else time(game.start)} · ${game.teams.first().league} · ${game.broadcasts.size} ${if (game.broadcasts.size == 1) "channel" else "channels"} · ${game.broadcasts.first().channel.name}"
+                else "Team channel · matchup unavailable · ${entry.channel!!.group}"
             holder.box.contentDescription = "${holder.title.text}. ${holder.detail.text}"
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x222D3542)
             fun ink(active: Boolean) { holder.title.setTextColor(if (active) Color.BLACK else Color.WHITE); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY) }
             ink(holder.box.hasFocus())
-            holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; focused(game) } }
-            holder.box.setOnClickListener { select(game) }
+            holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = entry.key; if (game != null) focused(game) else focusChannel(entry.channel!!) } }
+            holder.box.setOnClickListener { if (game != null) select(game) else selectChannel(entry.channel!!) }
         }
     }
     init {
         orientation = VERTICAL; tag = "sports-panel"; visibility = GONE
         val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         val refreshButton = button("Refresh", refresh).apply { tag = "sports-refresh" }
-        toolbar.addView(teamsButton); toolbar.addView(scope); toolbar.addView(refreshButton)
+        val filtersButton = button("Filters", filters).apply { tag = "sports-filters" }
+        toolbar.addView(teamsButton); toolbar.addView(scope); toolbar.addView(refreshButton); toolbar.addView(filtersButton)
         toolbar.addView(summary, LayoutParams(0, -2, 1f))
-        listOf(teamsButton, scope, refreshButton).forEach { control -> control.setOnKeyListener { _, key, event ->
+        listOf(teamsButton, scope, refreshButton, filtersButton).forEach { control -> control.setOnKeyListener { _, key, event ->
             when (key) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusGames(); true }
                 KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) leave(); true }
@@ -86,22 +87,25 @@ class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, choo
         rows.adapter = cards; addView(rows, LayoutParams(-1, 0, 1f))
     }
     @SuppressLint("NotifyDataSetChanged")
-    fun submit(next: List<SportsGame>, teamSummary: String, message: String, following: Boolean, hasTeams: Boolean, filtered: Boolean) {
+    fun submit(next: List<SportsGame>, channels: List<Channel>, teamSummary: String, message: String, following: Boolean, hasTeams: Boolean, hiddenGames: Int, guideChannels: Int) {
         summary.text = teamSummary; scope.isEnabled = hasTeams; scope.text = if (following && hasTeams) "My teams" else "All games"
         progress.text = message
         empty.text = if (following && hasTeams) "No matching games in the next 48 hours. Try All games, or check back after the provider updates its guide."
             else "No MLB/NFL games found in the next 48 hours. Games need team matchups in your provider’s guide."
-        if (filtered) empty.append(" Your category and verified-quality filters also apply.")
+        if (hiddenGames > 0) empty.text = "$hiddenGames matching ${if (hiddenGames == 1) "game is" else "games are"} hidden by your category, verified-quality, or unavailable-channel filters. Open Filters to adjust."
+        else if (guideChannels == 0) empty.text = "No usable sports guide data yet. Refresh checks likely game networks; listings need team names to identify a matchup."
+        if (channels.isNotEmpty()) empty.append(" Showing your provider’s team channels below; these are not confirmed game listings.")
         empty.visibility = if (next.isEmpty()) VISIBLE else GONE
-        if (games != next) {
-            val hadFocus = rows.hasFocus() || (games.isEmpty() && hasFocus()); games = next; cards.notifyDataSetChanged()
+        val entries = next.map { Entry(game = it) } + channels.map { Entry(channel = it) }
+        if (games != entries) {
+            val hadFocus = rows.hasFocus() || (games.isEmpty() && hasFocus()); games = entries; cards.notifyDataSetChanged()
             if (hadFocus) post { focusGames() }
         }
     }
     fun focusGames() { if (games.isEmpty()) teamsButton.requestFocus() else focusAt(games.indexOfFirst { it.key == remembered }.coerceAtLeast(0)) }
     private fun focusAt(position: Int) {
         if (position !in games.indices) return
-        val epoch = ++focusEpoch; rows.scrollToPosition(position)
+        val epoch = ++focusEpoch; if (rows.findViewHolderForAdapterPosition(position) == null) rows.scrollToPosition(position)
         fun attempt(left: Int) {
             if (!isShown || epoch != focusEpoch) return
             val item = rows.findViewHolderForAdapterPosition(position)?.itemView
@@ -112,6 +116,6 @@ class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, choo
     fun refreshTheme() { cards.notifyItemRangeChanged(0, cards.itemCount) }
     private class Card(val box: LinearLayout, val title: TextView, val detail: TextView) : RecyclerView.ViewHolder(box)
     companion object {
-        fun time(epoch: Long): String = DateTimeFormatter.ofPattern("EEE h:mm a").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(epoch))
+        fun time(epoch: Long): String = GuideClock.dayTime(epoch)
     }
 }

@@ -32,7 +32,7 @@ class PlaybackDetails(
     init {
         orientation = VERTICAL; tag = "playback-details"; visibility = View.GONE
         setPadding(dp(22), dp(16), dp(22), dp(16))
-        background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xE60B1018.toInt(), 0xFA0B1018.toInt()))
+        background = GuideTheme.glass(resources.displayMetrics.density); elevation = dp(10).toFloat(); clipToOutline = true
         addView(channel); addView(title, LayoutParams(-1, -2).apply { topMargin = dp(4) })
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })

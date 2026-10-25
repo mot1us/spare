@@ -32,6 +32,17 @@ data class Lineup(val channels: List<Channel>, val epgUrl: String = "", val cate
 data class Guide(val channels: List<Channel>, val programmes: Map<String, List<Programme>>, val categoryOrder: List<String> = emptyList()) {
     fun key(channel: Channel) = channel.guideId.ifBlank { channel.id }
     fun at(channel: Channel, time: Long): Programme? = programmes[key(channel)]?.firstOrNull { time >= it.start && time < it.end }
+    /** Short EPG belongs to a stream; migrate only unambiguous legacy cache entries. */
+    fun streamGuide(): Guide {
+        if (channels.all { key(it) == it.id }) return this
+        val counts = channels.groupingBy { key(it) }.eachCount()
+        val migrated = linkedMapOf<String, List<Programme>>()
+        for (channel in channels) {
+            val entries = programmes[channel.id] ?: programmes[key(channel)].takeIf { counts[key(channel)] == 1 }
+            if (!entries.isNullOrEmpty()) migrated[channel.id] = entries.map { it.copy(channel = channel.id) }
+        }
+        return copy(channels = channels.map { it.copy(guideId = it.id) }, programmes = migrated)
+    }
     fun json(): JSONObject = JSONObject().put("channels", JSONArray(channels.map { it.json() }))
         .put("programmes", JSONArray(programmes.values.flatten().map { it.json() })).put("categories", JSONArray(categoryOrder))
     companion object {

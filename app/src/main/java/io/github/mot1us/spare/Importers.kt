@@ -115,7 +115,7 @@ object Importers {
             val extension = j.optString("container_extension", "ts").takeIf { it in listOf("ts", "m3u8", "mp4") } ?: "ts"
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
-                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" })
+                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" })
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }

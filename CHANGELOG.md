@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 — 2026-10-25
+
+- Make future guide browsing independent for each channel, with Left to rewind, Back to return to live, and reachable Now controls. Add a persistent 12/24-hour time preference.
+- Clear search on category/Favorites selection, redraw favorite stars and EPG in place without stealing focus, with dark favorite-star focus contrast, and confirm additions/removals. Preserve sidebar focus with targeted updates and smooth offscreen scrolling; stop repeated Left on Search from bouncing focus.
+- Separate Guide/Sports navigation from provider categories. Broaden league-aware matchup matching, request deeper bounded sports EPG, diversify network warmup, distinguish filtered/missing listings, and offer labeled team-channel fallbacks. Refresh XMLTV without retuning.
+- Keep Xtream short EPG keyed by stream instead of shared XMLTV IDs; migrate only unambiguous cached guide entries and preserve explicit XMLTV overrides.
+- Replace the channel-change text block with a compact translucent programme card, subtle edges and shadows. Add an original minimal pixel-art TV icon and matching launcher banner.
+
 ## 0.4.0 — 2026-10-25
 
 - Add a Sports section beside Favorites: follow MLB/NFL teams, discover live/upcoming matchups in the provider guide, and choose among matching channels while keeping the live preview running.

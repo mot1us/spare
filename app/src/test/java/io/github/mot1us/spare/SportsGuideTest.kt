@@ -60,4 +60,22 @@ class SportsGuideTest {
         assertEquals(30, SportsCatalog.teams.count { it.league == "MLB" }); assertEquals(32, SportsCatalog.teams.count { it.league == "NFL" })
         assertEquals(62, SportsCatalog.byId.size)
     }
+    @Test fun leagueContextSupportsCityListingsWithoutGuessingAmbiguousCities() {
+        assertEquals(setOf("nfl:CHI", "nfl:MIN"), ids("NFL Football", "Chicago at Minnesota. Live."))
+        assertEquals(setOf("mlb:BOS", "mlb:SEA"), ids("MLB: Boston vs Seattle"))
+        assertNull(ids("MLB: New York vs Los Angeles"))
+        assertEquals(setOf("mlb:SF", "mlb:STL"), SportsGuide.teams(programme("Giants vs Cardinals"), "MLB Extra Innings")!!.map { it.id }.toSet())
+        assertNull(SportsGuide.teams(programme("Live Sports"), "MLB Yankees"))
+    }
+    @Test fun scanReachesOtherNetworksBeforeDuplicateQualityVariantsFillBudget() {
+        val duplicates = (1..200).map { Channel("$it", "USA ESPN FHD $it", "Sports", "https://example.com/$it") }
+        val cbs = Channel("cbs", "CBS", "USA", "https://example.com/cbs")
+        assertTrue(SportsGuide.warmChannels(duplicates + cbs, emptySet(), emptySet()).contains(cbs))
+    }
+    @Test fun teamChannelFallbackUsesNamesAndDoesNotInventGames() {
+        val channels = listOf(Channel("nyy", "MLB New York Yankees FHD", "MLB", "https://example.com/nyy"), Channel("news", "News", "USA", "https://example.com/news"))
+        assertEquals(listOf(channels.first()), SportsGuide.teamChannels(channels, setOf("mlb:NYY")))
+        assertTrue(SportsGuide.find(Guide(channels, emptyMap()), setOf("mlb:NYY"), emptySet(), now).isEmpty())
+    }
+
 }

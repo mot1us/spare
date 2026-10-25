@@ -14,10 +14,22 @@ import androidx.recyclerview.widget.RecyclerView
 
 data class GuideSection(val title: String, val key: String, val active: Boolean = false)
 
-class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val move: (Int) -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
+class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val openModes: () -> Unit, private val move: (Int) -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
     private var focusedKey: String? = null
-    @SuppressLint("NotifyDataSetChanged") fun submit(next: List<GuideSection>) { if (items != next) { items = next; notifyDataSetChanged() } }
+    init { setHasStableIds(true) }
+    fun submit(next: List<GuideSection>) {
+        if (items == next) return
+        val previous = items
+        val diff = androidx.recyclerview.widget.DiffUtil.calculateDiff(object : androidx.recyclerview.widget.DiffUtil.Callback() {
+            override fun getOldListSize() = previous.size
+            override fun getNewListSize() = next.size
+            override fun areItemsTheSame(old: Int, new: Int) = previous[old].key == next[new].key
+            override fun areContentsTheSame(old: Int, new: Int) = previous[old] == next[new]
+        })
+        items = next; diff.dispatchUpdatesTo(this)
+    }
+    override fun getItemId(position: Int) = Channel.stableId(items[position].key).take(16).toULong(16).toLong()
     fun rememberedPosition() = items.indexOfFirst { it.key == focusedKey }.takeIf { it >= 0 } ?: activePosition()
     fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
     override fun getItemCount() = items.size
@@ -28,7 +40,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
                 if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                     val at = items.indexOfFirst { it.key == tag }
                     val next = at + if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
-                    if (next < 0) openToolbar() else move(next.coerceAtMost(items.lastIndex)); return true
+                    if (next < 0) openModes() else move(next.coerceAtMost(items.lastIndex)); return true
                 }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { openToolbar(); return true }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) { enterGuide(); return true }

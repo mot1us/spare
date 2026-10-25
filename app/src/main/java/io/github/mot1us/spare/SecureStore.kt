@@ -94,6 +94,9 @@ class SecureStore(private val context: Context) {
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }
+    var clock24: Boolean
+        get() = preferences.getBoolean("clock-24", false)
+        set(value) { preferences.edit { putBoolean("clock-24", value) } }
     var captions: Boolean
         get() = preferences.getBoolean("captions", false)
         set(value) { preferences.edit { putBoolean("captions", value) } }

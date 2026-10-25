@@ -36,4 +36,21 @@ class XtreamLineupTest {
         assertEquals(Importers.endpoint(source, "player_api.php", "get_live_streams"), Importers.endpoint(without, "player_api.php", "get_live_streams"))
         assertFalse(Network.allowed("https://provider.example/\\", true))
     }
+    @Test fun streamSpecificGuidesDoNotCollapseSharedXmltvIds() {
+        val streams = JSONArray().put(stream(1).put("epg_channel_id", "shared")).put(stream(2).put("epg_channel_id", "shared"))
+        assertEquals(listOf("xc:1", "xc:2"), Importers.xtreamChannels(streams, source, emptyMap()).map { it.guideId })
+        assertEquals(listOf("shared", "shared"), Importers.xtreamChannels(streams, source.copy(epgUrl = "https://example.com/epg"), emptyMap()).map { it.guideId })
+    }
+    @Test fun migratesUniqueOldGuideKeysButDiscardsAmbiguousSharedListings() {
+        val one = Channel("xc:1", "One", "News", "https://example.com/1", guideId = "shared")
+        val two = one.copy(id = "xc:2")
+        val programme = Programme("shared", "News", 1, 2)
+        val unique = Guide(listOf(one), mapOf("shared" to listOf(programme))).streamGuide()
+        assertEquals("xc:1", unique.channels.single().guideId)
+        assertEquals("xc:1", unique.programmes["xc:1"]!!.single().channel)
+        assertTrue(Guide(listOf(one, two), mapOf("shared" to listOf(programme))).streamGuide().programmes.isEmpty())
+        val current = Guide(listOf(one.copy(guideId = one.id)), unique.programmes)
+        assertEquals(current, current.streamGuide())
+    }
+
 }

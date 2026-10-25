@@ -77,6 +77,29 @@ object SportsCatalog {
     private val punctuation = Regex("[^a-z0-9]+")
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)
         .lowercase(Locale.ROOT).replace("@", " at ").replace(Regex("\\p{M}+"), ""), " ").trim()
+    /** City-only listings need league context and a city unique within that league. */
+    fun cities(normalized: String, league: String): Set<SportsTeam> {
+        val clubs = teams.filter { it.league == league }
+        fun city(team: SportsTeam): String = normalize(team.name).let { name ->
+            when {
+                name.startsWith("new york ") -> "new york"
+                name.startsWith("los angeles ") -> "los angeles"
+                name.startsWith("tampa bay ") -> "tampa bay"
+                name.startsWith("kansas city ") -> "kansas city"
+                name.startsWith("san francisco ") -> "san francisco"
+                name.startsWith("san diego ") -> "san diego"
+                name.startsWith("st louis ") -> "st louis"
+                name.startsWith("new england ") -> "new england"
+                name.startsWith("new orleans ") -> "new orleans"
+                name.startsWith("green bay ") -> "green bay"
+                name.startsWith("las vegas ") -> "las vegas"
+                name == "athletics" -> "oakland"
+                else -> name.substringBefore(' ')
+            }
+        }
+        return clubs.groupBy(::city).filter { (city, teams) -> teams.size == 1 && " $normalized ".contains(" $city ") }
+            .values.map { it.single() }.toSet()
+    }
     private data class Alias(val team: SportsTeam, val phrase: String, val short: Boolean)
     private val index = teams.flatMap { t -> t.aliases.map { alias ->
         val phrase = normalize(alias); Alias(t, " $phrase ", phrase.length <= 3 && !phrase.contains(' '))

@@ -6,9 +6,9 @@ import java.nio.charset.CodingErrorAction
 import java.util.Base64
 
 object XtreamEpg {
-    fun load(source: Source, channel: Channel): List<Programme> {
+    fun load(source: Source, channel: Channel, depth: Int = 24): List<Programme> {
         val id = channel.id.removePrefix("xc:"); require(id.matches(Regex("[0-9]{1,20}")))
-        val url = Importers.endpoint(source, "player_api.php", "get_short_epg") + "&stream_id=$id&limit=24"
+        val url = Importers.endpoint(source, "player_api.php", "get_short_epg") + "&stream_id=$id&limit=${depth.coerceIn(24, 72)}"
         return parse(Network.get(url, source.allowHttp, 512 * 1024).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id })
     }
     fun parse(text: String, channel: String, now: Long = System.currentTimeMillis()): List<Programme> {
