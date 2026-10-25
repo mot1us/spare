@@ -14,15 +14,23 @@ import androidx.recyclerview.widget.RecyclerView
 
 data class GuideSection(val title: String, val key: String, val active: Boolean = false)
 
-class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
+class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val move: (Int) -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
+    private var focusedKey: String? = null
     @SuppressLint("NotifyDataSetChanged") fun submit(next: List<GuideSection>) { if (items != next) { items = next; notifyDataSetChanged() } }
+    fun rememberedPosition() = items.indexOfFirst { it.key == focusedKey }.takeIf { it >= 0 } ?: activePosition()
     fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val d = context.resources.displayMetrics.density
         val text = object : TextView(context) {
             override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                    val at = items.indexOfFirst { it.key == tag }
+                    val next = at + if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
+                    if (next < 0) openToolbar() else move(next.coerceAtMost(items.lastIndex)); return true
+                }
+                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { openToolbar(); return true }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) { enterGuide(); return true }
                 return super.onKeyDown(keyCode, event)
             }
@@ -39,9 +47,10 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
     override fun onBindViewHolder(holder: Holder, position: Int) {
         holder.label.background = GuideTheme.background(context.resources.displayMetrics.density)
         val item = items[position]
-        holder.label.text = item.title; holder.label.contentDescription = item.title
+        holder.label.tag = item.key; holder.label.text = item.title; holder.label.contentDescription = item.title
         holder.label.isSelected = item.active
         holder.label.typeface = Typeface.create(if (item.active) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+        holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key }
         holder.label.setOnClickListener { select(item) }
     }
     class Holder(val label: TextView) : RecyclerView.ViewHolder(label)

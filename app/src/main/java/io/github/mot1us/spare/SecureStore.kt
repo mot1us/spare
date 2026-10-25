@@ -51,7 +51,7 @@ class SecureStore(private val context: Context) {
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
@@ -77,6 +77,16 @@ class SecureStore(private val context: Context) {
     }.getOrDefault(UnavailableChannels())
     fun saveUnavailable(source: Source, channels: UnavailableChannels) {
         preferences.edit { putString("unavailable-${source.id}", JSONObject(channels.snapshot()).toString()) }
+    }
+    fun channelCaptions(source: Source, channel: Channel): String? = runCatching {
+        JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()).optString(channel.id).takeIf { it.isNotBlank() }
+    }.getOrNull()
+    fun setChannelCaptions(source: Source, channel: Channel, mode: String?) {
+        val entries = runCatching { JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()) }.getOrDefault(JSONObject())
+        entries.remove(channel.id)
+        if (mode != null) entries.put(channel.id, mode)
+        while (entries.length() > 5000) entries.remove(entries.keys().next())
+        preferences.edit { putString("channel-captions-${source.id}", entries.toString()) }
     }
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()

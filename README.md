@@ -2,7 +2,7 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.3.0**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.3.1**. License: MIT.
 
 ## What it does
 
@@ -34,6 +34,8 @@ Cached playlists resume before network work, with a six-hour lineup refresh inte
 | Guide | Up / Down | Browse channels without changing the stream |
 | Guide | OK | Tune a different channel in the preview; select the playing channel to expand |
 | Guide | Long-press OK | Toggle favorite |
+| Categories | Left / Down from controls | Jump to Search/Settings / return to the same category without scrolling |
+| Anywhere | Menu (if present) | Open Settings |
 | Guide | Left / Right | Open categories / move the guide window forward by 30 minutes; timeline buttons move earlier or return to Now |
 | Guide | Back / hold Back | Move between channel/sidebar focus / expand the current channel |
 | Full-screen player | Back | Open guide |
@@ -42,7 +44,7 @@ Cached playlists resume before network work, with a six-hour lineup refresh inte
 
 Search and Settings icons sit above the category sidebar; the guide has a larger 320×180 dp live preview. Playlists and Updates are inside Settings. Search requests microphone permission once, then listens inline using the configured speech service. There is no speech-app chooser or external recognition activity. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. Settings → Playlists adds, switches, edits, or removes playlists. Settings contains guide video style, guide filters, visible-category presets/custom choices, category order, five color themes, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
 
-Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles provides Off, Automatic, and detected tracks. Automatic persists across channels and enables deeper HLS caption detection; no captions can be shown when the provider supplies none.
+Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles and the channel-details Subtitles button save choices for the current channel: use the app default, Off, Automatic, or a specific track. App default changes the default for channels without an override. Automatic selects supported text tracks even without language/default labels. For transport streams without caption declarations, CC1 and Digital 1 compatibility readers are available; Automatic tries them for at most six eight-second intervals and stops once captions arrive, without reconnecting video. Compatibility services are guesses, not proof that a programme carries captions. Real provider caption descriptors and separate subtitle renditions take precedence. No captions can be created when the provider supplies none.
 
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 

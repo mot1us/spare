@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-10-24
+
+- Jump left from any category to Search/Settings, return down to the same category and scroll position, and keep vertical category navigation inside the list. Menu opens Settings from guide or playback.
+- Expose CC1/CEA-608 and Digital 1/CEA-708 compatibility readers when transport-stream caption descriptors are absent, including HLS masters that omit captions or incorrectly declare NONE. Preserve actual provider descriptors and separate subtitle tracks.
+- Make Automatic select supported subtitles even without matching language/default metadata, and try the two unlabeled compatibility services until captions appear, with a bounded search that never retunes the video.
+- Save per-playlist/channel subtitle choices, keep an app-wide default, and expose Subtitles in channel details. Validate actual embedded caption rendering, per-channel persistence, and deep-sidebar navigation.
+
 ## 0.3.0 — 2026-10-24
 
 - Keep new channel selections in the guide preview, retain explicit full-screen actions, and keep vertical remote navigation in the channel list across off-screen rows.

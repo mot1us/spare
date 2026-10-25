@@ -18,6 +18,7 @@ class PlaybackDetails(
     onGuide: () -> Unit,
     onPrevious: () -> Unit,
     onFavorite: () -> Unit,
+    onSubtitles: () -> Unit,
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; setTextColor(color) }
@@ -35,7 +36,7 @@ class PlaybackDetails(
         addView(channel); addView(title, LayoutParams(-1, -2).apply { topMargin = dp(4) })
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
-        addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
+        addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
     }
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
     fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean) {

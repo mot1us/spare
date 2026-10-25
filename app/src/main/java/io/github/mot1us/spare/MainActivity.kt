@@ -33,6 +33,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.Tracks
 import androidx.media3.common.Timeline
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -42,7 +43,6 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -101,6 +101,21 @@ class MainActivity : Activity() {
     private lateinit var voiceInput: NativeVoiceInput
     private var voiceVolume = 1f
     private var focusEpoch = 0
+    private var captionSawCue = false
+    private var captionScanCount = 0
+    private var captionProbeScheduled = false
+    private val probeCaptions = Runnable {
+        captionProbeScheduled = false
+        if (::player.isInitialized && player.currentCues.cues.isNotEmpty()) { captionSawCue = true; return@Runnable }
+        if (started && firstFrame && subtitleMode() == CaptionTracks.AUTO && !captionSawCue && captionScanCount < 6) {
+            val choices = CaptionTracks.choices(player.currentTracks)
+            val fallback = choices.filter { it.compatibility }
+            if (fallback.size > 1 && fallback.size == choices.size) {
+                val selected = fallback.indexOfFirst { it.group.isTrackSelected(it.index) }.coerceAtLeast(0)
+                captionScanCount++; selectCaption(fallback[(selected + 1) % fallback.size])
+            }
+        }
+    }
     private lateinit var playbackError: TextView
     private lateinit var searchButton: ImageButton
     private lateinit var settingsButton: ImageButton
@@ -177,7 +192,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         providerFactory = DataSource.Factory { ProviderDataSource { source?.allowHttp == true } }
-        mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
+        mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
         val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(50000, 60000, 1500, 8000)
             .setTargetBufferBytes(64 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build()
         player = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true)).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
@@ -210,6 +225,10 @@ class MainActivity : Activity() {
             }
         }
         player.addListener(object : Player.Listener {
+            override fun onTracksChanged(tracks: Tracks) { reconcileCaptions() }
+            override fun onCues(cueGroup: CueGroup) {
+                if (cueGroup.cues.isNotEmpty()) { captionSawCue = true; cancelCaptionProbe() }
+            }
             override fun onPlayerError(error: PlaybackException) {
                 if (!started || current == null || player.playerError !== error) return
                 cancelPlaybackCallbacks()
@@ -238,7 +257,7 @@ class MainActivity : Activity() {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
                 firstFrame = true; hasPlayedChannel = true; lastWorkingChannel = current
                 current?.let { channel -> source?.let { store.setLast(it, channel) }; workingUrls[channel.id] = playbackUrl; if (unavailable.restore(channel.id)) { saveUnavailable(); applyFilter() } }
-                cancelPlaybackCallbacks(); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
+                cancelPlaybackCallbacks(); reconcileCaptions(); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
                 player.videoFormat?.let { format ->
                     if (format.width > 0 && format.height > 0) recordVideo(VideoInfo(format.width, format.height, format.frameRate.takeIf { it.isFinite() && it > 0 } ?: lastVideoInfo?.fps ?: 0f))
                 }
@@ -298,8 +317,16 @@ class MainActivity : Activity() {
             background = GuideTheme.background(resources.displayMetrics.density)
             setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(8) }
         }
-        searchButton = icon("Search", R.drawable.ic_search, ::search).apply { tag = "search" }; toolbar.addView(searchButton)
-        settingsButton = icon("Settings", R.drawable.ic_settings, ::playbackMenu).apply { tag = "settings" }
+        searchButton = icon("Search", R.drawable.ic_search, ::search).apply { tag = "search"; id = View.generateViewId() }; toolbar.addView(searchButton)
+        settingsButton = icon("Settings", R.drawable.ic_settings, ::playbackMenu).apply { tag = "settings"; id = View.generateViewId() }
+        searchButton.nextFocusRightId = settingsButton.id; settingsButton.nextFocusLeftId = searchButton.id
+        listOf(searchButton, settingsButton).forEach { control -> control.setOnKeyListener { _, key, event ->
+            when {
+                key == KeyEvent.KEYCODE_DPAD_DOWN || (control === searchButton && key == KeyEvent.KEYCODE_DPAD_LEFT) -> { if (event.action == KeyEvent.ACTION_DOWN) focusSidebar(remember = true); true }
+                control === settingsButton && key == KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
+                else -> false
+            }
+        } }
         val settingsSlot = FrameLayout(this); settingsSlot.addView(settingsButton, FrameLayout.LayoutParams(dp(40), dp(40)))
         updateBadge = text("•", 18f).apply { visibility = View.GONE; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
         settingsSlot.addView(updateBadge, FrameLayout.LayoutParams(dp(12), dp(20), Gravity.TOP or Gravity.END))
@@ -310,7 +337,7 @@ class MainActivity : Activity() {
             favoritesOnly = section.key == "favorites"
             group = if (section.key.startsWith("group:")) section.key.removePrefix("group:") else null
             applyFilter(); focusChannel()
-        }, { focusChannel() })
+        }, { focusChannel() }, { ++focusEpoch; searchButton.requestFocus() }, ::focusCategoryAt)
         sidebar.adapter = sidebarAdapter
         navigation.addView(sidebar, LinearLayout.LayoutParams(-1, 0, 1f))
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
@@ -346,7 +373,7 @@ class MainActivity : Activity() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) { if (newState == RecyclerView.SCROLL_STATE_IDLE) scheduleEpg() }
         })
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
-        content.addView(text("← Categories     OK Preview / expand     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
+        content.addView(text("← Categories · ← again Search / Settings     OK Preview / expand     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
         previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; isFocusableInTouchMode = true; isClickable = true; setOnClickListener { if (current != null) showGuide(false) }; setOnFocusChangeListener { _, focused -> setTextColor(if (focused) Color.BLACK else Color.WHITE); setBackgroundColor(if (focused) GuideTheme.current.accent else 0xCC0B1018.toInt()) }; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(previewCaption, FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178); marginEnd = dp(18) })
         nowPlaying = text("", 15f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(16), dp(10), dp(16), dp(10)); visibility = View.GONE }
@@ -368,7 +395,7 @@ class MainActivity : Activity() {
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> source?.let { selected -> store.toggleFavorite(selected, channel); favorites = store.favorites(selected); applyFilter(); refreshDetails() } }
-        })
+        }, { tracks(C.TRACK_TYPE_TEXT) })
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         applyTheme(); updateTimes(); showGuide(true)
     }
@@ -393,10 +420,18 @@ class MainActivity : Activity() {
         }
         list.post { request(8) }
     }
-    private fun focusSidebar() {
-        ++focusEpoch
-        val position = sidebarAdapter.activePosition(); sidebar.scrollToPosition(position)
-        sidebar.post { sidebar.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() ?: searchButton.requestFocus() }
+    private fun focusSidebar(remember: Boolean = false) {
+        focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
+    }
+    private fun focusCategoryAt(position: Int) {
+        if (position !in 0 until sidebarAdapter.itemCount) { ++focusEpoch; searchButton.requestFocus(); return }
+        val epoch = ++focusEpoch; sidebar.scrollToPosition(position)
+        fun request(remaining: Int) {
+            if (epoch != focusEpoch || !guideVisible) return
+            val row = sidebar.findViewHolderForAdapterPosition(position)?.itemView
+            if (row != null) row.requestFocus() else if (remaining > 0) sidebar.postOnAnimation { request(remaining - 1) }
+        }
+        sidebar.post { request(8) }
     }
     private fun importProgress(epoch: Int, stage: String, done: Long = 0, total: Long = -1) = ui(epoch) {
         if (cachedStartup) return@ui
@@ -476,10 +511,10 @@ class MainActivity : Activity() {
         if (playbackUrl.isBlank()) return
         cancelPlaybackCallbacks()
         playbackToken++; expectedMediaId = "${current?.id}:$playbackToken"
-        firstFrame = false; lastVideoInfo = null; showPlaybackLoading(phase)
+        firstFrame = false; lastVideoInfo = null; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val item = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId).setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(12000).setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()).build()
         val media = if (playbackUrl.substringBefore('?').endsWith(".m3u8", true)) {
-            HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!store.captions).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+            HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         player.setMediaSource(media); player.prepare(); player.play()
         handler.postDelayed(startupTimeout, 15000)
@@ -823,38 +858,85 @@ class MainActivity : Activity() {
             store.setStreamFormat(selected, values[which]); dialog.dismiss(); current?.let(::tune)
         }.setNegativeButton("Cancel", null).show()
     }
+    private fun subtitleMode(): String = source?.let { selected -> current?.let { channel -> store.channelCaptions(selected, channel) } }
+        ?: if (store.captions) CaptionTracks.AUTO else CaptionTracks.OFF
+    private fun captionsEnabled() = subtitleMode() != CaptionTracks.OFF
     private fun applyCaptionPreference() {
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !store.captions)
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captionsEnabled())
             .setPreferredTextLanguage(java.util.Locale.getDefault().language)
-            .setSelectUndeterminedTextLanguage(true).build()
+            .setSelectUndeterminedTextLanguage(true).setSelectTextByDefault(captionsEnabled()).build()
+        if (!captionsEnabled()) cancelCaptionProbe()
+    }
+    private fun selectCaption(choice: CaptionTracks.Choice) {
+        if (choice.group.isTrackSelected(choice.index)) return
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setOverrideForType(TrackSelectionOverride(choice.group.mediaTrackGroup, choice.index)).build()
+    }
+    private fun cancelCaptionProbe() { handler.removeCallbacks(probeCaptions); captionProbeScheduled = false }
+    private fun reconcileCaptions() {
+        if (!started || !captionsEnabled() || player.currentMediaItem?.mediaId != expectedMediaId) { cancelCaptionProbe(); return }
+        val choices = CaptionTracks.choices(player.currentTracks)
+        val mode = subtitleMode()
+        if (mode.startsWith("track:")) choices.firstOrNull { it.key == mode }?.let { cancelCaptionProbe(); selectCaption(it); return }
+        // Only rotate guessed compatibility services; never change a provider-declared language.
+        if (mode == CaptionTracks.AUTO && !captionSawCue && captionScanCount < 6 && choices.size > 1 && choices.all { it.compatibility }) {
+            if (!captionProbeScheduled) { captionProbeScheduled = true; handler.postDelayed(probeCaptions, 8000) }
+        } else cancelCaptionProbe()
+    }
+    private fun setSubtitleMode(mode: String?) {
+        val selected = source ?: return; val channel = current ?: return
+        val wasEnabled = captionsEnabled()
+        store.setChannelCaptions(selected, channel, mode); captionSawCue = false; captionScanCount = 0
+        applyCaptionPreference(); reconcileCaptions()
+        if (!wasEnabled && captionsEnabled() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) playAttempt()
+    }
+    private fun defaultSubtitles() {
+        AlertDialog.Builder(this).setTitle("Default subtitles · all channels")
+            .setSingleChoiceItems(arrayOf("Off", "Automatic"), if (store.captions) 1 else 0) { dialog, which ->
+                val wasEnabled = captionsEnabled(); store.captions = which == 1; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); applyCaptionPreference(); reconcileCaptions(); dialog.dismiss()
+                if (!wasEnabled && captionsEnabled() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) playAttempt()
+            }.setNegativeButton("Close", null).show()
+    }
+    private fun subtitles() {
+        val selected = source; val channel = current
+        if (selected == null || channel == null) { defaultSubtitles(); return }
+        val choices = CaptionTracks.choices(player.currentTracks)
+        val names = arrayListOf("Use app default · ${if (store.captions) "Automatic" else "Off"}", "Off", "Automatic")
+        names.addAll(choices.map { it.label() })
+        if (choices.isEmpty() || choices.all { it.compatibility }) names.add("Caption availability · help")
+        val saved = store.channelCaptions(selected, channel)
+        val checked = when (saved) { null -> 0; CaptionTracks.OFF -> 1; CaptionTracks.AUTO -> 2; else -> choices.indexOfFirst { it.key == saved }.takeIf { it >= 0 }?.plus(3) ?: 2 }
+        AlertDialog.Builder(this).setTitle("Subtitles · ${channel.name}").setSingleChoiceItems(names.toTypedArray(), checked) { dialog, index ->
+            dialog.dismiss()
+            when {
+                index == 0 -> setSubtitleMode(null)
+                index == 1 -> setSubtitleMode(CaptionTracks.OFF)
+                index == 2 -> setSubtitleMode(CaptionTracks.AUTO)
+                index - 3 in choices.indices -> setSubtitleMode(choices[index - 3].key)
+                else -> notice("Caption availability", "This setting is saved for this channel only. Automatic tries the common CC1 and Digital 1 services when the provider omits caption labels. Compatibility services may be silent if this programme supplies no captions. Select a service directly to keep it for this channel, or choose Use app default to remove the override.")
+            }
+        }.setNeutralButton("App default") { _, _ -> defaultSubtitles() }.setNegativeButton("Close", null).show()
     }
     private fun tracks(type: Int) {
-        val text = type == C.TRACK_TYPE_TEXT
+        if (type == C.TRACK_TYPE_TEXT) { subtitles(); return }
         val choices = ArrayList<Pair<Tracks.Group, Int>>()
-        val names = if (text) arrayListOf("Off", "Automatic") else arrayListOf("Automatic")
-        player.currentTracks.groups.filter { it.type == type }.forEach { g ->
-            for (i in 0 until g.length) if (g.isTrackSupported(i)) {
-                val f = g.getTrackFormat(i); choices.add(g to i)
-                names.add(listOfNotNull(f.label, f.language?.let { java.util.Locale.forLanguageTag(it).displayLanguage }, f.sampleMimeType?.substringAfterLast('/'), f.accessibilityChannel.takeIf { it > 0 }?.let { "CC $it" }).distinct().joinToString(" · ").ifBlank { "Track ${choices.size}" })
+        val names = arrayListOf("Automatic")
+        player.currentTracks.groups.filter { it.type == type }.forEach { group ->
+            for (i in 0 until group.length) if (group.isTrackSupported(i)) {
+                val format = group.getTrackFormat(i); choices.add(group to i)
+                names.add(listOfNotNull(format.label, format.language, format.codecs).joinToString(" · ").ifBlank { "Track ${choices.size}" })
             }
         }
-        val base = if (text) 2 else 1
-        if (text && choices.isEmpty()) names.add("No subtitle tracks detected · help")
-        val selected = if (text && !store.captions) 0 else choices.indexOfFirst { (g, i) -> g.isTrackSelected(i) }.takeIf { it >= 0 }?.plus(base) ?: if (text) 1 else 0
-        AlertDialog.Builder(this).setTitle(if (text) "Subtitles" else "Audio").setSingleChoiceItems(names.toTypedArray(), selected) { dialog, index ->
-            if (text && index >= base && choices.isEmpty()) { dialog.dismiss(); notice("Subtitles", "This stream has not supplied a supported subtitle track. Automatic keeps captions enabled for channels that provide them and checks HLS segments for undeclared captions. Spare cannot create captions missing from the provider."); return@setSingleChoiceItems }
-            val wasEnabled = store.captions
-            val selection = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, text && index == 0)
-            if (text) { store.captions = index != 0; selection.setPreferredTextLanguage(java.util.Locale.getDefault().language).setSelectUndeterminedTextLanguage(true) }
-            if (index >= base) choices[index - base].let { (g, track) -> selection.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, track)) }
-            player.trackSelectionParameters = selection.build(); dialog.dismiss()
-            // Segment inspection is only needed when captions are requested. Keep fast chunkless startup otherwise.
-            if (text && !wasEnabled && store.captions && choices.isEmpty() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) playAttempt()
+        AlertDialog.Builder(this).setTitle("Audio").setItems(names.toTypedArray()) { _, index ->
+            val selection = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, false)
+            if (index > 0) choices[index - 1].let { (group, track) -> selection.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track)) }
+            player.trackSelectionParameters = selection.build()
         }.setNegativeButton("Close", null).show()
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { backLongPressed = false; handler.postDelayed(backHold, ViewConfiguration.getLongPressTimeout().toLong()) }
@@ -900,7 +982,7 @@ class MainActivity : Activity() {
     }
     override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg() }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onStop() { cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
     override fun onDestroy() { if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
