@@ -51,7 +51,7 @@ class SecureStore(private val context: Context) {
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
@@ -61,6 +61,8 @@ class SecureStore(private val context: Context) {
     fun setStreamFormat(source: Source, value: String) { preferences.edit { putString("stream-format-${source.id}", value) } }
     fun usaFirst(source: Source) = preferences.getBoolean("category-order-${source.id}", false)
     fun setUsaFirst(source: Source, value: Boolean) { preferences.edit { putBoolean("category-order-${source.id}", value) } }
+    fun playlistRefreshed(source: Source) = preferences.getLong("playlist-refreshed-${source.id}", 0)
+    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
         j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
@@ -77,7 +79,7 @@ class SecureStore(private val context: Context) {
         preferences.edit { putString("unavailable-${source.id}", JSONObject(channels.snapshot()).toString()) }
     }
     var smallPreview: Boolean
-        get() = preferences.getBoolean("small-preview", false)
+        get() = preferences.getBoolean("small-preview", true)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }
     var active: String
         get() = preferences.getString("active", "").orEmpty()

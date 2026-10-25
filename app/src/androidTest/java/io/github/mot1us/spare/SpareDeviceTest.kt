@@ -234,7 +234,7 @@ class SpareDeviceTest {
                 device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 device.pressDPadLeft(); instrumentation.waitForIdleSync()
-                assertTrue(device.wait(Until.hasObject(By.text("My guide").focused(true)), 5000))
+                assertTrue(device.wait(Until.hasObject(By.text("All channels").focused(true)), 5000))
                 repeat(2) { device.pressDPadDown() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 4 }
                 assertEquals("Category browsing must keep the current video", "/channel1.ts", playingPath(scenario))
@@ -270,7 +270,9 @@ class SpareDeviceTest {
                 waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
                 scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
                 assertTrue(store.videoInfo(source).isEmpty())
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("browse-all").requestFocus() }; device.pressDPadCenter()
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))), 5000))
+                device.findObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))).click()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.pressDPadCenter()
@@ -278,7 +280,9 @@ class SpareDeviceTest {
                 val observed = store.videoInfo(source).values.first(); assertTrue(observed.width > 0); assertTrue(observed.fps > 0)
                 assertEquals(profile, store.filters(source))
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("browse-all").requestFocus() }; device.pressDPadCenter()
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))), 5000))
+                device.findObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))).click()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 0 }
                 assertEquals(profile, store.filters(source))
                 scenario.recreate()
@@ -331,7 +335,7 @@ class SpareDeviceTest {
                     assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
                     val toolbar = activity.window.decorView.findViewWithTag<View>("guide-toolbar")
                     val a = IntArray(2); val b = IntArray(2); toolbar.getLocationOnScreen(a); categories.getLocationOnScreen(b)
-                    assertTrue(a[1] + toolbar.height <= b[1])
+                    assertTrue(a[1] + toolbar.height <= b[1]); assertEquals(2, (toolbar as ViewGroup).childCount)
                     assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
                     activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
                 }
@@ -341,6 +345,7 @@ class SpareDeviceTest {
                 device.findObject(By.text("Small live preview")).click()
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
                 assertTrue(store.smallPreview)
+                scenario.onActivity { assertTrue(find<PlayerView>(it.window.decorView)!!.width >= it.window.decorView.width / 3) }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 // This 1.024-second MP4 naturally opens another request on repeat.
                 // Preserve player/attempt identity rather than counting loop requests,

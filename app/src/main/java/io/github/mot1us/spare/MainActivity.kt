@@ -22,6 +22,7 @@ import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.widget.ImageButton
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ProgressBar
@@ -60,6 +61,10 @@ import java.util.concurrent.Executors
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val imports = Executors.newFixedThreadPool(2)
+    private val cacheWrites = Executors.newSingleThreadExecutor()
+    private val cadence = FrameCadence()
+    private var cachedStartup = false
+    private var availableUpdate: String? = null
     private var importTask: java.util.concurrent.Future<*>? = null
     private val epgWorkers = Executors.newFixedThreadPool(2)
     private var epgActive = 0
@@ -69,8 +74,8 @@ class MainActivity : Activity() {
     private val epgErrors = mutableMapOf<String, String>()
     private val fetchVisibleEpg = Runnable { collectVisibleEpg() }
     private val cacheEpg = Runnable {
-        val selected = source; val snapshot = guide; val epoch = generation
-        if (selected != null) imports.submit { if (!closed && epoch == generation) runCatching { store.cache(selected, snapshot) } }
+        val selected = source; val snapshot = guide
+        if (selected != null && snapshot.channels.isNotEmpty()) cacheWrites.execute { runCatching { store.cache(selected, snapshot) } }
     }
     private val logos = LogoLoader()
     private lateinit var store: SecureStore
@@ -98,8 +103,10 @@ class MainActivity : Activity() {
     private lateinit var playbackLoading: LinearLayout
     private lateinit var playbackLoadingText: TextView
     private lateinit var playbackError: TextView
-    private lateinit var searchButton: Button
-    private lateinit var updateButton: Button
+    private lateinit var searchButton: ImageButton
+    private lateinit var settingsButton: ImageButton
+    private lateinit var updateBadge: TextView
+    private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
     private lateinit var details: PlaybackDetails
     private lateinit var retryPanel: LinearLayout
@@ -178,12 +185,14 @@ class MainActivity : Activity() {
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
         video.player = player
         frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView)
-        player.setVideoFrameMetadataListener { _, _, format, _ ->
-            frameRates.request(format.frameRate)
+        player.setVideoFrameMetadataListener { pts, _, format, _ ->
+            val token = playbackToken
+            val measured = cadence.observe(token, pts)
+            val fps = format.frameRate.takeIf { it.isFinite() && it > 0 } ?: measured
+            frameRates.request(fps)
             if (firstFrame && format.width > 0 && format.height > 0) {
-                val info = VideoInfo(format.width, format.height, format.frameRate.takeIf { it.isFinite() && it > 0 } ?: 0f)
+                val info = VideoInfo(format.width, format.height, fps)
                 if (info != lastVideoInfo) {
-                    val token = playbackToken
                     handler.post { if (firstFrame && token == playbackToken && player.videoFormat?.width == info.width) recordVideo(info) }
                 }
             }
@@ -223,13 +232,13 @@ class MainActivity : Activity() {
                 }
             }
         })
-        updater = Updater(this, store) { release -> updateButton.text = release?.let { "Update ${it.version}" } ?: "Updates" }
+        updater = Updater(this, store) { release -> availableUpdate = release?.version; updateBadge.visibility = if (release == null) View.GONE else View.VISIBLE; settingsButton.contentDescription = if (release == null) "Settings" else "Settings · update available" }
         sources = runCatching { store.sources() }.getOrElse {
             notice("Source storage unavailable", "Android could not unlock saved credentials. Add your source again; no credentials have been sent elsewhere.")
             emptyList()
         }
         val selected = sources.firstOrNull { it.id == store.active } ?: sources.firstOrNull()
-        if (selected == null) { status.text = "Add a source to start watching"; handler.post { editSource(null) } }
+        if (selected == null) { status.text = "Add a playlist in Settings to start watching"; handler.post { editSource(null) } }
         else load(selected)
         handler.post(minuteTick)
         updater.check()
@@ -260,14 +269,6 @@ class MainActivity : Activity() {
         }
         root.addView(guidePanel, FrameLayout.LayoutParams(-1, -1))
         root.removeView(video); root.addView(video, FrameLayout.LayoutParams(-1, -1))
-        val toolbar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; tag = "guide-toolbar" }
-        toolbar.addView(text("spare", 20f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(dp(10), 0, 0, 0) }, LinearLayout.LayoutParams(dp(160), -2))
-        searchButton = button("Search") { search() }.apply { tag = "search" }; toolbar.addView(searchButton)
-        toolbar.addView(button("Browse all") { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); focusChannel() }.apply { tag = "browse-all" })
-        toolbar.addView(button("Sources") { showSources() })
-        toolbar.addView(button("Settings") { playbackMenu() }.apply { tag = "settings" })
-        updateButton = button("Updates") { updater.offer() }; toolbar.addView(updateButton)
-        guidePanel.addView(toolbar, LinearLayout.LayoutParams(-1, dp(44)))
         guideSearch = GuideSearchBar(this, ::button, {
             handler.removeCallbacks(filterSearch); handler.postDelayed(filterSearch, 150)
         }, ::voiceSearch, { finishSearch(false) }, { finishSearch(true) })
@@ -275,6 +276,21 @@ class MainActivity : Activity() {
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         guidePanel.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
         val navigation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(12), 0) }
+        val toolbar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; tag = "guide-toolbar" }
+        fun icon(label: String, resource: Int, click: () -> Unit) = ImageButton(this).apply {
+            contentDescription = label; isFocusableInTouchMode = true; setImageResource(resource); setPadding(dp(9), dp(9), dp(9), dp(9))
+            imageTintList = android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE))
+            fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(5).toFloat() }
+            background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.TRANSPARENT)) }
+            setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(8) }
+        }
+        searchButton = icon("Search", R.drawable.ic_search, ::search).apply { tag = "search" }; toolbar.addView(searchButton)
+        settingsButton = icon("Settings", R.drawable.ic_settings, ::playbackMenu).apply { tag = "settings" }
+        val settingsSlot = FrameLayout(this); settingsSlot.addView(settingsButton, FrameLayout.LayoutParams(dp(40), dp(40)))
+        updateBadge = text("•", 18f).apply { visibility = View.GONE; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        settingsSlot.addView(updateBadge, FrameLayout.LayoutParams(dp(12), dp(20), Gravity.TOP or Gravity.END))
+        toolbar.addView(settingsSlot, LinearLayout.LayoutParams(dp(40), dp(40)))
+        navigation.addView(toolbar, LinearLayout.LayoutParams(-1, dp(48)))
         sidebar = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@MainActivity); itemAnimator = null; tag = "guide-categories" }
         sidebarAdapter = SidebarAdapter(this, { section ->
             favoritesOnly = section.key == "favorites"
@@ -282,16 +298,18 @@ class MainActivity : Activity() {
             applyFilter(); focusChannel()
         }, { focusChannel() })
         sidebar.adapter = sidebarAdapter
-        navigation.addView(sidebar, LinearLayout.LayoutParams(-1, -1))
+        navigation.addView(sidebar, LinearLayout.LayoutParams(-1, 0, 1f))
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         body.addView(content, LinearLayout.LayoutParams(0, -1, 1f))
-        channelInfo = text("Your TV, kept simple.", 20f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        channelInfo.setPadding(0, 0, dp(230), 0); content.addView(channelInfo, LinearLayout.LayoutParams(-1, dp(28)))
-        programmeInfo = text("Add your playlist to start watching.", 12f).apply { maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, 0, dp(230), 0) }
-        content.addView(programmeInfo, LinearLayout.LayoutParams(-1, dp(56)))
-        status = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 1 }
-        status.setPadding(0, 0, dp(230), 0); content.addView(status, LinearLayout.LayoutParams(-1, dp(18)))
+        headerInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        channelInfo = text("", 20f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+        headerInfo.addView(channelInfo, LinearLayout.LayoutParams(-1, -2))
+        programmeInfo = text("Add a playlist in Settings to start watching.", 12f).apply { maxLines = 5; setTextColor(Color.LTGRAY) }
+        headerInfo.addView(programmeInfo, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(6) })
+        status = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 2 }
+        headerInfo.addView(status, LinearLayout.LayoutParams(-1, -2))
+        content.addView(headerInfo, LinearLayout.LayoutParams(-1, dp(188)))
         val timeline = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         filterInfo = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         timeline.addView(filterInfo, LinearLayout.LayoutParams(0, dp(30), 1f))
@@ -314,7 +332,7 @@ class MainActivity : Activity() {
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         content.addView(text("← Categories     OK Full screen     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
         previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-        root.addView(previewCaption, FrameLayout.LayoutParams(dp(216), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(142); marginEnd = dp(18) })
+        root.addView(previewCaption, FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178); marginEnd = dp(18) })
         nowPlaying = text("", 15f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(16), dp(10), dp(16), dp(10)); visibility = View.GONE }
         root.addView(nowPlaying, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { marginStart = dp(28); bottomMargin = dp(24) })
         playbackLoading = LinearLayout(this).apply {
@@ -353,13 +371,15 @@ class MainActivity : Activity() {
         sidebar.post { sidebar.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() ?: searchButton.requestFocus() }
     }
     private fun importProgress(epoch: Int, stage: String, done: Long = 0, total: Long = -1) = ui(epoch) {
+        if (cachedStartup) return@ui
         loadingPanel.visibility = View.VISIBLE; loadingBar.isIndeterminate = total <= 0
         val percent = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else null
         if (percent != null) loadingBar.progress = percent
         loadingText.text = stage + (percent?.let { " · $it%" } ?: "…")
     }
 
-    private fun load(selected: Source) {
+    private fun load(selected: Source, force: Boolean = false) {
+        cacheEpg.run(); cachedStartup = false
         val epoch = ++generation
         voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
@@ -372,7 +392,10 @@ class MainActivity : Activity() {
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
         importTask = imports.submit {
             val cached = runCatching { store.cached(selected) }.getOrNull()
-            if (cached != null) ui(epoch) { accept(cached, resume = true); status.text = "Refreshing guide…" }
+            if (cached != null) {
+                ui(epoch) { cachedStartup = true; loadingPanel.visibility = View.GONE; accept(cached, resume = true); status.text = "" }
+                if (!force && System.currentTimeMillis() - store.playlistRefreshed(selected) in 0 until 6 * 3600000L) return@submit
+            }
             val loaded = runCatching {
                 val lineup = if (selected.kind == "xtream") Importers.xtream(selected) { stage, done, total -> importProgress(epoch, stage, done, total) }
                 else Importers.m3u(Network.get(selected.url, selected.allowHttp, progress = { done, total -> importProgress(epoch, "Downloading channels", done, total) }).toString(Charsets.UTF_8), selected.allowHttp)
@@ -386,14 +409,13 @@ class MainActivity : Activity() {
                     Importers.xmltv(bytes, initial.channels.map { it.guideId }.filter { it.isNotEmpty() }.toSet())
                 } else Result.success(emptyMap())
                 val fresh = Guide(initial.channels, programmes.getOrDefault(cached?.programmes.orEmpty()), initial.categoryOrder)
-                if (!Thread.currentThread().isInterrupted && generation == epoch) runCatching { store.cache(selected, fresh) }
-                ui(epoch) { loadingPanel.visibility = View.GONE; accept(fresh, resume = false); status.text = if (programmes.isFailure) "Guide refresh failed · ${SourceErrors.message(programmes.exceptionOrNull()!!)}" else if (epg.isNotBlank() && fresh.programmes.isEmpty()) "Guide downloaded, but no current programmes matched the channel IDs." else "" }
+                ui(epoch) { loadingPanel.visibility = View.GONE; accept(fresh, resume = false); if (programmes.isSuccess) store.markPlaylistRefreshed(selected); handler.removeCallbacks(cacheEpg); cacheEpg.run(); status.text = if (programmes.isFailure) "Guide refresh failed · ${SourceErrors.message(programmes.exceptionOrNull()!!)}" else if (epg.isNotBlank() && fresh.programmes.isEmpty()) "Guide downloaded, but no current programmes matched the channel IDs." else "" }
             }.onFailure { failure -> ui(epoch) {
                 loadingPanel.visibility = View.GONE
                 val detail = SourceErrors.message(failure)
                 status.text = if (cached != null) "Using saved guide · $detail" else detail
-                if (cached == null && !isFinishing) AlertDialog.Builder(this).setTitle("Could not load source").setMessage(detail)
-                    .setPositiveButton("Edit source") { _, _ -> editSource(selected) }
+                if (cached == null && !isFinishing) AlertDialog.Builder(this).setTitle("Could not load playlist").setMessage(detail)
+                    .setPositiveButton("Edit playlist") { _, _ -> editSource(selected) }
                     .setNeutralButton("Retry") { _, _ -> load(selected) }.setNegativeButton("Close", null).show()
             } }
         }
@@ -481,19 +503,20 @@ class MainActivity : Activity() {
         lastVideoInfo = info
         if (videoInfo[channel.id] == info) return
         videoInfo[channel.id] = info; store.saveVideoInfo(selected, videoInfo)
-        applyFilter(); if (!guideVisible || focused?.id == channel.id) showInfo(channel)
+        applyFilter(); if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
     private fun collectVisibleEpg() {
         val selected = source ?: return
         if (selected.kind != "xtream" || selected.epgUrl.isNotBlank() || !started) return
-        val visible = if (guideVisible) {
-            val layout = list.layoutManager as LinearLayoutManager
-            val first = layout.findFirstVisibleItemPosition().coerceAtLeast(0)
-            val last = layout.findLastVisibleItemPosition().coerceAtLeast(first)
-            adapter.channels.subList(first.coerceAtMost(adapter.channels.size), minOf(last + 1, first + 20, adapter.channels.size))
-        } else emptyList()
-        epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible).distinctBy { it.id }
+        val channels = adapter.channels
+        val layout = list.layoutManager as LinearLayoutManager
+        val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
+        val last = if (guideVisible) layout.findLastVisibleItemPosition().coerceAtLeast(first) else first
+        val visible = channels.subList(first.coerceAtMost(channels.size), minOf(last + 1, first + 20, channels.size))
+        val nearby = channels.subList((first - 12).coerceIn(0, channels.size), minOf(last + 33, channels.size))
+        val favoritesToWarm = guide.channels.asSequence().filter { it.id in favorites }.take(24).toList()
+        epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible + nearby + favoritesToWarm).distinctBy { it.id }.take(80)
         pumpEpg()
     }
     private fun pumpEpg() {
@@ -501,7 +524,7 @@ class MainActivity : Activity() {
         if (closed || !started || selected.kind != "xtream" || selected.epgUrl.isNotBlank()) return
         val epoch = generation; val now = System.currentTimeMillis()
         while (epgActive < 2) {
-            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && now - (epgCheckedAt[it.id] ?: 0) >= 5 * 60000L } ?: return
+            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && (guide.at(it, now) == null || guide.programmes[guide.key(it)].orEmpty().maxOfOrNull { programme -> programme.end }?.let { end -> end < now + 30 * 60000L } != false) && now - (epgCheckedAt[it.id] ?: 0) >= 5 * 60000L } ?: return
             val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgActive++
             epgWorkers.execute {
                 val result = runCatching { XtreamEpg.load(selected, channel) }
@@ -542,14 +565,13 @@ class MainActivity : Activity() {
             (focused ?: current)?.let(::showInfo)
             scheduleEpg()
         }
-        searchButton.text = if (query.isEmpty()) "Search" else "Search ✓"
-        root.findViewWithTag<Button>("browse-all")?.text = if (browseAll) "My guide" else "Browse all"
+        searchButton.contentDescription = if (query.isEmpty()) "Search" else "Search · filter active"
         val selection = if (favoritesOnly) "Favorites" else group
         val profileLabel = if (browseAll) "Filters paused" else filters.summary().takeUnless { it == "All channels" && selection != null }
         filterInfo.text = "${filtered.size} channels · " + listOfNotNull(selection, profileLabel, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty()) View.VISIBLE else View.GONE
-        emptyInfo.text = if (!browseAll && (filters.excludedFps.isNotEmpty() || filters.minHeight > 0)) "No verified channels match yet. Choose Browse all, then play channels to verify their quality. Unknown quality stays hidden in My guide."
-            else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Unavailable channels." else "No channels match. Try another category, clear Search, or choose Browse all."
+        emptyInfo.text = if (!browseAll && (filters.excludedFps.isNotEmpty() || filters.minHeight > 0)) "No verified channels match yet. In Settings, choose Show unverified channels to play and verify them, or adjust Guide filters."
+            else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Unavailable channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
         updateGroups()
     }
     private fun updateGroups() {
@@ -559,7 +581,7 @@ class MainActivity : Activity() {
             groupsForChannels = guide.channels; groupsForOrder = guide.categoryOrder
         }
         val visibleGroups = providerGroups.filter { browseAll || filters.groups.isEmpty() || it in filters.groups }
-        sidebarAdapter.submit(listOf(GuideSection(if (browseAll) "All channels" else "My guide", "all", !favoritesOnly && (group == null)),
+        sidebarAdapter.submit(listOf(GuideSection("All channels", "all", !favoritesOnly && (group == null)),
             GuideSection("Favorites", "favorites", favoritesOnly)) + visibleGroups.map { GuideSection(it.ifBlank { "Uncategorized" }, "group:$it", !favoritesOnly && group == it && (group != null)) })
     }
     private fun updateTimes() { times.invalidate() }
@@ -569,10 +591,11 @@ class MainActivity : Activity() {
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         handler.removeCallbacks(hideNowPlaying); nowPlaying.visibility = View.GONE
         val preview = show && store.smallPreview
-        video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(216), dp(100), Gravity.TOP or Gravity.END).apply { topMargin = dp(62); marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
-        val inset = if (preview) dp(230) else 0
-        channelInfo.setPadding(0, 0, inset, 0); programmeInfo.setPadding(0, 0, inset, 0); status.setPadding(0, 0, inset, 0)
-        programmeInfo.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 56 else 38))
+        val searchInset = if (guideSearch.isVisible) dp(60) else 0
+        video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
+        headerInfo.setPadding(0, 0, if (preview) dp(336) else 0, 0)
+        headerInfo.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
+        previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
         listOf(previewCaption, nowPlaying, loadingPanel, playbackLoading, retryPanel).forEach(root::bringChildToFront)
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
@@ -589,12 +612,12 @@ class MainActivity : Activity() {
     }
     private fun search() {
         showGuide(true); group = null; favoritesOnly = false; applyFilter()
-        guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; guideSearch.voice.requestFocus()
+        guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true); guideSearch.voice.requestFocus()
         voiceSearch()
     }
     private fun finishSearch(close: Boolean) {
         handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
-        if (close) guideSearch.visibility = View.GONE
+        if (close) { guideSearch.visibility = View.GONE; showGuide(true) }
         focusChannel()
     }
     @Suppress("DEPRECATION") // Keep the small native Activity; speech input returns through Android's activity-result API.
@@ -654,7 +677,7 @@ class MainActivity : Activity() {
         if (::details.isInitialized) details.visibility = View.GONE
     }
     private fun showSources() {
-        val builder = AlertDialog.Builder(this).setTitle("Sources")
+        val builder = AlertDialog.Builder(this).setTitle("Playlists")
             .setSingleChoiceItems(sources.map { it.name }.toTypedArray(), sources.indexOfFirst { it.id == source?.id }) { dialog, which -> dialog.dismiss(); load(sources[which]) }
             .setPositiveButton("Add") { _, _ -> editSource(null) }.setNegativeButton("Close", null)
         if (source != null) builder.setNeutralButton("Edit current") { _, _ -> editSource(source) }
@@ -662,21 +685,24 @@ class MainActivity : Activity() {
     }
     private fun editSource(existing: Source?) = SourceDialog.show(this, existing, { selected ->
         runCatching { val next = sources.filterNot { it.id == selected.id } + selected; store.saveSources(next); sources = next }
-            .onSuccess { load(selected) }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
+            .onSuccess { load(selected, force = true) }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
     }, { removed ->
-        runCatching { val next = sources.filterNot { it.id == removed.id }; store.saveSources(next); store.removeCache(removed); sources = next }
+        runCatching { val next = sources.filterNot { it.id == removed.id }; store.saveSources(next); cacheWrites.execute { store.removeCache(removed) }; sources = next }
             .onSuccess {
-                sources.firstOrNull()?.let(::load) ?: run {
-                    ++generation; importTask?.cancel(true); handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); playbackToken++; player.stop(); frameRates.clear(); loadingPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; source = null; current = null; filters = GuideFilters(); videoInfo.clear(); guide = Guide.EMPTY; updateGroups(); applyFilter(); showGuide(true); status.text = "Add a source to start watching"
+                sources.firstOrNull()?.let { load(it) } ?: run {
+                    ++generation; importTask?.cancel(true); handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); playbackToken++; player.stop(); frameRates.clear(); loadingPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; source = null; current = null; filters = GuideFilters(); videoInfo.clear(); guide = Guide.EMPTY; updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
                 }
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
     private fun playbackMenu() {
-        val choices = mutableListOf("Guide video", "Guide filters", "Category order", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
+        val choices = mutableListOf("Playlists", availableUpdate?.let { "Update $it" } ?: "Updates", if (browseAll) "Use guide filters" else "Show unverified channels", "Guide video", "Guide filters", "Category order", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
         if (source?.kind == "xtream") choices.add(1, "Stream format")
         if (unavailable.snapshot().isNotEmpty()) choices.add(1, "Unavailable channels")
         AlertDialog.Builder(this).setTitle("Settings").setItems(choices.toTypedArray()) { _, item ->
             when (choices[item]) {
+                "Playlists" -> showSources()
+                "Updates", availableUpdate?.let { "Update $it" } -> updater.offer()
+                "Show unverified channels", "Use guide filters" -> { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); focusChannel() }
                 "Guide video" -> AlertDialog.Builder(this).setTitle("Video while browsing the guide").setSingleChoiceItems(arrayOf("Transparent overlay", "Small live preview"), if (store.smallPreview) 1 else 0) { dialog, which -> store.smallPreview = which == 1; dialog.dismiss(); showGuide(true) }.setNegativeButton("Cancel", null).show()
                 "Guide filters" -> filterMenu()
                 "Category order" -> {
@@ -690,9 +716,9 @@ class MainActivity : Activity() {
                 "Stream format" -> streamFormatMenu()
                 "Audio track" -> tracks(C.TRACK_TYPE_AUDIO)
                 "Subtitles" -> tracks(C.TRACK_TYPE_TEXT)
-                "Refresh playlist & guide" -> source?.let(::load)
+                "Refresh playlist & guide" -> source?.let { load(it, force = true) }
                 "Exit Spare" -> finish()
-                "About Spare" -> notice("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player.\nMIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nUp/Down: channel · Hold Back: full screen\nGuide: Left categories · Hold OK favorite\nSearch: voice or inline text\n\nQuality filters use observed playback, never channel names. Unknown channels stay hidden when quality filters are enabled; Browse all lets you verify them. No background stream scanning.\n\nNo app accounts, ads, or analytics. Credentials and guide cache stay in encrypted app storage.")
+                "About Spare" -> notice("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player.\nMIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nUp/Down: channel · Hold Back: full screen\nGuide: Left categories · Hold OK favorite\nSearch: voice or inline text\n\nQuality filters use observed playback, never channel names. Unknown channels stay hidden when quality filters are enabled; Settings → Show unverified channels lets you verify them. No background stream scanning.\n\nNo app accounts, ads, or analytics. Credentials and guide cache stay in encrypted app storage.")
                 "Open-source licenses" -> {
                     val content = listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
                     val label = text(content, 12f).apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
@@ -706,7 +732,7 @@ class MainActivity : Activity() {
     }
     private fun filterMenu() {
         if (source == null) { toast("Add a source first"); return }
-        AlertDialog.Builder(this).setTitle("My guide · ${filters.summary()}").setItems(arrayOf("Minimum resolution", "Frame rates · uncheck rates to hide", "Choose categories", "Reset filters")) { _, item ->
+        AlertDialog.Builder(this).setTitle("Guide filters · ${filters.summary()}").setItems(arrayOf("Minimum resolution", "Frame rates · uncheck rates to hide", "Choose categories", "Reset filters")) { _, item ->
             when (item) {
                 0 -> {
                     val heights = listOf(0, 720, 1080, 2160)
@@ -794,8 +820,8 @@ class MainActivity : Activity() {
     }
     override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg() }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun nowWindow() = System.currentTimeMillis() / 1800000L * 1800000L

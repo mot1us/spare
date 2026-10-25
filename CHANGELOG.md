@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 — 2026-10-24
+
+- Reduce guide controls to search/settings icons above the categories. Move Playlists, updates, and temporary filter bypass into Settings; remove My guide/Browse all buttons.
+- Enlarge live preview to 320×180 dp with space for programme details; make preview the default for unset preferences.
+- Show FPS in channel details, with bounded media-timestamp measurement when the stream omits frame-rate metadata.
+- Resume cached playlists quietly, refresh lineups at most every six hours unless requested, and prefetch nearby/favorite EPG with two workers. Preserve merged guide snapshots through serialized encrypted writes and flush on exit.
+
 ## 0.2.2 — 2026-10-24
 
 - Replace the search dialog with an inline guide search strip, live channel results, immediate TV voice input, and editable text fallback. Canceling voice input keeps the search usable.

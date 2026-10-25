@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 data class VideoInfo(val width: Int, val height: Int, val fps: Float) {
     fun json() = JSONObject().put("width", width).put("height", height).put("fps", fps.toDouble())
-    fun label(): String = "${height}p" + if (fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} fps" else ""
+    fun label(): String = "${height}p" + if (fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} fps" else " · Measuring fps…"
     companion object {
         fun from(j: JSONObject) = VideoInfo(j.optInt("width"), j.optInt("height"), j.optDouble("fps", 0.0).toFloat())
     }

@@ -2,7 +2,7 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.2.2**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.2.3**. License: MIT.
 
 ## What it does
 
@@ -11,15 +11,17 @@ Spare plays your own live-TV sources. It includes no channels, subscriptions, ad
 - Up to 100,000 channel entries per source, within bounded download sizes. Larger lists produce an explicit limit message.
 - A compact guide with channel logos, clear remote focus, and a choice of translucent video overlay or small live preview.
 - Provider categories in a dedicated left sidebar, inline channel-name search with TV voice input, and Favorites. Category order follows the Xtream category array or M3U first appearance; Settings offers USA-first grouping without alphabetizing either region. Provider channel order is preserved.
-- Xtream programme data fetched for the current channel and visible guide rows, with at most two concurrent requests. M3U XMLTV and explicit XMLTV overrides remain supported. Guide data stays in private encrypted cache.
-- Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and FPS exclusions. Uncheck 25/50 fps while keeping 24/30/60, for example; 23.976, 29.97, and 59.94 belong to their nominal families. Unknown FPS stays hidden while FPS filtering is active.
-- Quality comes from observed playback, never channel names. Unknown quality is hidden when quality filters are active. Browse all temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
+- Xtream programme data cached and prefetched for the current channel, visible/nearby rows, and up to 24 favorites, with at most two concurrent requests. M3U XMLTV and explicit XMLTV overrides remain supported. Guide data stays in private encrypted cache.
+- Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and FPS exclusions. Uncheck 25/50 fps while keeping 24/30/60, for example; 23.976, 29.97, and 59.94 belong to their nominal families. Unknown FPS stays hidden while FPS filtering is active. Streams without FPS metadata are measured from stable media timestamps, not the TV output rate.
+- Quality comes from observed playback, never channel names. Unknown quality is hidden when quality filters are active. Settings → Show unverified channels temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
 - Terminal 404/410 channels are hidden for 15 minutes after startup endpoints confirm they are missing, without bulk probing. Settings can retry or restore them. Network, account, and missing-segment errors do not prove a channel is absent.
 - MPEG-TS access-unit detection, Xtream TS/HLS fallback, a manual stream-format setting, and a visible startup timeout with safe diagnostics. Buffering has its own delayed corner indicator and an eight-second resume target; adaptive live playback requests a 12-second target offset when the provider window allows it. Recovery is bounded to two reconnects in two minutes. These improve tolerance of short disruptions but cannot fix a provider outage or inadequate throughput. Playlist and guide downloads show their current stage and byte progress when known.
 - Last-channel resume, one-press recall between two watched channels, programme/channel details, audio/subtitle selection, and automatic frame-rate matching where supported.
 - Quiet update badge, signed APK updates initiated in the app, and Android installation confirmation when required.
 
 Target hardware for first physical validation: **2026 onn 4K Pro with a 75-inch Samsung 4K TV**. Android TV 8.0/API 26 or newer is required. Full refresh-rate requests use Android 12/API 31 or newer; older systems use available display-mode selection. TV/HDMI modes and Android preferences can prevent a match. Switching may briefly blank the picture.
+
+Cached playlists resume before network work, with a six-hour lineup refresh interval and an explicit refresh in Settings. Cached EPG is reused and nearby rows are warmed in the background with two workers; a 20,000-channel provider is never bulk-probed. First-time imports retain a progress indicator.
 
 ## Remote
 
@@ -38,7 +40,7 @@ Target hardware for first physical validation: **2026 onn 4K Pro with a 75-inch 
 | Search | Down / Done | Browse the live-filtered channel results |
 | Search | Back | Close inline search; the query remains active until cleared |
 
-General controls are above the guide. Search immediately requests the TV's speech-input activity and puts returned words in an editable inline field. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. The Sources button adds, switches, edits, or removes sources. Settings contains guide video style, guide filters, category order, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
+Search and Settings icons sit above the category sidebar; the guide has a larger 320×180 dp live preview. Playlists and Updates are inside Settings. Search immediately requests the TV's speech-input activity and puts returned words in an editable inline field. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. Settings → Playlists adds, switches, edits, or removes playlists. Settings contains guide video style, guide filters, category order, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
 
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 

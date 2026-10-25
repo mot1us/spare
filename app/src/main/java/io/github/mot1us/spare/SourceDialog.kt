@@ -68,7 +68,7 @@ object SourceDialog {
             }
         }
         kinds.check(if (existing?.kind == "xtream") xtream.id else m3u.id)
-        val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add source" else "Edit source")
+        val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add playlist" else "Edit playlist")
             .setView(ScrollView(activity).apply { addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
             .apply { if (existing != null) setNeutralButton("Remove") { _, _ -> remove(existing) } }.create()
         dialog.setOnShowListener {
