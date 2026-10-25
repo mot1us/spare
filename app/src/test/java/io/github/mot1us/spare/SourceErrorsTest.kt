@@ -30,6 +30,21 @@ class SourceErrorsTest {
         assertTrue(SourceErrors.message(SocketTimeoutException("private-url")).contains("timed out"))
         assertTrue(SourceErrors.message(SSLHandshakeException("private-url")).contains("HTTPS"))
     }
+    @Test fun remainingFailuresHaveSpecificSafeReasons() {
+        listOf(
+            org.json.JSONException("private-secret") to "CHANNEL_DATA",
+            java.io.EOFException("private-secret") to "CONNECTION_CLOSED",
+            java.net.ProtocolException("private-secret") to "HTTP_PROTOCOL",
+            java.net.SocketException("private-secret") to "NETWORK_CONNECTION",
+            IOException("private-secret") to "NETWORK_IO",
+            IllegalArgumentException("private-secret") to "IMPORT_DATA",
+            IllegalStateException("private-secret") to "IMPORT_FAILED",
+        ).forEach { (error, code) ->
+            val detail = SourceErrors.message(error)
+            assertTrue(detail, detail.contains(code))
+            assertFalse(detail.contains("private-secret"))
+        }
+    }
     @Test fun unknownExceptionsAndNestedCausesNeverExposeRawMessages() {
         assertFalse(SourceErrors.message(IOException("https://private.example/?password=private-secret")).contains("private-secret"))
         assertTrue(SourceErrors.message(IOException("private-secret", HttpFailure(401))).contains("HTTP 401"))

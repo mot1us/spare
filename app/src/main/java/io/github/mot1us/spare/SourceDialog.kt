@@ -83,7 +83,7 @@ object SourceDialog {
                     error.text = "Enter a server base URL without a query, plus username and password."; return@setOnClickListener
                 }
                 val source = Source(existing?.id ?: java.util.UUID.randomUUID().toString(), name.text.toString().trim().take(64).ifBlank { URI(address).host },
-                    if (isXtream) "xtream" else "m3u", if (isXtream) Importers.serverBase(address) else address, if (isXtream) user.text.toString() else "", if (isXtream) password.text.toString() else "", guideAddress, allow.isChecked)
+                    if (isXtream) "xtream" else "m3u", address, if (isXtream) user.text.toString() else "", if (isXtream) password.text.toString() else "", guideAddress, allow.isChecked)
                 save(source); dialog.dismiss()
             }
         }

@@ -108,9 +108,9 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun xtreamLoadsLiveCategoriesChannelsAndVideo() {
-        FixtureServer().use { server ->
-            val source = Source(name = "Xtream Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+    @Test fun xtreamLoadsLargeLiveLineupCategoriesAndVideo() {
+        FixtureServer(channelCount = 25001).use { server ->
+            val source = Source(name = "Xtream Test", kind = "xtream", url = "${server.base}/", username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { activity ->
@@ -119,7 +119,7 @@ class SpareDeviceTest {
                 assertEquals("/live/test/test-secret/1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
                 waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == true }
-                scenario.onActivity { activity -> assertEquals(1, find<RecyclerView>(activity.window.decorView)!!.adapter!!.itemCount) }
+                scenario.onActivity { activity -> assertEquals(25001, find<RecyclerView>(activity.window.decorView)!!.adapter!!.itemCount) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -141,7 +141,7 @@ class SpareDeviceTest {
         FixtureServer().use { server ->
             val seed = Source(name = "UI Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(seed)); store.active = seed.id
-            val https = Source(name = "HTTPS Test", kind = "xtream", url = "https://provider.example:8443/panel", username = "test", password = "test-secret")
+            val https = Source(name = "HTTPS Test", kind = "xtream", url = "https://provider.example:8443/panel/", username = "test", password = "test-secret")
             var dialog: AlertDialog? = null
             var saved: Source? = null
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -223,11 +223,14 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
+        private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"mp4","epg_channel_id":"test1"}"""
+        }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap); canvas.drawColor(Color.WHITE)
@@ -257,7 +260,7 @@ class SpareDeviceTest {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
                             "/logo.png" -> logo to "image/png"
-                            "/player_api.php" -> (if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""" else """[{"stream_id":1,"name":"Xtream Test","category_id":"1","container_extension":"mp4","epg_channel_id":"test1"}]""").toByteArray() to "application/json"
+                            "/player_api.php" -> (if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""".toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             else -> video to "video/mp4"
                         }

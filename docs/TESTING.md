@@ -2,7 +2,7 @@
 
 Automated local checks cover importer behavior, hostile data, the optimized APK, lint, encrypted storage, and a private Android TV emulator. The emulator uses a local fixture server and the AndroidX Media3 sample video; no real source credentials or personal accounts are required.
 
-Five device tests cover encrypted storage, M3U/remote/favorites/resume, Xtream playback, playback when categories fail, and Save/Cancel focus plus unchanged HTTPS addresses after HTTP consent. The focus test checks actual button foreground/background contrast, D-pad navigation, Cancel behavior, and saved source data. Screenshots and failure diagnostics are retained as CI artifacts.
+Five device tests cover encrypted storage, M3U/remote/favorites/resume, a 25,001-channel Xtream lineup through video playback, playback when categories fail, and Save/Cancel focus plus unchanged HTTPS addresses and trailing slashes after HTTP consent. The focus test checks actual button foreground/background contrast, D-pad navigation, Cancel behavior, and saved source data. Screenshots and failure diagnostics are retained as CI artifacts.
 
 ## 2026 onn 4K Pro + Samsung checklist
 

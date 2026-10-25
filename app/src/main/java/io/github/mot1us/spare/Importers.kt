@@ -12,6 +12,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object Importers {
+    const val MAX_CHANNELS = 100000
     private val attribute = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     private fun attrs(line: String) = attribute.findAll(line).associate { it.groupValues[1].lowercase(Locale.ROOT) to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
     fun m3u(text: String, http: Boolean): Lineup {
@@ -52,7 +53,7 @@ object Importers {
                         }}"
                         result.add(Channel(Channel.stableId(stable), name, group.ifBlank { "Other" }, line,
                             metadata["tvg-logo"].orEmpty().takeIf { Network.allowed(it, http) }.orEmpty(), guideId))
-                        require(result.size <= 20000) { "Too many channels" }
+                        if (result.size > MAX_CHANNELS) throw SourceFailure(SourceProblem.CHANNEL_LIMIT)
                     }
                     metadata = emptyMap(); title = ""; group = ""
                 }
@@ -97,10 +98,14 @@ object Importers {
             require(categories.length() <= 20000)
             (0 until categories.length()).mapNotNull { i -> categories.optJSONObject(i)?.let { it.optString("category_id") to it.optString("category_name").take(128) } }.toMap()
         }.getOrDefault(emptyMap())
-        require(streams.length() <= 20000)
+        return Lineup(xtreamChannels(streams, source, names), endpoint(source, "xmltv.php"))
+    }
+
+    fun xtreamChannels(streams: JSONArray, source: Source, names: Map<String, String>): List<Channel> {
+        if (streams.length() > MAX_CHANNELS) throw SourceFailure(SourceProblem.CHANNEL_LIMIT)
         val base = serverBase(source.url)
         val channels = (0 until streams.length()).mapNotNull { index ->
-            val j = streams.getJSONObject(index)
+            val j = streams.optJSONObject(index) ?: return@mapNotNull null
             val id = j.optString("stream_id")
             if (!id.matches(Regex("[0-9]{1,20}"))) return@mapNotNull null
             val extension = j.optString("container_extension", "ts").takeIf { it in listOf("ts", "m3u8", "mp4") } ?: "ts"
@@ -109,7 +114,7 @@ object Importers {
                 j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), j.optString("epg_channel_id").take(256))
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
-        return Lineup(channels.distinctBy { it.id }, endpoint(source, "xmltv.php"))
+        return channels.distinctBy { it.id }
     }
 
     fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis()): Map<String, List<Programme>> {

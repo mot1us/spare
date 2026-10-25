@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 — 2026-10-24
+
+- Fix large provider imports: replace the 20,000-entry rejection with a bounded 100,000-entry channel limit, and explain that limit explicitly when exceeded.
+- Skip malformed Xtream entries while preserving usable channels and provider order.
+- Preserve the entered server URL, including its trailing slash, in source settings; normalize only when constructing requests.
+- Give remaining data, interrupted-connection, and HTTP-protocol failures distinct reasons without exposing provider URLs or credentials.
+- Add regression coverage for large lists, malformed entries, slash handling, and a full 25,001-channel import through video playback on Android TV.
+
 ## 0.1.1 — 2026-10-24
 
 - Refresh the guide with clearer programme hierarchy, quieter dark controls, rounded channel rows, and a persistent remote-control hint.

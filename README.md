@@ -2,12 +2,13 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.1.1**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.1.2**. License: MIT.
 
 ## What it does
 
 - M3U playlist URLs or Xtream Codes server/username/password.
 - Several saved sources, one active at a time.
+- Up to 100,000 channel entries per source, within bounded download sizes. Larger lists produce an explicit limit message.
 - A restrained dark channel/time guide with channel logos, clear remote focus, and a small preview of the current channel.
 - Provider groups, channel-name search, and Favorites; provider channel order is preserved.
 - Automatic provider XMLTV guide or an optional XMLTV URL override; three days of guide data, cached privately.
