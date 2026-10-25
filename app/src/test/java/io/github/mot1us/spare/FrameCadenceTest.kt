@@ -14,6 +14,17 @@ class FrameCadenceTest {
             assertEquals(fps, measured, .025f)
         }
     }
+    @Test fun duplicatesAndOccasionalSkippedFramesStillMeasure() {
+        val cadence = FrameCadence(); var measured = 0f
+        for (frame in 0..120) {
+            if (frame % 9 == 8) continue
+            val pts = (frame * 1_000_000.0 / 59.94).roundToLong()
+            measured = cadence.observe(1, pts)
+            cadence.observe(1, pts); cadence.observe(1, pts - 100)
+        }
+        assertEquals(59.94f, measured, .025f)
+        assertFalse(VideoInfo(1920, 1080, 0f).label().contains("Measuring"))
+    }
     @Test fun unstableIntervalsDoNotBecomeVerifiedFps() {
         val cadence = FrameCadence(); var pts = 0L; var rate = 0f
         repeat(200) { pts += if (it % 2 == 0) 16667 else 50000; rate = cadence.observe(0, pts) }

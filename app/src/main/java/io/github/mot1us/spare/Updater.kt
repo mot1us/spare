@@ -8,7 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import androidx.core.content.FileProvider
+import androidx.core.content.edit
 import androidx.core.net.toUri
 import org.json.JSONObject
 import org.json.JSONArray
@@ -56,7 +56,7 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
         val candidate = release ?: return check(true)
         if (busy) return
         AlertDialog.Builder(activity).setTitle("Update to ${candidate.version}")
-            .setMessage("Download and install the signed Spare update? Android may ask for permission or confirmation. Playback will stop while you install.")
+            .setMessage("Download and install the signed Spare update? Installation stays in Spare when Android allows it. Android may still require a one-time install permission or confirmation. Android closes Spare to finish installation; reopen it from your apps.")
             .setPositiveButton("Update") { _, _ -> download(candidate) }.setNegativeButton("Later", null).show()
     }
     private fun download(candidate: Release) {
@@ -94,19 +94,25 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
         return candidate.packageName == activity.packageName && candidate.versionName == expected.version && code == expected.code && code > BuildConfig.VERSION_CODE &&
             !theirs.isNullOrEmpty() && !ours.isNullOrEmpty() && theirs.map { it.toCharsString() }.toSet() == ours.map { it.toCharsString() }.toSet()
     }
-    fun resume() { if (pending != null && activity.packageManager.canRequestPackageInstalls()) install() }
+    fun resume() {
+        val result = activity.getSharedPreferences("update-install", Activity.MODE_PRIVATE)
+        result.getString("result", null)?.let { detail ->
+            result.edit { remove("result"); remove("session") }; message("Update not installed", detail)
+        }
+        if (pending != null && activity.packageManager.canRequestPackageInstalls()) install()
+    }
     private fun install() {
-        val file = pending ?: return
+        if (pending == null) return
         if (!activity.packageManager.canRequestPackageInstalls()) {
             runCatching { activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${activity.packageName}".toUri())) }
                 .onFailure { message("Permission required", "Allow Spare to install updates in Android’s special app access settings, then try again.") }
             return
         }
         pending = null
-        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.updates", file)
-        runCatching { activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-            .onFailure { message("Installer unavailable", "Android could not open its package installer.") }
+        runCatching { activity.startActivity(Intent(activity, UpdateInstallActivity::class.java)) }
+            .onFailure { message("Installer unavailable", "Android could not start installation. Try again.") }
     }
+
     private fun message(title: String, text: String) {
         if (!activity.isFinishing && !closed) AlertDialog.Builder(activity).setTitle(title).setMessage(text).setPositiveButton("OK", null).show()
     }

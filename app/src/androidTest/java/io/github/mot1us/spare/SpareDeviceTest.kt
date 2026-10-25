@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -95,8 +95,10 @@ class SpareDeviceTest {
                 device.pressDPadDown(); instrumentation.waitForIdleSync()
                 assertEquals("Browsing must not change streams", "/channel1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
-                waitFor(scenario) { channelList(it)?.isShown == false }
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels[1].id }
+                scenario.onActivity { assertTrue("New selection must stay in the guide", channelList(it)!!.isShown) }
                 assertEquals("/channel2.mp4", playingPath(scenario))
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
                 device.pressDPadUp(); instrumentation.waitForIdleSync()
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.pressBack()
@@ -388,7 +390,7 @@ class SpareDeviceTest {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_BUFFERING }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("playback-status")?.let { text -> text.isShown && text.text.toString() == "Buffering…" } == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-status")?.let { bar -> bar.isShown && bar.contentDescription.toString() == "Buffering…" } == true }
                 assertEquals(1, server.requests["/channel1.ts"])
                 server.resumeStream.countDown()
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.isPlaying == true && activity.window.decorView.findViewWithTag<View>("playback-status")?.isShown == false }
@@ -398,28 +400,28 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun inlineSearchUsesVoiceResultsAndKeepsCanceledVoiceEditable() {
+    @Test fun inlineSearchUsesNativeRecognitionAndKeepsFailedVoiceEditable() {
+        val previous = device.executeShellCommand("settings get secure voice_recognition_service").trim()
+        device.executeShellCommand("settings put secure voice_recognition_service io.github.mot1us.spare.debug.test/io.github.mot1us.spare.FakeRecognitionService")
+        device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
+        try {
         FixtureServer().use { server ->
             val source = Source(name = "Search Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
-                val answer = Intent().putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS, arrayListOf("Channel 2"))
-                val monitor = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_OK, answer), true)
+                val monitor = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
                 try {
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("search").requestFocus() }; device.pressDPadCenter()
+                    var attempt = ""
+                    scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("search").requestFocus() }; device.pressDPadCenter()
                     waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 }
-                    assertEquals("Opening Search must immediately request speech input", 1, monitor.hits)
-                    assertEquals("Search browsing must not tune another stream", "/channel1.mp4", playingPath(scenario))
-                } finally { instrumentation.removeMonitor(monitor) }
-                val canceled = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
-                try {
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }; device.pressDPadCenter()
-                    waitFor(scenario) { device.hasObject(By.text("Select the field to type, or choose Voice to try again.")) }
-                    assertEquals(1, canceled.hits)
+                    assertEquals("Native speech must not launch a chooser/activity", 0, monitor.hits)
+                    scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertEquals(1f, find<PlayerView>(it.window.decorView)!!.player!!.volume, 0f) }
                     assertEquals("/channel1.mp4", playingPath(scenario))
-                } finally { instrumentation.removeMonitor(canceled) }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }; device.pressDPadCenter()
+                    waitFor(scenario) { device.hasObject(By.textStartsWith("No speech heard.")) }
+                } finally { instrumentation.removeMonitor(monitor) }
                 val keyboardPackage = android.content.ComponentName.unflattenFromString(android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))!!.packageName
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.pkg(keyboardPackage)), 5000))
@@ -431,10 +433,14 @@ class SpareDeviceTest {
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "search.png"))
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }; device.pressDPadCenter()
-                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == false }
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == true }
                 assertEquals("/channel7.mp4", playingPath(scenario))
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
+        } finally {
+            if (previous.isBlank() || previous == "null") device.executeShellCommand("settings delete secure voice_recognition_service")
+            else device.executeShellCommand("settings put secure voice_recognition_service $previous")
         }
     }
 
@@ -466,6 +472,62 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying && store.last(source) == "xc:1" } == true }
                 device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
                 assertEquals("xc:1", store.previous(source))
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun guideScrollingThemesAndCategorySelectionKeepThePlayer() {
+        FixtureServer(regionGroups = true).use { server ->
+            val source = Source(name = "Navigation Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                repeat(12) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
+                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.name == "Test Channel 8" }
+                device.pressDPadCenter()
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.last().id }
+                scenario.onActivity { assertTrue(channelList(it)!!.isShown) }
+                var attempt = ""
+                scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000)); device.findObject(By.text("Theme")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Ocean")), 5000)); device.findObject(By.text("Ocean")).click()
+                waitFor(scenario) { store.theme == "Ocean" && GuideTheme.current.name == "Ocean" }
+                scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("Categories")), 5000)); device.findObject(By.text("Categories")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("USA & Canada")), 5000)); device.findObject(By.text("USA & Canada")).click()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 6 }
+                assertEquals(setOf("USA | News", "US | MLB", "CA | News"), SecureStore(context).filters(source).groups)
+                scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun automaticSubtitlesRenderAndFpsBecomesKnown() {
+        FixtureServer(captionsMode = true).use { server ->
+            val source = Source(name = "Captions Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Automatic")), 5000)); device.findObject(By.text("Automatic")).click()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.any { cue -> cue.text.toString().contains("Spare test captions") } == true }
+                assertTrue(store.captions)
+                waitFor(scenario) { store.videoInfo(source).values.any { it.fps > 0 } }
+                scenario.onActivity { assertFalse(store.videoInfo(source).values.first().label().contains("unavailable")) }
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
+                device.pressDPadDown(); device.pressDPadCenter()
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels[1].id }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isNotEmpty() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); device.findObject(By.text("Off")).click()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isEmpty() == true }
+                assertFalse(SecureStore(context).captions)
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -542,7 +604,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -562,7 +624,7 @@ class SpareDeviceTest {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); bitmap.recycle()
         }.toByteArray()
         private val playlist = ("#EXTM3U url-tvg=\"$base/guide.xml\"\n" + (1..8).joinToString("\n") {
-            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (tsMode || stalled) "ts" else "mp4"}"
+            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (captionsMode) "m3u8" else if (tsMode || stalled) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
         private val shortEpg: ByteArray
@@ -586,10 +648,14 @@ class SpareDeviceTest {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
                             "/logo.png" -> logo to "image/png"
+                            "/av.ts" -> avTransport to "video/mp2t"
+                            "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
+                            "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
+                            "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
                             "/player_api.php" -> (if (target.contains("get_short_epg")) shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
-                            else -> if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
+                            else -> if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
                         val status = if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"

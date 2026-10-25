@@ -3,8 +3,6 @@ package io.github.mot1us.spare
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -13,7 +11,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceView
@@ -100,8 +97,10 @@ class MainActivity : Activity() {
     private lateinit var loadingPanel: LinearLayout
     private lateinit var loadingText: TextView
     private lateinit var loadingBar: ProgressBar
-    private lateinit var playbackLoading: LinearLayout
-    private lateinit var playbackLoadingText: TextView
+    private lateinit var playbackLoading: ProgressBar
+    private lateinit var voiceInput: NativeVoiceInput
+    private var voiceVolume = 1f
+    private var focusEpoch = 0
     private lateinit var playbackError: TextView
     private lateinit var searchButton: ImageButton
     private lateinit var settingsButton: ImageButton
@@ -146,7 +145,6 @@ class MainActivity : Activity() {
     private var groupsForChannels: List<Channel>? = null
     private var groupsForOrder: List<String>? = null
     private var voiceSearchPending = false
-    private var voiceSearchGeneration = 0
     private val filterSearch = Runnable { query = guideSearch.query(); applyFilter() }
     private val hideDetails = Runnable { closeDetails() }
     private val workingUrls = mutableMapOf<String, String>()
@@ -173,27 +171,41 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
+        GuideTheme.select(store.theme)
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         providerFactory = DataSource.Factory { ProviderDataSource { source?.allowHttp == true } }
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
-        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(50000, 60000, 2500, 8000)
+        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(50000, 60000, 1500, 8000)
             .setTargetBufferBytes(64 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build()
         player = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true)).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
         video.player = player
         frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView)
-        player.setVideoFrameMetadataListener { pts, _, format, _ ->
+        voiceInput = NativeVoiceInput(this, { guideSearch.message(it) }, { words ->
+            if (guideSearch.isVisible && started) { guideSearch.setQuery(words); finishSearch(false) }
+        }, { listening ->
+            if (listening) { voiceVolume = player.volume; player.volume = 0f } else player.volume = voiceVolume
+        })
+        applyCaptionPreference()
+        player.setVideoFrameMetadataListener { pts, _, format, codec ->
             val token = playbackToken
             val measured = cadence.observe(token, pts)
-            val fps = format.frameRate.takeIf { it.isFinite() && it > 0 } ?: measured
+            val codecRate = runCatching { codec?.getFloat(android.media.MediaFormat.KEY_FRAME_RATE) }.getOrNull()
+                ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull()
+            val fps = format.frameRate.takeIf { it.isFinite() && it in 10f..120f }
+                ?: measured.takeIf { it > 0 } ?: codecRate?.takeIf { it.isFinite() && it in 10f..120f } ?: 0f
             frameRates.request(fps)
-            if (firstFrame && format.width > 0 && format.height > 0) {
-                val info = VideoInfo(format.width, format.height, fps)
-                if (info != lastVideoInfo) {
-                    handler.post { if (firstFrame && token == playbackToken && player.videoFormat?.width == info.width) recordVideo(info) }
+            if (firstFrame && (lastVideoInfo == null || (fps > 0 && lastVideoInfo?.fps != fps))) {
+                handler.post {
+                    if (firstFrame && token == playbackToken) {
+                        val size = player.videoSize
+                        val width = format.width.takeIf { it > 0 } ?: size.width
+                        val height = format.height.takeIf { it > 0 } ?: size.height
+                        if (width > 0 && height > 0) recordVideo(VideoInfo(width, height, fps.takeIf { it > 0 } ?: lastVideoInfo?.fps ?: 0f))
+                    }
                 }
             }
         }
@@ -228,7 +240,7 @@ class MainActivity : Activity() {
                 current?.let { channel -> source?.let { store.setLast(it, channel) }; workingUrls[channel.id] = playbackUrl; if (unavailable.restore(channel.id)) { saveUnavailable(); applyFilter() } }
                 cancelPlaybackCallbacks(); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
                 player.videoFormat?.let { format ->
-                    if (format.width > 0 && format.height > 0) recordVideo(VideoInfo(format.width, format.height, format.frameRate.takeIf { it.isFinite() && it > 0 } ?: 0f))
+                    if (format.width > 0 && format.height > 0) recordVideo(VideoInfo(format.width, format.height, format.frameRate.takeIf { it.isFinite() && it > 0 } ?: lastVideoInfo?.fps ?: 0f))
                 }
             }
         })
@@ -252,6 +264,7 @@ class MainActivity : Activity() {
         setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))
         fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(4).toFloat() }
         background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
+        background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30))
         stateListAnimator = null
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply { marginEnd = dp(8) }
         setOnClickListener { click() }
@@ -282,6 +295,7 @@ class MainActivity : Activity() {
             imageTintList = android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE))
             fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(5).toFloat() }
             background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.TRANSPARENT)) }
+            background = GuideTheme.background(resources.displayMetrics.density)
             setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(8) }
         }
         searchButton = icon("Search", R.drawable.ic_search, ::search).apply { tag = "search" }; toolbar.addView(searchButton)
@@ -322,25 +336,26 @@ class MainActivity : Activity() {
         content.addView(emptyInfo)
         list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@MainActivity); itemAnimator = null; clipToPadding = false; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { source }, { guide }, { favorites }, { windowStart },
-            { guideSearch.hideKeyboard(); if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it); showGuide(false) }, { channel ->
+            { guideSearch.hideKeyboard(); if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it) else showGuide(false) }, { channel ->
                 source?.let { store.toggleFavorite(it, channel); favorites = store.favorites(it); applyFilter() }
-            }, { channel -> focused = channel; showInfo(channel); scheduleEpg() }, { moveTime(it) }, { focusSidebar() })
+            }, { channel -> focused = channel; showInfo(channel); scheduleEpg() }, { moveTime(it) }, { focusSidebar() }, { id, direction ->
+                val index = adapter.channels.indexOfFirst { it.id == id }; if (index >= 0) focusChannelAt((index + direction).coerceIn(0, adapter.itemCount - 1))
+            })
         list.adapter = adapter
         list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) { if (newState == RecyclerView.SCROLL_STATE_IDLE) scheduleEpg() }
         })
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
-        content.addView(text("← Categories     OK Full screen     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
-        previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        content.addView(text("← Categories     OK Preview / expand     Hold OK Favorite     Hold Back Full screen", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) })
+        previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; isFocusableInTouchMode = true; isClickable = true; setOnClickListener { if (current != null) showGuide(false) }; setOnFocusChangeListener { _, focused -> setTextColor(if (focused) Color.BLACK else Color.WHITE); setBackgroundColor(if (focused) GuideTheme.current.accent else 0xCC0B1018.toInt()) }; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(previewCaption, FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178); marginEnd = dp(18) })
         nowPlaying = text("", 15f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(16), dp(10), dp(16), dp(10)); visibility = View.GONE }
         root.addView(nowPlaying, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply { marginStart = dp(28); bottomMargin = dp(24) })
-        playbackLoading = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(16), dp(20), dp(16)); setBackgroundColor(0xE60B1018.toInt()); visibility = View.GONE
-            addView(ProgressBar(this@MainActivity), LinearLayout.LayoutParams(dp(28), dp(28)))
+        playbackLoading = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true; visibility = View.GONE; tag = "playback-status"
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
         }
-        playbackLoadingText = text("Opening channel…", 12f).apply { tag = "playback-status" }.apply { setPadding(dp(14), 0, 0, 0) }; playbackLoading.addView(playbackLoadingText)
-        root.addView(playbackLoading, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        root.addView(playbackLoading, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
         loadingPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10)); setBackgroundColor(0xF20B1018.toInt()); visibility = View.GONE; tag = "import-progress" }
         loadingText = text("Loading playlist…", 11f); loadingPanel.addView(loadingText)
         loadingBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; isIndeterminate = true }; loadingPanel.addView(loadingBar, LinearLayout.LayoutParams(-1, dp(10)))
@@ -355,18 +370,31 @@ class MainActivity : Activity() {
             current?.let { channel -> source?.let { selected -> store.toggleFavorite(selected, channel); favorites = store.favorites(selected); applyFilter(); refreshDetails() } }
         })
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
-        updateTimes(); showGuide(true)
+        applyTheme(); updateTimes(); showGuide(true)
     }
     private fun moveTime(amount: Int) {
         windowStart = (windowStart + amount * 1800000L).coerceIn(nowWindow(), nowWindow() + 2 * 86400000L)
         updateTimes(); adapter.notifyItemRangeChanged(0, adapter.itemCount)
     }
     private fun focusChannel() {
-        val position = adapter.channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
+        val index = adapter.channels.indexOfFirst { it.id == (focused ?: current)?.id }.takeIf { it >= 0 }
+            ?: adapter.channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
+        focusChannelAt(index)
+    }
+    private fun focusChannelAt(position: Int) {
+        if (position !in adapter.channels.indices) return
+        val epoch = ++focusEpoch
         list.scrollToPosition(position)
-        list.post { list.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() ?: focusSidebar() }
+        fun request(remaining: Int) {
+            if (epoch != focusEpoch || !guideVisible) return
+            val row = list.findViewHolderForAdapterPosition(position)?.itemView
+            if (row != null) row.requestFocus()
+            else if (remaining > 0) list.postOnAnimation { request(remaining - 1) }
+        }
+        list.post { request(8) }
     }
     private fun focusSidebar() {
+        ++focusEpoch
         val position = sidebarAdapter.activePosition(); sidebar.scrollToPosition(position)
         sidebar.post { sidebar.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() ?: searchButton.requestFocus() }
     }
@@ -381,7 +409,7 @@ class MainActivity : Activity() {
     private fun load(selected: Source, force: Boolean = false) {
         cacheEpg.run(); cachedStartup = false
         val epoch = ++generation
-        voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
+        if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
@@ -435,10 +463,11 @@ class MainActivity : Activity() {
         if (!Network.allowed(channel.url, selected.allowHttp)) { showPlaybackFailure("This channel needs an allowed HTTP or HTTPS address. Check this source’s HTTP setting."); return }
         closeDetails(); cancelPlaybackCallbacks(); playbackToken++
         hasPlayedChannel = false; startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
-        current = channel; previewCaption.text = "Live · ${channel.name}"; showInfo(channel)
+        current = channel; previewCaption.text = "Full screen · ${channel.name}"; showInfo(channel)
         playbackUrl = if (selected.kind == "xtream") when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts") ?: channel.url; "hls" -> StreamUrls.format(channel.url, "m3u8") ?: channel.url; else -> channel.url } else channel.url
         if (selected.kind == "xtream" && store.streamFormat(selected) == "auto") playbackUrl = workingUrls[channel.id] ?: playbackUrl
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverrides().build()
+        applyCaptionPreference()
         if (started) playAttempt()
         if (!guideVisible) showNowPlaying()
         scheduleEpg()
@@ -450,7 +479,7 @@ class MainActivity : Activity() {
         firstFrame = false; lastVideoInfo = null; showPlaybackLoading(phase)
         val item = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId).setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(12000).setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()).build()
         val media = if (playbackUrl.substringBefore('?').endsWith(".m3u8", true)) {
-            HlsMediaSource.Factory(providerFactory).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
+            HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!store.captions).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, true)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         player.setMediaSource(media); player.prepare(); player.play()
         handler.postDelayed(startupTimeout, 15000)
@@ -471,11 +500,15 @@ class MainActivity : Activity() {
         handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); handler.removeCallbacks(revealBuffering); handler.removeCallbacks(bufferingTimeout)
     }
     private fun showPlaybackLoading(phase: PlaybackPhase) {
-        playbackPhase = phase; playbackLoadingText.text = phase.label
-        playbackLoading.layoutParams = FrameLayout.LayoutParams(-2, -2, if (phase == PlaybackPhase.OPENING || phase == PlaybackPhase.ALTERNATE) Gravity.CENTER else Gravity.BOTTOM or Gravity.END).apply {
-            marginEnd = dp(24); bottomMargin = dp(if (loadingPanel.isVisible) 76 else 24)
-        }
+        playbackPhase = phase; playbackLoading.contentDescription = phase.label
+        positionPlaybackLoading()
         playbackLoading.visibility = View.VISIBLE
+    }
+    private fun positionPlaybackLoading() {
+        val preview = guideVisible && store.smallPreview
+        playbackLoading.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(3), Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(175) + if (guideSearch.isVisible) dp(60) else 0; marginEnd = dp(18)
+        } else FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM)
     }
     private fun reconnectOrFail(detail: String) {
         cancelPlaybackCallbacks()
@@ -494,9 +527,9 @@ class MainActivity : Activity() {
     }
     private fun unavailableMenu() {
         val channels = guide.channels.filter { unavailable.contains(it.id, System.currentTimeMillis()) }
-        AlertDialog.Builder(this).setTitle("Unavailable · hidden for 15 minutes").setItems(channels.map { it.name }.toTypedArray()) { _, which ->
+        AlertDialog.Builder(this).setTitle("Temporarily hidden channels").setItems(channels.map { it.name }.toTypedArray()) { _, which ->
             val channel = channels[which]; unavailable.restore(channel.id); saveUnavailable(); applyFilter(); tune(channel); showGuide(false)
-        }.setPositiveButton("Restore all") { _, _ -> unavailable.clear(); saveUnavailable(); applyFilter() }.setNegativeButton("Close", null).show()
+        }.setNeutralButton("Why hidden?") { _, _ -> notice("Temporarily hidden channels", "Only channels whose startup addresses returned 404 or 410 are hidden. They return after 15 minutes. Select a channel to retry immediately, or restore all. Network and account errors never hide channels.") }.setPositiveButton("Restore all") { _, _ -> unavailable.clear(); saveUnavailable(); applyFilter() }.setNegativeButton("Close", null).show()
     }
     private fun recordVideo(info: VideoInfo) {
         val selected = source ?: return; val channel = current ?: return
@@ -571,7 +604,7 @@ class MainActivity : Activity() {
         filterInfo.text = "${filtered.size} channels · " + listOfNotNull(selection, profileLabel, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty()) View.VISIBLE else View.GONE
         emptyInfo.text = if (!browseAll && (filters.excludedFps.isNotEmpty() || filters.minHeight > 0)) "No verified channels match yet. In Settings, choose Show unverified channels to play and verify them, or adjust Guide filters."
-            else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Unavailable channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
+            else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
         updateGroups()
     }
     private fun updateGroups() {
@@ -587,7 +620,7 @@ class MainActivity : Activity() {
     private fun updateTimes() { times.invalidate() }
     private fun showGuide(show: Boolean) {
         closeDetails()
-        if (!show) guideSearch.hideKeyboard()
+        if (!show) { guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         handler.removeCallbacks(hideNowPlaying); nowPlaying.visibility = View.GONE
         val preview = show && store.smallPreview
@@ -599,8 +632,9 @@ class MainActivity : Activity() {
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
         listOf(previewCaption, nowPlaying, loadingPanel, playbackLoading, retryPanel).forEach(root::bringChildToFront)
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
-        previewCaption.text = if (current == null) "Select a channel" else "Live · ${current?.name}"
-        if (show) focusChannel() else showNowPlaying()
+        previewCaption.text = if (current == null) "Select a channel" else "Full screen · ${current?.name}"
+        positionPlaybackLoading()
+        if (show) focusChannel() else { ++focusEpoch; showNowPlaying() }
         scheduleEpg()
     }
     private fun showNowPlaying() {
@@ -616,38 +650,27 @@ class MainActivity : Activity() {
         voiceSearch()
     }
     private fun finishSearch(close: Boolean) {
+        voiceInput.stop(); voiceSearchPending = false
         handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
         if (close) { guideSearch.visibility = View.GONE; showGuide(true) }
         focusChannel()
     }
-    @Suppress("DEPRECATION") // Keep the small native Activity; speech input returns through Android's activity-result API.
     private fun voiceSearch() {
-        if (voiceSearchPending || !guideSearch.isVisible) return
-        guideSearch.hideKeyboard(); guideSearch.message("Listening for a channel name…")
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Search Spare channels")
-            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        voiceSearchPending = true; voiceSearchGeneration = generation
-        try { startActivityForResult(intent, 1001) }
-        catch (_: ActivityNotFoundException) { voiceSearchUnavailable() }
-        catch (_: SecurityException) { voiceSearchUnavailable() }
+        if (!guideSearch.isVisible) return
+        guideSearch.hideKeyboard(); ++focusEpoch
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (voiceSearchPending) return
+            voiceSearchPending = true
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1001)
+        } else voiceInput.start()
     }
-    private fun voiceSearchUnavailable() {
-        voiceSearchPending = false; guideSearch.message("Voice input is unavailable on this TV. Select the field to type."); guideSearch.input.requestFocus()
-    }
-    @Deprecated("Native speech activity-result callback")
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != 1001 || !voiceSearchPending) return
         voiceSearchPending = false
-        if (closed || voiceSearchGeneration != generation || !guideSearch.isVisible) return
-        val words = if (resultCode == RESULT_OK) runCatching { data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.take(10)?.firstOrNull { it.isNotBlank() } }.getOrNull() else null
-        if (words != null) {
-            guideSearch.setQuery(words.replace(Regex("[\\p{Cc}]+"), " ").trim().take(128))
-            guideSearch.message("Voice search complete. Edit the field or choose Voice to search again."); finishSearch(false)
-        } else { guideSearch.message("Select the field to type, or choose Voice to try again."); guideSearch.voice.requestFocus() }
+        if (!guideSearch.isVisible || !started) return
+        if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) voiceInput.start()
+        else guideSearch.message("Microphone permission is off. Select the field to type, or enable it in Android app permissions.")
     }
     private fun previousChannel(): Channel? {
         val selected = source ?: return null
@@ -695,9 +718,9 @@ class MainActivity : Activity() {
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
     private fun playbackMenu() {
-        val choices = mutableListOf("Playlists", availableUpdate?.let { "Update $it" } ?: "Updates", if (browseAll) "Use guide filters" else "Show unverified channels", "Guide video", "Guide filters", "Category order", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
+        val choices = mutableListOf("Playlists", availableUpdate?.let { "Update $it" } ?: "Updates", if (browseAll) "Use guide filters" else "Show unverified channels", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
         if (source?.kind == "xtream") choices.add(1, "Stream format")
-        if (unavailable.snapshot().isNotEmpty()) choices.add(1, "Unavailable channels")
+        if (unavailable.snapshot().isNotEmpty()) choices.add(1, "Temporarily hidden channels")
         AlertDialog.Builder(this).setTitle("Settings").setItems(choices.toTypedArray()) { _, item ->
             when (choices[item]) {
                 "Playlists" -> showSources()
@@ -705,6 +728,8 @@ class MainActivity : Activity() {
                 "Show unverified channels", "Use guide filters" -> { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); focusChannel() }
                 "Guide video" -> AlertDialog.Builder(this).setTitle("Video while browsing the guide").setSingleChoiceItems(arrayOf("Transparent overlay", "Small live preview"), if (store.smallPreview) 1 else 0) { dialog, which -> store.smallPreview = which == 1; dialog.dismiss(); showGuide(true) }.setNegativeButton("Cancel", null).show()
                 "Guide filters" -> filterMenu()
+                "Categories" -> categoryMenu()
+                "Theme" -> themeMenu()
                 "Category order" -> {
                     val selected = source
                     if (selected == null) toast("Add a source first") else AlertDialog.Builder(this).setTitle("Category order")
@@ -712,7 +737,7 @@ class MainActivity : Activity() {
                             store.setUsaFirst(selected, which == 1); groupsForChannels = null; updateGroups(); dialog.dismiss()
                         }.setNegativeButton("Cancel", null).show()
                 }
-                "Unavailable channels" -> unavailableMenu()
+                "Temporarily hidden channels" -> unavailableMenu()
                 "Stream format" -> streamFormatMenu()
                 "Audio track" -> tracks(C.TRACK_TYPE_AUDIO)
                 "Subtitles" -> tracks(C.TRACK_TYPE_TEXT)
@@ -743,14 +768,53 @@ class MainActivity : Activity() {
                     AlertDialog.Builder(this).setTitle("Frame rates · uncheck to hide").setMultiChoiceItems(FrameRateFilter.choices.values.toTypedArray(), rates.map { it !in excluded }.toBooleanArray()) { _, which, checked -> if (checked) excluded.remove(rates[which]) else excluded.add(rates[which]) }
                         .setPositiveButton("Save") { _, _ -> saveFilters(filters.copy(excludedFps = excluded)) }.setNeutralButton("All rates") { _, _ -> saveFilters(filters.copy(excludedFps = emptySet())) }.setNegativeButton("Cancel", null).show()
                 }
-                2 -> {
-                    val chosen = filters.groups.toMutableSet()
-                    AlertDialog.Builder(this).setTitle("Categories · none selected means all").setMultiChoiceItems(providerGroups.map { it.ifBlank { "Uncategorized" } }.toTypedArray(), providerGroups.map { it in chosen }.toBooleanArray()) { _, which, checked -> if (checked) chosen.add(providerGroups[which]) else chosen.remove(providerGroups[which]) }
-                        .setPositiveButton("Save") { _, _ -> saveFilters(filters.copy(groups = chosen)) }.setNeutralButton("All") { _, _ -> saveFilters(filters.copy(groups = emptySet())) }.setNegativeButton("Cancel", null).show()
-                }
+                2 -> categoryMenu()
                 3 -> saveFilters(GuideFilters())
             }
         }.setNegativeButton("Close", null).show()
+    }
+    private fun categoryMenu() {
+        if (source == null) { toast("Add a playlist first"); return }
+        AlertDialog.Builder(this).setTitle("Visible categories").setItems(CategoryPresets.names.toTypedArray()) { _, which ->
+            when (which) {
+                0 -> saveFilters(filters.copy(groups = emptySet()))
+                4 -> editCategories()
+                else -> {
+                    val chosen = CategoryPresets.select(providerGroups, which)
+                    if (chosen.isEmpty()) notice("No matching labels", "This provider has no category labels matching that preset. Choose categories manually instead. Your selection has been kept.")
+                    else saveFilters(filters.copy(groups = chosen))
+                }
+            }
+        }.setNeutralButton("About presets") { _, _ -> notice("Category presets", "Presets match country/language labels supplied by your playlist. They do not inspect the audio language. You can fine-tune the selection in Choose categories. Provider ordering is preserved.") }.setNegativeButton("Close", null).show()
+    }
+    private fun editCategories() {
+        val chosen = if (filters.groups.isEmpty()) providerGroups.toMutableSet() else filters.groups.toMutableSet()
+        val dialog = AlertDialog.Builder(this).setTitle("Choose visible categories")
+            .setMultiChoiceItems(providerGroups.map { it.ifBlank { "Uncategorized" } }.toTypedArray(), providerGroups.map { it in chosen }.toBooleanArray()) { _, which, checked -> if (checked) chosen.add(providerGroups[which]) else chosen.remove(providerGroups[which]) }
+            .setPositiveButton("Save", null).setNeutralButton("Show all") { _, _ -> saveFilters(filters.copy(groups = emptySet())) }.setNegativeButton("Cancel", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (chosen.isEmpty()) toast("Select at least one category, or choose Show all")
+                else { saveFilters(filters.copy(groups = if (chosen.size == providerGroups.size) emptySet() else chosen.toSet())); dialog.dismiss() }
+            }
+        }
+        dialog.show()
+    }
+    private fun themeMenu() {
+        AlertDialog.Builder(this).setTitle("Theme").setSingleChoiceItems(GuideTheme.palettes.map { it.name }.toTypedArray(), GuideTheme.palettes.indexOf(GuideTheme.current)) { dialog, which ->
+            store.theme = GuideTheme.palettes[which].name; GuideTheme.select(store.theme); applyTheme(); dialog.dismiss()
+        }.setNegativeButton("Cancel", null).show()
+    }
+    private fun applyTheme() {
+        val base = GuideTheme.current.background
+        guidePanel.background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(base or 0xF2000000.toInt(), base or 0xC9000000.toInt()))
+        fun visit(view: View) {
+            if (view is Button) { view.background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30)); view.setTextColor(GuideTheme.ink()) }
+            else if (view is ImageButton) view.background = GuideTheme.background(resources.displayMetrics.density)
+            if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
+        }
+        visit(root); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        sidebarAdapter.notifyItemRangeChanged(0, sidebarAdapter.itemCount); list.invalidate(); for (i in 0 until list.childCount) list.getChildAt(i).invalidate()
     }
     private fun streamFormatMenu() {
         val selected = source ?: return
@@ -759,19 +823,35 @@ class MainActivity : Activity() {
             store.setStreamFormat(selected, values[which]); dialog.dismiss(); current?.let(::tune)
         }.setNegativeButton("Cancel", null).show()
     }
+    private fun applyCaptionPreference() {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !store.captions)
+            .setPreferredTextLanguage(java.util.Locale.getDefault().language)
+            .setSelectUndeterminedTextLanguage(true).build()
+    }
     private fun tracks(type: Int) {
+        val text = type == C.TRACK_TYPE_TEXT
         val choices = ArrayList<Pair<Tracks.Group, Int>>()
-        val names = arrayListOf(if (type == C.TRACK_TYPE_TEXT) "Off" else "Auto")
+        val names = if (text) arrayListOf("Off", "Automatic") else arrayListOf("Automatic")
         player.currentTracks.groups.filter { it.type == type }.forEach { g ->
             for (i in 0 until g.length) if (g.isTrackSupported(i)) {
-                val f = g.getTrackFormat(i); choices.add(g to i); names.add(listOfNotNull(f.label, f.language, f.codecs).joinToString(" · ").ifBlank { "Track ${choices.size}" })
+                val f = g.getTrackFormat(i); choices.add(g to i)
+                names.add(listOfNotNull(f.label, f.language?.let { java.util.Locale.forLanguageTag(it).displayLanguage }, f.sampleMimeType?.substringAfterLast('/'), f.accessibilityChannel.takeIf { it > 0 }?.let { "CC $it" }).distinct().joinToString(" · ").ifBlank { "Track ${choices.size}" })
             }
         }
-        AlertDialog.Builder(this).setTitle(if (type == C.TRACK_TYPE_TEXT) "Subtitles" else "Audio").setItems(names.toTypedArray()) { _, index ->
-            val selection = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, type == C.TRACK_TYPE_TEXT && index == 0)
-            if (index > 0) choices[index - 1].let { (g, track) -> selection.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, track)) }
-            player.trackSelectionParameters = selection.build()
-        }.show()
+        val base = if (text) 2 else 1
+        if (text && choices.isEmpty()) names.add("No subtitle tracks detected · help")
+        val selected = if (text && !store.captions) 0 else choices.indexOfFirst { (g, i) -> g.isTrackSelected(i) }.takeIf { it >= 0 }?.plus(base) ?: if (text) 1 else 0
+        AlertDialog.Builder(this).setTitle(if (text) "Subtitles" else "Audio").setSingleChoiceItems(names.toTypedArray(), selected) { dialog, index ->
+            if (text && index >= base && choices.isEmpty()) { dialog.dismiss(); notice("Subtitles", "This stream has not supplied a supported subtitle track. Automatic keeps captions enabled for channels that provide them and checks HLS segments for undeclared captions. Spare cannot create captions missing from the provider."); return@setSingleChoiceItems }
+            val wasEnabled = store.captions
+            val selection = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, text && index == 0)
+            if (text) { store.captions = index != 0; selection.setPreferredTextLanguage(java.util.Locale.getDefault().language).setSelectUndeterminedTextLanguage(true) }
+            if (index >= base) choices[index - base].let { (g, track) -> selection.setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, track)) }
+            player.trackSelectionParameters = selection.build(); dialog.dismiss()
+            // Segment inspection is only needed when captions are requested. Keep fast chunkless startup otherwise.
+            if (text && !wasEnabled && store.captions && choices.isEmpty() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) playAttempt()
+        }.setNegativeButton("Close", null).show()
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -820,8 +900,8 @@ class MainActivity : Activity() {
     }
     override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg() }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private fun nowWindow() = System.currentTimeMillis() / 1800000L * 1800000L

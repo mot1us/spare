@@ -16,7 +16,7 @@ data class GuideSection(val title: String, val key: String, val active: Boolean 
 
 class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
-    @SuppressLint("NotifyDataSetChanged") fun submit(next: List<GuideSection>) { items = next; notifyDataSetChanged() }
+    @SuppressLint("NotifyDataSetChanged") fun submit(next: List<GuideSection>) { if (items != next) { items = next; notifyDataSetChanged() } }
     fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -37,6 +37,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         return Holder(text)
     }
     override fun onBindViewHolder(holder: Holder, position: Int) {
+        holder.label.background = GuideTheme.background(context.resources.displayMetrics.density)
         val item = items[position]
         holder.label.text = item.title; holder.label.contentDescription = item.title
         holder.label.isSelected = item.active

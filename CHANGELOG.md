@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-10-24
+
+- Keep new channel selections in the guide preview, retain explicit full-screen actions, and keep vertical remote navigation in the channel list across off-screen rows.
+- Replace the external speech activity with native microphone permission and inline recognition, cancellation, timeout, and editable fallback.
+- Add visible-category presets/custom selection and five guide color themes without restarting playback. Explain temporarily hidden channels and subtitle availability.
+- Persist automatic captions across channels, inspect HLS segments for undeclared captions when enabled, and keep explicit track selection.
+- Install verified updates through native PackageInstaller sessions, requesting confirmation-free self-updates on Android 12+ with system-confirmation fallback.
+- Replace channel-opening/buffering text with a thin progress bar, reduce initial buffer threshold from 2.5 to 1.5 seconds while retaining the larger rebuffer cushion, and make media-timestamp FPS measurement tolerate duplicate/skipped frames.
+
 ## 0.2.3 — 2026-10-24
 
 - Reduce guide controls to search/settings icons above the categories. Move Playlists, updates, and temporary filter bypass into Settings; remove My guide/Browse all buttons.

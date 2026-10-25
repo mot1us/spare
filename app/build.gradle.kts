@@ -17,7 +17,7 @@ android {
         versionCode = releaseVersion.getProperty("versionCode").toInt()
         versionName = releaseVersion.getProperty("versionName")
         buildConfigField("boolean", "PRERELEASE_UPDATES", (releaseVersion.getProperty("releaseChannel") == "prerelease").toString())
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "io.github.mot1us.spare.SpareTestRunner"
     }
     signingConfigs {
         if (signingPath != null) create("distribution") {

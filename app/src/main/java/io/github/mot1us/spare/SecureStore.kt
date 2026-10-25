@@ -78,6 +78,12 @@ class SecureStore(private val context: Context) {
     fun saveUnavailable(source: Source, channels: UnavailableChannels) {
         preferences.edit { putString("unavailable-${source.id}", JSONObject(channels.snapshot()).toString()) }
     }
+    var theme: String
+        get() = preferences.getString("theme", "Monochrome").orEmpty()
+        set(value) { preferences.edit { putString("theme", value) } }
+    var captions: Boolean
+        get() = preferences.getBoolean("captions", false)
+        set(value) { preferences.edit { putBoolean("captions", value) } }
     var smallPreview: Boolean
         get() = preferences.getBoolean("small-preview", true)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }

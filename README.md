@@ -2,7 +2,7 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.2.3**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.3.0**. License: MIT.
 
 ## What it does
 
@@ -15,7 +15,7 @@ Spare plays your own live-TV sources. It includes no channels, subscriptions, ad
 - Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and FPS exclusions. Uncheck 25/50 fps while keeping 24/30/60, for example; 23.976, 29.97, and 59.94 belong to their nominal families. Unknown FPS stays hidden while FPS filtering is active. Streams without FPS metadata are measured from stable media timestamps, not the TV output rate.
 - Quality comes from observed playback, never channel names. Unknown quality is hidden when quality filters are active. Settings → Show unverified channels temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
 - Terminal 404/410 channels are hidden for 15 minutes after startup endpoints confirm they are missing, without bulk probing. Settings can retry or restore them. Network, account, and missing-segment errors do not prove a channel is absent.
-- MPEG-TS access-unit detection, Xtream TS/HLS fallback, a manual stream-format setting, and a visible startup timeout with safe diagnostics. Buffering has its own delayed corner indicator and an eight-second resume target; adaptive live playback requests a 12-second target offset when the provider window allows it. Recovery is bounded to two reconnects in two minutes. These improve tolerance of short disruptions but cannot fix a provider outage or inadequate throughput. Playlist and guide downloads show their current stage and byte progress when known.
+- MPEG-TS access-unit detection, Xtream TS/HLS fallback, a manual stream-format setting, and a visible startup timeout with safe diagnostics. Channel opening/buffering uses a thin progress bar without status text; initial playback requests a 1.5-second buffer. Buffering has a delayed indicator and an eight-second resume target; adaptive live playback requests a 12-second target offset when the provider window allows it. Recovery is bounded to two reconnects in two minutes. These improve tolerance of short disruptions but cannot fix a provider outage or inadequate throughput. Playlist and guide downloads show their current stage and byte progress when known.
 - Last-channel resume, one-press recall between two watched channels, programme/channel details, audio/subtitle selection, and automatic frame-rate matching where supported.
 - Quiet update badge, signed APK updates initiated in the app, and Android installation confirmation when required.
 
@@ -32,7 +32,7 @@ Cached playlists resume before network work, with a six-hour lineup refresh inte
 | Full-screen player | Left | Toggle between the last two successfully played channels |
 | Details | Back | Close details and keep watching |
 | Guide | Up / Down | Browse channels without changing the stream |
-| Guide | OK | Tune selected channel and return to full-screen playback |
+| Guide | OK | Tune a different channel in the preview; select the playing channel to expand |
 | Guide | Long-press OK | Toggle favorite |
 | Guide | Left / Right | Open categories / move the guide window forward by 30 minutes; timeline buttons move earlier or return to Now |
 | Guide | Back / hold Back | Move between channel/sidebar focus / expand the current channel |
@@ -40,7 +40,9 @@ Cached playlists resume before network work, with a six-hour lineup refresh inte
 | Search | Down / Done | Browse the live-filtered channel results |
 | Search | Back | Close inline search; the query remains active until cleared |
 
-Search and Settings icons sit above the category sidebar; the guide has a larger 320×180 dp live preview. Playlists and Updates are inside Settings. Search immediately requests the TV's speech-input activity and puts returned words in an editable inline field. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. Settings → Playlists adds, switches, edits, or removes playlists. Settings contains guide video style, guide filters, category order, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
+Search and Settings icons sit above the category sidebar; the guide has a larger 320×180 dp live preview. Playlists and Updates are inside Settings. Search requests microphone permission once, then listens inline using the configured speech service. There is no speech-app chooser or external recognition activity. Voice can be retried, canceled, or replaced with keyboard input; unavailable speech input leaves the field usable. Search spans provider categories within the current guide-quality profile. Settings → Playlists adds, switches, edits, or removes playlists. Settings contains guide video style, guide filters, visible-category presets/custom choices, category order, five color themes, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
+
+Settings → Categories offers label-based English-speaking regions, USA/Canada, UK/Ireland, and manual choices; these labels cannot guarantee a stream’s spoken language. Theme changes preserve playback. Settings → Subtitles provides Off, Automatic, and detected tracks. Automatic persists across channels and enables deeper HLS caption detection; no captions can be shown when the provider supplies none.
 
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 
@@ -56,7 +58,7 @@ After the first stable release, this permanent link will install the latest stab
 
 A Downloader code can point to that URL. Register it once through [AFTVnews](https://go.aftvnews.com/) after a stable release exists. A code is a shortcut; it does not host the APK. CAPTCHA registration requires a human.
 
-The app checks for updates at most daily, without interrupting playback. Stable builds use the latest stable `update.json`; prerelease builds use GitHub's public Releases API to find the newest published testing or stable manifest. Drafts and foreign manifest URLs are rejected. It downloads only when asked, checks SHA-256, package ID, increasing version code, and the installed signing identity, then hands off to Android’s installer. Android may require enabling “install unknown apps” separately for Spare, even if it is already enabled for Downloader. Prereleases remain excluded from stable update discovery. Version 0.1.0 needs one manual update to 0.1.1 to fix testing-channel discovery.
+The app checks for updates at most daily, without interrupting playback. Stable builds use the latest stable `update.json`; prerelease builds use GitHub's public Releases API to find the newest published testing or stable manifest. Drafts and foreign manifest URLs are rejected. It downloads only when asked, checks SHA-256, package ID, increasing version code, and the installed signing identity, then stages a native PackageInstaller self-update. Android 12+ is asked to install without another confirmation, with the Android confirmation prompt retained when required. Android closes Spare to finish installation; reopen it from your apps. The update that first installs 0.3.0 still uses the older updater; this path takes effect for subsequent updates. Android may require enabling “install unknown apps” separately for Spare, even if it is already enabled for Downloader. Prereleases remain excluded from stable update discovery. Version 0.1.0 needs one manual update to 0.1.1 to fix testing-channel discovery.
 
 ## Build and verify
 
@@ -72,7 +74,7 @@ Production dependencies are locked in `app/gradle.lockfile`. Deliberate dependen
 
 Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites, current/previous watched-channel IDs, quality observations (up to 5,000 channels), temporary unavailability, guide video style, and guide preferences stay in private preferences. Removing a source removes its cached guide and preferences. Uninstalling clears local app data.
 
-Voice search delegates speech capture to the installed TV recognition app; that app's speech-processing/privacy policy applies. Spare receives transcribed text and does not record or store audio. It does not request direct microphone access. Voice availability and the dedicated remote Assistant button are controlled by the TV's software; Spare's Search action requests in-app channel transcription rather than a web search.
+Voice search requests RECORD_AUDIO only when Search/Voice is selected. The configured Android recognition service captures/processes speech; its privacy policy applies and it may use its own network service. Spare stores no audio, restores playback volume when listening ends, and stops listening when search closes or the app leaves the foreground. Permission denial or recognition failure leaves text search available. Voice availability and the dedicated remote Assistant button are controlled by the TV's software; Spare's Search action requests in-app channel transcription rather than a web search.
 
 Provider traffic, guide downloads, and logos contact the URLs supplied by your provider. Update checks and APK downloads contact GitHub (including api.github.com for prerelease discovery). There is no Spare credential service or telemetry endpoint. Provider data never becomes HTML or executable instructions.
 

@@ -16,7 +16,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.widget.doAfterTextChanged
 
-/** Search belongs to the guide. Only speech capture is delegated to the TV. */
+/** Search belongs to the guide. Speech capture uses the configured system service without leaving this UI. */
 @SuppressLint("ViewConstructor") // Constructed with callbacks in code; never inflated from XML.
 class GuideSearchBar(
     context: Context,

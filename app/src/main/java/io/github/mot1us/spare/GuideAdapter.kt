@@ -23,12 +23,12 @@ class GuideAdapter(
     private val favorites: () -> Set<String>, private val windowStart: () -> Long,
     private val selected: (Channel) -> Unit, private val favorite: (Channel) -> Unit,
     private val focus: (Channel) -> Unit, private val scrollTime: (Int) -> Unit,
-    private val openSidebar: () -> Unit,
+    private val openSidebar: () -> Unit, private val moveChannel: (String, Int) -> Unit,
 ) : RecyclerView.Adapter<GuideAdapter.Holder>() {
     var channels: List<Channel> = emptyList()
         private set
     init { setHasStableIds(true) }
-    @SuppressLint("NotifyDataSetChanged") fun submit(list: List<Channel>) { channels = list; notifyDataSetChanged() }
+    @SuppressLint("NotifyDataSetChanged") fun submit(list: List<Channel>) { if (channels != list) { channels = list; notifyDataSetChanged() } }
     override fun getItemCount() = channels.size
     override fun getItemId(position: Int) = Channel.stableId(channels[position].id).take(16).toULong(16).toLong()
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(Row(context))
@@ -49,6 +49,9 @@ class GuideAdapter(
             setOnFocusChangeListener { _, hasFocus -> invalidate(); if (hasFocus) channel?.let(focus) }
         }
         override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                channel?.let { moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; return true
+            }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { openSidebar(); return true }
             if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
                 scrollTime(1); return true
@@ -60,7 +63,7 @@ class GuideAdapter(
             val channel = channel ?: return
             val leftWidth = CHANNEL_WIDTH_DP * density
             val base = height / 2f + text.textSize * .35f
-            paint.color = if (hasFocus()) Color.WHITE else 0x88303943.toInt()
+            paint.color = if (hasFocus()) GuideTheme.current.accent else 0x88303943.toInt()
             canvas.drawRoundRect(0f, density, width.toFloat(), height - density, 3 * density, 3 * density, paint)
             val ink = if (hasFocus()) Color.BLACK else Color.WHITE
             text.color = ink
