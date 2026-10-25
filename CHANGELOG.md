@@ -5,6 +5,7 @@
 - Add a Sports section beside Favorites: follow MLB/NFL teams, discover live/upcoming matchups in the provider guide, and choose among matching channels while keeping the live preview running.
 - Group alternate broadcasts, preserve separate doubleheaders, prioritize favorite channels, and exclude ambiguous team names, replay/highlight listings, expired games, and games more than 48 hours away.
 - Reuse cached EPG and warm at most 160 likely sports/favorite channels with the existing two guide workers. Pause Sports guide requests on account/rate-limit errors or repeated failures. Respect category, observed-quality, and unavailable-channel filters; never probe video streams.
+- Keep a channel’s verified FPS when a same-size HLS/caption restart temporarily supplies no frame-rate metadata; replace it when a new valid reading arrives, and remeasure after resolution changes.
 - Keep team preferences on-device, support all-games browsing, and retain direct sidebar/toolbar navigation and per-channel captions from 0.3.1.
 
 ## 0.3.1 — 2026-10-24

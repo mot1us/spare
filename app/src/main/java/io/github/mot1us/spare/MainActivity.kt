@@ -594,9 +594,10 @@ class MainActivity : Activity() {
     }
     private fun recordVideo(info: VideoInfo) {
         val selected = source ?: return; val channel = current ?: return
-        lastVideoInfo = info
-        if (videoInfo[channel.id] == info) return
-        videoInfo[channel.id] = info; store.saveVideoInfo(selected, videoInfo)
+        val observed = info.retainingKnownRate(videoInfo[channel.id])
+        lastVideoInfo = observed
+        if (videoInfo[channel.id] == observed) return
+        videoInfo[channel.id] = observed; store.saveVideoInfo(selected, videoInfo)
         applyFilter(); if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }

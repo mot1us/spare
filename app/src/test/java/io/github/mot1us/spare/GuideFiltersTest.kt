@@ -32,6 +32,14 @@ class GuideFiltersTest {
         assertTrue(GuideFilters().matches(channel, null))
         assertFalse(GuideFilters(excludedFps = setOf(24)).matches(channel, VideoInfo(1920, 1080, 23.976f)))
     }
+    @Test fun temporaryUnknownFpsKeepsVerifiedRateOnlyForTheSameVideoSize() {
+        val prior = VideoInfo(1920, 1080, 59.94f)
+        assertEquals(prior, VideoInfo(1920, 1080, 0f).retainingKnownRate(prior))
+        assertEquals(prior, VideoInfo(1920, 1080, Float.NaN).retainingKnownRate(prior))
+        assertEquals(50f, VideoInfo(1920, 1080, 50f).retainingKnownRate(prior).fps)
+        assertEquals(0f, VideoInfo(1280, 720, 0f).retainingKnownRate(prior).fps)
+        assertEquals(0f, VideoInfo(1920, 1080, 0f).retainingKnownRate(null).fps)
+    }
     @Test fun streamFormatChangePreservesEncodedCredentialsAndQuery() {
         val url = "https://example.com:8443/live/user%2Fname/p%40ss/123.ts?token=a%2Fb"
         assertEquals("https://example.com:8443/live/user%2Fname/p%40ss/123.m3u8?token=a%2Fb", StreamUrls.alternate(url))

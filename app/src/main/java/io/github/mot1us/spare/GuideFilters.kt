@@ -3,6 +3,9 @@ package io.github.mot1us.spare
 import org.json.JSONObject
 
 data class VideoInfo(val width: Int, val height: Int, val fps: Float) {
+    /** Missing metadata during a same-size reconnect does not invalidate a measured frame rate. */
+    fun retainingKnownRate(previous: VideoInfo?): VideoInfo =
+        if ((!fps.isFinite() || fps <= 0) && previous != null && width == previous.width && height == previous.height && previous.fps.isFinite() && previous.fps > 0) copy(fps = previous.fps) else this
     fun json() = JSONObject().put("width", width).put("height", height).put("fps", fps.toDouble())
     fun label(): String = "${height}p" + if (fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} fps" else " · FPS unavailable"
     companion object {
