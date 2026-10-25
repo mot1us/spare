@@ -5,7 +5,7 @@ import java.util.Locale
 
 data class SportsTeam(val id: String, val league: String, val name: String, val aliases: List<String>)
 
-/** Local names only: no schedule service, account, tracking, or stream probing. */
+/** Local team names and aliases, shared by EPG matching and live event verification. */
 object SportsCatalog {
     private fun team(league: String, code: String, name: String, vararg aliases: String) =
         SportsTeam("${league.lowercase(Locale.ROOT)}:$code", league, name, (listOf(name, code) + aliases).distinct())

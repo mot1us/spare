@@ -61,7 +61,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         val item = items[position]
         holder.label.tag = item.key; holder.label.text = item.title; holder.label.contentDescription = item.title
         holder.label.isSelected = item.active
-        holder.label.typeface = Typeface.create(if (item.active) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+        holder.label.typeface = AppFont.face(item.active)
         holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key }
         holder.label.setOnClickListener { select(item) }
     }

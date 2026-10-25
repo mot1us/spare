@@ -13,9 +13,9 @@ import android.widget.TextView
 @SuppressLint("SetTextI18n")
 class NowPlayingBanner(context: Context) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
-    private fun label(size: Float, color: Int) = TextView(context).apply { textSize = size; setTextColor(color); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private fun label(size: Float, color: Int) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
     private val channel = label(12f, Color.LTGRAY)
-    private val programme = label(17f, Color.WHITE).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); maxLines = 2 }
+    private val programme = label(17f, Color.WHITE).apply { typeface = AppFont.face(true); maxLines = 2 }
     private val timing = label(11f, Color.LTGRAY)
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { max = 1000; progressTintList = android.content.res.ColorStateList.valueOf(Color.WHITE) }
     init {

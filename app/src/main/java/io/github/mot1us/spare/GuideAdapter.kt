@@ -44,7 +44,6 @@ class GuideAdapter(
         private val logoBounds = RectF()
         private val star = android.graphics.Path()
         private val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 11.5f * this@Row.density }
-        private val medium = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         init {
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (32 * density).toInt())
             isFocusable = true; isFocusableInTouchMode = true; isClickable = true; isLongClickable = true
@@ -99,7 +98,7 @@ class GuideAdapter(
             }
             val favorite = channel.id in favorites()
             val ahead = windowStart(channel) > GuideTimeline.live(System.currentTimeMillis())
-            text.typeface = medium
+            text.typeface = AppFont.face(true)
             canvas.drawText(TextUtils.ellipsize(channel.name, text, leftWidth - (if (favorite) 58 else 43) * density, TextUtils.TruncateAt.END).toString(), 36 * density, if (ahead) 13 * density else base, text)
             if (ahead) {
                 text.textSize = 8.5f * density
@@ -109,7 +108,7 @@ class GuideAdapter(
             if (favorite) {
                 paint.color = if (hasFocus()) Color.BLACK else 0xFFFFD28A.toInt(); canvas.drawPath(star, paint)
             }
-            text.typeface = Typeface.DEFAULT
+            text.typeface = AppFont.face()
             val start = windowStart(channel); val duration = 3 * 3600000L
             val available = width - leftWidth
             val programmes = guide().programmes[guide().key(channel)].orEmpty()

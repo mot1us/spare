@@ -49,9 +49,33 @@ class SecureStore(private val context: Context) {
     fun saveSources(sources: List<Source>) = write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray())
     fun cache(source: Source, guide: Guide) = write("cache-${source.id}.enc", guide.json().toString().toByteArray())
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
+    fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
+        require(kind in setOf("movie", "series"))
+        return read("library-${source.id}-$kind.enc")?.let { bytes ->
+            val root = JSONObject(bytes.toString(Charsets.UTF_8)); val entries = root.getJSONArray("entries")
+            require(entries.length() <= Importers.MAX_CHANNELS)
+            root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
+        }
+    }
+    fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) {
+        require(kind in setOf("movie", "series"))
+        write("library-${source.id}-$kind.enc", JSONObject().put("updated", System.currentTimeMillis()).put("entries", JSONArray(entries.map { it.json() })).toString().toByteArray())
+    }
+    @Synchronized fun watchProgress(source: Source): List<WatchProgress> = read("watch-${source.id}.enc")?.let { bytes ->
+        val entries = JSONArray(bytes.toString(Charsets.UTF_8)); require(entries.length() <= 100)
+        List(entries.length()) { WatchProgress.from(entries.getJSONObject(it)) }
+    }.orEmpty()
+    @Synchronized fun saveWatchProgress(source: Source, item: OnDemand, position: Long, duration: Long, ended: Boolean = false) {
+        val entries = runCatching { watchProgress(source) }.getOrDefault(emptyList()).filter { it.item.id != item.id }.toMutableList()
+        if (!ended && position >= 10000 && (duration <= 0 || position < duration - 30000)) entries.add(WatchProgress(item, position, duration.coerceAtLeast(0), System.currentTimeMillis()))
+        write("watch-${source.id}.enc", JSONArray(entries.takeLast(100).map { it.json() }).toString().toByteArray())
+    }
+    fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
+    fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true) } }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions").forEach { remove("$it-${source.id}") } }
+        listOf("library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
@@ -62,7 +86,7 @@ class SecureStore(private val context: Context) {
     fun usaFirst(source: Source) = preferences.getBoolean("category-order-${source.id}", false)
     fun setUsaFirst(source: Source, value: Boolean) { preferences.edit { putBoolean("category-order-${source.id}", value) } }
     fun playlistRefreshed(source: Source) = preferences.getLong("playlist-refreshed-${source.id}", 0)
-    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()) } }
+    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
         j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
@@ -97,6 +121,9 @@ class SecureStore(private val context: Context) {
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }
+    var font: String
+        get() = preferences.getString("font", "Default").orEmpty()
+        set(value) { preferences.edit { putString("font", value) } }
     var clock24: Boolean
         get() = preferences.getBoolean("clock-24", false)
         set(value) { preferences.edit { putBoolean("clock-24", value) } }

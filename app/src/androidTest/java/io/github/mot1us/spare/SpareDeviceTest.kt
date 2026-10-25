@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default" }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -621,7 +621,7 @@ class SpareDeviceTest {
                 var samePlayer: Player? = null
                 scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").requestFocus() }; device.pressDPadCenter()
+                scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { r -> r.isShown && r.adapter?.itemCount == 1 && r.hasFocus() } == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
@@ -751,7 +751,7 @@ class SpareDeviceTest {
             store.setFilters(source, GuideFilters(minHeight = 1080))
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-loading")?.isShown == true }
                 waitFor(scenario) { server.sportsTailBlocked.count == 0L }
                 device.pressMenu(); activateSetting(scenario, "Guide filters"); activateSetting(scenario, "Reset filters"); leaveSettings(scenario)
@@ -769,6 +769,97 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var samePlayer: Player? = null
+                scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.playbackState == Player.STATE_READY }
+                scenario.onActivity {
+                    assertTrue(it.window.decorView.findViewWithTag<View>("on-demand-controls").isShown)
+                    it.window.decorView.findViewWithTag<View>("on-demand-pause").performClick()
+                }
+                waitFor(scenario) { samePlayer?.playWhenReady == false }
+                scenario.onActivity { activity ->
+                    val seek = activity.window.decorView.findViewWithTag<android.widget.SeekBar>("on-demand-seek")
+                    assertTrue("Seekable movie exposes its native seek bar", seek.isEnabled); seek.requestFocus()
+                }
+                device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("on-demand-seek").hasFocus() && (samePlayer?.currentPosition ?: 0) > 0 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-restart").performClick() }
+                waitFor(scenario) { samePlayer?.currentPosition == 0L && samePlayer?.playWhenReady == false }
+                scenario.onActivity { samePlayer!!.repeatMode = Player.REPEAT_MODE_OFF; samePlayer!!.seekTo(samePlayer!!.duration - 20); samePlayer!!.play() }
+                waitFor(scenario) { samePlayer?.playbackState == Player.STATE_ENDED }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-pause").performClick() }
+                waitFor(scenario) { samePlayer?.playbackState == Player.STATE_READY && samePlayer?.isPlaying == true }
+                scenario.onActivity { samePlayer!!.repeatMode = Player.REPEAT_MODE_ONE }
+                device.pressBack(); device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-live").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" && channelList(it)?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick(); it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "library.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:episode:201").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/201.mp4" && samePlayer?.playbackState == Player.STATE_READY }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-next").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/202.mp4" && samePlayer?.playbackState == Player.STATE_READY }
+                assertEquals("On-demand titles must not replace live channel history", "xc:1", store.last(source))
+                device.pressBack(); device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:xc:1")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:xc:1").performClick() }
+                waitFor(scenario) { device.hasObject(By.textContains("Archived fixture")) && !it.window.decorView.findViewWithTag<View>("library-loading").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && samePlayer?.playbackState == Player.STATE_READY }
+                scenario.onActivity {
+                    assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player)
+                    val controls = it.window.decorView.findViewWithTag<ViewGroup>("on-demand-controls")
+                    fun live(v: View): View? { if (v is android.widget.Button && v.text.toString() == "Live TV") return v; if (v is ViewGroup) for (i in 0 until v.childCount) live(v.getChildAt(i))?.let { return it }; return null }
+                    live(controls)!!.performClick()
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" && channelList(it)?.isShown == true }
+                device.pressMenu(); activateSetting(scenario, "Font"); activateSetting(scenario, "Monospace")
+                waitFor(scenario) { store.font == "Monospace" }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(AppFont.face(true), it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface) }
+                leaveSettings(scenario)
+                scenario.recreate(); waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                assertEquals("Monospace", store.font)
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun continueWatchingPositionsAreEncryptedScopedAndClearedWhenFinished() {
+        val source = Source(name = "Progress", kind = "xtream", url = "https://example.com", username = "secret-user", password = "secret-password")
+        val item = OnDemand("movie:101", "Fixture movie", "Films", "https://example.com/movie/secret-user/secret-password/101.mp4")
+        try {
+            store.saveWatchProgress(source, item, 45000, 120000)
+            val restored = SecureStore(context).watchProgress(source).single()
+            assertEquals(45000, restored.position); assertEquals(item, restored.item)
+            val bytes = File(context.filesDir, "watch-${source.id}.enc").readBytes().toString(Charsets.UTF_8)
+            assertFalse(bytes.contains("secret-password")); assertFalse(bytes.contains("Fixture movie"))
+            assertTrue(store.watchProgress(source.copy(id = "other-source")).isEmpty())
+            store.saveWatchProgress(source, item, 120000, 120000, ended = true); assertTrue(store.watchProgress(source).isEmpty())
+            store.cacheCatalog(source, "movie", listOf(item)); assertEquals(item, SecureStore(context).catalog(source, "movie")!!.second.single())
+        } finally { store.removeCache(source) }
+        assertFalse(File(context.filesDir, "watch-${source.id}.enc").exists()); assertFalse(File(context.filesDir, "library-${source.id}-movie.enc").exists())
+    }
+
+    private fun fixtureLiveSports(activity: MainActivity) {
+        activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
+            LiveEvent("mlb-fixture", setOf("mlb:NYY", "mlb:BOS"), now - 300000), LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000)), now, setOf("MLB", "NFL")) }
+    }
     private fun fastRemote(key: Int, count: Int) {
         val down = android.os.SystemClock.uptimeMillis()
         repeat(count) { repeat ->
@@ -953,7 +1044,7 @@ class SpareDeviceTest {
         private val captionTransport by lazy { EmbeddedCaptionFixture.add(repeatTransport(avTransport, 8), embeddedCaptions == 708) }
         private val longTransport by lazy { repeatTransport(avTransport, 16) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
-            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1"}"""
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1","tv_archive":1,"tv_archive_duration":7}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
@@ -1007,7 +1098,12 @@ class SpareDeviceTest {
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
-                            "/player_api.php" -> (if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
+                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) """[{"category_id":"vod","category_name":"Fixture cinema"}]""".toByteArray()
+                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"vod","container_extension":"mp4"}]""".toByteArray()
+                                else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
+                                else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"vod"}]""".toByteArray()
+                                else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"Archived fixture","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
+                                else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"

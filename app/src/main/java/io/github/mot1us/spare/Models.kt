@@ -17,10 +17,13 @@ data class Source(
             j.getString("url"), j.optString("username"), j.optString("password"), j.optString("epg"), j.optBoolean("http"))
     }
 }
-data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "") {
+data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
+    val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false) {
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
+        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media)
     companion object {
-        fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"))
+        fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
+            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"))
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }

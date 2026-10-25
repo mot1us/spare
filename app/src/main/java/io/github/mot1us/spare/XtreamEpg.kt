@@ -11,21 +11,22 @@ object XtreamEpg {
         val url = Importers.endpoint(source, "player_api.php", "get_short_epg") + "&stream_id=$id&limit=${depth.coerceIn(1, 72)}"
         return parse(Network.get(url, source.allowHttp, 512 * 1024).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id })
     }
-    fun parse(text: String, channel: String, now: Long = System.currentTimeMillis()): List<Programme> {
+    fun parse(text: String, channel: String, now: Long = System.currentTimeMillis(), pastDays: Int = 0): List<Programme> {
         val root = JSONObject(text.trimStart('\uFEFF'))
         val entries = root.optJSONArray("epg_listings") ?: throw SourceFailure(SourceProblem.GUIDE_RESPONSE)
         require(entries.length() <= 2000)
         return (0 until entries.length()).mapNotNull { index ->
             val entry = entries.optJSONObject(index) ?: return@mapNotNull null
+            if (pastDays > 0 && entry.has("has_archive") && entry.optString("has_archive").lowercase() in setOf("0", "false")) return@mapNotNull null
             fun epoch(name: String): Long {
                 val raw = entry.optString(name).toLongOrNull() ?: return 0
                 return if (raw in 1_000_000_000L..99_999_999_999L) raw * 1000 else if (raw in 1_000_000_000_000L..99_999_999_999_999L) raw else 0
             }
             val start = epoch("start_timestamp")
             val end = epoch("stop_timestamp").takeIf { it > 0 } ?: epoch("end_timestamp")
-            if (start <= 0 || end <= start || end <= now - 3600000 || start >= now + 3 * 86400000L) return@mapNotNull null
+            if (start <= 0 || end <= start || end <= now - maxOf(3600000L, pastDays.coerceIn(0, 30) * 86400000L) || start >= now + 3 * 86400000L) return@mapNotNull null
             Programme(channel, decode(entry.optString("title")).take(512).ifBlank { "Untitled" }, start, end, decode(entry.optString("description")).take(2048))
-        }.distinctBy { it.start }.sortedBy { it.start }.take(72)
+        }.distinctBy { it.start }.sortedBy { it.start }.take(if (pastDays > 0) 2000 else 72)
     }
     private fun decode(value: String): String {
         val bounded = value.take(16384)

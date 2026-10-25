@@ -27,7 +27,7 @@ object Network {
         return result.toByteArray()
     }
 
-    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, progress: ((Long, Long) -> Unit)? = null): ByteArray {
+    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000, progress: ((Long, Long) -> Unit)? = null): ByteArray {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -35,8 +35,8 @@ object Network {
             val connection = URI(destination).toURL().openConnection() as HttpURLConnection
             try {
                 connection.instanceFollowRedirects = false
-                connection.connectTimeout = 12000
-                connection.readTimeout = 20000
+                connection.connectTimeout = minOf(12000, timeoutMs)
+                connection.readTimeout = timeoutMs
                 connection.setRequestProperty("User-Agent", "Spare/${BuildConfig.VERSION_NAME}")
                 connection.setRequestProperty("Accept-Encoding", "gzip")
                 val status = connection.responseCode
@@ -46,7 +46,7 @@ object Network {
                 } else {
                     if (status !in 200..299) throw HttpFailure(status)
                     if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
-                    val deadline = System.nanoTime() + 60000000000L
+                    val deadline = System.nanoTime() + minOf(60000L, timeoutMs * 3L) * 1000000
                     val total = connection.contentLengthLong
                     progress?.invoke(0, total)
                     val bounded = object : java.io.FilterInputStream(connection.inputStream) {

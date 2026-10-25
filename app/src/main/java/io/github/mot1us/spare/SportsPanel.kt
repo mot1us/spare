@@ -22,7 +22,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val chooseTeam: (String?) -> Unit, refresh: () -> Unit, private val select: (SportsGame) -> Unit,
     private val focused: (SportsGame) -> Unit, filters: () -> Unit, private val leave: () -> Unit) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
-    private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.LTGRAY) }
+    private fun label(size: Float) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(Color.LTGRAY) }
     val teamsButton = button("Teams", chooseTeams).apply { tag = "sports-teams" }
     private val teamBar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val teamScroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; addView(teamBar) }
@@ -55,7 +55,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                 isFocusableInTouchMode = true; isClickable = true
                 layoutParams = RecyclerView.LayoutParams(-1, dp(58)).apply { bottomMargin = dp(5) }
             }
-            val title = label(13f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
+            val title = label(13f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
             val detail = label(11f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
             box.addView(title); box.addView(detail); return Card(box, title, detail)
         }
@@ -109,6 +109,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
         progressBar.visibility = if (scanning) VISIBLE else GONE; progress.text = message
         empty.text = when {
+            message.contains("status unavailable") -> "Live game status could not be verified. Unverified matchups stay hidden; choose Refresh to retry."
             scanning -> "Finding live games… Results appear as channels are checked."
             hiddenGames > 0 -> "$hiddenGames live ${if (hiddenGames == 1) "game is" else "games are"} hidden by your guide filters or unavailable channels. Open Filters to adjust."
             guideChannels == 0 -> "No current sports guide data. Refresh checks likely game networks; your provider must name the teams in its live listings."

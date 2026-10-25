@@ -19,6 +19,7 @@ object Importers {
         if (!text.trimStart('\uFEFF', ' ', '\n', '\r').startsWith("#EXTM3U")) throw SourceFailure(SourceProblem.PLAYLIST)
         val result = ArrayList<Channel>()
         var metadata: Map<String, String> = emptyMap()
+        var defaults: Map<String, String> = emptyMap()
         var title = ""
         var group = ""
         var epg = ""
@@ -27,11 +28,11 @@ object Importers {
             val line = raw.trim().trimStart('\uFEFF')
             when {
                 line.startsWith("#EXTM3U") -> {
-                    val a = attrs(line)
+                    val a = attrs(line); defaults = a.filterKeys { it.startsWith("catchup") || it == "timeshift" }
                     epg = (a["url-tvg"] ?: a["x-tvg-url"] ?: "").split(',').first().trim()
                 }
                 line.startsWith("#EXTINF:") -> {
-                    metadata = attrs(line)
+                    metadata = defaults + attrs(line)
                     var quote = '\u0000'
                     var comma = -1
                     for ((i, c) in line.withIndex()) {
@@ -41,6 +42,7 @@ object Importers {
                     title = (if (comma >= 0) line.substring(comma + 1) else metadata["tvg-name"].orEmpty()).take(256)
                     group = metadata["group-title"].orEmpty().take(128)
                 }
+                line == "#EXT-X-PLAYLIST-TYPE:VOD" -> metadata = metadata + ("media" to "true")
                 line.startsWith("#EXTGRP:") -> group = line.substringAfter(':').take(128)
                 line.isNotEmpty() && !line.startsWith('#') -> {
                     if (Network.allowed(line, http)) {
@@ -52,7 +54,10 @@ object Importers {
                             "${uri.host}${uri.rawPath}?$query"
                         }}"
                         result.add(Channel(Channel.stableId(stable), name, group.ifBlank { "Other" }, line,
-                            metadata["tvg-logo"].orEmpty().takeIf { Network.allowed(it, http) }.orEmpty(), guideId))
+                            metadata["tvg-logo"].orEmpty().takeIf { Network.allowed(it, http) }.orEmpty(), guideId,
+                            (metadata["catchup-days"] ?: metadata["timeshift"])?.toIntOrNull()?.coerceIn(0, 30) ?: 0,
+                            metadata["catchup"].orEmpty().ifBlank { if (metadata.containsKey("timeshift")) "shift" else "" }, metadata["catchup-source"].orEmpty().take(8192),
+                            metadata["media"] == "true" || metadata.containsKey("media-dir")))
                         if (result.size > MAX_CHANNELS) throw SourceFailure(SourceProblem.CHANNEL_LIMIT)
                     }
                     metadata = emptyMap(); title = ""; group = ""
@@ -63,7 +68,7 @@ object Importers {
         return Lineup(result.distinctBy { it.id }, epg.takeIf { Network.allowed(it, http) }.orEmpty())
     }
 
-    private fun encoded(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+    fun encoded(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     fun serverBase(value: String): String {
         val base = value.trim().trimEnd('/')
         val uri = URI(base)
@@ -115,13 +120,14 @@ object Importers {
             val extension = j.optString("container_extension", "ts").takeIf { it in listOf("ts", "m3u8", "mp4") } ?: "ts"
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
-                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" })
+                j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" },
+                if (j.optInt("tv_archive") == 1) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc")
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }
     }
 
-    fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis()): Map<String, List<Programme>> {
+    fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         catch (_: org.xmlpull.v1.XmlPullParserException) { /* Some parsers only expose the disabled default. */ }
@@ -158,7 +164,7 @@ object Importers {
                     "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
                     "programme" -> {
                         inside = false; field = ""
-                        if (channel in channelIds && start > 0 && end > start && end > now - 3600000 && start < now + 3 * 86400000L) {
+                        if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
                             require(result.size < 200000) { "Guide has too many programmes" }
                             result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description))
                         }

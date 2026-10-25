@@ -36,7 +36,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         addView(contentScroll, LayoutParams(0, -1, 1f))
         contentScroll.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_DOWN) focusNavigation(); true } else false }
     }
-    private fun label(value: String, size: Float) = TextView(context).apply { text = value; textSize = size; setTextColor(Color.WHITE); gravity = Gravity.CENTER_VERTICAL }
+    private fun label(value: String, size: Float) = TextView(context).apply { text = value; textSize = size; typeface = AppFont.face(); setTextColor(Color.WHITE); gravity = Gravity.CENTER_VERTICAL }
     fun open(items: List<String>) {
         navigation.removeAllViews(); navRows.clear()
         items.forEachIndexed { index, item ->
@@ -64,7 +64,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         // Otherwise Android can focus the first nav row and re-enter a different page mid-render.
         if (content.hasFocus()) navRows[selected]?.requestFocus()
         controls.clear(); content.removeAllViews()
-        content.addView(label(title, 23f).apply { tag = "settings-page-title"; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }, LayoutParams(-1, dp(45)))
+        content.addView(label(title, 23f).apply { tag = "settings-page-title"; typeface = AppFont.face(true) }, LayoutParams(-1, dp(45)))
         if (description.isNotEmpty()) note(description)
     }
     fun note(message: String) { content.addView(label(message, 12f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(4), 0, dp(14)) }, LayoutParams(-1, -2)) }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — 2026-10-25
+
+- Verify current MLB/NFL provider matchups against ESPN live event state. Hide future, delayed, suspended, finished, stale, and unverified games; retain progress and manual retry without sending playlist data to the sports service.
+- Add a built-in font picker in Settings and Theme: Default, Compact, Casual, Serif, and Monospace. Apply fonts across native UI and canvas guide rows without restarting playback.
+- Add a separate, virtualized Library for provider movies, series, seasons/episodes, categories, text search, and Continue watching. Load Xtream catalogs on demand with encrypted caches; recognize explicitly declared M3U media entries.
+- Add advertised Xtream and M3U catch-up archives, available from the Library and channel details, with bounded archive history and completed-programme selection.
+- Reuse the same player for on-demand playback with pause, seek, start over, audio/subtitles, next episode, encrypted per-playlist resume positions, and explicit Library/Live TV return. Keep live channel history and recovery rules separate.
+
 ## 0.5.0 — 2026-10-25
 
 - Replace the Settings menu with a full-screen translucent two-pane surface: scroll settings on the left, change values on the right, and keep the existing player running behind it.
