@@ -353,6 +353,12 @@ class MainActivity : Activity() {
     }
     private fun buildUi() {
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }; setContentView(root)
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, next ->
+            val waiting = pendingFocusList
+            if (waiting != null && next != null && generateSequence(next) { it.parent as? View }.none { it === waiting }) {
+                ++focusEpoch; pendingFocusList = null
+            }
+        }
         video = PlayerView(this).apply {
             useController = false; isFocusable = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             setKeepContentOnPlayerReset(true); setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER); contentDescription = "Current channel video"
@@ -424,7 +430,7 @@ class MainActivity : Activity() {
         navigation.addView(libraryButton, LinearLayout.LayoutParams(-1, dp(34)).apply { bottomMargin = dp(6) })
         categoryHeading = text("CATEGORIES", 9f).apply { setTextColor(0xFF929FAF.toInt()); letterSpacing = .12f; setPadding(dp(10), dp(3), 0, dp(7)) }
         navigation.addView(categoryHeading)
-        sidebar = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); itemAnimator = null; setHasFixedSize(true); overScrollMode = View.OVER_SCROLL_NEVER; tag = "guide-categories" }
+        sidebar = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; setHasFixedSize(true); overScrollMode = View.OVER_SCROLL_NEVER; tag = "guide-categories" }
         sidebarAdapter = SidebarAdapter(this, { section ->
             val hadSearch = guideSearch.isVisible
             clearGuideSearch(); sportsVisible = false
@@ -465,7 +471,7 @@ class MainActivity : Activity() {
         times = TimeRuler(this) { guideTimeline.start((focused ?: current)?.id) }; content.addView(times, LinearLayout.LayoutParams(-1, dp(24)))
         emptyInfo = text("", 13f).apply { setPadding(dp(12), dp(24), dp(12), dp(24)); visibility = View.GONE }
         content.addView(emptyInfo)
-        list = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); itemAnimator = null; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER; tag = "channel-guide" }
+        list = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { source }, { guide }, { favorites }, { guideTimeline.start(it.id) },
             { guideSearch.hideKeyboard(); if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it) else showGuide(false) }, { channel ->
                 toggleFavorite(channel)

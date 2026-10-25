@@ -414,12 +414,18 @@ class SpareDeviceTest {
                 val monitor = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
                 try {
                     var attempt = ""
-                    scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("search").requestFocus() }; device.pressDPadCenter()
+                    scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; assertTrue(it.window.decorView.findViewWithTag<View>("search").requestFocus()) }
+                    instrumentation.waitForIdleSync()
+                    scenario.onActivity { assertTrue("Search icon must retain remote focus", it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
+                    device.pressDPadCenter()
                     waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 }
                     assertEquals("Native speech must not launch a chooser/activity", 0, monitor.hits)
                     scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertEquals(1f, find<PlayerView>(it.window.decorView)!!.player!!.volume, 0f) }
                     assertEquals("/channel1.mp4", playingPath(scenario))
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }; device.pressDPadCenter()
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }
+                    instrumentation.waitForIdleSync()
+                    scenario.onActivity { assertTrue("Pending channel navigation must not steal Voice focus", it.window.decorView.findViewWithTag<View>("guide-search-voice").hasFocus()) }
+                    device.pressDPadCenter()
                     waitFor(scenario) { device.hasObject(By.textStartsWith("No speech heard.")) }
                 } finally { instrumentation.removeMonitor(monitor) }
                 val keyboardPackage = android.content.ComponentName.unflattenFromString(android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))!!.packageName
