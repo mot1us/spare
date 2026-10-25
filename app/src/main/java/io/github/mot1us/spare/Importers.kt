@@ -89,15 +89,18 @@ object Importers {
         }
         throw SourceFailure(SourceProblem.RESPONSE)
     }
-    fun xtream(source: Source): Lineup {
-        val streams = xtreamArray(Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp).toString(Charsets.UTF_8))
+    fun xtream(source: Source, progress: (String, Long, Long) -> Unit = { _, _, _ -> }): Lineup {
+        val payload = Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp, progress = { bytes, total -> progress("Downloading channels", bytes, total) })
+        progress("Reading channel list", 0, -1)
+        val streams = xtreamArray(payload.toString(Charsets.UTF_8))
         // Categories are optional metadata. A provider may serve live streams while
         // rejecting or omitting this separate endpoint.
         val names = runCatching {
-            val categories = xtreamArray(Network.get(endpoint(source, "player_api.php", "get_live_categories"), source.allowHttp).toString(Charsets.UTF_8))
+            val categories = xtreamArray(Network.get(endpoint(source, "player_api.php", "get_live_categories"), source.allowHttp, progress = { bytes, total -> progress("Loading provider categories", bytes, total) }).toString(Charsets.UTF_8))
             require(categories.length() <= 20000)
             (0 until categories.length()).mapNotNull { i -> categories.optJSONObject(i)?.let { it.optString("category_id") to it.optString("category_name").take(128) } }.toMap()
         }.getOrDefault(emptyMap())
+        progress("Organizing ${streams.length()} channels", 0, -1)
         return Lineup(xtreamChannels(streams, source, names), endpoint(source, "xmltv.php"))
     }
 

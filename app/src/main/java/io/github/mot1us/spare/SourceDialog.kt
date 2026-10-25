@@ -29,8 +29,8 @@ object SourceDialog {
                 id = View.generateViewId(); tag = label
                 setSingleLine(true); inputType = type; setText(value)
                 (form.getChildAt(form.childCount - 1) as TextView).labelFor = id
-                textSize = 16f
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { bottomMargin = dp(12) }
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)).apply { bottomMargin = dp(12) }
                 form.addView(this)
             }
         }
@@ -38,7 +38,7 @@ object SourceDialog {
         val kinds = RadioGroup(activity).apply { orientation = RadioGroup.HORIZONTAL }
         val m3u = RadioButton(activity).apply { id = View.generateViewId(); text = "M3U URL" }
         val xtream = RadioButton(activity).apply { id = View.generateViewId(); text = "Xtream Codes" }
-        kinds.addView(m3u); kinds.addView(xtream); form.addView(kinds)
+        kinds.addView(m3u, RadioGroup.LayoutParams(-2, -2).apply { marginEnd = dp(12) }); kinds.addView(xtream); form.addView(kinds)
         val url = input("Playlist URL", existing?.url.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         val addressLabel = form.getChildAt(form.indexOfChild(url) - 1) as TextView
         val connection = TextView(activity).apply { textSize = 13f }; form.addView(connection)

@@ -26,4 +26,4 @@ test "$("$adb" -s "$serial" shell getprop sys.boot_completed | tr -d '\r')" = 1
 "$adb" -s "$serial" install -r app/build/outputs/apk/debug/app-debug.apk
 "$adb" -s "$serial" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 "$adb" -s "$serial" shell am instrument -w io.github.mot1us.spare.debug.test/androidx.test.runner.AndroidJUnitRunner | tee app/build/reports/device/results.txt
-grep -q '^OK (5 tests)' app/build/reports/device/results.txt
+grep -q '^OK (8 tests)' app/build/reports/device/results.txt

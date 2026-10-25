@@ -49,7 +49,24 @@ class SecureStore(private val context: Context) {
     fun saveSources(sources: List<Source>) = write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray())
     fun cache(source: Source, guide: Guide) = write("cache-${source.id}.enc", guide.json().toString().toByteArray())
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
-    fun removeCache(source: Source) { AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete() }
+    fun removeCache(source: Source) {
+        AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
+        preferences.edit { listOf("min-height", "sixty", "groups", "stream-format", "video-info", "favorites", "last").forEach { remove("$it-${source.id}") } }
+    }
+    fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), preferences.getBoolean("sixty-${source.id}", false), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
+    fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
+        putInt("min-height-${source.id}", value.minHeight); putBoolean("sixty-${source.id}", value.sixtyOnly); putStringSet("groups-${source.id}", value.groups)
+    } }
+    fun streamFormat(source: Source) = preferences.getString("stream-format-${source.id}", "auto").orEmpty()
+    fun setStreamFormat(source: Source, value: String) { preferences.edit { putString("stream-format-${source.id}", value) } }
+    fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
+        val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
+        j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
+    }.getOrDefault(mutableMapOf())
+    fun saveVideoInfo(source: Source, values: Map<String, VideoInfo>) {
+        val j = JSONObject(); values.entries.toList().takeLast(5000).forEach { j.put(it.key, it.value.json()) }
+        preferences.edit { putString("video-info-${source.id}", j.toString()) }
+    }
     var active: String
         get() = preferences.getString("active", "").orEmpty()
         set(value) { preferences.edit { putString("active", value) } }

@@ -9,10 +9,10 @@ import android.view.View
 class TimeRuler(context: Context, private val start: () -> Long) : View(context) {
     constructor(context: Context) : this(context, { System.currentTimeMillis() })
     private val scale = resources.displayMetrics.density
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.LTGRAY; textSize = 12f * scale }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.LTGRAY; textSize = 10f * scale }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val left = 220 * scale
+        val left = GuideAdapter.CHANNEL_WIDTH_DP * scale
         canvas.drawText("Channel", 8 * scale, 19 * scale, paint)
         for (i in 0..5) {
             val x = left + (width - left) * i / 6f + 8 * scale

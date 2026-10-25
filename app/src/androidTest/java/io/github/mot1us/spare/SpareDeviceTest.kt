@@ -64,24 +64,24 @@ class SpareDeviceTest {
                 }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.videoSize?.width?.let { width -> width > 0 } == true }
                 assertEquals("/channel1.mp4", playingPath(scenario))
-                device.pressDPadCenter()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.let { list -> list.isShown && list.hasFocus() } == true }
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.let { list -> list.isShown && list.hasFocus() } == true }
                 assertTrue(device.wait(Until.hasObject(By.textContains("World News")), 5000))
                 scenario.onActivity { activity ->
                     val video = find<PlayerView>(activity.window.decorView)!!
-                    assertTrue("Guide preview must be smaller than fullscreen", video.width < activity.window.decorView.width / 2)
+                    assertEquals("Live video stays full screen behind the translucent guide", activity.window.decorView.width, video.width)
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "guide-all.png"))
                 device.pressDPadDown(); instrumentation.waitForIdleSync()
                 assertEquals("Browsing must not change streams", "/channel1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == false }
+                waitFor(scenario) { channelList(it)?.isShown == false }
                 assertEquals("/channel2.mp4", playingPath(scenario))
                 device.pressDPadUp(); instrumentation.waitForIdleSync()
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
                 waitFor(scenario) { activity ->
-                    find<RecyclerView>(activity.window.decorView)?.let { list ->
+                    channelList(activity)?.let { list ->
                         list.isShown && list.findFocus() is GuideAdapter.Row
                     } == true
                 }
@@ -90,14 +90,14 @@ class SpareDeviceTest {
                 val holdMillis = ViewConfiguration.getLongPressTimeout() + 500
                 device.executeShellCommand("input dpad keyevent --duration $holdMillis 23")
                 instrumentation.waitForIdleSync()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == true && store.favorites(source).size == 1 }
+                waitFor(scenario) { channelList(it)?.isShown == true && store.favorites(source).size == 1 }
                 assertEquals(1, store.favorites(source).size)
-                device.findObject(By.text("Favorites")).click()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.adapter?.itemCount == 1 }
-                scenario.onActivity { find<RecyclerView>(it.window.decorView)!!.getChildAt(0).requestFocus() }
+                device.pressDPadLeft(); device.pressDPadDown(); device.pressDPadCenter()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 }
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "guide.png"))
                 device.pressBack()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == false }
+                waitFor(scenario) { channelList(it)?.isShown == false }
                 scenario.recreate()
                 waitFor(scenario) { activity ->
                     find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.playbackState == Player.STATE_READY } == true
@@ -118,8 +118,8 @@ class SpareDeviceTest {
                 }
                 assertEquals("/live/test/test-secret/1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
-                waitFor(scenario) { find<RecyclerView>(it.window.decorView)?.isShown == true }
-                scenario.onActivity { activity -> assertEquals(25001, find<RecyclerView>(activity.window.decorView)!!.adapter!!.itemCount) }
+                waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -192,6 +192,74 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun transportWithoutAccessUnitDelimitersAndCategorySidebar() {
+        FixtureServer(tsMode = true, slowPlaylist = true).use { server ->
+            val source = Source(name = "TS Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("import-progress")?.isShown == true }
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.videoSize.width > 0 && it.playbackState == Player.STATE_READY } == true }
+                waitFor(scenario) { store.videoInfo(source).isNotEmpty() }
+                assertEquals("/channel1.ts", playingPath(scenario))
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.isShown == true }
+                device.pressDPadLeft(); instrumentation.waitForIdleSync()
+                assertTrue(device.wait(Until.hasObject(By.text("My guide").focused(true)), 5000))
+                repeat(3) { device.pressDPadDown() }; device.pressDPadCenter()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 4 }
+                assertEquals("Category browsing must keep the current video", "/channel1.ts", playingPath(scenario))
+                scenario.onActivity { activity ->
+                    assertFalse(activity.isFinishing)
+                    assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
+                }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun xtreamRetriesHlsWhenTsEndpointFails() {
+        FixtureServer(fallbackHls = true).use { server ->
+            val source = Source(name = "Fallback Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.videoSize.width > 0 && it.playbackState == Player.STATE_READY } == true }
+                assertEquals("/live/test/test-secret/1.m3u8", playingPath(scenario))
+                waitFor(scenario) { store.videoInfo(source).isNotEmpty() }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun strictUnknownQualityFiltersAndBrowseAllPersistIndependently() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Filters Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            val profile = GuideFilters(1080, true, setOf("News")); store.setFilters(source, profile)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
+                assertTrue(store.videoInfo(source).isEmpty())
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("browse-all").requestFocus() }; device.pressDPadCenter()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
+                device.pressDPadCenter()
+                waitFor(scenario) { store.videoInfo(source).isNotEmpty() }
+                val observed = store.videoInfo(source).values.first(); assertTrue(observed.width > 0); assertTrue(observed.fps > 0)
+                assertEquals(profile, store.filters(source))
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("browse-all").requestFocus() }; device.pressDPadCenter()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 0 }
+                assertEquals(profile, store.filters(source))
+                scenario.recreate()
+                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                assertEquals(profile, store.filters(source)); assertFalse(store.videoInfo(source).isEmpty())
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    private fun channelList(activity: MainActivity): RecyclerView? = activity.window.decorView.findViewWithTag("channel-guide")
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
@@ -223,13 +291,14 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
+        private val transport = instrumentation.context.assets.open("no-aud.ts").use { it.readBytes() }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
-            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"mp4","epg_channel_id":"test1"}"""
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"${if (fallbackHls) "ts" else "mp4"}","epg_channel_id":"test1"}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
@@ -238,7 +307,7 @@ class SpareDeviceTest {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); bitmap.recycle()
         }.toByteArray()
         private val playlist = ("#EXTM3U url-tvg=\"$base/guide.xml\"\n" + (1..8).joinToString("\n") {
-            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.mp4"
+            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (tsMode) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
         init {
@@ -262,12 +331,15 @@ class SpareDeviceTest {
                             "/logo.png" -> logo to "image/png"
                             "/player_api.php" -> (if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""".toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
-                            else -> video to "video/mp4"
+                            "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
+                            else -> if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
-                        val status = if (failCategories && target.contains("get_live_categories")) "404 Not Found" else "200 OK"
+                        val status = if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
                         output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
-                        output.write(body); output.flush()
+                        if (slowPlaylist && path == "/playlist.m3u") {
+                            for (chunk in body.asList().chunked(200)) { output.write(chunk.toByteArray()); output.flush(); Thread.sleep(200) }
+                        } else { output.write(body); output.flush() }
                     }
                 }
             }

@@ -27,7 +27,7 @@ object Network {
         return result.toByteArray()
     }
 
-    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024): ByteArray {
+    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, progress: ((Long, Long) -> Unit)? = null): ByteArray {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -47,20 +47,25 @@ object Network {
                     if (status !in 200..299) throw HttpFailure(status)
                     if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
                     val deadline = System.nanoTime() + 60000000000L
+                    val total = connection.contentLengthLong
+                    progress?.invoke(0, total)
                     val bounded = object : java.io.FilterInputStream(connection.inputStream) {
                         var consumed = 0L
+                        var lastProgress = 0L
                         fun count(amount: Int) {
                             if (amount > 0) consumed += amount
                             if (consumed > limit) throw SourceFailure(SourceProblem.LIMIT)
                             if (System.nanoTime() > deadline) throw java.net.SocketTimeoutException("Download deadline exceeded")
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
+                            val now = System.nanoTime()
+                            if (now - lastProgress > 100000000L) { progress?.invoke(consumed, total); lastProgress = now }
                         }
                         override fun read(): Int = super.read().also { count(if (it < 0) 0 else 1) }
                         override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { count(it) }
                     }
                     val raw = bounded.buffered()
                     val input = if (connection.contentEncoding.equals("gzip", true)) GZIPInputStream(raw) else raw
-                    return input.use { readLimited(it, limit) }
+                    return input.use { readLimited(it, limit) }.also { progress?.invoke(bounded.consumed, total) }
                 }
             } finally { connection.disconnect() }
         }

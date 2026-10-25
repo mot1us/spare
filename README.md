@@ -2,16 +2,19 @@
 
 A minimal, free, open-source IPTV player for Android TV.
 
-Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.1.2**. License: MIT.
+Spare plays your own live-TV sources. It includes no channels, subscriptions, advertisements, analytics, or app account. Current prerelease: **0.2.0**. License: MIT.
 
 ## What it does
 
 - M3U playlist URLs or Xtream Codes server/username/password.
 - Several saved sources, one active at a time.
 - Up to 100,000 channel entries per source, within bounded download sizes. Larger lists produce an explicit limit message.
-- A restrained dark channel/time guide with channel logos, clear remote focus, and a small preview of the current channel.
-- Provider groups, channel-name search, and Favorites; provider channel order is preserved.
+- A compact translucent channel/time guide over live video, with channel logos and clear remote focus.
+- Provider categories in a left sidebar, channel-name search, and Favorites; provider channel order is preserved.
 - Automatic provider XMLTV guide or an optional XMLTV URL override; three days of guide data, cached privately.
+- Per-source guide filters: selected categories, minimum HD/FHD/4K resolution, and 59.94/60 fps only. An MLB/NFL preset selects matching provider category names and FHD+ / 60 fps.
+- Quality comes from observed playback, never channel names. Unknown quality is hidden when quality filters are active. Browse all temporarily bypasses the profile so channels can be played and verified; there is no background scanning.
+- MPEG-TS access-unit detection, Xtream TS/HLS fallback, a manual stream-format setting, and a visible startup timeout with safe diagnostics. Playlist and guide downloads show their current stage and byte progress when known.
 - Last-channel resume, audio/subtitle selection, and automatic frame-rate matching where supported.
 - Quiet update badge, signed APK updates initiated in the app, and Android installation confirmation when required.
 
@@ -26,11 +29,11 @@ Target hardware for first physical validation: **2026 onn 4K Pro with a 75-inch 
 | Guide | Up / Down | Browse channels without changing the stream |
 | Guide | OK | Tune selected channel and return to full-screen playback |
 | Guide | Long-press OK | Toggle favorite |
-| Guide | Left / Right | Move the three-hour guide window by 30 minutes |
+| Guide | Left / Right | Open categories / move the guide window forward by 30 minutes; timeline buttons move earlier or return to Now |
 | Guide | Back | Return to current channel |
-| Full-screen player | Back | Exit app |
+| Full-screen player | Back | Open guide |
 
-The Sources button adds, switches, edits, or removes sources. Playback contains audio/subtitle controls, guide refresh, and About. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
+The Sources button adds, switches, edits, or removes sources. Settings contains guide filters, Xtream stream format, audio/subtitle controls, refresh, About, and an explicit Exit action. Text entry works with the TV keyboard and the paired Google TV phone remote; there is no custom phone pairing server.
 
 Pause/rewind, recording, multiview, movies, and series are outside version one.
 
@@ -60,7 +63,7 @@ Production dependencies are locked in `app/gradle.lockfile`. Deliberate dependen
 
 ## Privacy and security
 
-Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites and last-channel IDs stay in private preferences. Removing a source removes its cached guide. Uninstalling clears local app data.
+Sources, credentials, and the guide cache are encrypted with an app-specific Android Keystore key in private storage; cloud backup/device transfer is disabled. Favorites, last-channel IDs, quality observations (up to 5,000 channels), and guide preferences stay in private preferences. Removing a source removes its cached guide and preferences. Uninstalling clears local app data.
 
 Provider traffic, guide downloads, and logos contact the URLs supplied by your provider. Update checks and APK downloads contact GitHub (including api.github.com for prerelease discovery). There is no Spare credential service or telemetry endpoint. Provider data never becomes HTML or executable instructions.
 
