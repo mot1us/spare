@@ -528,7 +528,7 @@ class SpareDeviceTest {
                 // Automatic above is a channel override; enable the app default separately for the next channel.
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("App default")), 5000)); device.findObject(By.text("App default")).click(); device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.text("App default")), 5000)); activateDialogButton(scenario, android.R.id.button3)
                 assertTrue(device.wait(Until.hasObject(By.text("Default subtitles · all channels")), 5000)); device.findObject(By.text("Automatic")).click()
                 waitFor(scenario) { store.captions }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
@@ -641,8 +641,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("NFL · Football")), 5000)); device.findObject(By.text("NFL · Football")).click()
                 assertTrue(device.wait(Until.hasObject(By.text("Buffalo Bills")), 5000)); device.findObject(By.text("Buffalo Bills")).click()
-                device.findObject(By.text("Save")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("Save").focused(true)), 5000)); device.pressDPadCenter()
+                activateDialogButton(scenario, android.R.id.button1)
                 waitFor(scenario) { SecureStore(context).followedTeams == setOf("mlb:NYY", "nfl:BUF") }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
@@ -661,6 +660,19 @@ class SpareDeviceTest {
             }
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet()
         }
+    }
+
+    private fun activateDialogButton(scenario: ActivityScenario<MainActivity>, id: Int) {
+        // TV buttons may focus on first touch or click immediately when already focused.
+        // Set native focus directly and send exactly one remote activation instead of mixing both inputs.
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            waitFor(scenario) {
+                val root = android.view.inspector.WindowInspector.getGlobalWindowViews().lastOrNull { it.hasWindowFocus() }
+                val button = root?.findViewById<android.widget.Button>(id)
+                button?.isShown == true && button.requestFocus() && button.hasFocus()
+            }
+            device.pressDPadCenter(); instrumentation.waitForIdleSync()
+        } else fail("The isolated automated TV suite requires API 29 or newer")
     }
 
     private fun holdBack() { device.executeShellCommand("input dpad keyevent --duration ${ViewConfiguration.getLongPressTimeout() + 500} 4"); instrumentation.waitForIdleSync() }
