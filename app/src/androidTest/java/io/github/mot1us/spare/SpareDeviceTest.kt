@@ -328,9 +328,24 @@ class SpareDeviceTest {
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
                 assertTrue(store.smallPreview)
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
-                val before = server.requests["/channel1.mp4"]
+                // This 1.024-second MP4 naturally opens another request on repeat.
+                // Preserve player/attempt identity rather than counting loop requests,
+                // which depend on the emulator's speed during remote/UI operations.
+                var beforePlayer: Player? = null
+                var beforeMediaId = ""
+                scenario.onActivity { activity ->
+                    beforePlayer = find<PlayerView>(activity.window.decorView)!!.player!!
+                    beforeMediaId = beforePlayer!!.currentMediaItem!!.mediaId
+                    assertTrue(beforeMediaId.isNotBlank())
+                }
+                fun assertPlaybackContinues() = waitFor(scenario) { activity ->
+                    val playing = find<PlayerView>(activity.window.decorView)!!.player!!
+                    assertSame("Guide changes must keep the same player", beforePlayer, playing)
+                    assertEquals("Expanding must not start a new playback attempt", beforeMediaId, playing.currentMediaItem!!.mediaId)
+                    playing.isPlaying
+                }
                 device.pressDPadCenter(); waitFor(scenario) { channelList(it)?.isShown == false }
-                assertEquals("Expanding the current channel must not reconnect", before, server.requests["/channel1.mp4"])
+                assertPlaybackContinues()
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 val bitmap = instrumentation.uiAutomation.takeScreenshot()
                 scenario.onActivity { activity ->
@@ -341,7 +356,7 @@ class SpareDeviceTest {
                 }; bitmap.recycle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "guide-preview.png"))
                 holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
-                assertEquals(before, server.requests["/channel1.mp4"])
+                assertPlaybackContinues()
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
