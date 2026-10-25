@@ -28,18 +28,19 @@ data class Programme(val channel: String, val title: String, val start: Long, va
     fun json() = JSONArray().put(channel).put(title).put(start).put(end).put(description)
     companion object { fun from(j: JSONArray) = Programme(j.getString(0), j.getString(1), j.getLong(2), j.getLong(3), j.optString(4)) }
 }
-data class Lineup(val channels: List<Channel>, val epgUrl: String = "")
-data class Guide(val channels: List<Channel>, val programmes: Map<String, List<Programme>>) {
+data class Lineup(val channels: List<Channel>, val epgUrl: String = "", val categoryOrder: List<String> = emptyList())
+data class Guide(val channels: List<Channel>, val programmes: Map<String, List<Programme>>, val categoryOrder: List<String> = emptyList()) {
     fun key(channel: Channel) = channel.guideId.ifBlank { channel.id }
     fun at(channel: Channel, time: Long): Programme? = programmes[key(channel)]?.firstOrNull { time >= it.start && time < it.end }
     fun json(): JSONObject = JSONObject().put("channels", JSONArray(channels.map { it.json() }))
-        .put("programmes", JSONArray(programmes.values.flatten().map { it.json() }))
+        .put("programmes", JSONArray(programmes.values.flatten().map { it.json() })).put("categories", JSONArray(categoryOrder))
     companion object {
         val EMPTY = Guide(emptyList(), emptyMap())
         fun from(j: JSONObject): Guide {
             val channels = j.getJSONArray("channels").let { a -> List(a.length()) { Channel.from(a.getJSONObject(it)) } }
             val programmes = j.getJSONArray("programmes").let { a -> List(a.length()) { Programme.from(a.getJSONArray(it)) } }
-            return Guide(channels, programmes.groupBy { it.channel })
+            val categories = j.optJSONArray("categories")?.let { a -> List(a.length()) { a.getString(it) } }.orEmpty()
+            return Guide(channels, programmes.groupBy { it.channel }, categories)
         }
     }
 }

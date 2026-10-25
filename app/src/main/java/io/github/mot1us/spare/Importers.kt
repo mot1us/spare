@@ -101,7 +101,8 @@ object Importers {
             (0 until categories.length()).mapNotNull { i -> categories.optJSONObject(i)?.let { it.optString("category_id") to it.optString("category_name").take(128) } }.toMap()
         }.getOrDefault(emptyMap())
         progress("Organizing ${streams.length()} channels", 0, -1)
-        return Lineup(xtreamChannels(streams, source, names), endpoint(source, "xmltv.php"))
+        val channels = xtreamChannels(streams, source, names)
+        return Lineup(channels, endpoint(source, "xmltv.php"), CategoryOrder.provider(channels.map { it.group }, names.values.toList()))
     }
 
     fun xtreamChannels(streams: JSONArray, source: Source, names: Map<String, String>): List<Channel> {

@@ -34,7 +34,7 @@ class PlaybackRecoveryTest {
         val us = listOf("US | Sports", "USA: News", "🇺🇸 MLB", "U.S.A. NFL", "United States - Local", "Sports [US]")
         val other = listOf("RUSSIA", "MUSIC", "AUS | Sports", "UK | News", "RUS: Movies")
         us.forEach { assertTrue(it, CategoryOrder.isUsa(it)) }; other.forEach { assertFalse(it, CategoryOrder.isUsa(it)) }
-        val ordered = CategoryOrder.sorted(other + us)
+        val ordered = CategoryOrder.usaFirst(other + us)
         assertTrue(ordered.take(us.size).all(CategoryOrder::isUsa)); assertEquals((other + us).toSet(), ordered.toSet())
     }
 }

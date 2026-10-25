@@ -5,6 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.app.AlertDialog
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
+import android.content.IntentFilter
+import android.speech.RecognizerIntent
 import android.widget.CheckBox
 import android.widget.EditText
 import android.view.View
@@ -94,7 +99,7 @@ class SpareDeviceTest {
                 assertEquals("/channel2.mp4", playingPath(scenario))
                 device.pressDPadUp(); instrumentation.waitForIdleSync()
                 assertEquals("/channel1.mp4", playingPath(scenario))
-                device.pressDPadCenter()
+                device.pressBack()
                 waitFor(scenario) { activity ->
                     channelList(activity)?.let { list ->
                         list.isShown && list.findFocus() is GuideAdapter.Row
@@ -124,7 +129,7 @@ class SpareDeviceTest {
     }
 
     @Test fun xtreamLoadsLargeLiveLineupCategoriesAndVideo() {
-        FixtureServer(channelCount = 25001).use { server ->
+        FixtureServer(channelCount = 25001, regionGroups = true).use { server ->
             val source = Source(name = "Xtream Test", kind = "xtream", url = "${server.base}/", username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -132,11 +137,19 @@ class SpareDeviceTest {
                     find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.playbackState == Player.STATE_READY && it.videoSize.width > 0 } == true
                 }
                 assertEquals("/live/test/test-secret/1.mp4", playingPath(scenario))
-                device.pressDPadCenter()
+                device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 waitFor(scenario) { device.hasObject(By.textContains("World News")) }
                 assertNull("Xtream must not require the whole provider XMLTV", server.requests["/xmltv.php"])
                 scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
+                val expected = listOf("USA | News", "CA | News", "UK | News", "US | MLB")
+                waitFor(scenario) { store.cached(source)?.categoryOrder == expected }
+                scenario.onActivity { activity ->
+                    val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
+                    expected.forEachIndexed { index, name -> assertEquals(name, (categories.findViewHolderForAdapterPosition(index + 2)!!.itemView as android.widget.TextView).text.toString()) }
+                }
+                scenario.recreate()
+                waitFor(scenario) { store.cached(source)?.categoryOrder == expected && channelList(it)?.adapter?.itemCount == 25001 }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -308,13 +321,14 @@ class SpareDeviceTest {
         FixtureServer(regionGroups = true).use { server ->
             val source = Source(name = "Guide Modes", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
+            store.setUsaFirst(source, true)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { activity ->
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
-                    assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(2)!!.itemView as android.widget.TextView).text.toString())
-                    assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
+                    assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(2)!!.itemView as android.widget.TextView).text.toString())
+                    assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
                     val toolbar = activity.window.decorView.findViewWithTag<View>("guide-toolbar")
                     val a = IntArray(2); val b = IntArray(2); toolbar.getLocationOnScreen(a); categories.getLocationOnScreen(b)
                     assertTrue(a[1] + toolbar.height <= b[1])
@@ -374,6 +388,79 @@ class SpareDeviceTest {
                 server.resumeStream.countDown()
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.isPlaying == true && activity.window.decorView.findViewWithTag<View>("playback-status")?.isShown == false }
                 assertEquals("A recoverable buffer underrun must keep the existing stream", 1, server.requests["/channel1.ts"])
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun inlineSearchUsesVoiceResultsAndKeepsCanceledVoiceEditable() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Search Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                val answer = Intent().putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS, arrayListOf("Channel 2"))
+                val monitor = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_OK, answer), true)
+                try {
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("search").requestFocus() }; device.pressDPadCenter()
+                    waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 }
+                    assertEquals("Opening Search must immediately request speech input", 1, monitor.hits)
+                    assertEquals("Search browsing must not tune another stream", "/channel1.mp4", playingPath(scenario))
+                } finally { instrumentation.removeMonitor(monitor) }
+                val canceled = instrumentation.addMonitor(IntentFilter(RecognizerIntent.ACTION_RECOGNIZE_SPEECH), Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true)
+                try {
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }; device.pressDPadCenter()
+                    waitFor(scenario) { device.hasObject(By.text("Select the field to type, or choose Voice to try again.")) }
+                    assertEquals(1, canceled.hits)
+                    assertEquals("/channel1.mp4", playingPath(scenario))
+                } finally { instrumentation.removeMonitor(canceled) }
+                val keyboardPackage = android.content.ComponentName.unflattenFromString(android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))!!.packageName
+                scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").requestFocus() }; device.pressDPadCenter()
+                assertTrue(device.wait(Until.hasObject(By.pkg(keyboardPackage)), 5000))
+                device.findObject(By.desc("Search channels")).text = "Channel 7"
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 && (channelList(it)!!.adapter as GuideAdapter).channels.single().name == "Test Channel 7" && device.hasObject(By.textStartsWith("Test Channel 7  ·")) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) }
+                waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                assertTrue(device.wait(Until.gone(By.pkg(keyboardPackage)), 5000))
+                assertEquals("/channel1.mp4", playingPath(scenario))
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "search.png"))
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }; device.pressDPadCenter()
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == false }
+                assertEquals("/channel7.mp4", playingPath(scenario))
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun okShowsDetailsAndLeftTogglesWatchedChannelsAcrossFailuresAndRestart() {
+        FixtureServer(channelCount = 3, missingStatus = 404).use { server ->
+            val source = Source(name = "History Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying && store.last(source) == "xc:1" } == true }
+                var attempt = ""
+                scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-details")?.isShown == true && device.hasObject(By.text("Guide")) }
+                scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertFalse(channelList(it)!!.isShown) }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "details.png"))
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-details")?.isShown == false && channelList(it)?.isShown == false }
+                device.pressDPadUp(); waitFor(scenario) { store.last(source) == "xc:3" }
+                assertEquals("xc:1", store.previous(source))
+                device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:1" }
+                assertEquals("xc:3", store.previous(source))
+                device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressDPadUp(); device.pressDPadCenter()
+                waitFor(scenario) { store.unavailable(source).contains("xc:2", System.currentTimeMillis()) && store.last(source) == "xc:3" && playingPath(scenario) == "/live/test/test-secret/3.ts" }
+                assertEquals("Failed channels must not replace the previously watched channel", "xc:1", store.previous(source))
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:1" }
+                scenario.recreate()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying && store.last(source) == "xc:1" } == true }
+                device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
+                assertEquals("xc:1", store.previous(source))
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -461,7 +548,7 @@ class SpareDeviceTest {
         private val avTransport by lazy { instrumentation.context.assets.open("stall-av.ts").use { it.readBytes() } }
         private val longTransport by lazy { repeatTransport(avTransport, 16) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
-            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"1","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1"}"""
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1"}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
@@ -494,7 +581,7 @@ class SpareDeviceTest {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
                             "/logo.png" -> logo to "image/png"
-                            "/player_api.php" -> (if (target.contains("get_short_epg")) shortEpg else if (target.contains("get_live_categories")) """[{"category_id":"1","category_name":"News"}]""".toByteArray() else streams) to "application/json"
+                            "/player_api.php" -> (if (target.contains("get_short_epg")) shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             else -> if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"

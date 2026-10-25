@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — 2026-10-24
+
+- Replace the search dialog with an inline guide search strip, live channel results, immediate TV voice input, and editable text fallback. Canceling voice input keeps the search usable.
+- Show a compact programme/channel details panel on OK while watching, with guide, previous-channel, and favorite actions. Keep Back-to-guide and hold-Back behavior.
+- Add single-press Left to toggle between the last two successfully played channels. Preserve source-local history across restarts and keep failed tune attempts out of it.
+- Preserve Xtream category-array order in the encrypted guide cache and M3U group first-appearance order. Default to provider order; offer stable USA-first ordering in Settings.
+- Extend remote, search/voice-result, details, history, category-order, and cache regression coverage.
+
 ## 0.2.1 — 2026-10-24
 
 - Separate startup, buffering, alternate-format, and reconnect status. Add a delayed corner buffering indicator, a larger resume cushion, a bounded buffer target, a conservative adaptive-live offset, and bounded reconnects.

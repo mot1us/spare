@@ -3,6 +3,8 @@ package io.github.mot1us.spare
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -11,7 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
+import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.SurfaceView
@@ -21,7 +23,6 @@ import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.LinearLayout
@@ -99,6 +100,8 @@ class MainActivity : Activity() {
     private lateinit var playbackError: TextView
     private lateinit var searchButton: Button
     private lateinit var updateButton: Button
+    private lateinit var guideSearch: GuideSearchBar
+    private lateinit var details: PlaybackDetails
     private lateinit var retryPanel: LinearLayout
     private var sources = emptyList<Source>()
     private var source: Source? = null
@@ -134,6 +137,11 @@ class MainActivity : Activity() {
     private var unavailable = UnavailableChannels()
     private var lastWorkingChannel: Channel? = null
     private var groupsForChannels: List<Channel>? = null
+    private var groupsForOrder: List<String>? = null
+    private var voiceSearchPending = false
+    private var voiceSearchGeneration = 0
+    private val filterSearch = Runnable { query = guideSearch.query(); applyFilter() }
+    private val hideDetails = Runnable { closeDetails() }
     private val workingUrls = mutableMapOf<String, String>()
     private val retry = Runnable { if (started && current != null) playAttempt(PlaybackPhase.RECONNECTING) }
     private val revealBuffering = Runnable { if (started && current != null && player.playbackState == Player.STATE_BUFFERING) showPlaybackLoading(PlaybackPhase.BUFFERING) }
@@ -150,7 +158,7 @@ class MainActivity : Activity() {
     private val backHold = Runnable { if (guideVisible && current != null) { backLongPressed = true; showGuide(false) } }
     private val hideNowPlaying = Runnable { nowPlaying.visibility = View.GONE }
     private val minuteTick = object : Runnable {
-        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.notifyItemRangeChanged(0, adapter.itemCount); (focused ?: current)?.let(::showInfo) }; handler.postDelayed(this, 60000) } }
+        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.notifyItemRangeChanged(0, adapter.itemCount); (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -208,7 +216,7 @@ class MainActivity : Activity() {
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
                 firstFrame = true; hasPlayedChannel = true; lastWorkingChannel = current
-                current?.let { channel -> workingUrls[channel.id] = playbackUrl; if (unavailable.restore(channel.id)) { saveUnavailable(); applyFilter() } }
+                current?.let { channel -> source?.let { store.setLast(it, channel) }; workingUrls[channel.id] = playbackUrl; if (unavailable.restore(channel.id)) { saveUnavailable(); applyFilter() } }
                 cancelPlaybackCallbacks(); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
                 player.videoFormat?.let { format ->
                     if (format.width > 0 && format.height > 0) recordVideo(VideoInfo(format.width, format.height, format.frameRate.takeIf { it.isFinite() && it > 0 } ?: 0f))
@@ -254,12 +262,16 @@ class MainActivity : Activity() {
         root.removeView(video); root.addView(video, FrameLayout.LayoutParams(-1, -1))
         val toolbar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; tag = "guide-toolbar" }
         toolbar.addView(text("spare", 20f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(dp(10), 0, 0, 0) }, LinearLayout.LayoutParams(dp(160), -2))
-        searchButton = button("Search") { search() }; toolbar.addView(searchButton)
+        searchButton = button("Search") { search() }.apply { tag = "search" }; toolbar.addView(searchButton)
         toolbar.addView(button("Browse all") { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); focusChannel() }.apply { tag = "browse-all" })
         toolbar.addView(button("Sources") { showSources() })
         toolbar.addView(button("Settings") { playbackMenu() }.apply { tag = "settings" })
         updateButton = button("Updates") { updater.offer() }; toolbar.addView(updateButton)
         guidePanel.addView(toolbar, LinearLayout.LayoutParams(-1, dp(44)))
+        guideSearch = GuideSearchBar(this, ::button, {
+            handler.removeCallbacks(filterSearch); handler.postDelayed(filterSearch, 150)
+        }, ::voiceSearch, { finishSearch(false) }, { finishSearch(true) })
+        guidePanel.addView(guideSearch, LinearLayout.LayoutParams(-1, -2))
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         guidePanel.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
         val navigation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(12), 0) }
@@ -292,7 +304,7 @@ class MainActivity : Activity() {
         content.addView(emptyInfo)
         list = RecyclerView(this).apply { layoutManager = LinearLayoutManager(this@MainActivity); itemAnimator = null; clipToPadding = false; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { source }, { guide }, { favorites }, { windowStart },
-            { if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it); showGuide(false) }, { channel ->
+            { guideSearch.hideKeyboard(); if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it); showGuide(false) }, { channel ->
                 source?.let { store.toggleFavorite(it, channel); favorites = store.favorites(it); applyFilter() }
             }, { channel -> focused = channel; showInfo(channel); scheduleEpg() }, { moveTime(it) }, { focusSidebar() })
         list.adapter = adapter
@@ -321,6 +333,10 @@ class MainActivity : Activity() {
         retryActions.addView(button("Retry") { current?.let { tune(it) } })
         retryActions.addView(button("Guide") { retryPanel.visibility = View.GONE; showGuide(true) }); retryPanel.addView(retryActions)
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
+        details = PlaybackDetails(this, ::button, { showGuide(true) }, ::recallPrevious, {
+            current?.let { channel -> source?.let { selected -> store.toggleFavorite(selected, channel); favorites = store.favorites(selected); applyFilter(); refreshDetails() } }
+        })
+        root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         updateTimes(); showGuide(true)
     }
     private fun moveTime(amount: Int) {
@@ -345,6 +361,7 @@ class MainActivity : Activity() {
 
     private fun load(selected: Source) {
         val epoch = ++generation
+        voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
@@ -359,7 +376,7 @@ class MainActivity : Activity() {
             val loaded = runCatching {
                 val lineup = if (selected.kind == "xtream") Importers.xtream(selected) { stage, done, total -> importProgress(epoch, stage, done, total) }
                 else Importers.m3u(Network.get(selected.url, selected.allowHttp, progress = { done, total -> importProgress(epoch, "Downloading channels", done, total) }).toString(Charsets.UTF_8), selected.allowHttp)
-                Guide(lineup.channels, cached?.programmes.orEmpty()).also { initial -> ui(epoch) { accept(initial, resume = cached == null) } } to
+                Guide(lineup.channels, cached?.programmes.orEmpty(), lineup.categoryOrder).also { initial -> ui(epoch) { accept(initial, resume = cached == null) } } to
                     selected.epgUrl.ifBlank { if (selected.kind == "xtream") "" else lineup.epgUrl }
             }
             loaded.onSuccess { (initial, epg) ->
@@ -368,7 +385,7 @@ class MainActivity : Activity() {
                     importProgress(epoch, "Reading guide")
                     Importers.xmltv(bytes, initial.channels.map { it.guideId }.filter { it.isNotEmpty() }.toSet())
                 } else Result.success(emptyMap())
-                val fresh = Guide(initial.channels, programmes.getOrDefault(cached?.programmes.orEmpty()))
+                val fresh = Guide(initial.channels, programmes.getOrDefault(cached?.programmes.orEmpty()), initial.categoryOrder)
                 if (!Thread.currentThread().isInterrupted && generation == epoch) runCatching { store.cache(selected, fresh) }
                 ui(epoch) { loadingPanel.visibility = View.GONE; accept(fresh, resume = false); status.text = if (programmes.isFailure) "Guide refresh failed · ${SourceErrors.message(programmes.exceptionOrNull()!!)}" else if (epg.isNotBlank() && fresh.programmes.isEmpty()) "Guide downloaded, but no current programmes matched the channel IDs." else "" }
             }.onFailure { failure -> ui(epoch) {
@@ -383,7 +400,7 @@ class MainActivity : Activity() {
     }
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
     private fun accept(next: Guide, resume: Boolean) {
-        guide = if (source?.kind == "xtream" && source?.epgUrl.isNullOrBlank()) Guide(next.channels, next.programmes + guide.programmes) else next; updateGroups(); applyFilter()
+        guide = if (source?.kind == "xtream" && source?.epgUrl.isNullOrBlank()) Guide(next.channels, next.programmes + guide.programmes, next.categoryOrder) else next; updateGroups(); applyFilter()
         if (resume && current == null) {
             val last = source?.let { selected -> adapter.channels.firstOrNull { it.id == store.last(selected) } } ?: adapter.channels.firstOrNull()
             if (last != null) { tune(last); showGuide(false) }
@@ -394,9 +411,9 @@ class MainActivity : Activity() {
     private fun tune(channel: Channel) {
         val selected = source ?: return
         if (!Network.allowed(channel.url, selected.allowHttp)) { showPlaybackFailure("This channel needs an allowed HTTP or HTTPS address. Check this source’s HTTP setting."); return }
-        cancelPlaybackCallbacks(); playbackToken++
+        closeDetails(); cancelPlaybackCallbacks(); playbackToken++
         hasPlayedChannel = false; startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
-        current = channel; previewCaption.text = "Live · ${channel.name}"; store.setLast(selected, channel); showInfo(channel)
+        current = channel; previewCaption.text = "Live · ${channel.name}"; showInfo(channel)
         playbackUrl = if (selected.kind == "xtream") when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts") ?: channel.url; "hls" -> StreamUrls.format(channel.url, "m3u8") ?: channel.url; else -> channel.url } else channel.url
         if (selected.kind == "xtream" && store.streamFormat(selected) == "auto") playbackUrl = workingUrls[channel.id] ?: playbackUrl
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverrides().build()
@@ -495,12 +512,13 @@ class MainActivity : Activity() {
                             if (entries.isNotEmpty()) {
                                 val programmes = LinkedHashMap(guide.programmes); programmes[guide.key(channel)] = entries
                                 while (programmes.size > 5000) programmes.remove(programmes.keys.first())
-                                guide = Guide(guide.channels, programmes); epgErrors.remove(channel.id)
+                                guide = Guide(guide.channels, programmes, guide.categoryOrder); epgErrors.remove(channel.id)
                                 handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
                             } else epgErrors[channel.id] = "Provider supplied no current programme data."
                         }.onFailure { epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(it)}" }
                         adapter.notifyItemRangeChanged(0, adapter.itemCount)
                         (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                        if (details.isVisible) refreshDetails()
                     }
                     if (!closed) pumpEpg()
                 }
@@ -519,6 +537,11 @@ class MainActivity : Activity() {
         val filtered = guide.channels.filter { !unavailable.contains(it.id, now) && (!favoritesOnly || it.id in favorites) && ((group == null) || it.group == group) &&
             (query.isBlank() || it.name.contains(query, true)) && (browseAll || filters.matches(it, videoInfo[it.id])) }
         adapter.submit(filtered)
+        if (guideVisible) {
+            if (focused != null && filtered.none { it.id == focused?.id }) focused = filtered.firstOrNull()
+            (focused ?: current)?.let(::showInfo)
+            scheduleEpg()
+        }
         searchButton.text = if (query.isEmpty()) "Search" else "Search ✓"
         root.findViewWithTag<Button>("browse-all")?.text = if (browseAll) "My guide" else "Browse all"
         val selection = if (favoritesOnly) "Favorites" else group
@@ -530,13 +553,19 @@ class MainActivity : Activity() {
         updateGroups()
     }
     private fun updateGroups() {
-        if (groupsForChannels !== guide.channels) { providerGroups = CategoryOrder.sorted(guide.channels.map { it.group }); groupsForChannels = guide.channels }
+        if (groupsForChannels !== guide.channels || groupsForOrder !== guide.categoryOrder) {
+            val provider = CategoryOrder.provider(guide.channels.map { it.group }, guide.categoryOrder)
+            providerGroups = if (source?.let(store::usaFirst) == true) CategoryOrder.usaFirst(provider) else provider
+            groupsForChannels = guide.channels; groupsForOrder = guide.categoryOrder
+        }
         val visibleGroups = providerGroups.filter { browseAll || filters.groups.isEmpty() || it in filters.groups }
         sidebarAdapter.submit(listOf(GuideSection(if (browseAll) "All channels" else "My guide", "all", !favoritesOnly && (group == null)),
             GuideSection("Favorites", "favorites", favoritesOnly)) + visibleGroups.map { GuideSection(it.ifBlank { "Uncategorized" }, "group:$it", !favoritesOnly && group == it && (group != null)) })
     }
     private fun updateTimes() { times.invalidate() }
     private fun showGuide(show: Boolean) {
+        closeDetails()
+        if (!show) guideSearch.hideKeyboard()
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         handler.removeCallbacks(hideNowPlaying); nowPlaying.visibility = View.GONE
         val preview = show && store.smallPreview
@@ -554,15 +583,75 @@ class MainActivity : Activity() {
     private fun showNowPlaying() {
         val channel = current ?: return
         handler.removeCallbacks(hideNowPlaying)
-        nowPlaying.text = channel.name + (guide.at(channel, System.currentTimeMillis())?.let { "  ·  ${it.title}" } ?: "")
+        nowPlaying.text = channel.name + (guide.at(channel, System.currentTimeMillis())?.let { "  ·  ${it.title}" } ?: "") + "\nOK Details    ← Previous    Back Guide"
         nowPlaying.visibility = View.VISIBLE
         handler.postDelayed(hideNowPlaying, 1800)
     }
     private fun search() {
-        val input = EditText(this).apply { inputType = InputType.TYPE_CLASS_TEXT; setSingleLine(true); setText(query); hint = "Channel name" }
-        AlertDialog.Builder(this).setTitle("Find channel").setView(input)
-            .setPositiveButton("Search") { _, _ -> query = input.text.toString().trim().take(128); applyFilter() }
-            .setNeutralButton("Clear") { _, _ -> query = ""; applyFilter() }.setNegativeButton("Cancel", null).show()
+        showGuide(true); group = null; favoritesOnly = false; applyFilter()
+        guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; guideSearch.voice.requestFocus()
+        voiceSearch()
+    }
+    private fun finishSearch(close: Boolean) {
+        handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
+        if (close) guideSearch.visibility = View.GONE
+        focusChannel()
+    }
+    @Suppress("DEPRECATION") // Keep the small native Activity; speech input returns through Android's activity-result API.
+    private fun voiceSearch() {
+        if (voiceSearchPending || !guideSearch.isVisible) return
+        guideSearch.hideKeyboard(); guideSearch.message("Listening for a channel name…")
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Search Spare channels")
+            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        voiceSearchPending = true; voiceSearchGeneration = generation
+        try { startActivityForResult(intent, 1001) }
+        catch (_: ActivityNotFoundException) { voiceSearchUnavailable() }
+        catch (_: SecurityException) { voiceSearchUnavailable() }
+    }
+    private fun voiceSearchUnavailable() {
+        voiceSearchPending = false; guideSearch.message("Voice input is unavailable on this TV. Select the field to type."); guideSearch.input.requestFocus()
+    }
+    @Deprecated("Native speech activity-result callback")
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 1001 || !voiceSearchPending) return
+        voiceSearchPending = false
+        if (closed || voiceSearchGeneration != generation || !guideSearch.isVisible) return
+        val words = if (resultCode == RESULT_OK) runCatching { data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.take(10)?.firstOrNull { it.isNotBlank() } }.getOrNull() else null
+        if (words != null) {
+            guideSearch.setQuery(words.replace(Regex("[\\p{Cc}]+"), " ").trim().take(128))
+            guideSearch.message("Voice search complete. Edit the field or choose Voice to search again."); finishSearch(false)
+        } else { guideSearch.message("Select the field to type, or choose Voice to try again."); guideSearch.voice.requestFocus() }
+    }
+    private fun previousChannel(): Channel? {
+        val selected = source ?: return null
+        val last = store.last(selected)
+        val id = if (current?.id != last) last else store.previous(selected)
+        return guide.channels.firstOrNull { it.id == id && it.id != current?.id && !unavailable.contains(it.id, System.currentTimeMillis()) }
+    }
+    private fun recallPrevious() {
+        val prior = previousChannel()
+        if (prior == null) { toast("No previous available channel yet"); return }
+        tune(prior); showGuide(false)
+    }
+    private fun refreshDetails() {
+        val channel = current ?: return
+        val now = System.currentTimeMillis(); val programme = guide.at(channel, now)
+        val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
+        details.update(channel, programme, next, videoInfo[channel.id]?.label() ?: "Quality unverified", channel.id in favorites, previousChannel() != null)
+    }
+    private fun showDetails() {
+        if (current == null) return
+        handler.removeCallbacks(hideNowPlaying); nowPlaying.visibility = View.GONE
+        refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.guideButton.requestFocus()
+        handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000)
+    }
+    private fun closeDetails() {
+        handler.removeCallbacks(hideDetails)
+        if (::details.isInitialized) details.visibility = View.GONE
     }
     private fun showSources() {
         val builder = AlertDialog.Builder(this).setTitle("Sources")
@@ -583,20 +672,27 @@ class MainActivity : Activity() {
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
     private fun playbackMenu() {
-        val choices = mutableListOf("Guide video", "Guide filters", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
+        val choices = mutableListOf("Guide video", "Guide filters", "Category order", "Audio track", "Subtitles", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare")
         if (source?.kind == "xtream") choices.add(1, "Stream format")
         if (unavailable.snapshot().isNotEmpty()) choices.add(1, "Unavailable channels")
         AlertDialog.Builder(this).setTitle("Settings").setItems(choices.toTypedArray()) { _, item ->
             when (choices[item]) {
                 "Guide video" -> AlertDialog.Builder(this).setTitle("Video while browsing the guide").setSingleChoiceItems(arrayOf("Transparent overlay", "Small live preview"), if (store.smallPreview) 1 else 0) { dialog, which -> store.smallPreview = which == 1; dialog.dismiss(); showGuide(true) }.setNegativeButton("Cancel", null).show()
                 "Guide filters" -> filterMenu()
+                "Category order" -> {
+                    val selected = source
+                    if (selected == null) toast("Add a source first") else AlertDialog.Builder(this).setTitle("Category order")
+                        .setSingleChoiceItems(arrayOf("Provider order", "USA first · keep provider order within each region"), if (store.usaFirst(selected)) 1 else 0) { dialog, which ->
+                            store.setUsaFirst(selected, which == 1); groupsForChannels = null; updateGroups(); dialog.dismiss()
+                        }.setNegativeButton("Cancel", null).show()
+                }
                 "Unavailable channels" -> unavailableMenu()
                 "Stream format" -> streamFormatMenu()
                 "Audio track" -> tracks(C.TRACK_TYPE_AUDIO)
                 "Subtitles" -> tracks(C.TRACK_TYPE_TEXT)
                 "Refresh playlist & guide" -> source?.let(::load)
                 "Exit Spare" -> finish()
-                "About Spare" -> notice("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player.\nMIT License · github.com/mot1us/spare\n\nOK: guide · Up/Down: channel\nHold OK on a guide channel: favorite\nLeft: categories · Hold Back: full screen\n\nQuality filters use observed playback, never channel names. Unknown channels stay hidden when quality filters are enabled; Browse all lets you verify them. No background stream scanning.\n\nNo app accounts, ads, or analytics. Credentials and guide cache stay in encrypted app storage.")
+                "About Spare" -> notice("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player.\nMIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nUp/Down: channel · Hold Back: full screen\nGuide: Left categories · Hold OK favorite\nSearch: voice or inline text\n\nQuality filters use observed playback, never channel names. Unknown channels stay hidden when quality filters are enabled; Browse all lets you verify them. No background stream scanning.\n\nNo app accounts, ads, or analytics. Credentials and guide cache stay in encrypted app storage.")
                 "Open-source licenses" -> {
                     val content = listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { name -> assets.open("licenses/$name").bufferedReader().use { it.readText() } }
                     val label = text(content, 12f).apply { setPadding(dp(20), dp(12), dp(20), dp(12)) }
@@ -653,12 +749,19 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { backLongPressed = false; handler.postDelayed(backHold, ViewConfiguration.getLongPressTimeout().toLong()) }
             if (event.action == KeyEvent.ACTION_UP) { handler.removeCallbacks(backHold); if (!backLongPressed && !event.isCanceled) navigateBack() }
             return true
         }
         if (!guideVisible && retryPanel.visibility != View.VISIBLE) {
+            if (details.isVisible) {
+                if (event.action == KeyEvent.ACTION_DOWN) { handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000) }
+                return super.dispatchKeyEvent(event)
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) recallPrevious(); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_INFO) { if (event.action == KeyEvent.ACTION_UP) showDetails(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (event.action == KeyEvent.ACTION_DOWN) {
                     val channels = adapter.channels
@@ -671,7 +774,7 @@ class MainActivity : Activity() {
                 return true
             }
             if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
-                if (event.action == KeyEvent.ACTION_UP) showGuide(true)
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) showDetails()
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
@@ -682,14 +785,16 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // The TV activity opts out of predictive back for remote hold detection.
     override fun onBackPressed() = navigateBack()
     private fun navigateBack() {
-        if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
+        if (details.isVisible) closeDetails()
+        else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
+        else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
         else if (!guideVisible) showGuide(true)
         else if (list.hasFocus()) focusSidebar()
         else focusChannel()
     }
     override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && current != null) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg() }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { started = false; firstFrame = false; expectedMediaId = ""; handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onStop() { started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
     override fun onDestroy() { closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

@@ -51,7 +51,7 @@ class SecureStore(private val context: Context) {
     fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
     fun removeCache(source: Source) {
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
@@ -59,6 +59,8 @@ class SecureStore(private val context: Context) {
     } }
     fun streamFormat(source: Source) = preferences.getString("stream-format-${source.id}", "auto").orEmpty()
     fun setStreamFormat(source: Source, value: String) { preferences.edit { putString("stream-format-${source.id}", value) } }
+    fun usaFirst(source: Source) = preferences.getBoolean("category-order-${source.id}", false)
+    fun setUsaFirst(source: Source, value: Boolean) { preferences.edit { putBoolean("category-order-${source.id}", value) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
         j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
@@ -81,7 +83,15 @@ class SecureStore(private val context: Context) {
         get() = preferences.getString("active", "").orEmpty()
         set(value) { preferences.edit { putString("active", value) } }
     fun last(source: Source) = preferences.getString("last-${source.id}", "").orEmpty()
-    fun setLast(source: Source, channel: Channel) { preferences.edit { putString("last-${source.id}", channel.id) } }
+    fun previous(source: Source) = preferences.getString("previous-${source.id}", "").orEmpty()
+    // Called only after a rendered frame: a failed tune must not replace watch history.
+    fun setLast(source: Source, channel: Channel) {
+        val prior = last(source)
+        preferences.edit {
+            if (prior.isNotBlank() && prior != channel.id) putString("previous-${source.id}", prior)
+            putString("last-${source.id}", channel.id)
+        }
+    }
     fun favorites(source: Source) = preferences.getStringSet("favorites-${source.id}", emptySet()).orEmpty().toSet()
     fun toggleFavorite(source: Source, channel: Channel) {
         val favorites = favorites(source).toMutableSet()
