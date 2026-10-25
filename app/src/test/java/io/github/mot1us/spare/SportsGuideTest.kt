@@ -53,7 +53,7 @@ class SportsGuideTest {
         val channels = (1..25001).map { Channel("$it", "Sports $it", "MLB", "https://example.com/$it", guideId = "${it / 2}") } +
             Channel("followed", "New York Yankees", "USA", "https://example.com/nyy", guideId = "nyy")
         val warm = SportsGuide.warmChannels(channels, setOf("25000"), setOf("mlb:NYY"))
-        assertEquals(160, warm.size); assertEquals("followed", warm.first().id)
+        assertEquals(SportsGuide.MAX_WARM_CHANNELS, warm.size); assertEquals("followed", warm.first().id)
         assertEquals("25000", warm[1].id); assertEquals(warm.size, warm.map { it.guideId }.distinct().size)
     }
     @Test fun catalogHasAllTeamsAndStableDistinctLeagueIds() {
@@ -72,10 +72,12 @@ class SportsGuideTest {
         val cbs = Channel("cbs", "CBS", "USA", "https://example.com/cbs")
         assertTrue(SportsGuide.warmChannels(duplicates + cbs, emptySet(), emptySet()).contains(cbs))
     }
-    @Test fun teamChannelFallbackUsesNamesAndDoesNotInventGames() {
-        val channels = listOf(Channel("nyy", "MLB New York Yankees FHD", "MLB", "https://example.com/nyy"), Channel("news", "News", "USA", "https://example.com/news"))
-        assertEquals(listOf(channels.first()), SportsGuide.teamChannels(channels, setOf("mlb:NYY")))
-        assertTrue(SportsGuide.find(Guide(channels, emptyMap()), setOf("mlb:NYY"), emptySet(), now).isEmpty())
+    @Test fun liveOnlyUsesCurrentListingsAndExcludesUpcomingAndExpiredGames() {
+        val channel = Channel("live", "ESPN", "Sports", "https://example.com/live")
+        val guide = Guide(listOf(channel), mapOf("live" to listOf(programme("Bills at Chiefs", "live", now - 4 * 3600000), programme("Yankees at Red Sox", "live"), programme("Bills at Chiefs", "live", now + 3600000))))
+        val games = SportsGuide.find(guide, emptySet(), emptySet(), now, liveOnly = true)
+        assertEquals(1, games.size); assertEquals(setOf("mlb:NYY", "mlb:BOS"), games.single().teams.map { it.id }.toSet())
+        assertTrue(SportsGuide.find(guide, setOf("nfl:BUF"), emptySet(), now, liveOnly = true).isEmpty())
     }
 
 }

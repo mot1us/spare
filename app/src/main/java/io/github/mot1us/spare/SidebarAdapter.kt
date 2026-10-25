@@ -40,7 +40,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
                 if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                     val at = items.indexOfFirst { it.key == tag }
                     val next = at + if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
-                    if (next < 0) openModes() else move(next.coerceAtMost(items.lastIndex)); return true
+                    if (next < 0) { if (event.repeatCount == 0) openModes() } else if (next <= items.lastIndex) move(next); return true
                 }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { openToolbar(); return true }
                 if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) { enterGuide(); return true }

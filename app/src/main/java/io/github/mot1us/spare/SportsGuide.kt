@@ -12,7 +12,7 @@ data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Lon
 /** Conservative EPG matching. A listing is evidence of a broadcast, not a guarantee that a stream is online. */
 object SportsGuide {
     const val HORIZON = 48 * 3600000L
-    const val MAX_WARM_CHANNELS = 160
+    const val MAX_WARM_CHANNELS = 64
     private val matchup = Regex("\\b(vs|v|versus|at)\\b")
     private val baseball = Regex("\\b(mlb|baseball|world series)\\b")
     private val football = Regex("\\b(nfl|football|super bowl)\\b")
@@ -47,7 +47,7 @@ object SportsGuide {
         if (ranked.isEmpty() || (ranked.size > 1 && ranked[0].values.sum() == ranked[1].values.sum())) return null
         return ranked.first().keys.sortedBy { it.id }
     }
-    fun find(guide: Guide, followed: Set<String>, favorites: Set<String>, now: Long): List<SportsGame> {
+    fun find(guide: Guide, followed: Set<String>, favorites: Set<String>, now: Long, liveOnly: Boolean = false): List<SportsGame> {
         data class Pending(val teams: List<SportsTeam>, var start: Long, var end: Long, val broadcasts: MutableList<SportsBroadcast>)
         val games = LinkedHashMap<String, MutableList<Pending>>()
         val parsed = HashMap<Triple<String, String, String>, List<SportsTeam>?>()
@@ -56,7 +56,8 @@ object SportsGuide {
         var count = 0
         for ((key, channels) in channelsByKey) {
             if (Thread.currentThread().isInterrupted) return emptyList()
-            for (programme in guide.programmes[key].orEmpty().take(72)) {
+            val listings = if (liveOnly) listOfNotNull(guide.at(channels.first(), now)) else guide.programmes[key].orEmpty().take(72)
+            for (programme in listings) {
                 if (++checked > 360000) break
                 if (programme.end <= now || programme.start >= now + HORIZON || programme.end <= programme.start) continue
                 val channelContext = channels.first().let { "${it.group} ${it.name}" }
@@ -80,8 +81,6 @@ object SportsGuide {
         return games.values.flatten().map { game -> SportsGame(game.teams, game.start, game.end,
             game.broadcasts.sortedByDescending { it.channel.id in favorites }) }.sortedBy { it.start }.take(256)
     }
-    fun teamChannels(channels: List<Channel>, followed: Set<String>): List<Channel> = if (followed.isEmpty()) emptyList() else
-        channels.filter { channel -> SportsCatalog.mentions(SportsCatalog.normalize(channel.name), false).any { it.id in followed } }.take(48)
     /** Order likely game networks first, never open streams, and cap provider guide requests. */
     fun warmChannels(channels: List<Channel>, favorites: Set<String>, followed: Set<String>): List<Channel> {
         val scores = channels.mapIndexedNotNull { index, channel ->

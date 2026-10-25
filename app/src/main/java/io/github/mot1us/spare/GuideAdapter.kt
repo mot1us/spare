@@ -55,7 +55,11 @@ class GuideAdapter(
         }
         override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                channel?.let { moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; return true
+                channel?.let {
+                    val index = channels.indexOfFirst { row -> row.id == it.id }
+                    if (!(keyCode == KeyEvent.KEYCODE_DPAD_UP && index == 0 && event.repeatCount > 0))
+                        moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
+                }; return true
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 val row = channel

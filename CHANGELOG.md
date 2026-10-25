@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 — 2026-10-25
+
+- Replace the Settings menu with a full-screen translucent two-pane surface: scroll settings on the left, change values on the right, and keep the existing player running behind it.
+- Show live Sports only, with All live and followed-team selectors. Reuse current EPG, reduce Sports requests to four listings per channel across at most 64 prioritized networks, and show animated progress while results arrive incrementally. Prevent continuous responses from postponing the render.
+- Keep rapid category navigation anchored to one pending focus target; stop held Up at the first channel instead of cascading into top controls. Disable scroll-edge effects and redundant boundary focus changes.
+- Update Android TV launcher and application icon/banner declarations. The pixel TV is the S, followed by PARE, forming one SPARE wordmark on the home-screen tile.
+
 ## 0.4.1 — 2026-10-25
 
 - Make future guide browsing independent for each channel, with Left to rewind, Back to return to live, and reachable Now controls. Add a persistent 12/24-hour time preference.

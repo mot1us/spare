@@ -88,6 +88,9 @@ class SecureStore(private val context: Context) {
         while (entries.length() > 5000) entries.remove(entries.keys().next())
         preferences.edit { putString("channel-captions-${source.id}", entries.toString()) }
     }
+    var sportsTeam: String
+        get() = preferences.getString("sports-team-selected", "").orEmpty()
+        set(value) { preferences.edit { putString("sports-team-selected", value.takeIf { it in SportsCatalog.byId }.orEmpty()) } }
     var followedTeams: Set<String>
         get() = preferences.getStringSet("sports-teams", emptySet()).orEmpty().filter { it in SportsCatalog.byId }.toSet()
         set(value) { preferences.edit { putStringSet("sports-teams", value.filter { it in SportsCatalog.byId }.toSet()) } }

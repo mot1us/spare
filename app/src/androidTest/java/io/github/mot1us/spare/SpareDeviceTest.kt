@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.clock24 = false }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -273,8 +273,8 @@ class SpareDeviceTest {
                 scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
                 assertTrue(store.videoInfo(source).isEmpty())
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))), 5000))
-                device.findObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))).click()
+                activateSetting(scenario, "Guide filters")
+                activateSetting(scenario, if (store.videoInfo(source).isEmpty()) "Show unverified channels" else "Use guide filters"); leaveSettings(scenario)
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.pressDPadCenter()
@@ -283,8 +283,8 @@ class SpareDeviceTest {
                 assertEquals(profile, store.filters(source))
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))), 5000))
-                device.findObject(By.text(java.util.regex.Pattern.compile("Show unverified channels|Use guide filters"))).click()
+                activateSetting(scenario, "Guide filters")
+                activateSetting(scenario, if (store.videoInfo(source).isEmpty()) "Show unverified channels" else "Use guide filters"); leaveSettings(scenario)
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 0 }
                 assertEquals(profile, store.filters(source))
                 scenario.recreate()
@@ -342,9 +342,9 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
                 }
                 device.pressDPadCenter(); assertTrue(device.wait(Until.hasObject(By.text("Guide video")), 5000))
-                device.findObject(By.text("Guide video")).click()
+                activateSetting(scenario, "Guide video")
                 assertTrue(device.wait(Until.hasObject(By.text("Small live preview")), 5000))
-                device.findObject(By.text("Small live preview")).click()
+                activateSetting(scenario, "Small live preview"); leaveSettings(scenario)
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
                 assertTrue(store.smallPreview)
                 scenario.onActivity { assertTrue(find<PlayerView>(it.window.decorView)!!.width >= it.window.decorView.width / 3) }
@@ -497,12 +497,12 @@ class SpareDeviceTest {
                 scenario.onActivity { assertTrue(channelList(it)!!.isShown) }
                 var attempt = ""
                 scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000)); device.findObject(By.text("Theme")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("Ocean")), 5000)); device.findObject(By.text("Ocean")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000)); activateSetting(scenario, "Theme")
+                assertTrue(device.wait(Until.hasObject(By.text("Ocean")), 5000)); activateSetting(scenario, "Ocean"); leaveSettings(scenario)
                 waitFor(scenario) { store.theme == "Ocean" && GuideTheme.current.name == "Ocean" }
                 scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Categories")), 5000)); device.findObject(By.text("Categories")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("USA & Canada")), 5000)); device.findObject(By.text("USA & Canada")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Categories")), 5000)); activateSetting(scenario, "Categories")
+                assertTrue(device.wait(Until.hasObject(By.text("USA & Canada")), 5000)); activateSetting(scenario, "USA & Canada"); leaveSettings(scenario)
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 6 }
                 assertEquals(setOf("USA | News", "US | MLB", "CA | News"), SecureStore(context).filters(source).groups)
                 scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
@@ -519,25 +519,25 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("Automatic")), 5000)); device.findObject(By.text("Automatic")).click()
+                activateSetting(scenario, "Subtitles")
+                assertTrue(device.wait(Until.hasObject(By.text("Automatic")), 5000)); activateSetting(scenario, "Automatic"); leaveSettings(scenario)
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.any { cue -> cue.text.toString().contains("Spare test captions") } == true }
                 assertEquals(CaptionTracks.AUTO, store.channelCaptions(source, store.cached(source)!!.channels.first()))
                 waitFor(scenario) { store.videoInfo(source).values.any { it.fps > 0 } }
                 scenario.onActivity { assertFalse(store.videoInfo(source).values.first().label().contains("unavailable")) }
                 // Automatic above is a channel override; enable the app default separately for the next channel.
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("App default")), 5000)); activateDialogButton(scenario, android.R.id.button3)
-                assertTrue(device.wait(Until.hasObject(By.text("Default subtitles · all channels")), 5000)); device.findObject(By.text("Automatic")).click()
+                activateSetting(scenario, "Subtitles")
+                assertTrue(device.wait(Until.hasObject(By.text("App default")), 5000)); activateSetting(scenario, "App default")
+                assertTrue(device.wait(Until.hasObject(By.text("Default subtitles · all channels")), 5000)); activateSetting(scenario, "Automatic"); leaveSettings(scenario)
                 waitFor(scenario) { store.captions }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels[1].id }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isNotEmpty() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Subtitles")), 5000)); device.findObject(By.text("Subtitles")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); device.findObject(By.text("Off")).click()
+                activateSetting(scenario, "Subtitles")
+                assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); activateSetting(scenario, "Off"); leaveSettings(scenario)
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isEmpty() == true }
                 assertEquals(CaptionTracks.OFF, SecureStore(context).channelCaptions(source, store.cached(source)!!.channels[1]))
             }
@@ -611,10 +611,10 @@ class SpareDeviceTest {
             val programmes = mapOf(
                 "sports:2" to listOf(Programme("sports:2", "Yankees vs Red Sox", now - 300000, now + 3600000), Programme("sports:2", "Yankees vs Red Sox", now + 5 * 3600000, now + 8 * 3600000)),
                 "sports:3" to listOf(Programme("sports:3", "MLB: NYY @ BOS", now - 300000, now + 3600000)),
-                "sports:4" to listOf(Programme("sports:4", "NFL: Bills at Chiefs", now + 1800000, now + 4 * 3600000)),
+                "sports:4" to listOf(Programme("sports:4", "NFL: Bills at Chiefs", now - 300000, now + 4 * 3600000)),
             )
             store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true
-            store.followedTeams = setOf("mlb:NYY"); store.toggleFavorite(source, channels[2])
+            store.followedTeams = setOf("mlb:NYY"); store.sportsTeam = "mlb:NYY"; store.toggleFavorite(source, channels[2])
             store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
@@ -622,7 +622,7 @@ class SpareDeviceTest {
                 scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").requestFocus() }; device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { r -> r.isShown && r.adapter?.itemCount == 2 && r.hasFocus() } == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { r -> r.isShown && r.adapter?.itemCount == 1 && r.hasFocus() } == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
                 device.pressDPadCenter()
@@ -637,12 +637,17 @@ class SpareDeviceTest {
                     it.window.decorView.findViewWithTag<View>("sports-scope").requestFocus()
                 }
                 device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("NFL · Football")), 5000)); device.findObject(By.text("NFL · Football")).click()
                 assertTrue(device.wait(Until.hasObject(By.text("Buffalo Bills")), 5000)); device.findObject(By.text("Buffalo Bills")).click()
                 activateDialogButton(scenario, android.R.id.button1)
                 waitFor(scenario) { SecureStore(context).followedTeams == setOf("mlb:NYY", "nfl:BUF") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:nfl:BUF") != null }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:BUF").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 && device.hasObject(By.text("Buffalo Bills vs Kansas City Chiefs")) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-scope").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 repeat(6) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
@@ -667,15 +672,15 @@ class SpareDeviceTest {
             val source = Source(name = "Timeline fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val channels = (1..2).map { Channel("time:$it", "Channel $it", "News", "${server.base}/channel$it.mp4") }
             val now = System.currentTimeMillis(); val slot = GuideTimeline.live(now)
-            val programmes = channels.associate { c -> c.id to listOf(Programme(c.id, "Live ${c.id}", slot, slot + GuideTimeline.SLOT), Programme(c.id, "Later ${c.id}", slot + GuideTimeline.SLOT, slot + 3 * 3600000)) }
+            val programmes = channels.associate { c -> c.id to listOf(Programme(c.id, "Live ${c.id}", slot, slot + 2 * GuideTimeline.SLOT), Programme(c.id, "Later ${c.id}", slot + 2 * GuideTimeline.SLOT, slot + 3 * 3600000)) }
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
-                device.pressDPadRight(); waitFor(scenario) { device.hasObject(By.text("Later time:1")) }
+                repeat(2) { device.pressDPadRight() }; waitFor(scenario) { device.hasObject(By.text("Later time:1")) }
                 device.pressDPadDown(); waitFor(scenario) { device.hasObject(By.text("Live time:2")) }
                 device.pressDPadUp(); waitFor(scenario) { device.hasObject(By.text("Later time:1")) }
-                device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Live time:1")) }
+                repeat(2) { device.pressDPadLeft() }; waitFor(scenario) { device.hasObject(By.text("Live time:1")) }
                 device.pressDPadRight(); device.pressBack(); waitFor(scenario) { device.hasObject(By.text("Live time:1")) && channelList(it)?.hasFocus() == true }
                 device.pressDPadRight(); device.pressDPadUp()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-now").hasFocus() }
@@ -685,8 +690,8 @@ class SpareDeviceTest {
                 repeat(6) { device.pressDPadLeft() }
                 scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Time format")), 5000)); device.findObject(By.text("Time format")).click()
-                assertTrue(device.wait(Until.hasObject(By.text("24 hour · 19:30")), 5000)); device.findObject(By.text("24 hour · 19:30")).click()
+                assertTrue(device.wait(Until.hasObject(By.text("Time format")), 5000)); activateSetting(scenario, "Time format")
+                assertTrue(device.wait(Until.hasObject(By.text("24 hour · 19:30")), 5000)); activateSetting(scenario, "24 hour · 19:30"); leaveSettings(scenario)
                 waitFor(scenario) { store.clock24 && GuideClock.use24Hour }
                 scenario.recreate(); waitFor(scenario) { GuideClock.use24Hour && find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
             }
@@ -736,6 +741,115 @@ class SpareDeviceTest {
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
+    }
+
+    @Test fun liveSportsShowsProgressAndEarlyResultsWithoutWaitingForWholeScan() {
+        FixtureServer(channelCount = 12, slowSportsGuide = true).use { server ->
+            val source = Source(name = "Live scan fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channels = (1..12).map { Channel("xc:$it", "ESPN $it", "Sports", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it") }
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            store.setFilters(source, GuideFilters(minHeight = 1080))
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { device.hasObject(By.textContains("No verified channels match")) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-loading")?.isShown == true }
+                waitFor(scenario) { server.sportsTailBlocked.count == 0L }
+                device.pressMenu(); activateSetting(scenario, "Guide filters"); activateSetting(scenario, "Reset filters"); leaveSettings(scenario)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                scenario.onActivity { assertTrue("Results must appear while later provider responses are still pending", it.window.decorView.findViewWithTag<View>("sports-loading").isShown) }
+                assertTrue("Live discovery requests a small current guide, not 72 future listings", server.epgTargets.all { it.contains("limit=4") })
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)?.itemView?.isShown == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-loading.png"))
+                server.finishSportsGuide.countDown()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-loading").isShown }
+                assertFalse(device.hasObject(By.text("Buffalo Bills vs Kansas City Chiefs")))
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    private fun fastRemote(key: Int, count: Int) {
+        val down = android.os.SystemClock.uptimeMillis()
+        repeat(count) { repeat ->
+            instrumentation.sendKeySync(android.view.KeyEvent(down, android.os.SystemClock.uptimeMillis(), android.view.KeyEvent.ACTION_DOWN, key, repeat))
+            android.os.SystemClock.sleep(12)
+        }
+        instrumentation.sendKeySync(android.view.KeyEvent(down, android.os.SystemClock.uptimeMillis(), android.view.KeyEvent.ACTION_UP, key, 0))
+    }
+    @Test fun rapidCategoryScrollingKeepsHighlightAndHeldUpStopsAtFirstChannel() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Held remote fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = (1..120).map { Channel("held:$it", "Channel $it", "Category $it", "${server.base}/channel1.mp4") }
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
+                fastRemote(android.view.KeyEvent.KEYCODE_DPAD_DOWN, 80)
+                waitFor(scenario) { activity ->
+                    val list = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
+                    (list.findFocus() as? android.widget.TextView)?.text?.toString()?.removePrefix("Category ")?.toIntOrNull()?.let { it >= 20 } == true
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "held-categories.png"))
+                device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                fastRemote(android.view.KeyEvent.KEYCODE_DPAD_DOWN, 50)
+                fastRemote(android.view.KeyEvent.KEYCODE_DPAD_UP, 100)
+                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:1" }
+                scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("guide-now").hasFocus()) }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-now").hasFocus() }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun twoPaneSettingsKeepsFullscreenVideoAndLauncherUsesWordmarkBanner() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Settings fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var samePlayer: Player? = null; var attempt = ""
+                scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player; attempt = samePlayer!!.currentMediaItem!!.mediaId }
+                device.pressMenu(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown == true }
+                scenario.onActivity { activity ->
+                    val nav = activity.window.decorView.findViewWithTag<View>("settings-navigation"); val content = activity.window.decorView.findViewWithTag<View>("settings-content")
+                    val left = IntArray(2); val right = IntArray(2); nav.getLocationOnScreen(left); content.getLocationOnScreen(right)
+                    assertTrue(left[0] + nav.width < right[0]); assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
+                    activity.window.decorView.findViewWithTag<View>("settings-nav:Theme").requestFocus()
+                }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-option:Monochrome").hasFocus() }
+                device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { store.theme == "Ocean" }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title")?.text.toString() == "Theme" && it.window.decorView.findViewWithTag<View>("settings-option:Ocean")?.hasFocus() == true }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))
+                scenario.onActivity { activity ->
+                    val info = activity.packageManager.getActivityInfo(android.content.ComponentName(activity, MainActivity::class.java), 0)
+                    assertEquals(R.drawable.tv_banner, info.banner); assertEquals(R.drawable.ic_spare, info.icon)
+                    val banner = info.loadBanner(activity.packageManager)!!; val bitmap = Bitmap.createBitmap(960, 540, Bitmap.Config.ARGB_8888)
+                    banner.setBounds(0, 0, 960, 540); banner.draw(Canvas(bitmap)); File(context.getExternalFilesDir(null), "launcher-banner.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+                }
+                leaveSettings(scenario); scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    private fun activateSetting(scenario: ActivityScenario<MainActivity>, label: String) {
+        waitFor(scenario) { activity ->
+            val panel = activity.window.decorView.findViewWithTag<View>("settings-panel")
+            if (panel?.isShown != true) false else {
+                val control = panel.findViewWithTag<View>("settings-nav:$label") ?: panel.findViewWithTag<View>("settings-option:$label")
+                control?.let { it.requestFocus(); it.performClick(); true } ?: false
+            }
+        }
+    }
+    private fun leaveSettings(scenario: ActivityScenario<MainActivity>) {
+        repeat(2) {
+            var open = false; scenario.onActivity { activity -> open = activity.window.decorView.findViewWithTag<View>("settings-panel")?.isShown == true }
+            if (open) { device.pressBack(); instrumentation.waitForIdleSync() }
+        }
+        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown != true }
     }
 
     private fun activateDialogButton(scenario: ActivityScenario<MainActivity>, id: Int) {
@@ -827,7 +941,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -851,6 +965,10 @@ class SpareDeviceTest {
             "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (captionsMode || embeddedHls) "m3u8" else if (tsMode || stalled || embeddedCaptions != 0) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
+        val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
+        val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
+        private val liveSportsSent = AtomicBoolean(false)
+        val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
         init {
             if (embeddedCaptions != 0) captionTransport // Build fixtures before starting HTTP, so generation errors fail directly.
@@ -869,6 +987,18 @@ class SpareDeviceTest {
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
+                        var sportsPayload: ByteArray? = null
+                        if (slowSportsGuide && target.contains("get_short_epg")) {
+                            epgTargets.add(target)
+                            val id = Regex("stream_id=([0-9]+)").find(target)?.groupValues?.get(1)?.toInt() ?: 1
+                            // Socket arrival order can differ from request order. Delay only after
+                            // the first live listing was actually served, never in front of it.
+                            if (id > 2 && liveSportsSent.get()) { sportsTailBlocked.countDown(); finishSportsGuide.await(20, java.util.concurrent.TimeUnit.SECONDS) }
+                            if (id == 1) liveSportsSent.set(true)
+                            val time = System.currentTimeMillis(); val title = if (id == 1) "Yankees vs Red Sox" else if (id == 2) "Bills vs Chiefs" else "World News"
+                            val start = if (id == 2) time + 3600000 else time - 300000
+                            sportsPayload = """{"epg_listings":[{"title":"$title","start_timestamp":${start / 1000},"stop_timestamp":${(start + 3600000) / 1000}}]}""".toByteArray()
+                        }
                         val (body, mime) = when (path) {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
@@ -877,7 +1007,7 @@ class SpareDeviceTest {
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
-                            "/player_api.php" -> (if (target.contains("get_short_epg")) shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
+                            "/player_api.php" -> (if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
@@ -898,6 +1028,6 @@ class SpareDeviceTest {
                 }
             }
         }
-        override fun close() { resumeStream.countDown(); socket.close(); worker.shutdownNow() }
+        override fun close() { finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
     }
 }
