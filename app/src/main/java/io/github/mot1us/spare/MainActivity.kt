@@ -442,7 +442,7 @@ class MainActivity : Activity() {
             if (row != null) row.requestFocus()
             else if (remaining > 0) list.postOnAnimation { request(remaining - 1) }
         }
-        list.post { request(8) }
+        request(8) // Attached rows must receive focus before the next queued remote key.
     }
     private fun focusSidebar(remember: Boolean = false) {
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
@@ -455,7 +455,7 @@ class MainActivity : Activity() {
             val row = sidebar.findViewHolderForAdapterPosition(position)?.itemView
             if (row != null) row.requestFocus() else if (remaining > 0) sidebar.postOnAnimation { request(remaining - 1) }
         }
-        sidebar.post { request(8) }
+        request(8)
     }
     private fun importProgress(epoch: Int, stage: String, done: Long = 0, total: Long = -1) = ui(epoch) {
         if (cachedStartup) return@ui

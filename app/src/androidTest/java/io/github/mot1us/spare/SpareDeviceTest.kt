@@ -463,7 +463,13 @@ class SpareDeviceTest {
                 assertEquals("xc:3", store.previous(source))
                 device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
-                device.pressDPadUp(); device.pressDPadCenter()
+                // Dispatch rapid Up/OK in one input batch: focus cannot wait for a later posted task.
+                scenario.onActivity { activity ->
+                    for (key in listOf(android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_CENTER)) {
+                        activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, key))
+                        activity.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, key))
+                    }
+                }
                 waitFor(scenario) { store.unavailable(source).contains("xc:2", System.currentTimeMillis()) && store.last(source) == "xc:3" && playingPath(scenario) == "/live/test/test-secret/3.ts" }
                 assertEquals("Failed channels must not replace the previously watched channel", "xc:1", store.previous(source))
                 holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }

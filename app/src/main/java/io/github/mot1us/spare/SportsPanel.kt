@@ -107,7 +107,7 @@ class SportsPanel(context: Context, button: (String, () -> Unit) -> Button, choo
             val item = rows.findViewHolderForAdapterPosition(position)?.itemView
             if (item != null) item.requestFocus() else if (left > 0) rows.postOnAnimation { attempt(left - 1) }
         }
-        rows.post { attempt(8) }
+        attempt(8)
     }
     fun refreshTheme() { cards.notifyItemRangeChanged(0, cards.itemCount) }
     private class Card(val box: LinearLayout, val title: TextView, val detail: TextView) : RecyclerView.ViewHolder(box)
