@@ -63,7 +63,69 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun request(job: (Int) -> Unit) { task?.cancel(true); val token = ++epoch; task = worker.submit { if (!destroyed) job(token) } }
     private fun ui(token: Int, work: () -> Unit) { handler.post { if (!destroyed && token == epoch && opened) work() } }
+    private val categoryNames = mutableMapOf<String, Map<String, String>>()
     private fun catalog(selected: Source, mode: String, force: Boolean) {
+        val root = "${selected.id}:$mode"; activeCatalog = root
+        val title = if (mode == "movie") "Movies" else "Series"
+        panel.page(title, "Loading categories…", true)
+        fun bind(names: Map<String, String>) {
+            categoryNames[root] = names
+            panel.page(title, "Choose a category · Only the selected category is downloaded", false)
+            panel.bindCatalog(root, names, { group, query ->
+                val scope = group ?: names.keys.first()
+                scopedCatalog(selected, mode, root, scope, names, query, force)
+            }, { loadCatalogPage(null, activeQuery, true) }, "Featured")
+        }
+        val memory = categoryNames[root]
+        if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
+        request { token ->
+            val file = "library-categories-${selected.id}-$mode.enc"
+            val cached = runCatching { store.read(file)?.let { org.json.JSONObject(it.toString(Charsets.UTF_8)) }?.let { j -> j.keys().asSequence().associateWith { j.getString(it) } } }.getOrNull()
+            if (!force && !cached.isNullOrEmpty()) { ui(token) { bind(cached) }; return@request }
+            val names = runCatching { VodCatalog.categories(selected, mode).filterKeys { it.matches(Regex("[0-9]{1,20}")) } }.getOrDefault(emptyMap())
+            if (names.isNotEmpty()) runCatching { store.write(file, org.json.JSONObject(names).toString().toByteArray()) }
+            ui(token) { if (names.isEmpty()) bulkCatalog(selected, mode, force) else bind(names) }
+        }
+    }
+    private fun scopedCatalog(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>, query: String, force: Boolean) {
+        val key = "$root:category:$scope"
+        catalogImports.filterKeys { it.startsWith("$root:category:") && it != key }.values.forEach { if (!it.isDone) it.cancel(true) }
+        activeCatalog = key; activeGroup = null; activeQuery = query
+        val title = names[scope].orEmpty()
+        fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
+            activeSnapshot = snapshot; catalogImporting = busy
+            panel.page(title, "${snapshot.count} titles${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
+            loadCatalogPage(null, activeQuery, false)
+        }
+        val memory = catalogs[key]
+        if (memory != null) display(memory, !memory.complete) else { panel.catalogPage(emptyList(), false, false); panel.catalogBusy(); panel.page(title, "Loading this category…", true) }
+        if (!force && catalogImports[key]?.isDone == false) return
+        if (!force && memory?.complete == true && System.currentTimeMillis() - memory.updated in 0 until 6 * 3600000L) return
+        catalogImports[key]?.cancel(true)
+        val generation = ++catalogGeneration; catalogGenerations[key] = generation
+        fun deliver(snapshot: LibraryCatalog.Snapshot, busy: Boolean) { handler.post {
+            if (!destroyed && catalogGenerations[key] == generation) {
+                catalogs[key] = snapshot
+                if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) display(snapshot, busy)
+            }
+        } }
+        catalogImports[key] = worker.submit {
+            val cached = memory?.takeIf { it.complete } ?: runCatching { repository.cached(selected, mode, scope) }.getOrNull()
+            if (cached != null) deliver(cached, false)
+            if (!force && cached != null && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
+            runCatching {
+                val writer = repository.Writer(selected, mode, scope = scope); var batches = 0
+                VodCatalog.stream(selected, mode, scope) { batch ->
+                    writer.append(batch); batches++
+                    if (cached == null && batches % 4 == 1) deliver(writer.snapshot(names), true)
+                }
+                writer.finish(names)
+            }.onSuccess { deliver(it, false) }.onFailure { failure -> handler.post {
+                if (!destroyed && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (cached != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
+            } }
+        }
+    }
+    private fun bulkCatalog(selected: Source, mode: String, force: Boolean) {
         val key = "${selected.id}:$mode"; val title = if (mode == "movie") "Movies" else "Series"
         val memory = catalogs[key]
         activeCatalog = key

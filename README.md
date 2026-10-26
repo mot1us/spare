@@ -32,6 +32,8 @@ Spare includes no channels or subscriptions. Provider features and device suppor
 | Movie / episode / catch-up | Back | Return to live TV |
 | Library | Library action during playback | Pause and browse |
 
+Sports has separate Scores and Watch views. Hold OK on a Sports stream to add a second view; your provider must allow two connections. Subtitle size/style and Glass, Flat or Grid layouts are in Settings.
+
 ## Install
 
 Download **spare.apk** from [Releases](https://github.com/mot1us/spare/releases), sideload it, then add your playlist in **Settings → Playlists**. Enable HTTP there only if your provider requires it.

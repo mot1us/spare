@@ -29,6 +29,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     refresh: () -> Unit, private val close: () -> Unit) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.WHITE); typeface = AppFont.face() }
+    var navigation: (() -> Unit)? = null
+    private var allCategoryTitle = "All"
     private val heading = label(22f).apply { tag = "library-heading" }
     private val message = label(11f).apply { maxLines = 2; setTextColor(Color.LTGRAY); tag = "library-status" }
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
@@ -84,7 +86,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             override fun onCreateViewHolder(parent: ViewGroup, type: Int) = Holder(cell(13f, 42))
             override fun onBindViewHolder(holder: Holder, position: Int) {
                 val name = if (position == 0) null else categoryNames[position - 1]
-                holder.text.text = name?.let { categoryLabels[it] ?: it } ?: "All"; holder.text.isSelected = group == name
+                holder.text.text = name?.let { categoryLabels[it] ?: it } ?: allCategoryTitle; holder.text.isSelected = group == name
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
                 holder.text.setOnClickListener { catalogFocusRequested = true; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]; filter(); notifyItemRangeChanged(0, itemCount); if (catalogQuery == null) focusRows() }
                 holder.text.setOnKeyListener { _, key, event ->
@@ -93,7 +95,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                     when (key) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (position == 0 && key == KeyEvent.KEYCODE_DPAD_UP && event.repeatCount == 0) search.requestFocus() else focusAt(categories, position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusRows(); true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> true
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) navigation?.invoke(); true }
                     else -> false
                 } }
             }
@@ -181,7 +183,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }
 
-    fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit) {
+    fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit, allTitle: String = "All") {
+        allCategoryTitle = allTitle
         browse(); grid = true; columns = 4; (rows.layoutManager as GridLayoutManager).spanCount = 4
         if (catalogContext != key || catalogQuery == null) {
             if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key

@@ -22,11 +22,12 @@ data class WatchProgress(val item: OnDemand, val position: Long, val duration: L
 object VodCatalog {
     private val numeric = Regex("[0-9]{1,20}")
     /** Publish bounded batches while the response is arriving, rather than buffering the whole JSON document. */
-    fun stream(source: Source, kind: String, batch: (List<OnDemand>) -> Unit) {
+    fun stream(source: Source, kind: String, category: String? = null, batch: (List<OnDemand>) -> Unit) {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
         val action = if (kind == "movie") "get_vod_streams" else "get_series"
+        require(category == null || numeric.matches(category))
         val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "plot", "stream_icon", "cover", "year", "releaseDate", "genre", "cast", "tmdb_id", "imdb_id")
-        Network.consume(Importers.endpoint(source, "player_api.php", action), source.allowHttp) { input ->
+        Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
                 reader.beginArray(); val entries = mutableListOf<JSONObject>(); val seen = hashSetOf<String>(); var count = 0
@@ -48,7 +49,7 @@ object VodCatalog {
                         } else reader.skipValue()
                     }
                     reader.endObject(); entries.add(item)
-                    if (entries.size == 64) publish()
+                    if (entries.size == if (seen.isEmpty()) 8 else 64) publish()
                 }
                 reader.endArray(); publish()
                 if (reader.peek() != android.util.JsonToken.END_DOCUMENT) throw SourceFailure(SourceProblem.RESPONSE)

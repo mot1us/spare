@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -657,14 +657,19 @@ class SpareDeviceTest {
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
                 device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("★ YES · Quality unverified")), 5000))
-                device.findObject(By.text("★ YES · Quality unverified")).click()
+                assertTrue(device.wait(Until.hasObject(By.textContains("★ YES · Quality unverified")), 5000))
+                device.findObject(By.textContains("★ YES · Quality unverified")).click()
                 waitFor(scenario) { store.last(source) == "sports:3" }
                 assertEquals("/channel3.mp4", playingPath(scenario))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2").performLongClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("multiview-second") == null && it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
                 scenario.onActivity {
                     assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player)
                     assertTrue(it.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                     assertTrue(find<PlayerView>(it.window.decorView)!!.width < it.window.decorView.width / 2)
+                    it.window.decorView.findViewWithTag<View>("sports-scores").performClick()
                     it.window.decorView.findViewWithTag<View>("sports-scope").requestFocus()
                 }
                 device.pressDPadCenter()
@@ -680,10 +685,10 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-scope").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-teams").requestFocus() }
-                device.pressDPadDown(); device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                device.pressDPadDown(); device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 repeat(6) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
-                device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }; device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
                 device.pressDPadRight(); device.pressDPadDown(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
                 device.pressDPadRight(); holdBack()
@@ -790,7 +795,6 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
-                repeat(3) { device.pressDPadLeft() }; waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library").hasFocus() }
                 device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
@@ -811,6 +815,7 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
@@ -948,9 +953,14 @@ class SpareDeviceTest {
                 device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 fastRemote(android.view.KeyEvent.KEYCODE_DPAD_DOWN, 50)
                 fastRemote(android.view.KeyEvent.KEYCODE_DPAD_UP, 100)
-                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:1" }
-                scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("guide-now").hasFocus()) }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-now").hasFocus() }
+                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel != null }
+                scenario.onActivity { channelList(it)!!.scrollToPosition(0) }
+                waitFor(scenario) { channelList(it)?.findViewHolderForAdapterPosition(0) != null }
+                scenario.onActivity { channelList(it)!!.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
+                device.pressDPadUp(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:120" }
+                device.pressDPadDown(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:1" }
+                device.pressDPadLeft(); device.pressDPadLeft()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -977,6 +987,10 @@ class SpareDeviceTest {
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))
+                activateSetting(scenario, "Style · Flat"); waitFor(scenario) { store.themeStyle == "Flat" && GuideTheme.style == "Flat" }
+                activateSetting(scenario, "Subtitles"); activateSetting(scenario, "Subtitle appearance")
+                activateSetting(scenario, "Medium"); activateSetting(scenario, "Shadow")
+                waitFor(scenario) { store.subtitleSize == "Medium" && store.subtitleStyle == "Shadow" }
                 scenario.onActivity { activity ->
                     val info = activity.packageManager.getActivityInfo(android.content.ComponentName(activity, MainActivity::class.java), 0)
                     assertEquals(R.drawable.tv_banner, info.banner); assertEquals(R.drawable.ic_spare, info.icon)
@@ -1123,6 +1137,7 @@ class SpareDeviceTest {
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val catalogTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
         init {
             if (embeddedCaptions != 0) captionTransport // Build fixtures before starting HTTP, so generation errors fail directly.
@@ -1141,6 +1156,7 @@ class SpareDeviceTest {
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
+                        if (target.contains("get_vod_streams")) catalogTargets.add(target)
                         if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {
                             val location = if (path == "/redirect.mp4") "$base/redirect-relative.mp4" else "/channel1.mp4"
                             connection.getOutputStream().write("HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); return@use
@@ -1165,11 +1181,11 @@ class SpareDeviceTest {
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
-                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) """[{"category_id":"vod","category_name":"Fixture cinema"}]""".toByteArray()
-                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"vod","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
+                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) """[{"category_id":"1","category_name":"Fixture cinema"}]""".toByteArray()
+                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"1","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
                                 else if (target.contains("get_vod_info")) """{"info":{"plot":"A provider-supplied film description.","cover_big":"$base/logo.png","releasedate":"2025-01-01","duration":"01:30:00","genre":"Drama"}}""".toByteArray()
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
-                                else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"vod"}]""".toByteArray()
+                                else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"1"}]""".toByteArray()
                                 else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"Archived fixture","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
                                 else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"

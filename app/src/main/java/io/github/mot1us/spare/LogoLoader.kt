@@ -32,7 +32,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                 require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
                 val options = BitmapFactory.Options().apply {
-                    inSampleSize = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= maxDimension }
+                    inSampleSize = generateSequence(1) { it * 2 }.takeWhile { maxOf(bounds.outWidth, bounds.outHeight) / it >= maxDimension }.lastOrNull() ?: 1
                 }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             }.getOrNull()

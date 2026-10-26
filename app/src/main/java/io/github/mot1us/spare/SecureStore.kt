@@ -133,6 +133,15 @@ class SecureStore(private val context: Context) {
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }
+    var themeStyle: String
+        get() = preferences.getString("theme-style", "Glass").orEmpty()
+        set(value) { preferences.edit { putString("theme-style", value) } }
+    var subtitleSize: String
+        get() = preferences.getString("subtitle-size", "Small").orEmpty()
+        set(value) { preferences.edit { putString("subtitle-size", value) } }
+    var subtitleStyle: String
+        get() = preferences.getString("subtitle-style", "Outline").orEmpty()
+        set(value) { preferences.edit { putString("subtitle-style", value) } }
     var font: String
         get() = preferences.getString("font", "Default").orEmpty()
         set(value) { preferences.edit { putString("font", value) } }

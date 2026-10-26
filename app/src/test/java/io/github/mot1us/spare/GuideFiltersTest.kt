@@ -40,6 +40,16 @@ class GuideFiltersTest {
         assertEquals(0f, VideoInfo(1280, 720, 0f).retainingKnownRate(prior).fps)
         assertEquals(0f, VideoInfo(1920, 1080, 0f).retainingKnownRate(null).fps)
     }
+    @Test fun sixtyPlusUsesDisplayedHeightAndIncludesBroadcastRates() {
+        val filter = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
+        listOf(59.94f, 60f, 100f, 119.88f).forEach { fps ->
+            assertTrue(filter.matches(channel, VideoInfo(1440, 1080, fps)))
+            assertTrue(filter.matches(channel, VideoInfo(960, 1080, fps, interlaced = true)))
+        }
+        assertFalse(filter.matches(channel, VideoInfo(1920, 1080, 50f)))
+        assertFalse(filter.matches(channel, VideoInfo(1920, 720, 60f)))
+        assertFalse(filter.matches(channel, VideoInfo(1920, 1080, 0f)))
+    }
     @Test fun streamFormatChangePreservesEncodedCredentialsAndQuery() {
         val url = "https://example.com:8443/live/user%2Fname/p%40ss/123.ts?token=a%2Fb"
         assertEquals("https://example.com:8443/live/user%2Fname/p%40ss/123.m3u8?token=a%2Fb", StreamUrls.alternate(url))

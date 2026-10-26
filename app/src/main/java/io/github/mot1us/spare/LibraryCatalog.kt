@@ -18,9 +18,9 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     private val publishLock = Any()
     private val writers = mutableMapOf<String, String>()
-    private fun prefix(source: Source, mode: String): String { require(mode in setOf("movie", "series")); return "catalog-${source.id}-$mode-" }
-    fun cached(source: Source, mode: String): Snapshot? {
-        val prefix = prefix(source, mode)
+    private fun prefix(source: Source, mode: String, scope: String = ""): String { require(mode in setOf("movie", "series") && (scope.isEmpty() || scope.matches(Regex("[0-9]{1,20}")))); return "catalog-${source.id}-$mode-${if (scope.isEmpty()) "" else "category-$scope-"}" }
+    fun cached(source: Source, mode: String, scope: String = ""): Snapshot? {
+        val prefix = prefix(source, mode, scope)
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
             val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") == 1)
@@ -28,17 +28,18 @@ class LibraryCatalog(private val store: SecureStore) {
             val chunks = List(pages.length()) { i -> val p = pages.getJSONObject(i); val groups = p.getJSONArray("groups"); Chunk(p.getString("file"), p.getInt("count"), List(groups.length()) { groups.getString(it) }) }
             val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
             val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels)
-            store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
+            if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
             return snapshot
         }
         // One-time migration runs on the repository worker, never on the UI thread.
+        if (scope.isNotEmpty()) return null
         val old = store.catalog(source, mode) ?: return null
         val writer = Writer(source, mode, old.first)
         old.second.chunked(64).forEach(writer::append)
         return writer.finish(emptyMap()).also { store.delete("library-${source.id}-$mode.enc") }
     }
-    inner class Writer(source: Source, mode: String, private val stamp: Long = System.currentTimeMillis()) {
-        private val prefix = prefix(source, mode)
+    inner class Writer(source: Source, mode: String, private val stamp: Long = System.currentTimeMillis(), scope: String = "") {
+        private val prefix = prefix(source, mode, scope)
         private val generation = UUID.randomUUID().toString()
         private val chunks = mutableListOf<Chunk>()
         init { synchronized(publishLock) { writers[prefix] = generation } }

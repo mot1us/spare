@@ -27,13 +27,17 @@ object SportsSchedule {
             }
         } }
         if (events.isNotEmpty()) partial(LiveSportsSnapshot(events.values.toList(), now, emptySet()))
-        val pool = Executors.newFixedThreadPool(2)
+        val pool = Executors.newFixedThreadPool(4)
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<Triple<String, String, List<LiveEvent>>>(pool)
             urls.forEach { (league, url) -> completion.submit(java.util.concurrent.Callable { Triple(league, url, LiveSports.parse(get(url), league, now, onlyLive = false, includeCompleted = url.contains("/scoreboard")).map { it.copy(scoreboard = url.contains("/scoreboard")) }) }) }
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(12)
             repeat(urls.size) {
                 if (Thread.currentThread().isInterrupted) return LiveSportsSnapshot.EMPTY
-                runCatching { completion.take().get() }.onSuccess { (league, url, entries) ->
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) return LiveSportsSnapshot(events.values.toList(), now, leagues)
+                val finished = completion.poll(remaining, java.util.concurrent.TimeUnit.NANOSECONDS) ?: return LiveSportsSnapshot(events.values.toList(), now, leagues)
+                runCatching { finished.get() }.onSuccess { (league, url, entries) ->
                     if (url.contains("/scoreboard")) leagues.add(league)
                     entries.forEach { event -> if (event.scoreboard || events[event.id]?.scoreboard != true) events[event.id] = event }
                     if (url.contains("/teams/")) {
@@ -60,15 +64,28 @@ object SportsSchedule {
     }
     fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long): SportsGame {
         if (game.state == "post") return game
-        val broadcasts = SportsGuide.find(guide, emptySet(), favorites, now, liveOnly = false)
-        val matches = broadcasts.filter { it.teams.map { t -> t.id }.toSet() == game.teams.map { it.id }.toSet() && kotlin.math.abs(it.start - game.start) <= 3 * 3600000L }
-            .flatMap { it.broadcasts }.distinctBy { it.channel.id }
+        val target = game.teams.map { it.id }.toSet()
+        val parsed = HashMap<Pair<String, String>, List<SportsTeam>?>()
+        val byGuideKey = guide.channels.filter { !it.media }.groupBy { guide.key(it) }
+        val matches = mutableListOf<SportsBroadcast>()
+        for ((key, channels) in byGuideKey) {
+            if (Thread.currentThread().isInterrupted) return game
+            val programme = guide.programmes[key].orEmpty().firstOrNull { p ->
+                p.end > now && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && run {
+                    val cacheKey = p.title to p.description
+                    val teams = if (parsed.containsKey(cacheKey)) parsed[cacheKey] else SportsGuide.teams(p).also { if (parsed.size < 10000) parsed[cacheKey] = it }
+                    teams?.map { it.id }?.toSet() == target
+                }
+            }
+            if (programme != null) channels.forEach { matches.add(SportsBroadcast(it, programme)) }
+        }
         val names = game.networks.map { SportsCatalog.normalize(it) }.filter { it.length >= 3 }
         val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }
-        val candidates = if (matches.isNotEmpty()) emptyList() else guide.channels.asSequence().filter { channel ->
+        val confirmed = matches.map { it.channel.id }.toSet()
+        val candidates = guide.channels.asSequence().filter { channel ->
             val name = " ${SportsCatalog.normalize(channel.name)} "
-            (names + mascots).any { " $it " in name }
-        }.sortedByDescending { it.id in favorites }.take(24).toList()
+            !channel.media && channel.id !in confirmed && (names + mascots).any { " $it " in name }
+        }.sortedByDescending { it.id in favorites }.take(512).toList()
         return game.copy(broadcasts = matches, candidates = candidates)
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))

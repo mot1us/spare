@@ -56,7 +56,7 @@ class GuideAdapter(
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 channel?.let {
                     val index = channels.indexOfFirst { row -> row.id == it.id }
-                    if (!(keyCode == KeyEvent.KEYCODE_DPAD_UP && index == 0 && event.repeatCount > 0))
+                    if (index >= 0)
                         moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
                 }; return true
             }
@@ -122,7 +122,8 @@ class GuideAdapter(
                 val x1 = leftWidth + (maxOf(p.start, start) - start).toFloat() / duration * available
                 val x2 = leftWidth + (minOf(p.end, start + duration) - start).toFloat() / duration * available
                 paint.color = if (hasFocus()) Color.LTGRAY else Color.rgb(56, 56, 56)
-                canvas.drawLine(x1, 6 * density, x1, height - 6 * density, paint)
+                canvas.drawLine(x1, if (GuideTheme.style == "Grid") 0f else 6 * density, x1, if (GuideTheme.style == "Grid") height.toFloat() else height - 6 * density, paint)
+                if (GuideTheme.style == "Grid") canvas.drawLine(x1, height - density, x2, height - density, paint)
                 if (x2 - x1 > 20 * density) canvas.drawText(TextUtils.ellipsize(if (ahead) "${time(p.start)} · ${p.title}" else p.title, text, x2 - x1 - 16 * density, TextUtils.TruncateAt.END).toString(), x1 + 8 * density, base, text)
             }
             val now = System.currentTimeMillis()
