@@ -52,11 +52,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val empty = label(13f).apply { tag = "sports-empty"; setPadding(dp(16), dp(12), dp(16), dp(12)) }
     private val rows = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false); itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-games" }
     private val streams = RecyclerView(context).apply { layoutManager = TvFocus.Layout(context); itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-streams"; visibility = GONE }
-    private val logos = LogoLoader(512, 6 * 1024 * 1024)
-    private val cardLogos = LogoLoader(160, 3 * 1024 * 1024)
-    private val thumbnails = LogoLoader(384, 5 * 1024 * 1024)
-    private val pictures = LogoLoader(1280, 8 * 1024 * 1024)
-    private val artwork = SportsArtwork { key, url, attribution -> if (featured?.key == key) showArtwork(key, url, attribution) }
+    private val artworkFiles = ArtworkFiles(context)
+    private val logos = LogoLoader(512, 6 * 1024 * 1024, artworkFiles)
+    private val cardLogos = LogoLoader(160, 3 * 1024 * 1024, artworkFiles)
+    private val thumbnails = LogoLoader(384, 5 * 1024 * 1024, artworkFiles)
+    private val pictures = LogoLoader(1280, 8 * 1024 * 1024, artworkFiles)
+    private val artwork = SportsArtwork(context) { key, url, attribution -> showArtwork(key, url, attribution) }
     private val gameArt = linkedMapOf<String, String>()
     private var games = emptyList<SportsGame>()
     private var featured: SportsGame? = null
@@ -67,6 +68,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var focusEpoch = 0
     private var leagueIndex = 0
     private var pendingEnter = false
+    private var inputEpoch = 0
+    private var streamEntry = false
+    private var streamInput = 0
+    var chooseDate: () -> Unit = {}
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean { if (event.action == KeyEvent.ACTION_DOWN) ++inputEpoch; return super.dispatchKeyEvent(event) }
     private var matchingKey: String? = null
     private var preview = false
     private var streamsList = emptyList<Channel>()
@@ -82,7 +88,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun getItemId(position: Int) = Channel.stableId(games[position].key).take(16).toULong(16).toLong()
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GameCard {
             val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(8)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(dp(216), -1).apply { marginEnd = dp(9) } }
-            val badge = label(10f).apply { typeface = AppFont.face(true) }; val title = label(12f).apply { maxLines = 2; typeface = AppFont.face(true); ellipsize = android.text.TextUtils.TruncateAt.END }; val detail = label(10f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+            val badge = label(10f).apply { typeface = AppFont.face(true) }; val title = label(12f).apply { maxLines = 2; typeface = AppFont.face(true); ellipsize = android.text.TextUtils.TruncateAt.END }; val detail = label(10f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
             val poster = FrameLayout(context).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF172B40.toInt(), 0xFF344258.toInt())); clipChildren = true }
             val crests = LinearLayout(context).apply { gravity = Gravity.CENTER }
             val logos = List(2) { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(7), dp(3), dp(7), dp(3)); crests.addView(this, LayoutParams(0, -1, 1f)) } }
@@ -94,11 +100,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun onBindViewHolder(holder: GameCard, position: Int) {
             val game = games[position]; holder.box.tag = game.key; holder.badge.text = badge(game); holder.title.text = game.scoreLine
             drawCard(holder, game)
-            holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + game.statusLine(System.currentTimeMillis())
+            holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + GuideClock.sportsDate(game.start) + if (game.state != "pre") "\n" + game.statusLine(System.currentTimeMillis()) else ""
             holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
             fun ink(active: Boolean) { val color = if (active) Color.BLACK else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.badge.setTextColor(if (active) Color.BLACK else if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent) }
-            ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game) } }
+            ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game); artwork.prefetch(games.drop(position + 1).take(2)) } }
             holder.box.setOnClickListener { select(game) }
             holder.box.setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { val at = holder.bindingAdapterPosition; if (at != RecyclerView.NO_POSITION) { val next = at + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1; if (next < 0) focusTeams() else if (next in games.indices) focusAt(next) } }; true }
@@ -159,8 +165,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun showHero(game: SportsGame) {
         val changed = featured?.key != game.key; featured = game; artwork.resume()
         heroBadge.text = SportsLeagues.label(game.leagueId).uppercase() + "  ·  " + badge(game); heroBadge.setTextColor(if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent)
-        heroTitle.text = game.title; heroScore.text = if (game.state == "pre") GuideClock.dayTime(game.start) else if (game.scores.isEmpty()) "Score unavailable" else game.teams.joinToString("   :   ") { game.scores[it.id] ?: "–" }
-        heroDetail.text = (if (game.live(System.currentTimeMillis())) game.status.ifBlank { "In progress" } else if (game.state == "pre") "Upcoming" else game.statusLine(System.currentTimeMillis())) + "\n" + game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
+        heroTitle.text = game.title; heroScore.text = if (game.state == "pre") GuideClock.time(game.start) else if (game.scores.isEmpty()) "Score unavailable" else game.teams.joinToString("   :   ") { game.scores[it.id] ?: "–" }
+        heroDetail.text = GuideClock.sportsDate(game.start) + "\n" + game.status.ifBlank { if (game.state == "pre") "Upcoming" else game.statusLine(System.currentTimeMillis()) } + " · " + game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
+
         findStreams.isEnabled = game.state != "post"; findStreams.text = if (game.state == "pre") "Find coverage" else "Find streams"
         if (changed) { backdrop.setImageDrawable(null); credit.text = ""; crests.isVisible = !preview }
         game.teams.forEachIndexed { i, team -> val url = game.logos[team.id].orEmpty().ifBlank { team.logo }; fun draw() { if (featured?.key == game.key) { crestViews[i].setImageBitmap(logos.get(url, false) {}); redrawVisiblePosters() } }; crestViews[i].setImageBitmap(logos.get(url, false, ::draw)) }
@@ -169,11 +176,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun showArtwork(key: String, url: String, attribution: String) {
         if (url.isBlank()) return
         gameArt[key] = url; while (gameArt.size > 64) gameArt.remove(gameArt.keys.first())
-        if (preview) { redrawVisiblePosters(); return }
+        if (preview || featured?.key != key) { redrawVisiblePosters(); return }
         fun draw() { if (featured?.key == key && !preview) { val image = pictures.get(url, false) {}; backdrop.setImageBitmap(image); redrawVisiblePosters(); crests.isVisible = image == null; credit.text = if (image != null && attribution.isNotBlank()) "Photo: $attribution" else "" } }
         val image = pictures.get(url, false, ::draw); backdrop.setImageBitmap(image); crests.isVisible = image == null; credit.text = if (image != null && attribution.isNotBlank()) "Photo: $attribution" else ""
     }
     fun previewMode(enabled: Boolean) {
+        val height = if (watchMode) dp(200) else 0; val weight = if (watchMode) 0f else 1f
+        val old = hero.layoutParams as? LayoutParams
+        if (old?.height != height || old.weight != weight) hero.layoutParams = LayoutParams(-1, height, weight)
+        if (preview == enabled) return
         preview = enabled; heroContent.setPadding(dp(20), dp(12), dp(if (enabled) 330 else 210), dp(12)); crests.isVisible = !enabled && backdrop.drawable == null
         if (enabled) backdrop.setImageDrawable(null)
         hero.layoutParams = LayoutParams(-1, if (watchMode) dp(200) else 0, if (watchMode) 0f else 1f)
@@ -185,10 +196,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (scope != selected) { scope = selected; remembered = null; showGames() }
         if (signature != followed) {
             signature = followed; val hadFocus = leagueList.hasFocus(); leagueList.removeAllViews()
-            val values = listOf<String?>("today", null, "followed") + SportsLeagues.all.map { "league:${it.id}" } + followed.sortedBy { SportsCatalog.byId[it]?.name }
+            val values = listOf<String?>("today", "tomorrow", "date-picker", null, "followed") + SportsLeagues.all.map { "league:${it.id}" } + followed.sortedBy { SportsCatalog.byId[it]?.name }
             values.forEachIndexed { index, value ->
-                val title = when { value == "today" -> "Today"; value == null -> "All games"; value == "followed" -> "My teams"; value.startsWith("league:") -> SportsLeagues.label(value.substringAfter(':')); else -> SportsCatalog.byId[value]?.name ?: value }
-                val chip = button(title) { pendingEnter = false; chooseTeam(value) }.apply { textSize = 11f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; isSelected = value == selected; tag = value?.let { "sports-team:$it" } ?: "sports-scope"; layoutParams = LayoutParams(-1, dp(34)).apply { bottomMargin = dp(5) } }
+                val title = when { value == "today" -> "Today"; value == "tomorrow" -> "Tomorrow"; value == "date-picker" -> "Choose date"; value == null -> "All games"; value == "followed" -> "My teams"; value.startsWith("league:") -> SportsLeagues.label(value.substringAfter(':')); else -> SportsCatalog.byId[value]?.name ?: value }
+                val chip = button(title) { pendingEnter = false; if (value == "date-picker") chooseDate() else chooseTeam(value) }.apply { textSize = 11f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; isSelected = value == selected; tag = value?.let { "sports-team:$it" } ?: "sports-scope"; layoutParams = LayoutParams(-1, dp(34)).apply { bottomMargin = dp(5) } }
                 chip.setOnFocusChangeListener { _, active -> if (active) leagueIndex = index }
                 chip.setOnKeyListener { _, key, event -> when (key) {
                     KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { pendingEnter = false; if (index == 0) leave() else leagueList.getChildAt(index - 1)?.requestFocus() }; true }
@@ -198,34 +209,38 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                     else -> false
                 } }; leagueList.addView(chip)
             }
-            leagueIndex = values.indexOf(selected).coerceAtLeast(0); if (hadFocus) leagueList.getChildAt(leagueIndex)?.requestFocus()
+            leagueIndex = values.indexOf(if (selected?.startsWith("date:") == true) "date-picker" else selected).coerceAtLeast(0); if (hadFocus) leagueList.getChildAt(leagueIndex)?.requestFocus()
         }
         for (index in 0 until leagueList.childCount) {
-            val chip = leagueList.getChildAt(index); chip.isSelected = chip.tag == (selected?.let { "sports-team:$it" } ?: "sports-scope")
+            val chip = leagueList.getChildAt(index); chip.isSelected = chip.tag == (selected?.let { "sports-team:$it" } ?: "sports-scope") || chip.tag == "sports-team:date-picker" && selected?.startsWith("date:") == true
+            if (chip.tag == "sports-team:date-picker" && chip is Button) chip.text = SportsSchedule.selectedDate(selected)?.format(java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d")) ?: "Choose date"
         }
         progress.isVisible = scanning; status.text = message
         empty.text = when { scanning -> "Loading scores and schedules…"; selected == "followed" && followed.isEmpty() -> "Choose Manage teams to follow your clubs."; message.contains("unavailable", true) -> "Scores are unavailable. Choose Refresh to try again."; else -> "No games scheduled in this view. Choose another league or Refresh." }
         empty.isVisible = next.isEmpty() && !streams.isVisible
         if (games != next) {
-            val old = games; val hadFocus = rows.hasFocus()
+            val old = games; val hadFocus = rows.hasFocus(); val input = inputEpoch; val anchor = remembered; val oldPosition = old.indexOfFirst { it.key == anchor }.coerceAtLeast(0)
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() { override fun getOldListSize() = old.size; override fun getNewListSize() = next.size; override fun areItemsTheSame(a: Int, b: Int) = old[a].key == next[b].key; override fun areContentsTheSame(a: Int, b: Int) = old[a] == next[b] })
+            if (hadFocus && next.none { it.key == anchor }) { rows.isFocusableInTouchMode = true; rows.requestFocus() }
             games = next; diff.dispatchUpdatesTo(cards)
-            val chosen = next.firstOrNull { it.key == remembered } ?: featured(next, followed, System.currentTimeMillis())
+            val chosen = next.firstOrNull { it.key == remembered } ?: featured(next, followed, System.currentTimeMillis(), scope == "today" || scope == "tomorrow" || scope?.startsWith("league:") == true || scope?.startsWith("date:") == true)
             if (chosen != null) showHero(chosen) else { featured = null; artwork.pause(); backdrop.setImageDrawable(null); crestViews.forEach { it.setImageDrawable(null) }; heroTitle.text = "Your next game"; heroScore.text = ""; heroBadge.text = selected?.removePrefix("league:")?.let(SportsLeagues::label) ?: "SPORTS"; heroDetail.text = "Schedules appear independently of playlist channels."; findStreams.isEnabled = false }
-            if ((pendingEnter && games.isNotEmpty()) || (hadFocus && rows.findFocus() == null)) post { focusGames() }
+            if (pendingEnter && games.isNotEmpty()) post { if (input == inputEpoch) focusGames() }
+            else if (hadFocus && games.isNotEmpty()) rows.postOnAnimation { if (input == inputEpoch && !watchMode && !rows.hasFocus()) focusAt(games.indexOfFirst { it.key == anchor }.takeIf { it >= 0 } ?: oldPosition.coerceAtMost(games.lastIndex)) }
         } else featured?.let { current -> next.firstOrNull { it.key == current.key }?.let(::showHero) }
     }
     @SuppressLint("NotifyDataSetChanged")
-    fun matching(game: SportsGame) { streamsList = emptyList(); streamAdapter.notifyDataSetChanged(); empty.isVisible = false; showHero(game); watchMode = true; matchingKey = game.key; rows.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = true; progress.isVisible = true; status.text = "Finding playlist streams…"; presentationChanged?.invoke() }
+    fun matching(game: SportsGame) { streamEntry = true; streamInput = inputEpoch; streamsList = emptyList(); streamAdapter.notifyDataSetChanged(); empty.isVisible = false; showHero(game); watchMode = true; matchingKey = game.key; rows.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = true; progress.isVisible = true; status.text = "Finding playlist streams…"; presentationChanged?.invoke() }
     @SuppressLint("NotifyDataSetChanged")
     fun showStreams(game: SportsGame, channels: List<Channel>, label: (Channel) -> String) {
         if (!watchMode || matchingKey != game.key) return
         val same = streamsList == channels; val hadFocus = streams.hasFocus(); streamsList = channels; streamLabels = label
         if (!same) streamAdapter.notifyDataSetChanged(); progress.isVisible = false; status.text = "${channels.size} streams · OK Preview · ＋ Add to multiview · Hold Back Full screen"
         empty.text = if (game.state == "post") "This game has ended." else "No channel matched these filters yet. Try Stream filters or refresh your guide."
-        empty.isVisible = channels.isEmpty(); if (!hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
+        empty.isVisible = channels.isEmpty(); val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }
     private fun showGames() { watchMode = false; matchingKey = null; streams.isVisible = false; rows.isVisible = true; scoresButton.isVisible = false; filtersButton.isVisible = false; presentationChanged?.invoke() }
+    fun home() { remembered = null; showGames(); pendingEnter = true }
     fun back(): Boolean { if (!watchMode) return false; showGames(); focusGames(); return true }
     fun focusTeams() { leagueList.getChildAt(leagueIndex)?.requestFocus() ?: teamsButton.requestFocus() }
     fun focusGames() { if (watchMode && streamsList.isNotEmpty()) focusStream(0) else if (games.isNotEmpty()) { pendingEnter = false; focusAt(games.indexOfFirst { it.key == (remembered ?: featured?.key) }.coerceAtLeast(0)) } else { pendingEnter = true; focusTeams() } }
@@ -256,8 +271,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private class StreamCard(val box: LinearLayout, val play: Button, val together: Button) : RecyclerView.ViewHolder(box)
     companion object {
         fun time(epoch: Long): String = GuideClock.dayTime(epoch)
-        fun featured(games: List<SportsGame>, followed: Set<String>, now: Long): SportsGame? = games.minWithOrNull(compareBy<SportsGame> { game ->
-            val mine = game.teams.any { it.id in followed }; when { mine && game.live(now) -> 0; mine && game.state == "pre" && game.start >= now -> 1; game.live(now) -> 2; game.state == "pre" && game.start >= now -> 3; else -> 4 }
+        fun featured(games: List<SportsGame>, followed: Set<String>, now: Long, todayFirst: Boolean = false): SportsGame? = games.minWithOrNull(compareBy<SportsGame> { game ->
+            val mine = game.teams.any { it.id in followed }
+            if (todayFirst) when { mine && game.live(now) -> 0; game.live(now) -> 1; game.state == "pre" && game.start >= now && SportsSchedule.onDay(game.start, now) -> 2; mine && game.state == "pre" && game.start >= now -> 3; game.state == "pre" && game.start >= now -> 4; else -> 5 }
+            else when { mine && game.live(now) -> 0; mine && game.state == "pre" && game.start >= now -> 1; game.live(now) -> 2; game.state == "pre" && game.start >= now -> 3; else -> 4 }
         }.thenBy { if (it.state == "post") -it.start else it.start })
     }
 }

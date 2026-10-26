@@ -11,10 +11,15 @@ import java.util.concurrent.Executors
 object SportsSchedule {
     private val boardCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
     private val teamCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
-    fun load(followed: Set<String>, partial: (LiveSportsSnapshot) -> Unit = {}, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {
+    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {
         val now = System.currentTimeMillis(); val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
         val events = linkedMapOf<String, LiveEvent>(); val leagues = mutableSetOf<String>()
         val urls = mutableListOf<Pair<String, String>>()
+        if (requestedDate != null) {
+            listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1)).forEach { day -> SportsLeagues.all.forEach { league ->
+                urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
+            } }
+        } else {
         SportsLeagues.all.forEach { league ->
             urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
         }
@@ -22,7 +27,8 @@ object SportsSchedule {
             if (league.id == "NFL" || league.path.startsWith("soccer/")) urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?limit=100")
             urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.minusDays(1).format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
         }
-        followed.sorted().take(24).forEach { id -> SportsCatalog.byId[id]?.let { team ->
+        }
+        (if (requestedDate == null) followed else emptySet()).sorted().take(24).forEach { id -> SportsCatalog.byId[id]?.let { team ->
             team.competitions.forEach { leagueId ->
                 val league = SportsLeagues.byId[leagueId] ?: return@forEach
                 val key = "$leagueId:$id"; val cached = teamCache[key]
@@ -75,9 +81,16 @@ object SportsSchedule {
         return (0 until minOf(calendar.length(), 500)).mapNotNull { index -> runCatching { java.time.OffsetDateTime.parse(calendar.optString(index)).toLocalDate() }.getOrNull() }
             .filter { !it.isBefore(date) && !it.isAfter(date.plusDays(45)) }.minOrNull()?.format(DateTimeFormatter.BASIC_ISO_DATE)
     }
+    fun selectedDate(scope: String?, now: Long = System.currentTimeMillis()): java.time.LocalDate? = when {
+        scope == "tomorrow" -> Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate().plusDays(1)
+        scope?.startsWith("date:") == true -> runCatching { java.time.LocalDate.parse(scope.removePrefix("date:")) }.getOrNull()
+        else -> null
+    }
     internal fun onDay(start: Long, now: Long, zone: ZoneId = ZoneId.systemDefault()) = Instant.ofEpochMilli(start).atZone(zone).toLocalDate() == Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
     fun games(snapshot: LiveSportsSnapshot, guide: Guide, team: String?, favorites: Set<String>, now: Long, matchChannels: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<SportsGame> {
-        val events = if (team == "today") snapshot.events.filter { it.scoreboard && (onDay(it.start, now, zone) || it.state == "in" && it.start in (now - 18 * 3600000L)..now) }
+        val selectedDay = selectedDate(team, now)
+        val events = if (selectedDay != null) snapshot.events.filter { it.scoreboard && Instant.ofEpochMilli(it.start).atZone(zone).toLocalDate() == selectedDay }
+            else if (team == "today") snapshot.events.filter { it.scoreboard && (onDay(it.start, now, zone) || it.state == "in" && it.start in (now - 18 * 3600000L)..now) }
             else if (team == null || team.startsWith("league:")) snapshot.events.filter { it.scoreboard && (team == null || it.teams.any { id -> (it.league.ifBlank { SportsCatalog.byId[id]?.league.orEmpty() }) == team.substringAfter(':') }) }
             else snapshot.events.filter { team in it.teams && (it.state == "in" || it.state == "pre" && it.start > now) }
                 .sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(1)

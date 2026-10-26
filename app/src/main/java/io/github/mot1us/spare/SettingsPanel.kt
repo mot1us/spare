@@ -77,7 +77,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         content.addView(label(title, 23f).apply { tag = "settings-page-title"; typeface = AppFont.face(true) }, LayoutParams(-1, dp(45)))
         if (description.isNotEmpty()) note(description)
     }
-    fun note(message: String) { content.addView(label(message, 12f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(4), 0, dp(14)) }, LayoutParams(-1, -2)) }
+    fun note(message: String, identifier: String? = null) { content.addView(label(message, 12f).apply { tag = identifier; setTextColor(Color.LTGRAY); setPadding(0, dp(4), 0, dp(14)) }, LayoutParams(-1, -2)) }
     fun action(title: String, detail: String = "", selected: Boolean = false, execute: () -> Unit) {
         val text = label(title, 13f); val subtitle = label(detail, 11f).apply { setTextColor(Color.LTGRAY) }
         val box = LinearLayout(context).apply {

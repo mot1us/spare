@@ -52,8 +52,38 @@ class SecureStore(private val context: Context) {
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
     } ?: emptyList()
     fun saveSources(sources: List<Source>) = write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray())
-    fun cache(source: Source, guide: Guide) = write("cache-${source.id}.enc", guide.json().toString().toByteArray())
-    fun cached(source: Source): Guide? = read("cache-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
+    fun cache(source: Source, guide: Guide) { saveLineup(source, guide); cacheProgrammes(source, guide.programmes, System.currentTimeMillis()) }
+    fun saveLineup(source: Source, guide: Guide, url: String = guideUrl(source)) {
+        write("lineup-${source.id}.enc", guide.copy(programmes = emptyMap()).json().toString().toByteArray())
+        if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
+    }
+    fun guideUrl(source: Source) = runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
+    fun cachedLineup(source: Source): Guide? = read("lineup-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
+        ?: read("cache-${source.id}.enc")?.let { GuideDisk.lineup(it).also { guide -> saveLineup(source, guide) } }
+    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = read("epg-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes }
+        ?: read("cache-${source.id}.enc")?.let {
+            val entries = Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes
+            cacheProgrammes(source, entries, System.currentTimeMillis())
+            if (java.io.File(context.filesDir, "lineup-${source.id}.enc").exists()) delete("cache-${source.id}.enc")
+            entries
+        }.orEmpty()
+    fun cacheProgrammes(source: Source, programmes: Map<String, List<Programme>>, observedAt: Long) = synchronized(cacheLock) {
+        if (observedAt >= preferences.getLong("epg-cache-${source.id}", 0)) {
+            write("epg-${source.id}.enc", Guide(emptyList(), programmes).json().toString().toByteArray())
+            preferences.edit { putLong("epg-cache-${source.id}", observedAt) }
+        }
+    }
+    fun cached(source: Source): Guide? = cachedLineup(source)?.copy(programmes = cachedProgrammes(source))
+    fun refreshPolicy(source: Source) = RefreshPolicy(preferences.getInt("playlist-hours-${source.id}", 0), preferences.getInt("epg-hours-${source.id}", 0), preferences.getBoolean("playlist-launch-${source.id}", false), preferences.getBoolean("epg-launch-${source.id}", false))
+    fun setRefreshPolicy(source: Source, policy: RefreshPolicy) { preferences.edit {
+        putInt("playlist-hours-${source.id}", policy.playlistHours); putInt("epg-hours-${source.id}", policy.epgHours)
+        putBoolean("playlist-launch-${source.id}", policy.playlistOnLaunch); putBoolean("epg-launch-${source.id}", policy.epgOnLaunch)
+    } }
+    fun epgRefreshed(source: Source) = preferences.getLong("epg-refreshed-${source.id}", 0)
+    fun markEpgRefreshed(source: Source) { preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
+    fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
+    fun refreshError(source: Source, value: String) { preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
+    companion object { private val cacheLock = Any() }
     fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
         require(kind in setOf("movie", "series"))
         return read("library-${source.id}-$kind.enc")?.let { bytes ->
@@ -86,8 +116,8 @@ class SecureStore(private val context: Context) {
     fun removeCache(source: Source) {
         pruneCatalog("catalog-${source.id}-", emptySet())
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        listOf("library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") } }
+        listOf("lineup-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit {

@@ -59,6 +59,15 @@ class SpareDeviceTest {
             val corrupt = file.readBytes(); corrupt[corrupt.lastIndex] = (corrupt.last().toInt() xor 1).toByte(); file.writeBytes(corrupt)
             try { store.read("test-security.enc"); fail("Tampered ciphertext accepted") } catch (_: java.security.GeneralSecurityException) { }
             assertEquals(0, context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_ALLOW_BACKUP)
+            val files = ArtworkFiles(context); val url = "https://images.example/synthetic-${System.nanoTime()}.png"
+            val bytes = ByteArrayOutputStream().also { output -> Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, output); recycle() } }.toByteArray()
+            var downloads = 0
+            assertArrayEquals(bytes, files.bytes(url) { downloads++; bytes }); assertArrayEquals(bytes, files.bytes(url) { downloads++; bytes }); assertEquals(1, downloads)
+            val first = LogoLoader(16, 1024 * 1024, files); val second = LogoLoader(32, 1024 * 1024, files)
+            first.prefetch(url); second.prefetch(url)
+            val deadline = System.currentTimeMillis() + 5000
+            while ((first.get(url, false) {} == null || second.get(url, false) {} == null) && System.currentTimeMillis() < deadline) Thread.sleep(30)
+            assertNotNull(first.get(url, false) {}); assertNotNull(second.get(url, false) {}); first.close(); second.close()
             val source = Source(name = "Page test", kind = "xtream", url = "https://example.com")
             try {
                 val catalog = LibraryCatalog(store); val writer = catalog.Writer(source, "movie")
@@ -88,6 +97,55 @@ class SpareDeviceTest {
             assertEquals(profile, SecureStore(context).filters(source))
             assertFalse(context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).contains("sixty-${source.id}"))
         } finally { store.removeCache(source) }
+    }
+
+    @Test fun savedStartupBackgroundRefreshAndScheduledJobKeepPlaybackAndFocus() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Refresh fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val savedText = "#EXTM3U\n" + (1..8).joinToString("\n") { "#EXTINF:-1 tvg-id=\"test$it\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n${server.base}/channel$it.mp4" }
+            val channels = Importers.m3u(savedText, true).channels; val now = System.currentTimeMillis()
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, mapOf("test1" to listOf(Programme("test1", "Saved programme", now - 60000, now + 3600000)))))
+            store.toggleFavorite(source, channels[1]); store.setLast(source, channels[0]); store.setRefreshPolicy(source, RefreshPolicy())
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                assertEquals("Saved launch must not request the playlist", 0, server.requests["/playlist.m3u"] ?: 0)
+                var samePlayer: Player? = null; var item = ""
+                scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player; item = samePlayer!!.currentMediaItem!!.mediaId }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressDPadDown(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == channels[1].id }
+                val refreshDone = java.util.concurrent.atomic.AtomicBoolean(false)
+                scenario.onActivity { activity ->
+                    val method = MainActivity::class.java.getDeclaredMethod("refreshCurrent", Source::class.java, Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType, kotlin.jvm.functions.Function0::class.java)
+                    method.isAccessible = true; method.invoke(activity, source, true, true, { refreshDone.set(true); Unit })
+                }
+                waitFor(scenario) { refreshDone.get() && it.window.decorView.findViewWithTag<View>("background-refresh")?.isShown != true }
+                scenario.onActivity { activity ->
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(item, samePlayer!!.currentMediaItem!!.mediaId)
+                    assertEquals(channels[1].id, (channelList(activity)?.findFocus() as? GuideAdapter.Row)?.channel?.id)
+                }
+                assertEquals(setOf(channels[1].id), store.favorites(source)); assertEquals(1, server.requests["/playlist.m3u"])
+                assertTrue(store.epgRefreshed(source) > 0)
+                // Force an actual Android job after making only the playlist schedule due.
+                store.setRefreshPolicy(source, RefreshPolicy(playlistHours = 1))
+                context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).edit().putLong("playlist-refreshed-${source.id}", 0).commit()
+                scenario.onActivity { RefreshJobs.configure(it, listOf(source)) }
+                val jobs = context.getSystemService(android.app.job.JobScheduler::class.java).allPendingJobs
+                val job = jobs.single { it.extras.getString("source") == source.id }
+                assertTrue(job.isPersisted); assertFalse(job.extras.toString().contains(server.base))
+                device.executeShellCommand("cmd jobscheduler run -f ${context.packageName} ${job.id}")
+                waitFor(scenario) { (server.requests["/playlist.m3u"] ?: 0) == 2 && !PlaylistRefresh.running(source.id) }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(item, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(samePlayer!!.isPlaying) }
+                store.setRefreshPolicy(source, RefreshPolicy()); scenario.onActivity { RefreshJobs.configure(it, listOf(source)) }
+                // A provider refresh failure leaves the authenticated local cache usable.
+                val bad = source.copy(url = "${server.base}/missing-playlist.m3u")
+                store.saveSources(listOf(bad)); val failed = java.util.concurrent.atomic.AtomicReference<PlaylistRefresh.Result>()
+                PlaylistRefresh.request(context, bad, true, false) { failed.set(it) }
+                waitFor(scenario) { failed.get() != null }
+                assertTrue(failed.get().error.isNotBlank()); assertEquals(8, store.cachedLineup(bad)!!.channels.size)
+            }
+            store.saveSources(emptyList()); RefreshJobs.configure(context, emptyList()); store.removeCache(source)
+        }
     }
 
     @Test fun networkImportPreviewRemoteFavoritesAndResume() {
@@ -745,6 +803,14 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:league:NFL").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
+                scenario.onActivity { activity ->
+                    val games = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                    games.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, status = "Updated score")), now, setOf("NFL")) }
+                    activity.window.decorView.findViewWithTag<View>("sports-refresh").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail").text.contains("Updated score") }
+                scenario.onActivity { assertTrue("A scoreboard update keeps game-card focus", it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus()); assertFalse(it.window.decorView.findViewWithTag<View>("sports-leagues").hasFocus()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:league:NFL").requestFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }

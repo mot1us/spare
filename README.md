@@ -12,6 +12,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Sports hub opening on Today, with illustrated game cards, league browsing, featured game artwork, live/final scores, followed teams, and playlist stream matching. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
 - Provider movies, series, catch-up, and Continue watching.
 - Color palettes, layout styles, a retro Nostalgia preset, eleven offline fonts, 12/24-hour time, and optional AIO Metadata.
+- Saved startup, background playlist/EPG refresh schedules, and cached Sports artwork.
 - In-app signed updates. No ads, analytics, or Spare account.
 
 Spare includes no channels or subscriptions. Provider features and device support vary.
@@ -34,7 +35,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Movie / episode / catch-up | Back | Return to live TV |
 | Library | Library action during playback | Pause and browse |
 
-Choose a game in Sports to find streams. Use ＋ View or playback details → Multiview for two-up/four-up viewing; the account and device must support the selected stream count. Recent-channel tiles in playback details offer Watch or ＋ Add view. Focus a pane for audio; OK makes it full screen. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
+Sports opens on Today; browse Tomorrow, choose a date, or filter leagues/teams. Choose a game to find confirmed or possible playlist coverage. Background refresh schedules and last-success status are under Settings → Playlists → Refresh settings. Intervals follow Android’s background limits. Choose a game in Sports to find streams. Use ＋ View or playback details → Multiview for two-up/four-up viewing; the account and device must support the selected stream count. Recent-channel tiles in playback details offer Watch or ＋ Add view. Focus a pane for audio; OK makes it full screen. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
 
 ## Install
 

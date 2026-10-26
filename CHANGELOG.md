@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 — 2026-10-26
+
+- Open saved channels before loading EPG; keep encrypted lineup and guide caches independently. Refresh without restarting streams or resetting guide navigation.
+- Add per-playlist launch and interval schedules for channels and EPG, quiet progress, last-success status and retry controls. Use native Android background jobs; keep usable data on failures.
+- Share a bounded disk cache across Sports hero images and thumbnails, reuse pending artwork requests, retry transient failures and prefetch nearby matchups.
+- Add dated game cards, Tomorrow/date browsing and NFL hero priority for live or tonight’s games. Preserve card focus across score/art updates and return Sports home to Today.
+- Label confirmed versus possible coverage and provider versus playback quality; preserve Multiview’s retained surfaces and selected audio.
+
 ## 0.10.2 — 2026-10-26
 
 - Replace Android TV launcher art with a clean Spare wordmark. Add an optional Nostalgia preset with phosphor colors, square borders, a full guide grid and monospace type.

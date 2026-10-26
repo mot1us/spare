@@ -9,6 +9,11 @@ object GuideClock {
     var use24Hour = false
     fun time(epoch: Long, clock24: Boolean = use24Hour, zone: ZoneId = ZoneId.systemDefault()): String =
         DateTimeFormatter.ofPattern(if (clock24) "HH:mm" else "h:mm a", Locale.getDefault()).withZone(zone).format(Instant.ofEpochMilli(epoch))
+    fun sportsDate(epoch: Long, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault(), clock24: Boolean = use24Hour): String {
+        val day = Instant.ofEpochMilli(epoch).atZone(zone).toLocalDate(); val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val prefix = when (day) { today -> "Today · "; today.plusDays(1) -> "Tomorrow · "; else -> "" }
+        return prefix + DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()).format(day) + " · " + time(epoch, clock24, zone)
+    }
     fun dayTime(epoch: Long): String = DateTimeFormatter.ofPattern(if (use24Hour) "EEE HH:mm" else "EEE h:mm a", Locale.getDefault())
         .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(epoch))
 }

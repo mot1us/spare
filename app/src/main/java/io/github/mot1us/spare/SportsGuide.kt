@@ -7,8 +7,8 @@ data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Lon
     val leagueId get() = competition.ifBlank { teams.first().league }
     val key: String get() = (if (competition.isNotBlank() && eventId.isNotBlank()) "$competition:$eventId" else eventId).ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
-    val scoreLine: String get() = if (scores.isEmpty()) title else teams.joinToString("   —   ") { it.name + (scores[it.id]?.let { score -> "  $score" } ?: "") }
-    fun statusLine(now: Long): String = when { state == "post" -> status.ifBlank { "Final" }; live(now) -> "LIVE · ${status.ifBlank { "In progress" }}"; state == "pre" -> "${GuideClock.dayTime(start)}"; else -> status.ifBlank { "Status unavailable" } }
+    val scoreLine: String get() = if (scores.isEmpty() || state == "pre") title else teams.joinToString("   —   ") { it.name + (scores[it.id]?.let { score -> "  $score" } ?: "") }
+    fun statusLine(now: Long): String = when { state == "post" -> status.ifBlank { "Final" }; live(now) -> "LIVE · ${status.ifBlank { "In progress" }}"; state == "pre" -> "${GuideClock.sportsDate(start, now)}"; else -> status.ifBlank { "Status unavailable" } }
     fun live(now: Long) = state == "in" && if (eventId.isNotBlank()) start <= now + 60000 else start <= now && end > now
 }
 
