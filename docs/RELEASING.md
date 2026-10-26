@@ -15,9 +15,13 @@ For local release builds, supply `SPARE_KEYSTORE`, `SPARE_STORE_PASSWORD`, `SPAR
 
 ## CI and release flow
 
-Build checks run on pushes and pull requests. A trusted push to `main` automatically publishes a signed release only after build and emulator checks pass. A manual main-branch workflow dispatch can also request publication. Pull requests never receive signing secrets.
+The Checks workflow runs builds, unit tests and lint on pushes and pull requests. New commits cancel obsolete Checks runs. It does not boot a TV emulator or publish APKs.
 
-`releaseChannel=prerelease` keeps the initial version outside stable updates until the physical checklist passes. After that checkpoint, a new versioned update can set `releaseChannel=stable`; subsequent tested main-branch updates then publish into the in-app stable update channel automatically. Existing release tags and artifacts are not replaced. The manual workflow can force a prerelease but cannot bypass the tracked prerelease channel.
+Request a release only after implementation is ready: update `release-request.json` to match `version.properties` and increment its `attempt`, then commit and push it to main. That marker triggers Publish APK, which retains the full build, isolated TV, native update-install, signing and manifest verification gates. A failed gate requires inspecting and fixing its cause before a new attempt. Code-only correction commits run Checks; increment the request attempt when ready to publish again. A manual main-branch Publish APK dispatch with publish enabled is also supported. Pull requests never receive signing secrets.
+
+The marker may keep the last requested version while the tracked native version advances for unreleased configuration/documentation work. Mismatched versions skip publication. Never advance the marker for intermediate commits.
+
+`releaseChannel=prerelease` keeps the initial version outside stable updates until the physical checklist passes. After that checkpoint, a new versioned update can set `releaseChannel=stable`; subsequent explicitly requested, tested updates then publish into the in-app stable update channel. Existing release tags and artifacts are not replaced. The manual workflow can force a prerelease but cannot bypass the tracked prerelease channel.
 
 The workflow publishes `spare.apk`, `SHA256SUMS`, and `update.json` at `v<versionName>`. Existing tags/releases are not overwritten. The metadata pins the APK URL to its exact version; the app also checks the APK’s package, higher version code, and signing identity. Android still verifies the package at installation.
 

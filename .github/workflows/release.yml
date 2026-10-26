@@ -1,0 +1,160 @@
+name: Publish APK
+on:
+  push:
+    branches: [main]
+    paths: [release-request.json]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a signed, versioned APK after all checks
+        type: boolean
+        default: false
+      prerelease:
+        description: Keep outside stable updates until hardware testing passes
+        type: boolean
+        default: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: spare-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  request:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.request.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: request
+        name: Read explicit release request
+        env:
+          MANUAL_PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          tracked = dict(line.split('=', 1) for line in Path('version.properties').read_text().splitlines() if '=' in line)
+          request = json.loads(Path('release-request.json').read_text())
+          if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch':
+              publish = os.environ.get('MANUAL_PUBLISH') == 'true'
+          else:
+              publish = request['versionName'] == tracked['versionName'] and request['versionCode'] == int(tracked['versionCode'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('publish=' + str(publish).lower() + '\n')
+          print('Release requested' if publish else 'No release requested; only normal build checks are needed.')
+          PYTHON
+  build:
+    needs: request
+    if: needs.request.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - run: python3 scripts/version.py
+      - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spare-tested-apks
+          path: app/build/outputs/apk/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spare-build-reports
+          path: app/build/reports/
+  device:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - run: sdkmanager emulator 'system-images;android-36;android-tv;x86_64'
+      - name: Boot isolated TV emulator
+        shell: bash
+        run: |
+          sudo chmod a+rw /dev/kvm
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/spare-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          printf 'no\n' | avdmanager create avd --force --name spare-test --package 'system-images;android-36;android-tv;x86_64' --path "$ANDROID_AVD_HOME/spare-test.avd"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          root = Path(os.environ['ANDROID_AVD_HOME'])
+          config = root / 'spare-test.avd/config.ini'
+          values = dict(line.split('=',1) for line in config.read_text().splitlines() if '=' in line)
+          values.update({'hw.lcd.width':'1920','hw.lcd.height':'1080','hw.lcd.density':'320','hw.initialOrientation':'landscape','hw.ramSize':'3G','hw.gpu.enabled':'yes','hw.gpu.mode':'swiftshader_indirect'})
+          config.write_text(''.join(f'{k}={v}\n' for k,v in values.items()))
+          (root / 'spare-test.ini').write_text(f'avd.ini.encoding=UTF-8\npath={root}/spare-test.avd\ntarget=android-36\n')
+          PY
+          nohup "$ANDROID_HOME/emulator/emulator" -avd spare-test -port 5580 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+      - name: Use checked APKs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name spare-tested-apks --dir app/build/outputs/apk
+      - run: bash scripts/device-test.sh
+      - run: bash scripts/update-device-test.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: spare-tv-device-tests
+          path: app/build/reports/device/
+  release:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    needs: [build, device]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Use checked optimized APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name spare-tested-apks --dir tested-apks
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - run: sdkmanager 'build-tools;35.0.0'
+      - name: Sign optimized APK
+        env:
+          SPARE_KEYSTORE_BASE64: ${{ secrets.SPARE_KEYSTORE_BASE64 }}
+          SPARE_STORE_PASSWORD: ${{ secrets.SPARE_KEYSTORE_PASSWORD }}
+          SPARE_KEY_PASSWORD: ${{ secrets.SPARE_KEYSTORE_PASSWORD }}
+          SPARE_KEY_ALIAS: spare
+        shell: bash
+        run: |
+          test -n "$SPARE_KEYSTORE_BASE64" && test -n "$SPARE_STORE_PASSWORD" || { echo 'Configure the two signing secrets described in docs/RELEASING.md'; exit 1; }
+          export SPARE_KEYSTORE="$RUNNER_TEMP/spare-release.p12"
+          trap 'rm -f "$SPARE_KEYSTORE"' EXIT
+          printf '%s' "$SPARE_KEYSTORE_BASE64" | base64 --decode > "$SPARE_KEYSTORE"
+          chmod 600 "$SPARE_KEYSTORE"
+          mkdir -p dist
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks "$SPARE_KEYSTORE" --ks-key-alias spare --ks-pass env:SPARE_STORE_PASSWORD --key-pass env:SPARE_KEY_PASSWORD --v4-signing-enabled false --out dist/spare.apk tested-apks/release/app-release-unsigned.apk
+          python3 scripts/release_manifest.py
+      - name: Publish new release without replacing history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          version="$(python3 scripts/version.py --name)"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'This release already exists; increment the tracked version instead of overwriting it.'
+            exit 1
+          fi
+          flags=()
+          channel="$(python3 scripts/version.py --channel)"
+          if [ "$channel" = prerelease ] || [ "$MANUAL_PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "v$version" dist/spare.apk dist/SHA256SUMS dist/update.json --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Spare $version" --notes-file dist/release-notes.md "${flags[@]}"

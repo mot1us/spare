@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.5 — 2026-10-25
+
+- Separate fast push/PR checks from explicitly requested signed releases. Cancel obsolete check runs and retain TV/update-install verification once a release is requested. The public APK remains 0.8.4 until the next release request.
+
 ## 0.8.4 — 2026-10-25
 
 - Resume the saved channel when its FPS needs rechecking after a quality-cache migration, so strict FHD/FPS filters cannot prevent verification. Keep category, resolution and unavailable-channel restrictions intact.
