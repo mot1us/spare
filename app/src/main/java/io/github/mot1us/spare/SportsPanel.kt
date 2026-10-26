@@ -209,6 +209,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (streams.findViewHolderForAdapterPosition(at) == null) streams.scrollToPosition(at)
         fun attempt(left: Int) { if (isShown && token == focusEpoch) { val view = streams.findViewHolderForAdapterPosition(at)?.itemView; if (view != null) { view.requestFocus(); TvFocus.center(streams, view) } else if (left > 0) streams.postOnAnimation { attempt(left - 1) } } }; attempt(15)
     }
+    fun focusTeams() { teamBar.getChildAt(teamIndex)?.requestFocus() ?: teamsButton.requestFocus() }
     fun focusGames() { if (streams.isVisible && streamChannels.isNotEmpty()) { focusStream(0); return }; if (games.isEmpty()) { pendingEnter = true; teamsButton.requestFocus() } else { pendingEnter = false; focusAt(games.indexOfFirst { it.key == remembered }.coerceAtLeast(0)) } }
     private fun focusAt(position: Int) {
         if (position !in games.indices) return

@@ -215,6 +215,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun catalogBusy() { hasMore = false; loading.visibility = VISIBLE }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
+    fun focusCategories() { focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0)) }
     fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return

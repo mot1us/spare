@@ -19,6 +19,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var kind = "movie"
     private var parentSeries: OnDemand? = null
     private var archive: Channel? = null
+    private var directCatchup = false
+    var catchupClosed: (() -> Unit)? = null
     private var episodeList = emptyList<OnDemand>()
     private var playingEpisodes = emptyList<OnDemand>()
     private var destroyed = false
@@ -47,7 +49,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val opened get() = panel.isVisible
     fun open(mode: String = kind) {
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
-        parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
+        directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = source()
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
         if (selected == null) { panel.submit(emptyList()); panel.page("Library", "Add a playlist in Settings first.", false); panel.focusRows(); return }
@@ -284,7 +286,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.page("Catch-up", if (channels.isEmpty()) "This playlist has no advertised archives. Refresh the playlist if archive support was recently added." else "Choose a channel to browse its provider archive. Only completed programmes are listed.", false)
         panel.submit(channels.map { channel -> BrowserRow(channel.id, channel.name, "${channel.catchupDays} days · ${channel.group}") { openCatchup(channel) } }, channels.associate { it.id to it.group }, posters = false); panel.focusRows()
     }
-    fun openCatchup(channel: Channel) {
+    fun openCatchup(channel: Channel, direct: Boolean = false) {
+        directCatchup = direct
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
         task?.cancel(true); ++epoch
@@ -308,8 +311,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun clearMetadata() { details.clear() }
     fun reopen() { open(kind) }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!); parentSeries != null -> episodes(selected, parentSeries!!); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
-    fun back() { when { detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
+    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
+    fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
     fun dismiss() { pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
     fun destroy() { catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }

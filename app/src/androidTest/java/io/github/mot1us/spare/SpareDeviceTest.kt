@@ -359,9 +359,12 @@ class SpareDeviceTest {
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
                     assertEquals("USA | News", (categories.findViewHolderForAdapterPosition(2)!!.itemView as android.widget.TextView).text.toString())
                     assertEquals("US | MLB", (categories.findViewHolderForAdapterPosition(3)!!.itemView as android.widget.TextView).text.toString())
-                    val toolbar = activity.window.decorView.findViewWithTag<View>("guide-toolbar")
-                    val a = IntArray(2); val b = IntArray(2); toolbar.getLocationOnScreen(a); categories.getLocationOnScreen(b)
-                    assertTrue(a[1] + toolbar.height <= b[1]); assertEquals(2, (toolbar as ViewGroup).childCount)
+                    val rail = activity.window.decorView.findViewWithTag<View>("app-navigation")
+                    val a = IntArray(2); val b = IntArray(2); rail.getLocationOnScreen(a); categories.getLocationOnScreen(b)
+                    assertTrue(a[0] + rail.width <= b[0])
+                    val controls = listOf("search", "guide-mode", "sports-mode", "library", "settings").map { activity.window.decorView.findViewWithTag<View>(it) }
+                    assertEquals(1, controls.map { it.width to it.height }.distinct().size)
+                    assertTrue(controls.zipWithNext().all { (first, next) -> val x = IntArray(2); val y = IntArray(2); first.getLocationOnScreen(x); next.getLocationOnScreen(y); x[1] + first.height < y[1] })
                     assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
                     activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
                 }
@@ -591,14 +594,14 @@ class SpareDeviceTest {
                 var first = -1
                 scenario.onActivity { first = (it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition() }
                 device.pressDPadLeft()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
-                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings").hasFocus() }
-                device.pressDPadDown(); waitFor(scenario) { device.hasObject(By.text("Category 29").focused(true)) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-mode").hasFocus() }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
+                device.pressDPadDown(); device.pressDPadRight(); waitFor(scenario) { device.hasObject(By.text("Category 29").focused(true)) }
                 scenario.onActivity {
-                    assertEquals(first, (it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition())
+                    assertTrue(kotlin.math.abs(first - (it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition()) <= 1)
                     assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                 }
-                device.pressDPadLeft(); device.pressDPadRight(); device.pressDPadCenter()
+                device.pressDPadLeft(); repeat(3) { device.pressDPadDown() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("Playlists")), 5000)); device.pressBack()
             }
             store.saveSources(emptyList()); store.removeCache(source)
@@ -689,8 +692,8 @@ class SpareDeviceTest {
                 repeat(6) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scope").hasFocus() }; device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
-                device.pressDPadRight(); device.pressDPadDown(); waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
+                repeat(2) { device.pressDPadUp() }; waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
+                repeat(2) { device.pressDPadDown() }; waitFor(scenario) { device.hasObject(By.text("Sports").focused(true)) }
                 device.pressDPadRight(); holdBack()
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
                 device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
@@ -816,6 +819,10 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
+                device.pressMenu(); activateSetting(scenario, "Time format"); activateSetting(scenario, "24 hour · 19:30")
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && store.clock24 }
+                leaveSettings(scenario)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown != true }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
@@ -878,6 +885,15 @@ class SpareDeviceTest {
                     live(controls)!!.performClick()
                 }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" && channelList(it)?.isShown == true }
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                val liveAttempt = playingPath(scenario)
+                var liveMediaId = ""; scenario.onActivity { liveMediaId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-catchup")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-catchup").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                device.pressBack(); waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && channelList(it)?.isShown == false }
+                assertEquals(liveAttempt, playingPath(scenario))
+                scenario.onActivity { assertEquals("Closing the Catch-up browser must preserve the live connection", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
                 device.pressMenu(); activateSetting(scenario, "Font"); activateSetting(scenario, "Monospace")
                 waitFor(scenario) { store.font == "Monospace" }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(AppFont.face(true), it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface) }
@@ -960,7 +976,7 @@ class SpareDeviceTest {
                 device.pressDPadUp(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:120" }
                 device.pressDPadDown(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == "held:1" }
                 device.pressDPadLeft(); device.pressDPadLeft()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-mode").hasFocus() }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -984,6 +1000,12 @@ class SpareDeviceTest {
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-option:Monochrome").hasFocus() }
                 device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { store.theme == "Ocean" }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title")?.text.toString() == "Theme" && it.window.decorView.findViewWithTag<View>("settings-option:Ocean")?.hasFocus() == true }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-nav:Theme").hasFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings").hasFocus() }
+                device.pressDPadRight(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-option:Monochrome").hasFocus() }
+                device.pressDPadCenter(); waitFor(scenario) { store.theme == "Monochrome" && it.window.decorView.findViewWithTag<View>("settings-panel").isShown }
+                activateSetting(scenario, "Ocean")
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))

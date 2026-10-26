@@ -16,6 +16,8 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 
 Spare includes no channels or subscriptions. Provider features and device support vary.
 
+Search, Guide, Sports, Library and Settings share a fixed left navigation rail. Left/Right moves between columns and remembers your position.
+
 ## Remote controls
 
 | Where | Control | Action |

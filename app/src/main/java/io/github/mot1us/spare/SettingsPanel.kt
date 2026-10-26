@@ -19,9 +19,10 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private val navigation = LinearLayout(context).apply { orientation = VERTICAL; tag = "settings-navigation" }
     private val content = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(24), 0, dp(8), dp(16)); tag = "settings-content" }
-    private val contentScroll = ScrollView(context).apply { overScrollMode = OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false; isFocusable = true; addView(content) }
+    private val contentScroll = ScrollView(context).apply { overScrollMode = OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false; isFocusableInTouchMode = true; addView(content) }
     private val navRows = linkedMapOf<String, TextView>()
     private val controls = mutableListOf<View>()
+    var leaveNavigation: (() -> Unit)? = null
     private var selected = "Playlists"
     val currentPage get() = selected
     val opened get() = isVisible
@@ -35,6 +36,15 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         addView(left, LayoutParams(dp(220), -1))
         addView(contentScroll, LayoutParams(0, -1, 1f))
         contentScroll.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_DOWN) focusNavigation(); true } else false }
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (contentScroll.hasFocus()) focusNavigation() else (leaveNavigation ?: close).invoke()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
     private fun label(value: String, size: Float) = TextView(context).apply { text = value; textSize = size; typeface = AppFont.face(); setTextColor(Color.WHITE); gravity = Gravity.CENTER_VERTICAL }
     fun open(items: List<String>) {
@@ -60,9 +70,9 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     }
     private fun selectPage(item: String) { selected = item; navRows.forEach { (name, row) -> row.isSelected = name == item }; render(item) }
     fun page(title: String, description: String) {
-        // Move focus to the selected navigation row before removing a focused option.
-        // Otherwise Android can focus the first nav row and re-enter a different page mid-render.
-        if (content.hasFocus()) navRows[selected]?.requestFocus()
+        // Keep focus on a stable content container while replacing a focused option.
+        // Otherwise Android can enter a different navigation page during the render.
+        if (content.hasFocus()) { contentScroll.descendantFocusability = FOCUS_BEFORE_DESCENDANTS; contentScroll.requestFocus(); contentScroll.descendantFocusability = FOCUS_AFTER_DESCENDANTS }
         controls.clear(); content.removeAllViews()
         content.addView(label(title, 23f).apply { tag = "settings-page-title"; typeface = AppFont.face(true) }, LayoutParams(-1, dp(45)))
         if (description.isNotEmpty()) note(description)
@@ -79,6 +89,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
             setOnFocusChangeListener { _, focused -> text.setTextColor(if (focused) Color.BLACK else Color.WHITE); subtitle.setTextColor(if (focused) Color.BLACK else Color.LTGRAY); if (childCount > 1) (getChildAt(1) as TextView).setTextColor(if (focused) Color.BLACK else Color.WHITE) }
             setOnClickListener { execute() }
             setOnKeyListener { _, key, event -> when (key) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) execute(); true }
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) focusNavigation(); true }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) controls[(controls.indexOf(this) + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1).coerceIn(controls.indices)].requestFocus(); true }
                 else -> false
@@ -127,7 +138,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     fun refresh(focus: String? = null) {
         val restore = focus ?: content.findFocus()?.tag?.toString()?.removePrefix("settings-option:")
         navRows.values.forEach { it.background = GuideTheme.background(resources.displayMetrics.density) }
-        render(selected); if (restore != null) post { if (opened && hasWindowFocus()) content.findViewWithTag<View>("settings-option:$restore")?.requestFocus() }
+        render(selected); if (restore != null) post { if (opened) content.findViewWithTag<View>("settings-option:$restore")?.requestFocus() }
     }
     fun selectSetting(item: String) { navRows[item]?.requestFocus(); selectPage(item); focusContent() }
     fun focusNavigation() { navRows[selected]?.requestFocus() }

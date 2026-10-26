@@ -118,6 +118,7 @@ class MainActivity : Activity() {
     private lateinit var sportsPanel: SportsPanel
     private var settingsPanel: SettingsPanel? = null
     private var settingsReturnGuide = true
+    private var settingsReturnLibrary = false
     private lateinit var timeline: LinearLayout
     private lateinit var nowButton: Button
     private lateinit var guideMode: Button
@@ -177,8 +178,9 @@ class MainActivity : Activity() {
         }
     }
     private lateinit var playbackError: TextView
-    private lateinit var searchButton: ImageButton
-    private lateinit var settingsButton: ImageButton
+    private lateinit var navigationRail: NavigationRail
+    private lateinit var searchButton: Button
+    private lateinit var settingsButton: Button
     private lateinit var updateBadge: TextView
     private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
@@ -234,7 +236,7 @@ class MainActivity : Activity() {
         }
     }
     private var backLongPressed = false
-    private val backHold = Runnable { if (guideVisible && current != null) { backLongPressed = true; showGuide(false) } }
+    private val backHold = Runnable { if (guideVisible && settingsPanel?.opened != true && current != null) { backLongPressed = true; showGuide(false) } }
     private val hideNowPlaying = Runnable { nowPlaying.hide() }
     private val minuteTick = object : Runnable {
         override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.refreshRows(); if (sportsVisible) scheduleSports() else (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
@@ -387,7 +389,7 @@ class MainActivity : Activity() {
         }
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
         guidePanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(18), dp(18), dp(14))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(104), dp(18), dp(18), dp(14))
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B1018.toInt(), 0xC90B1018.toInt()))
         }
         root.addView(guidePanel, FrameLayout.LayoutParams(-1, -1))
@@ -398,58 +400,11 @@ class MainActivity : Activity() {
         guidePanel.addView(guideSearch, LinearLayout.LayoutParams(-1, -2))
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         guidePanel.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
+        navigationRail = NavigationRail(this, ::search, { openSection(false) }, { openSection(true) }, { openLibrary() }, ::playbackMenu,
+            ::enterNavigationContent, { ++focusEpoch; pendingFocusList = null })
+        searchButton = navigationRail.search; settingsButton = navigationRail.settings; guideMode = navigationRail.guide
+        sportsMode = navigationRail.sports; libraryButton = navigationRail.library; updateBadge = navigationRail.badge
         val navigation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(12), 0) }
-        val toolbar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; tag = "guide-toolbar" }
-        fun icon(label: String, resource: Int, click: () -> Unit) = ImageButton(this).apply {
-            contentDescription = label; isFocusableInTouchMode = true; setImageResource(resource); setPadding(dp(9), dp(9), dp(9), dp(9))
-            imageTintList = android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE))
-            fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(5).toFloat() }
-            background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.TRANSPARENT)) }
-            background = GuideTheme.background(resources.displayMetrics.density)
-            setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pendingFocusList = null } }
-            setOnClickListener { click() }; layoutParams = LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(8) }
-        }
-        searchButton = icon("Search", R.drawable.ic_search, ::search).apply { tag = "search"; id = View.generateViewId() }; toolbar.addView(searchButton)
-        settingsButton = icon("Settings", R.drawable.ic_settings, ::playbackMenu).apply { tag = "settings"; id = View.generateViewId() }
-        searchButton.nextFocusRightId = settingsButton.id; settingsButton.nextFocusLeftId = searchButton.id
-        listOf(searchButton, settingsButton).forEach { control -> control.setOnKeyListener { _, key, event ->
-            when {
-                control === searchButton && key == KeyEvent.KEYCODE_DPAD_LEFT -> true
-                key == KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { ++focusEpoch; if (sportsVisible) sportsMode.requestFocus() else if (control === settingsButton) focusSidebar(remember = true) else guideMode.requestFocus() }; true }
-                control === settingsButton && key == KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
-                else -> false
-            }
-        } }
-        val settingsSlot = FrameLayout(this); settingsSlot.addView(settingsButton, FrameLayout.LayoutParams(dp(40), dp(40)))
-        updateBadge = text("•", 18f).apply { visibility = View.GONE; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-        settingsSlot.addView(updateBadge, FrameLayout.LayoutParams(dp(12), dp(20), Gravity.TOP or Gravity.END))
-        toolbar.addView(settingsSlot, LinearLayout.LayoutParams(dp(40), dp(40)))
-        navigation.addView(toolbar, LinearLayout.LayoutParams(-1, dp(48)))
-        val modes = LinearLayout(this).apply { tag = "guide-modes"; setPadding(0, 0, 0, dp(8)) }
-        guideMode = button("Guide") { switchMode(false) }.apply { tag = "guide-mode"; id = View.generateViewId(); setPadding(dp(7), 0, dp(7), 0) }
-        sportsMode = button("Sports") { switchMode(true) }.apply { tag = "sports-mode"; id = View.generateViewId(); setPadding(dp(7), 0, dp(7), 0) }
-        modes.addView(guideMode, LinearLayout.LayoutParams(0, dp(32), 1f).apply { marginEnd = dp(6) }); modes.addView(sportsMode, LinearLayout.LayoutParams(0, dp(32), 1f))
-        guideMode.nextFocusRightId = sportsMode.id; sportsMode.nextFocusLeftId = guideMode.id
-        listOf(guideMode, sportsMode).forEach { it.setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pendingFocusList = null } } }
-        listOf(guideMode, sportsMode).forEach { control -> control.setOnKeyListener { _, key, event ->
-            when {
-                key == KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { ++focusEpoch; searchButton.requestFocus() }; true }
-                key == KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { libraryButton.requestFocus() }; true }
-                control === guideMode && key == KeyEvent.KEYCODE_DPAD_LEFT -> true
-                control === sportsMode && key == KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
-                else -> false
-            }
-        } }
-        navigation.addView(modes, LinearLayout.LayoutParams(-1, dp(40)))
-        libraryButton = button("Library") { openLibrary() }.apply { tag = "library"; contentDescription = "Library · movies, series and catch-up" }
-        libraryButton.setOnKeyListener { _, key, event -> when (key) {
-            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) guideMode.requestFocus(); true }
-            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (sportsVisible) focusChannel() else focusSidebar(remember = true) }; true }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
-            KeyEvent.KEYCODE_DPAD_LEFT -> true
-            else -> false
-        } }
-        navigation.addView(libraryButton, LinearLayout.LayoutParams(-1, dp(34)).apply { bottomMargin = dp(6) })
         categoryHeading = text("CATEGORIES", 9f).apply { setTextColor(0xFF929FAF.toInt()); letterSpacing = .12f; setPadding(dp(10), dp(3), 0, dp(7)) }
         navigation.addView(categoryHeading)
         sidebar = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; setHasFixedSize(true); overScrollMode = View.OVER_SCROLL_NEVER; tag = "guide-categories" }
@@ -461,7 +416,7 @@ class MainActivity : Activity() {
             focused = null; applyFilter()
             if (hadSearch) showGuide(true)
             focusChannelAt(0)
-        }, { focusChannel() }, { openNavigation() }, { ++focusEpoch; libraryButton.requestFocus() }, ::focusCategoryAt)
+        }, { focusChannel() }, { openNavigation() }, { openNavigation() }, ::focusCategoryAt)
         sidebar.adapter = sidebarAdapter
         navigation.addView(sidebar, LinearLayout.LayoutParams(-1, 0, 1f))
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
@@ -545,17 +500,22 @@ class MainActivity : Activity() {
             { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive)
         root.addView(demandControls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::returnToLive, ::returnToLive)
-        library.panel.navigation = ::openNavigation
+        library.panel.navigation = { ++focusEpoch; libraryButton.requestFocus() }
+        library.catchupClosed = ::returnToLiveChannel
+        library.panel.setPadding(dp(104), dp(18), dp(24), dp(18))
         root.addView(library.panel, FrameLayout.LayoutParams(-1, -1))
+        root.addView(navigationRail, FrameLayout.LayoutParams(dp(76), -1, Gravity.START).apply { marginStart = dp(14); topMargin = dp(18); bottomMargin = dp(14) })
         applyTheme(); updateTimes(); showGuide(true)
     }
     private fun openLibrary(channel: Channel? = null) {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
         root.bringChildToFront(library.panel)
-        if (channel != null) library.openCatchup(channel) else library.open()
+        if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
+        if (channel != null) library.openCatchup(channel, direct = true) else library.open()
+        showNavigation("library")
     }
     private fun reopenLibrary() {
-        saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(); root.bringChildToFront(library.panel)
+        saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(); root.bringChildToFront(library.panel); showNavigation("library")
     }
     private fun playOnDemand(item: OnDemand, position: Long) {
         val selected = source ?: return
@@ -598,6 +558,11 @@ class MainActivity : Activity() {
         if (channel != null) tune(channel) else { saveDemandProgress(); onDemand = null; player.stop(); demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick) }
         showGuide(true)
     }
+    private fun returnToLiveChannel() {
+        library.dismiss(); retryPanel.visibility = View.GONE
+        if (onDemand != null) returnToLive()
+        showGuide(false)
+    }
     private fun toggleFavorite(channel: Channel) {
         val selected = source ?: return
         store.toggleFavorite(selected, channel); favorites = store.favorites(selected)
@@ -633,12 +598,25 @@ class MainActivity : Activity() {
         if (position !in adapter.channels.indices) return
         focusListRow(list, position)
     }
-    private fun openNavigation() {
-        if (onDemand != null) returnToLive()
-        if (::library.isInitialized && library.opened) library.dismiss()
-        if (!guideVisible) showGuide(true)
-        ++focusEpoch; searchButton.requestFocus()
+    private fun showNavigation(key: String) {
+        navigationRail.visibility = View.VISIBLE; navigationRail.activate(key); root.bringChildToFront(navigationRail)
     }
+    private fun openSection(sports: Boolean) {
+        settingsPanel?.visibility = View.GONE
+        if (library.opened) library.dismiss()
+        if (onDemand != null) returnToLive()
+        switchMode(sports)
+    }
+    private fun enterNavigationContent() {
+        when (navigationRail.findFocus()?.tag) {
+            "search" -> if (guideSearch.isVisible && guideVisible) guideSearch.input.requestFocus() else search()
+            "guide-mode" -> { if (settingsPanel?.opened == true || library.opened || sportsVisible) openSection(false); focusSidebar(remember = true) }
+            "sports-mode" -> { if (settingsPanel?.opened == true || library.opened || !sportsVisible) openSection(true); sportsPanel.focusTeams() }
+            "library" -> { if (settingsPanel?.opened == true || !library.opened) openLibrary(); library.panel.focusCategories() }
+            "settings" -> { if (settingsPanel?.opened != true) playbackMenu(); settingsPanel?.focusNavigation() }
+        }
+    }
+    private fun openNavigation() { ++focusEpoch; pendingFocusList = null; navigationRail.focusCurrent() }
     private fun focusSidebar(remember: Boolean = false) {
         if (sportsVisible) { ++focusEpoch; sportsMode.requestFocus(); return }
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
@@ -912,7 +890,7 @@ class MainActivity : Activity() {
             else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
         updateGroups()
         if (::sportsPanel.isInitialized) {
-            guideMode.isSelected = !sportsVisible; sportsMode.isSelected = sportsVisible
+            if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
             sidebar.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             categoryHeading.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             sportsPanel.visibility = if (sportsVisible) View.VISIBLE else View.GONE
@@ -952,7 +930,8 @@ class MainActivity : Activity() {
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
         previewCaption.text = if (current == null) "Select a channel" else "Full screen · ${current?.name}"
         positionPlaybackLoading()
-        if (show) { focusChannel(); if (sportsVisible) scheduleSports() } else { ++focusEpoch; showNowPlaying() }
+        if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
+        else { navigationRail.visibility = View.GONE; ++focusEpoch; showNowPlaying() }
         scheduleEpg()
     }
     private fun showNowPlaying() {
@@ -963,6 +942,9 @@ class MainActivity : Activity() {
         handler.postDelayed(hideNowPlaying, 2800)
     }
     private fun search() {
+        settingsPanel?.visibility = View.GONE
+        if (::library.isInitialized && library.opened) library.dismiss()
+        if (onDemand != null) returnToLive()
         sportsVisible = false
         showGuide(true); group = null; favoritesOnly = false; applyFilter()
         guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true); guideSearch.voice.requestFocus()
@@ -1135,18 +1117,19 @@ class MainActivity : Activity() {
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
     private fun playbackMenu() {
-        if (::library.isInitialized && library.opened) library.dismiss()
         if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         val existing = settingsPanel
         if (existing?.opened == true) { existing.focusNavigation(); return }
-        settingsReturnGuide = guideVisible; ++focusEpoch; handler.removeCallbacks(backHold)
+        settingsReturnGuide = guideVisible; settingsReturnLibrary = library.opened; ++focusEpoch; handler.removeCallbacks(backHold)
         showGuide(false); nowPlaying.hide(immediate = true); previewCaption.visibility = View.GONE
-        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
+        showNavigation("settings")
         panel.open(listOf("Playlists", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
-        settingsPanel?.visibility = View.GONE; showGuide(settingsReturnGuide)
+        settingsPanel?.visibility = View.GONE
+        if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation("library"); library.panel.focusCategories() } else showGuide(settingsReturnGuide)
         if (settingsReturnGuide) { ++focusEpoch; settingsButton.requestFocus() }
     }
     private fun renderSettingsPage(page: String) {
@@ -1304,7 +1287,7 @@ class MainActivity : Activity() {
             else if (view is ImageButton) view.background = GuideTheme.background(resources.displayMetrics.density)
             if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
-        visit(root); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        visit(root); navigationRail.appearance(); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
         if (::sportsPanel.isInitialized) sportsPanel.refreshTheme()
         sidebarAdapter.notifyItemRangeChanged(0, sidebarAdapter.itemCount); adapter.refreshTheme()
     }
@@ -1396,17 +1379,17 @@ class MainActivity : Activity() {
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) { multiview.close(); playbackMenu() }; return true }
             return super.dispatchKeyEvent(event)
         }
-        if (::library.isInitialized && library.opened) {
-            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) library.back(); return true }
-            if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
-            return super.dispatchKeyEvent(event)
-        }
         settingsPanel?.takeIf { it.opened }?.let { panel ->
             if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_MENU) {
                 if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) { if (event.keyCode == KeyEvent.KEYCODE_MENU) closeSettings() else panel.back() }
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) { closeSettings(); search() }; return true }
+            return super.dispatchKeyEvent(event)
+        }
+        if (::library.isInitialized && library.opened) {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) library.back(); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
             return super.dispatchKeyEvent(event)
         }
         if (guideVisible && pendingFocusList != null && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) return true
@@ -1461,7 +1444,7 @@ class MainActivity : Activity() {
         if (::multiview.isInitialized && multiview.active) { multiview.close(); showGuide(true); return }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
         if (library.opened) { library.back(); return }
-        if (onDemand != null) { returnToLive(); return }
+        if (onDemand != null) { if (onDemand?.kind == "catchup") returnToLiveChannel() else returnToLive(); return }
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }

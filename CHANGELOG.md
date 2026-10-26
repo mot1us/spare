@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1 — 2026-10-26
+
+- Replace mixed controls with a uniform, fixed navigation rail: Search, Guide, Sports, Library, Settings. Preserve the selected category when moving between columns.
+- Keep Settings open while changing options and make Left move one level per press. Settings also owns input when Library is underneath.
+- Use one continuously retargeted scroll controller and retain nearby rows to reduce fast-scroll stutter and focus flashing.
+- Back from per-channel Catch-up returns directly to the live channel without reopening an already playing stream.
+
 ## 0.9.0 — 2026-10-25
 
 - Load and cache VOD by category instead of downloading the entire library before browsing.
