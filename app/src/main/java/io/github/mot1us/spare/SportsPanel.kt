@@ -151,6 +151,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             val teams = listOf(null, "league:NFL", "league:MLB") + followed.sortedBy { SportsCatalog.byId[it]?.name } + SportsCatalog.teams.filter { it.id !in followed }.sortedWith(compareBy({ it.league }, { it.name })).map { it.id }
             teams.forEachIndexed { index, team ->
                 val chip = button(when (team) { null -> "All games"; "league:NFL" -> "NFL"; "league:MLB" -> "MLB"; else -> SportsCatalog.byId[team]!!.name }) { pendingEnter = false; remembered = null; matchingKey = null; showGames(); chooseTeam(team) }
+                chip.layoutParams = LayoutParams(-1, dp(34)).apply { bottomMargin = dp(4) }; chip.maxLines = 1; chip.ellipsize = android.text.TextUtils.TruncateAt.END; chip.textSize = 11f
                 chip.setOnFocusChangeListener { _, active -> if (active) teamIndex = index }
                 chip.tag = team?.let { "sports-team:$it" } ?: "sports-scope"; chip.isSelected = team == selected
                 chip.setOnKeyListener { _, key, event -> when (key) {

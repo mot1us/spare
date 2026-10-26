@@ -5,7 +5,7 @@
 - Load and cache VOD by category instead of downloading the entire library before browsing.
 - Separate Sports Scores and Watch, with a team sidebar, inline stream matches, sharper logos and optional two-stream multiview.
 - Find FHD/60+ across the playlist without stale search/category restrictions; align resolution filtering with displayed video height.
-- Wrap live channel lists, jump directly from categories to main controls, and add Glass, Flat and Grid styles.
+- Wrap live channel lists, hold focus while offscreen rows attach, jump directly from categories to main controls, and add Glass, Flat and Grid styles.
 - Add subtitle size/style controls with a smaller default; increase playback buffer headroom and wait longer before reconnecting a stalled stream.
 
 ## 0.8.5 — 2026-10-25

@@ -415,7 +415,7 @@ class MainActivity : Activity() {
         listOf(searchButton, settingsButton).forEach { control -> control.setOnKeyListener { _, key, event ->
             when {
                 control === searchButton && key == KeyEvent.KEYCODE_DPAD_LEFT -> true
-                key == KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { ++focusEpoch; if (sportsVisible) sportsMode.requestFocus() else guideMode.requestFocus() }; true }
+                key == KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { ++focusEpoch; if (sportsVisible) sportsMode.requestFocus() else if (control === settingsButton) focusSidebar(remember = true) else guideMode.requestFocus() }; true }
                 control === settingsButton && key == KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
                 else -> false
             }
@@ -654,6 +654,11 @@ class MainActivity : Activity() {
         val epoch = ++focusEpoch
         if (row != null && !target.isComputingLayout) { row.requestFocus(); TvFocus.center(target, row); return }
         pendingFocusList = target; pendingFocusEpoch = epoch
+        // Keep focus inside the list while an offscreen/wrapped row is attached.
+        // Otherwise Android can move it to a toolbar button as the old row is recycled.
+        target.descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+        target.isFocusableInTouchMode = true; target.requestFocus()
+        target.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         target.stopScroll(); (target.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(position, target.height / 2 - dp(if (target === sidebar) 19 else 16))
         fun request(remaining: Int) {
             if (epoch != focusEpoch || !guideVisible || (settingsPanel?.isShown == true)) return
@@ -1404,6 +1409,7 @@ class MainActivity : Activity() {
             if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) { closeSettings(); search() }; return true }
             return super.dispatchKeyEvent(event)
         }
+        if (guideVisible && pendingFocusList != null && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) return true
         if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {

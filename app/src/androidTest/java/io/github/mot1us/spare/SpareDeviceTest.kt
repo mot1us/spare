@@ -521,7 +521,7 @@ class SpareDeviceTest {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
-                repeat(12) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
+                repeat(7) { device.pressDPadDown(); instrumentation.waitForIdleSync() }
                 waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.name == "Test Channel 8" }
                 device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.last().id }
@@ -658,7 +658,7 @@ class SpareDeviceTest {
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
                 device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.textContains("★ YES · Quality unverified")), 5000))
-                device.findObject(By.textContains("★ YES · Quality unverified")).click()
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:3").requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == "sports:3" }
                 assertEquals("/channel3.mp4", playingPath(scenario))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2").performLongClick() }
