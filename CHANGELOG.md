@@ -2,6 +2,7 @@
 
 ## 0.11.0 — 2026-10-26
 
+- Synchronize encrypted file access across refresh jobs and app instances to keep source saves atomic.
 - Open saved channels before loading EPG; keep encrypted lineup and guide caches independently. Refresh without restarting streams or resetting guide navigation.
 - Add per-playlist launch and interval schedules for channels and EPG, quiet progress, last-success status and retry controls. Use native Android background jobs; keep usable data on failures.
 - Share a bounded disk cache across Sports hero images and thumbnails, reuse pending artwork requests, retry transient failures and prefetch nearby matchups.

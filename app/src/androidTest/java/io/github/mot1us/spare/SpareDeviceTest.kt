@@ -59,6 +59,16 @@ class SpareDeviceTest {
             val corrupt = file.readBytes(); corrupt[corrupt.lastIndex] = (corrupt.last().toInt() xor 1).toByte(); file.writeBytes(corrupt)
             try { store.read("test-security.enc"); fail("Tampered ciphertext accepted") } catch (_: java.security.GeneralSecurityException) { }
             assertEquals(0, context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_ALLOW_BACKUP)
+            // AtomicFile is not thread-safe across separate SecureStore instances.
+            val originalSources = store.sources(); val concurrentSource = Source(name = "Concurrent cache test", kind = "m3u", url = "https://example.com/playlist.m3u")
+            val concurrentStore = SecureStore(context); val pool = Executors.newFixedThreadPool(2); val start = java.util.concurrent.CountDownLatch(1)
+            try {
+                store.saveSources(listOf(concurrentSource))
+                val writer = pool.submit { start.await(); repeat(160) { store.saveSources(listOf(concurrentSource.copy(name = "Write $it"))) } }
+                val reader = pool.submit { start.await(); repeat(160) { assertEquals("Concurrent reads retain the last committed source", 1, concurrentStore.sources().size) } }
+                start.countDown(); writer.get(15, java.util.concurrent.TimeUnit.SECONDS); reader.get(15, java.util.concurrent.TimeUnit.SECONDS)
+                assertEquals("Write 159", concurrentStore.sources().single().name)
+            } finally { pool.shutdownNow(); store.saveSources(originalSources) }
             val files = ArtworkFiles(context); val url = "https://images.example/synthetic-${System.nanoTime()}.png"
             val bytes = ByteArrayOutputStream().also { output -> Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, output); recycle() } }.toByteArray()
             var downloads = 0
@@ -219,7 +229,7 @@ class SpareDeviceTest {
                 assertNull("Xtream must not require the whole provider XMLTV", server.requests["/xmltv.php"])
                 scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
                 val expected = listOf("USA | News", "CA | News", "UK | News", "US | MLB")
-                waitFor(scenario) { File(context.filesDir, "cache-${source.id}.enc").exists() }
+                waitFor(scenario) { File(context.filesDir, "lineup-${source.id}.enc").exists() }
                 assertEquals(expected, store.cached(source)?.categoryOrder)
                 scenario.onActivity { activity ->
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")

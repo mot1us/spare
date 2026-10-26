@@ -16,14 +16,14 @@ import javax.crypto.spec.GCMParameterSpec
 
 class SecureStore(private val context: Context) {
     private val preferences = context.getSharedPreferences("view-state", Context.MODE_PRIVATE)
-    private val key: SecretKey by lazy {
+    private val key: SecretKey by lazy { synchronized(keyLock) {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey("spare-v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
             init(KeyGenParameterSpec.Builder("spare-v1", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
-    }
-    @Synchronized fun write(name: String, bytes: ByteArray) {
+    } }
+    fun write(name: String, bytes: ByteArray) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
         val file = AtomicFile(File(context.filesDir, name))
@@ -32,21 +32,21 @@ class SecureStore(private val context: Context) {
             output.write(byteArrayOf(1)); output.write(cipher.iv); output.write(cipher.doFinal(bytes)); file.finishWrite(output)
         } catch (e: Exception) { file.failWrite(output); throw e }
     }
-    @Synchronized fun read(name: String): ByteArray? {
+    fun read(name: String): ByteArray? = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
         val file = AtomicFile(File(context.filesDir, name))
-        if (!file.baseFile.exists()) return null
+        if (!file.baseFile.exists()) return@synchronized null
         val bytes = file.openRead().use { Network.readLimited(it, 128 * 1024 * 1024) }
         require(bytes.size >= 29 && bytes[0] == 1.toByte())
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
         }
-        return cipher.doFinal(bytes, 13, bytes.size - 13)
+        cipher.doFinal(bytes, 13, bytes.size - 13)
     }
-    fun delete(name: String) { require(name.matches(Regex("[a-zA-Z0-9_.-]+"))); AtomicFile(File(context.filesDir, name)).delete() }
+    fun delete(name: String) = synchronized(fileLock(name)) { require(name.matches(Regex("[a-zA-Z0-9_.-]+"))); AtomicFile(File(context.filesDir, name)).delete() }
     fun pruneCatalog(prefix: String, keep: Set<String>) {
         require(prefix.matches(Regex("catalog-[a-zA-Z0-9_-]+-")))
-        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") && it.name !in keep }?.forEach { AtomicFile(it).delete() }
+        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") && it.name !in keep }?.forEach { delete(it.name) }
     }
     fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
@@ -83,7 +83,7 @@ class SecureStore(private val context: Context) {
     fun markEpgRefreshed(source: Source) { preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
     fun refreshError(source: Source, value: String) { preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
-    companion object { private val cacheLock = Any() }
+    companion object { private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
     fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
         require(kind in setOf("movie", "series"))
         return read("library-${source.id}-$kind.enc")?.let { bytes ->
@@ -115,8 +115,8 @@ class SecureStore(private val context: Context) {
     fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun removeCache(source: Source) {
         pruneCatalog("catalog-${source.id}-", emptySet())
-        AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
-        listOf("lineup-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
+        delete("cache-${source.id}.enc")
+        listOf("lineup-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { delete(it) }
         preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
