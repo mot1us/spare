@@ -840,7 +840,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:xc:1").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Archived fixture")) && !it.window.decorView.findViewWithTag<View>("library-loading").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.performClick() }
-                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && samePlayer?.playbackState == Player.STATE_READY }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && samePlayer?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED) && (samePlayer?.videoSize?.width ?: 0) > 0 }
                 scenario.onActivity {
                     assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player)
                     val controls = it.window.decorView.findViewWithTag<ViewGroup>("on-demand-controls")

@@ -4,6 +4,7 @@
 
 - Make guide and Library search ignore spacing, punctuation and provider text styling, so KING 5 also finds KING5.
 - Reduce the README to key features, remote controls and installation.
+- Reuse cached quality readings directly and avoid repeated metadata parsing for large unlabelled lineups.
 
 ## 0.8.0 — 2026-10-25
 
