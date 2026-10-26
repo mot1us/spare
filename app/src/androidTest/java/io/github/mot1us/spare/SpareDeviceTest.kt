@@ -305,9 +305,15 @@ class SpareDeviceTest {
                 activateSetting(scenario, if (store.videoInfo(source).isEmpty()) "Show unverified channels" else "Use guide filters"); leaveSettings(scenario)
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 0 }
                 assertEquals(profile, store.filters(source))
+                // An invalidated FPS cache must not prevent the saved FHD channel
+                // from resuming so playback can verify it under strict filters.
+                val lastId = store.last(source)
+                store.saveVideoInfo(source, mapOf(lastId to VideoInfo(1920, 1080, 0f)))
                 scenario.recreate()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                device.pressBack()
                 waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
-                assertEquals(profile, store.filters(source)); assertFalse(store.videoInfo(source).isEmpty())
+                assertEquals(profile, store.filters(source)); assertTrue(store.videoInfo(source).values.any { it.fps > 0 })
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }

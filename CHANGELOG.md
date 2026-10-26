@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4 — 2026-10-25
+
+- Resume the saved channel when its FPS needs rechecking after a quality-cache migration, so strict FHD/FPS filters cannot prevent verification. Keep category, resolution and unavailable-channel restrictions intact.
+
 ## 0.8.3 — 2026-10-25
 
 - Read AVC SPS timing and decoder headers; version old quality readings and synchronize live quality updates so details and FHD/FPS filters agree. Preserve progressive frames versus interlaced field-rate labels.

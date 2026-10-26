@@ -712,7 +712,10 @@ class MainActivity : Activity() {
     private fun accept(next: Guide, resume: Boolean) {
         guide = if (source?.kind == "xtream" && source?.epgUrl.isNullOrBlank()) Guide(next.channels, next.programmes + guide.programmes, next.categoryOrder) else next; updateGroups(); applyFilter()
         if (resume && current == null) {
-            val last = source?.let { selected -> adapter.channels.firstOrNull { it.id == store.last(selected) } } ?: adapter.channels.firstOrNull()
+            val lastId = source?.let(store::last)
+            val recheck = guide.channels.firstOrNull { it.id == lastId && !it.media && !unavailable.contains(it.id, System.currentTimeMillis()) }
+                ?.takeIf { (videoInfo[it.id]?.fps ?: 0f) <= 0f && filters.copy(excludedFps = emptySet()).matches(it, videoInfo[it.id]) }
+            val last = adapter.channels.firstOrNull { it.id == lastId } ?: recheck ?: adapter.channels.firstOrNull()
             if (last != null) { tune(last); showGuide(false) }
         } else current = next.channels.firstOrNull { it.id == current?.id } ?: current
         if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
