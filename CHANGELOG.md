@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0 — 2026-10-26
+
+- Rebuild Sports around league navigation, featured game artwork, live/upcoming/final status and scores, and a remote-friendly game rail. Add NBA, NHL, Premier League, MLS and Champions League.
+- Prioritize followed teams live, then their next game. Keep scoreboards independent of playlist matching and fetch artwork only for the focused game.
+- Add explicit Watch together actions, two-up/four-up layouts, focus-selected audio, and game/channel picking. Release additional streams when closed or backgrounded.
+- Show live-programme hero artwork from XMLTV/Xtream metadata, or optional AIO Metadata matches, with a channel-logo fallback.
+
 ## 0.9.3 — 2026-10-26
 
 - Smooth the hidden dock with a cached slide, retarget interrupted movement, and reveal its handle after closing completes.

@@ -29,9 +29,9 @@ data class Channel(val id: String, val name: String, val group: String, val url:
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }
-data class Programme(val channel: String, val title: String, val start: Long, val end: Long, val description: String = "") {
-    fun json() = JSONArray().put(channel).put(title).put(start).put(end).put(description)
-    companion object { fun from(j: JSONArray) = Programme(j.getString(0), j.getString(1), j.getLong(2), j.getLong(3), j.optString(4)) }
+data class Programme(val channel: String, val title: String, val start: Long, val end: Long, val description: String = "", val artwork: String = "") {
+    fun json() = JSONArray().put(channel).put(title).put(start).put(end).put(description).put(artwork)
+    companion object { fun from(j: JSONArray) = Programme(j.getString(0), j.getString(1), j.getLong(2), j.getLong(3), j.optString(4), j.optString(5)) }
 }
 data class Lineup(val channels: List<Channel>, val epgUrl: String = "", val categoryOrder: List<String> = emptyList())
 data class Guide(val channels: List<Channel>, val programmes: Map<String, List<Programme>>, val categoryOrder: List<String> = emptyList()) {

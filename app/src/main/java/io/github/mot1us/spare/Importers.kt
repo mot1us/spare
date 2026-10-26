@@ -134,7 +134,7 @@ object Importers {
         require(!parser.getFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL)) { "DTD processing must be disabled" }
         parser.setInput(Network.xmlPayload(bytes).inputStream(), null)
         val result = ArrayList<Programme>()
-        var channel = ""; var title = ""; var description = ""; var start = 0L; var end = 0L
+        var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
         var text = StringBuilder(); var field = ""; var inside = false; var elements = 0
         while (true) {
             when (parser.nextToken()) {
@@ -151,8 +151,10 @@ object Importers {
                             channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
                             start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
                             end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
-                            title = ""; description = ""; inside = true
+                            title = ""; description = ""; artwork = ""; inside = true
                         }
+                        "icon" -> if (inside && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }
+                        "image" -> if (inside) { field = "image"; text = StringBuilder() }
                         "title", "desc" -> if (inside) { field = parser.name; text = StringBuilder() }
                     }
                 }
@@ -162,11 +164,12 @@ object Importers {
                 XmlPullParser.END_TAG -> when (parser.name) {
                     "title" -> if (inside) { if (title.isEmpty()) title = text.toString().take(512); field = "" }
                     "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
+                    "image" -> if (inside) { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
                     "programme" -> {
                         inside = false; field = ""
                         if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
                             require(result.size < 200000) { "Guide has too many programmes" }
-                            result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description))
+                            result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
                         }
                     }
                 }

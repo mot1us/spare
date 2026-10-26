@@ -3,12 +3,13 @@ package io.github.mot1us.spare
 import kotlin.math.abs
 
 data class SportsBroadcast(val channel: Channel, val programme: Programme)
-data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "") {
-    val key: String get() = eventId.ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
+data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val competition: String = "") {
+    val leagueId get() = competition.ifBlank { teams.first().league }
+    val key: String get() = (if (competition.isNotBlank() && eventId.isNotBlank()) "$competition:$eventId" else eventId).ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
     val scoreLine: String get() = if (scores.isEmpty()) title else teams.joinToString("   —   ") { it.name + (scores[it.id]?.let { score -> "  $score" } ?: "") }
     fun statusLine(now: Long): String = when { state == "post" -> status.ifBlank { "Final" }; live(now) -> "LIVE · ${status.ifBlank { "In progress" }}"; state == "pre" -> "${GuideClock.dayTime(start)}"; else -> status.ifBlank { "Status unavailable" } }
-    fun live(now: Long) = if (eventId.isNotBlank()) state == "in" && start <= now + 60000 else start <= now && end > now
+    fun live(now: Long) = state == "in" && if (eventId.isNotBlank()) start <= now + 60000 else start <= now && end > now
 }
 
 /** Conservative EPG matching. A listing is evidence of a broadcast, not a guarantee that a stream is online. */
@@ -17,6 +18,9 @@ object SportsGuide {
     const val MAX_WARM_CHANNELS = 64
     private val matchup = Regex("\\b(vs|v|versus|at)\\b")
     private val baseball = Regex("\\b(mlb|baseball|world series)\\b")
+    private val basketball = Regex("\\b(nba|basketball)\\b")
+    private val hockey = Regex("\\b(nhl|hockey)\\b")
+    private val soccer = Regex("\\b(soccer|premier league|champions league|mls|uefa)\\b")
     private val football = Regex("\\b(nfl|football|super bowl)\\b")
     private val noise = Regex("\\b(replay|rerun|classic|highlights?|pregame|postgame|pre game|post game|preview|review|news|countdown|re air|reair|encore|condensed|talk|documentary|sportscenter|nfl live|baseball tonight|quick pitch|good morning football)\\b")
     private val sportsChannel = Regex("\\b(sports?|mlb|nfl|espn|fox|fs1|fs2|nfln|nbc|cbs|abc|tbs|tnt|yes|sny|nesn|masn|root|fanduel|bally|space city|marquee|snla|snny|sn|tsn)\\b")
@@ -25,11 +29,11 @@ object SportsGuide {
         if (noise.containsMatchIn(title)) return null
         val description = SportsCatalog.normalize(programme.description)
         val context = "$title $description"
-        val mlb = baseball.containsMatchIn(context); val nfl = football.containsMatchIn(context)
-        val explicitLeague = if (mlb && !nfl) "MLB" else if (nfl && !mlb) "NFL" else if (!mlb && !nfl) {
+        val leagues = listOf("MLB" to baseball, "NFL" to football, "NBA" to basketball, "NHL" to hockey, "Soccer" to soccer)
+        val detected = leagues.filter { it.second.containsMatchIn(context) }.map { it.first }
+        val explicitLeague = detected.singleOrNull() ?: if (detected.isEmpty()) {
             val channel = SportsCatalog.normalize(channelContext)
-            if (Regex("\\bmlb\\b").containsMatchIn(channel) && !Regex("\\bnfl\\b").containsMatchIn(channel)) "MLB"
-            else if (Regex("\\bnfl\\b").containsMatchIn(channel) && !Regex("\\bmlb\\b").containsMatchIn(channel)) "NFL" else null
+            leagues.filter { it.second.containsMatchIn(channel) }.singleOrNull()?.first
         } else null
         val hasMatchup = matchup.containsMatchIn(title)
         if (!hasMatchup && explicitLeague == null) return null
@@ -41,7 +45,7 @@ object SportsGuide {
         if (explicitLeague != null && (hasMatchup || matchup.containsMatchIn(description))) {
             SportsCatalog.cities(if (hasMatchup) title else description, explicitLeague).forEach { resolved.putIfAbsent(it, 1) }
         }
-        val candidates = listOf("MLB", "NFL").mapNotNull { league ->
+        val candidates = listOf("MLB", "NFL", "NBA", "NHL", "Soccer").mapNotNull { league ->
             if (explicitLeague != null && explicitLeague != league) null
             else resolved.filterKeys { it.league == league }.takeIf { it.size == 2 }
         }

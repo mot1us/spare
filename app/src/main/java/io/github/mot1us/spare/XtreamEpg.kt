@@ -25,7 +25,7 @@ object XtreamEpg {
             val start = epoch("start_timestamp")
             val end = epoch("stop_timestamp").takeIf { it > 0 } ?: epoch("end_timestamp")
             if (start <= 0 || end <= start || end <= now - maxOf(3600000L, pastDays.coerceIn(0, 30) * 86400000L) || start >= now + 3 * 86400000L) return@mapNotNull null
-            Programme(channel, decode(entry.optString("title")).take(512).ifBlank { "Untitled" }, start, end, decode(entry.optString("description")).take(2048))
+            Programme(channel, decode(entry.optString("title")).take(512).ifBlank { "Untitled" }, start, end, decode(entry.optString("description")).take(2048), listOf("image", "cover", "icon").map { entry.optString(it).take(4096) }.firstOrNull { Network.allowed(it, true) }.orEmpty())
         }.distinctBy { it.start }.sortedBy { it.start }.take(if (pastDays > 0) 2000 else 72)
     }
     private fun decode(value: String): String {

@@ -19,6 +19,7 @@ import android.view.ViewGroup
 import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.Button
 import android.widget.FrameLayout
@@ -79,6 +80,7 @@ class MainActivity : Activity() {
     }
     private val sportsWorker = Executors.newSingleThreadExecutor()
     private var sportsTask: java.util.concurrent.Future<*>? = null
+    private var sportsMatchEpoch = 0
     private var sportsEpoch = 0
     private var sportsVisible = false
     private var sportsTeam: String? = null
@@ -100,7 +102,7 @@ class MainActivity : Activity() {
     private val liveSportsWorker = Executors.newSingleThreadExecutor()
     internal var liveSportsLoader: () -> LiveSportsSnapshot = {
         runCatching { store.read("sports-schedule.enc")?.let { SportsSchedule.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull()?.let { saved -> handler.post { if (!closed && liveSports.events.isEmpty()) { liveSports = saved; scheduleSports() } } }
-        SportsSchedule.load(store.followedTeams + listOfNotNull(sportsTeam?.takeIf { it in SportsCatalog.byId }), partial = { snapshot -> handler.post { if (!closed) { liveSports = snapshot; scheduleSports() } } }).also { snapshot -> runCatching { store.write("sports-schedule.enc", SportsSchedule.json(snapshot).toString().toByteArray()) } }
+        SportsSchedule.load(store.followedTeams + listOfNotNull(sportsTeam?.takeIf { it in SportsCatalog.byId }), partial = { snapshot -> handler.post { if (!closed) { liveSports = snapshot; scheduleSports() } } }).also { snapshot -> if (snapshot.leagues.isNotEmpty()) runCatching { store.write("sports-schedule.enc", SportsSchedule.json(snapshot).toString().toByteArray()) } }
     }
     private val pollLiveSports = Runnable { if (sportsVisible && guideVisible && started) { checkLiveSports(); scheduleSports() } }
     private lateinit var library: LibraryController
@@ -184,6 +186,9 @@ class MainActivity : Activity() {
     private lateinit var searchButton: Button
     private lateinit var settingsButton: Button
     private lateinit var updateBadge: TextView
+    private lateinit var headerSurface: FrameLayout
+    private lateinit var headerArtwork: ImageView
+    private lateinit var programmeArtwork: ProgrammeArtwork
     private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
     private lateinit var details: PlaybackDetails
@@ -250,7 +255,7 @@ class MainActivity : Activity() {
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
-        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = store.sportsTeam.takeIf { it in SportsCatalog.byId || it.startsWith("league:") }
+        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = store.sportsTeam.takeIf { it in SportsCatalog.byId || it.startsWith("league:") || it == "followed" }
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
@@ -262,7 +267,11 @@ class MainActivity : Activity() {
         player = ExoPlayer.Builder(this, DefaultRenderersFactory(this).setEnableDecoderFallback(true)).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
         video.player = player
-        multiview = Multiview(root, video, player, ::button, providerFactory, store, { channel -> tune(channel); showGuide(false) }, { showGuide(true) }).also { it.fullScreenMain = { showGuide(false) } }
+        multiview = Multiview(root, video, player, ::button, providerFactory, store, { channel -> tune(channel); showGuide(false) }, { showGuide(true) }).also { views ->
+            views.fullScreenMain = { showGuide(false) }
+            views.addGame = { closeDetails(); switchMode(true) }
+            views.addChannel = { closeDetails(); switchMode(false) }
+        }
         applySubtitleAppearance()
         frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView)
         voiceInput = NativeVoiceInput(this, { guideSearch.message(it) }, { words ->
@@ -427,6 +436,11 @@ class MainActivity : Activity() {
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         body.addView(content, LinearLayout.LayoutParams(0, -1, 1f))
+        headerSurface = FrameLayout(this)
+        headerArtwork = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = .7f; tag = "programme-artwork"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO; visibility = View.GONE }
+        programmeArtwork = ProgrammeArtwork(headerArtwork)
+        headerSurface.addView(headerArtwork, FrameLayout.LayoutParams(-1, -1))
+        headerSurface.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF50B1018.toInt(), 0x700B1018)) }, FrameLayout.LayoutParams(-1, -1))
         headerInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; tag = "guide-header" }
         channelInfo = text("", 20f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
         headerInfo.addView(channelInfo, LinearLayout.LayoutParams(-1, -2))
@@ -434,7 +448,8 @@ class MainActivity : Activity() {
         headerInfo.addView(programmeInfo, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(6) })
         status = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 2 }
         headerInfo.addView(status, LinearLayout.LayoutParams(-1, -2))
-        content.addView(headerInfo, LinearLayout.LayoutParams(-1, dp(188)))
+        headerSurface.addView(headerInfo, FrameLayout.LayoutParams(-1, -1))
+        content.addView(headerSurface, LinearLayout.LayoutParams(-1, dp(188)))
         timeline = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         filterInfo = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         timeline.addView(filterInfo, LinearLayout.LayoutParams(0, dp(30), 1f))
@@ -455,7 +470,7 @@ class MainActivity : Activity() {
         content.addView(emptyInfo)
         list = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { source }, { guide }, { favorites }, { guideTimeline.start(it.id) },
-            { guideSearch.hideKeyboard(); if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it) else showGuide(false) }, { channel ->
+            { guideSearch.hideKeyboard(); if (::multiview.isInitialized && multiview.browsing) startMultiview(it) else if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it) else showGuide(false) }, { channel ->
                 toggleFavorite(channel)
             }, { channel -> focused = channel; showInfo(channel); updateTimes(); scheduleEpg() }, { channel, direction -> moveTime(channel, direction) }, { focusSidebar() }, { id, direction ->
                 val index = adapter.channels.indexOfFirst { it.id == id }
@@ -470,7 +485,7 @@ class MainActivity : Activity() {
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, { playbackMenu(); settingsPanel?.selectSetting("Guide filters") }, { focusSidebar() })
-        sportsPanel.watchChannel = { channel -> if (channel.id == current?.id && hasPlayedChannel) showGuide(false) else tune(channel) }
+        sportsPanel.watchChannel = { channel -> if (::multiview.isInitialized && multiview.browsing) startMultiview(channel) else if (channel.id == current?.id && hasPlayedChannel) showGuide(false) else tune(channel) }
         sportsPanel.secondChannel = ::startMultiview
         sportsPanel.presentationChanged = { if (guideVisible && sportsVisible) layoutGuideSurface() }
         content.addView(sportsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -499,7 +514,7 @@ class MainActivity : Activity() {
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } })
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) })
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         demandControls = OnDemandControls(this, ::button, { if (player.playbackState == Player.STATE_ENDED) { demandPosition = 0; demandPaused = false; playAttempt() } else { demandPaused = player.playWhenReady; player.playWhenReady = !demandPaused }; showDemandControls() },
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
@@ -682,6 +697,7 @@ class MainActivity : Activity() {
     }
 
     private fun load(selected: Source, force: Boolean = false) {
+        if (::multiview.isInitialized) multiview.close()
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         cacheEpg.run(); cachedStartup = false
@@ -892,6 +908,9 @@ class MainActivity : Activity() {
         channelInfo.text = programme?.title ?: channel.name
         val quality = channel.quality(videoInfo[channel.id])?.let { it.label() + (if ((videoInfo[channel.id]?.fps ?: 0f) > 0) "" else " · Provider reported") } ?: "Quality unverified"
         val enriched = programme?.let { metadata.get(it) }
+        val art = programme?.artwork.orEmpty().ifBlank { enriched?.backdrop.orEmpty().ifBlank { enriched?.poster.orEmpty() } }.ifBlank { channel.logo }
+        headerArtwork.scaleType = if (art == channel.logo) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
+        programmeArtwork.show(if (guideVisible && !sportsVisible) art else "", source?.allowHttp == true)
         programmeInfo.text = channel.name + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${enriched?.description?.ifBlank { it.description } ?: it.description}" } ?: "\n${epgErrors[channel.id] ?: if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
     }
     private fun applyFilter() {
@@ -923,7 +942,7 @@ class MainActivity : Activity() {
             timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "← Navigation · Left main controls     OK Choose channel     Hold Back Full screen"
+            remoteHint.text = if (sportsVisible) "← Leagues / navigation    OK Find streams    Hold Back Full screen"
                 else "← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }
@@ -954,9 +973,10 @@ class MainActivity : Activity() {
         val preview = guideVisible && store.smallPreview && !(sportsVisible && !sportsPanel.watching)
         val searchInset = if (guideSearch.isVisible) dp(60) else 0
         video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
-        headerInfo.visibility = if (sportsVisible && !sportsPanel.watching) View.GONE else View.VISIBLE
+        headerSurface.visibility = if (sportsVisible) View.GONE else View.VISIBLE
+        sportsPanel.previewMode(preview && sportsVisible)
         headerInfo.setPadding(0, 0, if (preview) dp(336) else 0, 0)
-        headerInfo.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
+        headerSurface.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
         previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
         listOf(previewCaption, nowPlaying, loadingPanel, playbackLoading, retryPanel, favoriteFeedback).forEach(root::bringChildToFront)
@@ -1011,7 +1031,7 @@ class MainActivity : Activity() {
         liveSportsTask = liveSportsWorker.submit {
             val result = runCatching { liveSportsLoader() }.getOrDefault(LiveSportsSnapshot.EMPTY)
             handler.post { if (!closed) {
-                liveSportsChecking = false; liveSports = result
+                liveSportsChecking = false; if (result.events.isNotEmpty() || result.leagues.isNotEmpty()) liveSports = result
                 if (liveSportsAgain) { liveSportsAgain = false; checkLiveSports(force = true) }
                 scheduleSports()
             } }
@@ -1033,7 +1053,11 @@ class MainActivity : Activity() {
         val quality = videoInfo.toMap(); val now = System.currentTimeMillis(); val hidden = unavailable.snapshot().filterValues { it > now }.keys
         val signature = listOf(snapshot.channels, profile.groups, favoriteSnapshot, followed, selectedTeam, hidden)
         sportsTask = sportsWorker.submit {
-            val rawGames = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
+            val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
+            val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
+                val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
+                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
+            }
             val games = rawGames.map { game -> game.copy(broadcasts = game.broadcasts.filter { it.channel.id !in hidden && profile.matches(it.channel, quality[it.channel.id]) }, candidates = game.candidates.filter { it.id !in hidden && profile.matches(it, quality[it.id]) }) }
             val guideChannels = snapshot.programmes.size
             handler.post {
@@ -1043,9 +1067,9 @@ class MainActivity : Activity() {
                 selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
                 val scanning = liveSportsChecking
                 val progress = when {
-                    scanning -> "Updating MLB/NFL schedules… Games appear as results arrive."
+                    scanning -> "Updating scores… Games appear as each league arrives."
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
-                    else -> "${if (selectedTeam == null) "NFL week / MLB today" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
+                    else -> "${if (selectedTeam == null) "All leagues" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.submit(games, followed, selectedTeam, progress, scanning, 0, guideChannels)
                 selectedGame?.let(::showGameInfo) ?: run {
@@ -1058,13 +1082,15 @@ class MainActivity : Activity() {
     }
     private fun refreshSportsGuide() { checkLiveSports(force = true); sportsPanel.loading("Updating schedules…"); scheduleSports() }
     private fun sportsTeams() {
-        AlertDialog.Builder(this).setTitle("Follow teams").setItems(arrayOf("MLB · Baseball", "NFL · Football")) { _, leagueIndex ->
-            val teams = SportsCatalog.teams.filter { it.league == if (leagueIndex == 0) "MLB" else "NFL" }.sortedBy { it.name }
+        val leagues = SportsLeagues.all
+        AlertDialog.Builder(this).setTitle("Follow teams").setItems(leagues.map { it.name }.toTypedArray()) { _, leagueIndex ->
+            val league = leagues[leagueIndex]
+            val teams = SportsCatalog.teams.filter { league.id in it.competitions }.sortedBy { it.name }
             val chosen = store.followedTeams.toMutableSet()
-            AlertDialog.Builder(this).setTitle("Follow ${teams.first().league} teams")
+            AlertDialog.Builder(this).setTitle("Follow ${league.name} teams")
                 .setMultiChoiceItems(teams.map { it.name }.toTypedArray(), teams.map { it.id in chosen }.toBooleanArray()) { _, which, checked ->
                     if (checked) chosen.add(teams[which].id) else chosen.remove(teams[which].id)
-                }.setPositiveButton("Save") { _, _ -> store.followedTeams = chosen; if (sportsTeam != null && sportsTeam?.startsWith("league:") != true && sportsTeam !in chosen) { sportsTeam = null; store.sportsTeam = "" }; checkLiveSports(force = true); scheduleSports() }
+                }.setPositiveButton("Save") { _, _ -> store.followedTeams = chosen; checkLiveSports(force = true); scheduleSports() }
                 .setNegativeButton("Cancel", null).show()
         }.setNegativeButton("Close", null).show()
     }
@@ -1076,13 +1102,14 @@ class MainActivity : Activity() {
         sportsChannels = emptyList()
     }
     private fun selectGame(game: SportsGame) {
-        val selected = source ?: return; val snapshot = guide; val favoritesSnapshot = favorites
+        val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = if (browseAll) GuideFilters() else filters; val quality = videoInfo.toMap(); val sourceEpoch = generation
+        showGameInfo(game); val matchEpoch = ++sportsMatchEpoch
         sportsPanel.matching(game)
         sportsWorker.execute {
             val result = SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis())
             handler.post {
-                if (closed || generation != sourceEpoch || source?.id != selected.id || !sportsVisible) return@post
+                if (closed || generation != sourceEpoch || source?.id != selected.id || !sportsVisible || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return@post
                 val now = System.currentTimeMillis(); val confirmed = result.broadcasts.map { it.channel.id }.toSet()
                 val channels = (result.broadcasts.map { it.channel } + result.candidates).distinctBy { it.id }
                     .filter { !unavailable.contains(it.id, now) && profile.matches(it, quality[it.id]) }
@@ -1096,12 +1123,15 @@ class MainActivity : Activity() {
     }
     private fun startMultiview(channel: Channel) {
         val selected = source ?: return
-        if (current == null || !hasPlayedChannel) { tune(channel); toast("Start another channel, then hold OK to add a second view"); return }
-        if (channel.id == current?.id) { toast("Choose a different channel for the second view"); return }
+        if (current == null || !hasPlayedChannel) { tune(channel); toast("Start a live channel, then choose Watch together"); return }
+        if (channel.id == current?.id) {
+            if (!multiview.active) multiview.open(current!!.name, current!!.id)
+            multiview.chooseGame(); return
+        }
         if (!Network.allowed(channel.url, selected.allowHttp)) { toast("This stream needs HTTP permission in playlist settings"); return }
         showGuide(false); nowPlaying.hide(immediate = true); frameRates.clear()
         val url = when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts"); "hls" -> StreamUrls.format(channel.url, "m3u8"); else -> workingUrls[channel.id] } ?: channel.url
-        multiview.start(channel, url, current?.name.orEmpty())
+        multiview.start(channel, url, current?.name.orEmpty(), current?.id.orEmpty())
     }
     private fun previousChannel(): Channel? {
         val selected = source ?: return null
@@ -1235,7 +1265,7 @@ class MainActivity : Activity() {
                 } }
             }
             "Subtitles" -> renderCaptionSettings()
-            "Sports" -> { panel.page("Live sports", "Sports shows ESPN live schedules independently of your playlist. All live shows games in progress; each followed team shows its live or next scheduled game. Channel matching runs separately from schedule loading. ESPN receives no playlist or credential data. Follow teams to add quick team selectors. Cached results appear first; a progress bar shows guide checks."); panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) } }
+            "Sports" -> { panel.page("Sports", "Browse league scoreboards, follow teams, and select a game to find playlist streams. LIVE comes from fresh game status, not a programme title. Watch together supports two or four streams; your provider and TV hardware must support the chosen connection and decoder count. ESPN receives no playlist credentials."); panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) } }
             "Updates" -> { panel.page(page, "Spare ${BuildConfig.VERSION_NAME}. Updates are downloaded from verified GitHub releases. Android may request installation permission or confirmation."); panel.action(availableUpdate?.let { "Update $it" } ?: "Check for updates") { updater.offer() } }
             "Stream format" -> {
                 panel.page(page, "Auto tries the provider’s alternate transport format when a channel cannot open.")
@@ -1409,7 +1439,7 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (::multiview.isInitialized && multiview.active) {
+        if (::multiview.isInitialized && multiview.visible) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) { multiview.close(); showGuide(true) }; return true }
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) { multiview.close(); playbackMenu() }; return true }
             return super.dispatchKeyEvent(event)
@@ -1476,7 +1506,9 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // The TV activity opts out of predictive back for remote hold detection.
     override fun onBackPressed() = navigateBack()
     private fun navigateBack() {
-        if (::multiview.isInitialized && multiview.active) { multiview.close(); showGuide(true); return }
+        if (::multiview.isInitialized && multiview.active) {
+            if (multiview.browsing) { showGuide(false); multiview.present() } else { multiview.close(); showGuide(true) }; return
+        }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
         if (library.opened) { library.back(); return }
         if (onDemand != null) { if (onDemand?.kind == "catchup") returnToLiveChannel() else returnToLive(); return }
@@ -1485,13 +1517,14 @@ class MainActivity : Activity() {
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
         else if (!guideVisible) showGuide(true)
         else if (list.hasFocus() && guideTimeline.ahead((focused ?: current)?.id)) resetTime()
+        else if (sportsVisible && sportsPanel.back()) return
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); if (onDemand != null) demandPaused = !player.playWhenReady; handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { if (::multiview.isInitialized) multiview.close(); metadata.close(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); if (onDemand != null) demandPaused = !player.playWhenReady; handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

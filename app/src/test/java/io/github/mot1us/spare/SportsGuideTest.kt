@@ -58,7 +58,7 @@ class SportsGuideTest {
     }
     @Test fun catalogHasAllTeamsAndStableDistinctLeagueIds() {
         assertEquals(30, SportsCatalog.teams.count { it.league == "MLB" }); assertEquals(32, SportsCatalog.teams.count { it.league == "NFL" })
-        assertEquals(62, SportsCatalog.byId.size)
+        assertEquals(SportsCatalog.teams.size, SportsCatalog.byId.size); assertEquals(30, SportsCatalog.teams.count { it.league == "NBA" }); assertEquals(32, SportsCatalog.teams.count { it.league == "NHL" }); assertTrue(SportsCatalog.teams.any { "EPL" in it.competitions && "UCL" in it.competitions })
     }
     @Test fun leagueContextSupportsCityListingsWithoutGuessingAmbiguousCities() {
         assertEquals(setOf("nfl:CHI", "nfl:MIN"), ids("NFL Football", "Chicago at Minnesota. Live."))

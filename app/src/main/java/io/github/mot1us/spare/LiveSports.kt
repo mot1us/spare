@@ -5,13 +5,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true)
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "")
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {
         if (!fresh(now)) return emptyList()
         return games.filter { game ->
-            game.teams.first().league in leagues && events.any { event ->
+            game.leagueId in leagues && events.any { event ->
                 event.state == "in" && event.teams == game.teams.map { it.id }.toSet() && kotlin.math.abs(game.start - event.start) < 12 * 3600000L
             }
         }
@@ -37,7 +37,7 @@ object LiveSports {
         return LiveSportsSnapshot(events.distinctBy { it.id }, now, leagues)
     }
     fun parse(text: String, league: String, now: Long, onlyLive: Boolean = true, includeCompleted: Boolean = false): List<LiveEvent> {
-        require(league in setOf("NFL", "MLB"))
+        require(league in SportsLeagues.byId)
         val entries = JSONObject(text).getJSONArray("events"); require(entries.length() <= 500)
         val result = mutableListOf<LiveEvent>()
         for (index in 0 until entries.length()) {
@@ -47,7 +47,7 @@ object LiveSports {
                 val competition = competitions.optJSONObject(match) ?: continue
                 val status = (competition.optJSONObject("status") ?: event.optJSONObject("status"))?.optJSONObject("type") ?: continue
                 val state = status.optString("name")
-                val live = status.optString("state") == "in" && !status.optBoolean("completed") && state in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION")
+                val live = status.optString("state") == "in" && !status.optBoolean("completed") && state in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF", "STATUS_EXTRA_TIME", "STATUS_SHOOTOUT")
                 val upcoming = !onlyLive && status.optString("state") == "pre" && state == "STATUS_SCHEDULED" && !status.optBoolean("completed")
                 if (!live && !upcoming && !includeCompleted) continue
                 val date = competition.optString("date").ifBlank { event.optString("date") }
@@ -60,7 +60,7 @@ object LiveSports {
                 if (competitors.length() != 2) continue
                 val teams = (0 until competitors.length()).mapNotNull { i ->
                     val team = competitors.optJSONObject(i)?.optJSONObject("team") ?: return@mapNotNull null
-                    resolve(league, team.optString("abbreviation"), team.optString("displayName"))
+                    resolve(league, team.optString("abbreviation"), team.optString("displayName"), team.optString("id"))
                 }.toSet()
                 if (teams.size == 2) {
                     val networks = mutableListOf<String>()
@@ -72,20 +72,21 @@ object LiveSports {
                     val scores = linkedMapOf<String, String>(); val logos = linkedMapOf<String, String>()
                     for (i in 0 until competitors.length()) {
                         val side = competitors.getJSONObject(i); val team = side.getJSONObject("team")
-                        val id = resolve(league, team.optString("abbreviation"), team.optString("displayName")) ?: continue
+                        val id = resolve(league, team.optString("abbreviation"), team.optString("displayName"), team.optString("id")) ?: continue
                         val score = side.optJSONObject("score")?.optString("displayValue") ?: side.optString("score")
                         if (score.matches(Regex("[0-9]{1,3}"))) scores[id] = score
                         val logo = team.optString("logo").ifBlank { team.optJSONArray("logos")?.optJSONObject(0)?.optString("href").orEmpty() }
-                        if (logo.length <= 2048 && Network.allowed(logo, false)) logos[id] = logo
+                        if (logo.length <= 2048 && Network.allowed(logo, false)) logos[id] = if (runCatching { java.net.URI(logo).host }.getOrNull() == "a.espncdn.com") logo.replace("/500/scoreboard/", "/500/").replace("/500-dark/scoreboard/", "/500-dark/") else logo
                     }
-                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100)))
+                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100), league = league))
                 }
             }
         }
         return result.distinctBy { it.id }
     }
-    private fun resolve(league: String, code: String, name: String): String? {
+    private fun resolve(league: String, code: String, name: String, apiId: String = ""): String? {
+        SportsCatalog.teams.firstOrNull { league in it.competitions && apiId.isNotBlank() && it.apiId == apiId }?.let { return it.id }
         val aliases = when (league to code.uppercase(java.util.Locale.ROOT)) { "NFL" to "WSH", "NFL" to "WAS" -> "WSH"; "NFL" to "JAC" -> "JAX"; "MLB" to "OAK" -> "ATH"; else -> code.uppercase(java.util.Locale.ROOT) }
-        return SportsCatalog.byId["${league.lowercase(java.util.Locale.ROOT)}:$aliases"]?.id ?: SportsCatalog.teams.firstOrNull { it.league == league && SportsCatalog.normalize(it.name) == SportsCatalog.normalize(name) }?.id
+        return SportsCatalog.byId["${league.lowercase(java.util.Locale.ROOT)}:$aliases"]?.id ?: SportsCatalog.teams.firstOrNull { league in it.competitions && SportsCatalog.normalize(it.name) == SportsCatalog.normalize(name) }?.id
     }
 }

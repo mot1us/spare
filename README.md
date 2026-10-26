@@ -6,10 +6,10 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 
 - M3U playlists and Xtream Codes accounts; multiple saved playlists.
 - Live TV guide, channel categories, favorites, text and voice search.
-- Live preview or a translucent guide over full-screen video.
+- Live preview or a translucent guide, with programme artwork from your provider or optional metadata.
 - Frame-rate matching, audio tracks, and per-channel subtitles.
 - Resolution/FPS filters, including an FHD+ / 60 fps preset. Provider-reported quality is labelled; playback readings take priority.
-- NFL/MLB scoreboards with scores, team logos, start times, and playlist channel matching.
+- Sports hub with league browsing, featured game artwork, live/final scores, followed teams, and playlist stream matching. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
 - Provider movies, series, catch-up, and Continue watching.
 - Twelve color palettes, six styles, eleven offline fonts, 12/24-hour time, and optional AIO Metadata.
 - In-app signed updates. No ads, analytics, or Spare account.
@@ -34,7 +34,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Movie / episode / catch-up | Back | Return to live TV |
 | Library | Library action during playback | Pause and browse |
 
-Sports has separate Scores and Watch views. Hold OK on a Sports stream to add a second view; your provider must allow two connections. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
+Choose a game in Sports to find streams. Use ＋ Watch together or the playback details action for two-up/four-up viewing; the account and device must support the selected stream count. Focus a pane for audio; OK makes it full screen. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
 
 ## Install
 

@@ -3,7 +3,7 @@ package io.github.mot1us.spare
 import java.text.Normalizer
 import java.util.Locale
 
-data class SportsTeam(val id: String, val league: String, val name: String, val aliases: List<String>)
+data class SportsTeam(val id: String, val league: String, val name: String, val aliases: List<String>, val apiId: String = "", val competitions: Set<String> = setOf(league), val logo: String = "")
 
 /** Local team names and aliases, shared by EPG matching and live event verification. */
 object SportsCatalog {
@@ -72,7 +72,7 @@ object SportsCatalog {
         team("NFL", "TB", "Tampa Bay Buccaneers", "Buccaneers", "Bucs", "TBB"),
         team("NFL", "TEN", "Tennessee Titans", "Titans"),
         team("NFL", "WSH", "Washington Commanders", "Commanders", "Washington Football Team", "WAS"),
-    )
+    ) + SportsExtraTeams.teams
     val byId = teams.associateBy { it.id }
     private val punctuation = Regex("[^a-z0-9]+")
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)
