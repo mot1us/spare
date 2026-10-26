@@ -134,6 +134,8 @@ class MainActivity : Activity() {
     private lateinit var updater: Updater
     private lateinit var player: ExoPlayer
     private lateinit var video: PlayerView
+    @Volatile private var measuredFrameRate = 0f
+    @Volatile private var decoderFrameRate = 0f
     private lateinit var frameRates: FrameRates
     private lateinit var root: FrameLayout
     private lateinit var guidePanel: LinearLayout
@@ -266,8 +268,10 @@ class MainActivity : Activity() {
         player.setVideoFrameMetadataListener { pts, _, format, codec ->
             val token = playbackToken
             val measured = cadence.observe(token, pts)
+            measuredFrameRate = measured
             val codecRate = runCatching { codec?.getFloat(android.media.MediaFormat.KEY_FRAME_RATE) }.getOrNull()
                 ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull()
+            decoderFrameRate = codecRate ?: 0f
             if (scanFormat !== format) { scanFormat = format; scanInterlaced = VideoRate.interlaced(format) }
             val fps = VideoRate.resolve(format.frameRate, measured, codecRate ?: 0f, scanInterlaced)
             frameRates.request(fps)
@@ -717,7 +721,7 @@ class MainActivity : Activity() {
         if (playbackUrl.isBlank()) return
         cancelPlaybackCallbacks()
         playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
-        firstFrame = false; lastVideoInfo = null; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
+        firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(12000).setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
@@ -1058,7 +1062,10 @@ class MainActivity : Activity() {
         val channel = current ?: return
         val now = System.currentTimeMillis(); val programme = guide.at(channel, now)
         val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
-        details.update(channel, programme, next, videoInfo[channel.id]?.label() ?: "Quality unverified", channel.id in favorites, previousChannel() != null, Catchup.supported(channel))
+        val format = player.videoFormat
+        fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
+        val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Source ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Timestamps ${rate(measuredFrameRate)} fps"
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel))
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }

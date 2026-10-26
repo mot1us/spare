@@ -14,13 +14,25 @@ object VideoRate {
         return if (abs(nearest - value) <= .04f) nearest else value
     }
     fun resolve(declared: Float, measured: Float, codec: Float = 0f, interlaced: Boolean = false): Float {
-        val sample = normalize(measured); val metadata = normalize(declared).takeIf { value -> rates.any { abs(it - value) <= .2f } } ?: 0f; val decoded = normalize(codec)
-        val frames = when { sample > 0 -> sample; decoded > 0 && metadata > 0 && abs(decoded - metadata) > 1 -> decoded; metadata > 0 -> metadata; else -> decoded }
+        fun nominal(value: Float) = normalize(value).takeIf { rate -> rate > 0 && rates.any { abs(it - rate) <= .2f } } ?: 0f
+        // Render callbacks can omit frames. A valid source rate describes the
+        // stream; callback cadence is only a fallback when metadata is absent.
+        val metadata = nominal(declared); val decoded = nominal(codec)
+        val frames = when { metadata > 0 -> metadata; decoded > 0 -> decoded; else -> normalize(measured) }
         return if (interlaced && (abs(frames - 25) < .1f || abs(frames - 29.97f) < .1f || abs(frames - 30) < .1f)) normalize(frames * 2) else frames
     }
     @UnstableApi fun interlaced(format: Format): Boolean {
+        if (format.sampleMimeType == MimeTypes.VIDEO_MPEG2) return format.initializationData.any { bytes ->
+            // MPEG-2 sequence_extension: identifier 1, then profile/level,
+            // then progressive_sequence at bit 12 of the extension payload.
+            (0 until bytes.size - 5).any { at ->
+                bytes[at] == 0.toByte() && bytes[at + 1] == 0.toByte() && bytes[at + 2] == 1.toByte() && bytes[at + 3] == 0xB5.toByte() &&
+                    (bytes[at + 4].toInt() and 0xF0) == 0x10 && (bytes[at + 5].toInt() and 0x08) == 0
+            }
+        }
         if (format.sampleMimeType != MimeTypes.VIDEO_H264) return false
         return format.initializationData.asSequence().filter { it.size in 4..65536 }.any { bytes ->
+            if ((bytes[0].toInt() and 31) == 7 && runCatching { !NalUnitUtil.parseSpsNalUnit(bytes, 0, bytes.size).frameMbsOnlyFlag }.getOrDefault(false)) return@any true
             (0 until bytes.size - 4).any { at ->
                 val prefix = if (bytes[at] == 0.toByte() && bytes[at + 1] == 0.toByte() && bytes[at + 2] == 1.toByte()) 3
                     else if (bytes[at] == 0.toByte() && bytes[at + 1] == 0.toByte() && bytes[at + 2] == 0.toByte() && bytes[at + 3] == 1.toByte()) 4 else 0

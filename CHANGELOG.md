@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — 2026-10-25
+
+- Measure timestamp cadence over a stable sample window instead of one median interval, correctly handling millisecond-rounded 60/59.94 and 30/29.97 fps timestamps.
+- Prefer valid stream/decoder FPS metadata over render callbacks that can omit frames. Detect MPEG-2 interlaced sequence flags and raw H.264 SPS alongside Annex B headers; retain progressive 30 fps.
+- Show codec, source, decoder and timestamp FPS in channel details so a remaining provider-specific discrepancy can be reported without credentials or URLs.
+
 ## 0.8.1 — 2026-10-25
 
 - Make guide and Library search ignore spacing, punctuation and provider text styling, so KING 5 also finds KING5.
