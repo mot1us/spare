@@ -21,7 +21,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title) }
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableId(key).take(16).toULong(16).toLong() }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -33,14 +33,28 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val message = label(11f).apply { maxLines = 2; setTextColor(Color.LTGRAY); tag = "library-status" }
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     private val search = EditText(context).apply { hint = "Search this list"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
-    private val categories = RecyclerView(context).apply { layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-categories" }
-    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = LinearLayoutManager(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
+    private val categories = RecyclerView(context).apply { layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-categories" }
+    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = true; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
     private var categoryNames = emptyList<String>()
+    private var categoryLabels = emptyMap<String, String>()
+    private var catalogFocusRequested = false
     private var rowGroups = emptyMap<String, String>()
     private var group: String? = null
+    private var catalogQuery: ((String?, String) -> Unit)? = null
+    private var catalogMore: (() -> Unit)? = null
+    private var hasMore = false
+    private var catalogContext = ""
+    private val anchors = mutableMapOf<String, String?>()
+    private val contexts = mutableMapOf<String, Pair<String?, String>>()
+    private var changingSearch = false
+    private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val searchLater = Runnable { filter() }
+    private fun anchorKey() = "$catalogContext:${group.orEmpty()}:${ChannelSearch.key(search.text.toString())}"
+    private fun rememberAnchor() { anchors[anchorKey()] = rememberedKey }
+
     private var pending: RecyclerView? = null
     private var focusEpoch = 0
     private var columns = 4
@@ -64,16 +78,21 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         body.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(empty); addView(rows, LayoutParams(-1, 0, 1f)) }, LayoutParams(0, -1, 1f))
         addView(body, LayoutParams(-1, 0, 1f)); addView(detailPane, LayoutParams(-1, 0, 1f))
         categories.adapter = object : RecyclerView.Adapter<Holder>() {
+            init { setHasStableIds(true) }
+            override fun getItemId(position: Int) = (if (position == 0) "All" else categoryNames[position - 1]).hashCode().toLong()
             override fun getItemCount() = categoryNames.size + 1
             override fun onCreateViewHolder(parent: ViewGroup, type: Int) = Holder(cell(13f, 42))
             override fun onBindViewHolder(holder: Holder, position: Int) {
                 val name = if (position == 0) null else categoryNames[position - 1]
-                holder.text.text = name ?: "All"; holder.text.isSelected = group == name
+                holder.text.text = name?.let { categoryLabels[it] ?: it } ?: "All"; holder.text.isSelected = group == name
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
-                holder.text.setOnClickListener { group = name; filter(); notifyItemRangeChanged(0, itemCount); focusAt(rows, 0) }
-                holder.text.setOnKeyListener { _, key, event -> when (key) {
+                holder.text.setOnClickListener { catalogFocusRequested = true; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]; filter(); notifyItemRangeChanged(0, itemCount); if (catalogQuery == null) focusRows() }
+                holder.text.setOnKeyListener { _, key, event ->
+                    val position = holder.bindingAdapterPosition
+                    if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
+                    when (key) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (position == 0 && key == KeyEvent.KEYCODE_DPAD_UP && event.repeatCount == 0) search.requestFocus() else focusAt(categories, position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusAt(rows, 0); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusRows(); true }
                     KeyEvent.KEYCODE_DPAD_LEFT -> true
                     else -> false
                 } }
@@ -81,7 +100,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
         rows.adapter = object : RecyclerView.Adapter<PosterHolder>() {
             init { setHasStableIds(true) }
-            override fun getItemId(position: Int) = Channel.stableId(shownRows[position].key).take(16).toULong(16).toLong()
+            override fun getItemId(position: Int) = shownRows[position].stableId
             override fun getItemCount() = shownRows.size
             override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder {
                 val box = LinearLayout(context).apply { orientation = VERTICAL; isFocusableInTouchMode = true; isClickable = true; setPadding(dp(7), dp(7), dp(7), dp(7)); background = GuideTheme.background(resources.displayMetrics.density, 0x44323D4B) }
@@ -105,20 +124,30 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 val poster = item.poster
                 fun draw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
                 holder.image.setImageBitmap(images.get(poster, artworkHttp, ::draw))
-                holder.box.setOnKeyListener { _, key, event -> when (key) {
+                holder.box.setOnKeyListener { _, key, event ->
+                    val position = holder.bindingAdapterPosition
+                    if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
+                    when (key) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) {
                         val step = if (grid) columns else 1
                         val next = position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) step else -step
                         if (next < 0) { if (event.repeatCount == 0) search.requestFocus() } else focusAt(rows, next.coerceAtMost(shownRows.lastIndex))
                     }; true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusAt(categories, 0) else focusAt(rows, position - 1) }; true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0)) else focusAt(rows, position - 1) }; true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && grid && position % columns < columns - 1) focusAt(rows, position + 1); true }
                     else -> false
                 } }
             }
         }
-        rows.layoutManager = GridLayoutManager(context, columns)
-        search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { filter() }; override fun afterTextChanged(s: Editable?) {} })
+        rows.layoutManager = object : GridLayoutManager(context, columns) {
+            override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
+        }
+        rows.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(list: RecyclerView, dx: Int, dy: Int) {
+                if (hasMore && (list.layoutManager as GridLayoutManager).findLastVisibleItemPosition() >= shownRows.size - 16) { hasMore = false; catalogMore?.invoke() }
+            }
+        })
+        search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (!changingSearch) { searchHandler.removeCallbacks(searchLater); searchHandler.postDelayed(searchLater, 180) } }; override fun afterTextChanged(s: Editable?) {} })
         search.setOnEditorActionListener { _, _, _ -> hideKeyboard(); focusAt(rows, 0); true }
         search.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_DOWN) { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusAt(rows, 0) }; true } else false }
     }
@@ -131,17 +160,19 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.visibility = if (busy) VISIBLE else GONE }
     @SuppressLint("NotifyDataSetChanged")
     fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true) {
+        stopCatalog()
         browse()
         grid = posters; columns = if (grid) 4 else 1
         (rows.layoutManager as? GridLayoutManager)?.spanCount = columns
         if (reset) { group = null; search.setText(""); rememberedKey = null }
-        allRows = values; rowGroups = groups; categoryNames = groups.values.distinct()
+        allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
         if (group !in categoryNames) group = null
         categories.adapter?.notifyDataSetChanged(); filter()
     }
     @SuppressLint("NotifyDataSetChanged")
     private fun filter() {
         val query = ChannelSearch.key(search.text.toString())
+        catalogQuery?.let { ++focusEpoch; pending = null; hasMore = false; it(group, query); return }
         // Filtering preserves provider order. A full Myers diff becomes quadratic when
         // a large catalog loses most entries; only visible holders need rebinding.
         ++focusEpoch; pending = null; rows.stopScroll()
@@ -150,16 +181,47 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }
 
+    fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit) {
+        browse(); grid = true; columns = 4; (rows.layoutManager as GridLayoutManager).spanCount = 4
+        if (catalogContext != key || catalogQuery == null) {
+            if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key
+            val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); changingSearch = false
+            rememberedKey = anchors[anchorKey()]
+        }
+        catalogQuery = query; catalogMore = more; catalogLabels(groups); filter()
+    }
+    @SuppressLint("NotifyDataSetChanged")
+    fun catalogLabels(groups: Map<String, String>) {
+        val names = groups.keys.toList()
+        if (categoryNames != names) { categoryNames = names; categoryLabels = groups; categories.adapter?.notifyDataSetChanged() }
+        else if (categoryLabels != groups) { categoryLabels = groups; categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1) }
+    }
+    @SuppressLint("NotifyDataSetChanged")
+    fun catalogPage(values: List<BrowserRow>, append: Boolean, more: Boolean) {
+        val old = shownRows
+        val samePrefix = values.size >= old.size && old.indices.all { old[it].key == values[it].key }
+        val focus = rows.hasFocus(); val restore = rememberedKey
+        shownRows = values; allRows = emptyList(); hasMore = more
+        if (samePrefix) {
+            if (values.size > old.size) rows.adapter?.notifyItemRangeInserted(old.size, values.size - old.size)
+        } else {
+            ++focusEpoch; pending = null; rows.adapter?.notifyDataSetChanged()
+        }
+        empty.visibility = if (values.isEmpty()) VISIBLE else GONE; empty.text = "No matching titles."
+        if (!append && (focus || catalogFocusRequested) && values.isNotEmpty()) { catalogFocusRequested = false; rememberedKey = restore; focusRows() }
+    }
+    fun catalogBusy() { hasMore = false; loading.visibility = VISIBLE }
+    fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
     fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
         val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
-        if (item != null) { item.requestFocus(); return }
-        pending = list; list.stopScroll(); list.scrollToPosition(position)
+        if (item != null) { item.requestFocus(); TvFocus.center(list, item); return }
+        pending = list; list.stopScroll(); (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, list.height / 2 - dp(if (list === categories) 21 else if (grid) 105 else 28))
         fun attempt(left: Int) {
-            if (!isShown || epoch != focusEpoch) { pending = null; return }
+            if (!isShown || epoch != focusEpoch) return
             val row = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
-            if (row != null) { pending = null; row.requestFocus() } else if (left > 0) list.postOnAnimation { attempt(left - 1) } else pending = null
+            if (row != null) { pending = null; row.requestFocus(); TvFocus.center(list, row) } else if (left > 0) list.postOnAnimation { attempt(left - 1) } else pending = null
         }; list.postOnAnimation { attempt(25) }
     }
     fun hideKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0) }
@@ -188,7 +250,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start); actions.addView(makeButton("Back to catalog", back)); detailPane.addView(actions, LayoutParams(-1, dp(40)))
         if (restore) start.requestFocus()
     }
-    fun pauseImages() { ++focusEpoch; pending = null; images.pause() }
+    fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); ++focusEpoch; pending = null; images.pause() }
     fun resumeImages() { images.resume() }
     fun closeImages() { images.close() }
     private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box)

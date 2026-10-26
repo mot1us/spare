@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3 — 2026-10-25
+
+- Read AVC SPS timing and decoder headers; version old quality readings and synchronize live quality updates so details and FHD/FPS filters agree. Preserve progressive frames versus interlaced field-rate labels.
+- Stream VOD catalogs into bounded encrypted pages with a small local index, show the first page before the full download, and keep imports independent of browsing and playback.
+- Preserve Library focus and category positions, append pages without clearing the grid, and deliver provider details before optional metadata enrichment.
+
 ## 0.8.2 — 2026-10-25
 
 - Measure timestamp cadence over a stable sample window instead of one median interval, correctly handling millisecond-rounded 60/59.94 and 30/29.97 fps timestamps.

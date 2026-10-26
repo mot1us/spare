@@ -21,6 +21,40 @@ data class WatchProgress(val item: OnDemand, val position: Long, val duration: L
 
 object VodCatalog {
     private val numeric = Regex("[0-9]{1,20}")
+    /** Publish bounded batches while the response is arriving, rather than buffering the whole JSON document. */
+    fun stream(source: Source, kind: String, batch: (List<OnDemand>) -> Unit) {
+        require(source.kind == "xtream" && kind in setOf("movie", "series"))
+        val action = if (kind == "movie") "get_vod_streams" else "get_series"
+        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "plot", "stream_icon", "cover", "year", "releaseDate", "genre", "cast", "tmdb_id", "imdb_id")
+        Network.consume(Importers.endpoint(source, "player_api.php", action), source.allowHttp) { input ->
+            android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
+                if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
+                reader.beginArray(); val entries = mutableListOf<JSONObject>(); val seen = hashSetOf<String>(); var count = 0
+                fun publish() {
+                    val parsed = parse(JSONArray(entries), source, kind, emptyMap()).filter { seen.add(it.id) }
+                    if (parsed.isNotEmpty()) batch(parsed)
+                    entries.clear()
+                }
+                while (reader.hasNext()) {
+                    if (++count > Importers.MAX_CHANNELS) throw SourceFailure(SourceProblem.LIMIT)
+                    if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog import cancelled")
+                    if (reader.peek() != android.util.JsonToken.BEGIN_OBJECT) { reader.skipValue(); continue }
+                    val item = JSONObject(); reader.beginObject()
+                    while (reader.hasNext()) {
+                        val name = reader.nextName()
+                        if (name in fields && reader.peek() in setOf(android.util.JsonToken.STRING, android.util.JsonToken.NUMBER, android.util.JsonToken.BOOLEAN)) {
+                            val value = if (reader.peek() == android.util.JsonToken.BOOLEAN) reader.nextBoolean().toString() else reader.nextString()
+                            item.put(name, value.take(4096))
+                        } else reader.skipValue()
+                    }
+                    reader.endObject(); entries.add(item)
+                    if (entries.size == 64) publish()
+                }
+                reader.endArray(); publish()
+                if (reader.peek() != android.util.JsonToken.END_DOCUMENT) throw SourceFailure(SourceProblem.RESPONSE)
+            }
+        }
+    }
     fun load(source: Source, kind: String): List<OnDemand> {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
         val prefix = if (kind == "movie") "vod" else "series"

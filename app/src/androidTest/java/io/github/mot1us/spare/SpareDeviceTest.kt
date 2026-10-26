@@ -59,6 +59,22 @@ class SpareDeviceTest {
             val corrupt = file.readBytes(); corrupt[corrupt.lastIndex] = (corrupt.last().toInt() xor 1).toByte(); file.writeBytes(corrupt)
             try { store.read("test-security.enc"); fail("Tampered ciphertext accepted") } catch (_: java.security.GeneralSecurityException) { }
             assertEquals(0, context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_ALLOW_BACKUP)
+            val source = Source(name = "Page test", kind = "xtream", url = "https://example.com")
+            try {
+                val catalog = LibraryCatalog(store); val writer = catalog.Writer(source, "movie")
+                val entries = (1..190).map { OnDemand("movie:$it", "Movie $it", if (it % 2 == 0) "Category 1" else "Category 2", "https://example.com/private/$it.mp4") }
+                entries.chunked(64).forEach(writer::append)
+                val snapshot = writer.finish(mapOf("1" to "Science fiction", "2" to "Drama"))
+                val first = catalog.query(snapshot, "Science fiction", "", limit = 40)
+                val second = catalog.query(snapshot, "Science fiction", "", first.cursor, 40)
+                assertEquals(40, first.entries.size); assertTrue(first.more)
+                assertTrue(first.entries.none { a -> second.entries.any { b -> a.id == b.id } })
+                assertEquals("movie:188", catalog.query(snapshot, null, "Movie 188").entries.single().id)
+                val restored = LibraryCatalog(store).cached(source, "movie")!!
+                assertEquals(190, restored.count); assertEquals(snapshot.groups, restored.groups)
+                assertTrue(context.filesDir.listFiles()!!.filter { it.name.startsWith("catalog-${source.id}-") }.none { it.readBytes().toString(Charsets.UTF_8).contains("https://example.com/private/") })
+            } finally { store.removeCache(source) }
+
         } finally { context.deleteFile("test-security.enc") }
     }
 

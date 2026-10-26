@@ -18,7 +18,10 @@ object VideoRate {
         // Render callbacks can omit frames. A valid source rate describes the
         // stream; callback cadence is only a fallback when metadata is absent.
         val metadata = nominal(declared); val decoded = nominal(codec)
-        val frames = when { metadata > 0 -> metadata; decoded > 0 -> decoded; else -> normalize(measured) }
+        val sample = normalize(measured)
+        // Codec output often rounds 29.97 to 30. Prefer a stable timestamp rate
+        // within the same family, while preserving explicit higher source rates.
+        val frames = when { metadata > 0 -> metadata; sample > 0 && (decoded == 0f || abs(sample - decoded) < 1f) -> sample; decoded > 0 -> decoded; else -> sample }
         return if (interlaced && (abs(frames - 25) < .1f || abs(frames - 29.97f) < .1f || abs(frames - 30) < .1f)) normalize(frames * 2) else frames
     }
     @UnstableApi fun interlaced(format: Format): Boolean {
@@ -39,5 +42,14 @@ object VideoRate {
                 prefix > 0 && at + prefix < bytes.size && bytes[at + prefix].toInt() and 31 == 7 && runCatching { !NalUnitUtil.parseSpsNalUnit(bytes, at + prefix, bytes.size).frameMbsOnlyFlag }.getOrDefault(false)
             }
         }
+    }
+
+    @UnstableApi fun observation(format: Format, measured: Float, codecRate: Float, header: AvcHeader.Info): VideoInfo {
+        val scan = if (header.known) header.interlaced else interlaced(format)
+        val declared = header.fps.takeIf { it > 0 } ?: format.frameRate
+        val encoded = resolve(declared, measured, codecRate)
+        val motion = resolve(declared, measured, codecRate, scan)
+        val evidence = when { header.fps > 0 -> "SPS timing"; declared > 0 -> "stream"; measured > 0 -> "timestamps"; codecRate > 0 -> "decoder"; else -> "unverified" }
+        return VideoInfo(format.width, format.height, motion, scan, encoded, evidence)
     }
 }

@@ -60,8 +60,6 @@ class MainActivity : Activity() {
     private val imports = Executors.newFixedThreadPool(2)
     private val cacheWrites = Executors.newSingleThreadExecutor()
     private val cadence = FrameCadence()
-    @Volatile private var scanFormat: androidx.media3.common.Format? = null
-    @Volatile private var scanInterlaced = false
     private var cachedStartup = false
     private var availableUpdate: String? = null
     private var importTask: java.util.concurrent.Future<*>? = null
@@ -136,6 +134,7 @@ class MainActivity : Activity() {
     private lateinit var video: PlayerView
     @Volatile private var measuredFrameRate = 0f
     @Volatile private var decoderFrameRate = 0f
+    @Volatile private var scanEvidence = "unknown"
     private lateinit var frameRates: FrameRates
     private lateinit var root: FrameLayout
     private lateinit var guidePanel: LinearLayout
@@ -265,23 +264,40 @@ class MainActivity : Activity() {
             if (listening) { voiceVolume = player.volume; player.volume = 0f } else player.volume = voiceVolume
         })
         applyCaptionPreference()
+        var qualityFormat: androidx.media3.common.Format? = null
+        var qualityCodec: android.media.MediaFormat? = null
+        var qualityHeader = AvcHeader.Info()
+        var qualityToken = -1
+        var qualityPostedAt = 0L
         player.setVideoFrameMetadataListener { pts, _, format, codec ->
             val token = playbackToken
             val measured = cadence.observe(token, pts)
             measuredFrameRate = measured
             val codecRate = runCatching { codec?.getFloat(android.media.MediaFormat.KEY_FRAME_RATE) }.getOrNull()
-                ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull()
-            decoderFrameRate = codecRate ?: 0f
-            if (scanFormat !== format) { scanFormat = format; scanInterlaced = VideoRate.interlaced(format) }
-            val fps = VideoRate.resolve(format.frameRate, measured, codecRate ?: 0f, scanInterlaced)
-            frameRates.request(fps)
-            if (firstFrame && (lastVideoInfo == null || (fps > 0 && lastVideoInfo?.fps != fps))) {
+                ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull() ?: 0f
+            decoderFrameRate = codecRate
+            if (qualityToken != token || qualityFormat !== format || qualityCodec !== codec) {
+                qualityToken = token; qualityFormat = format; qualityCodec = codec
+                val buffers = format.initializationData.toMutableList()
+                listOf("csd-0", "csd-1").forEach { key -> runCatching {
+                    codec?.getByteBuffer(key)?.duplicate()?.let { data -> if (data.remaining() in 4..65536) buffers.add(ByteArray(data.remaining()).also(data::get)) }
+                } }
+                qualityHeader = if (format.sampleMimeType == androidx.media3.common.MimeTypes.VIDEO_H264) AvcHeader.read(buffers) else AvcHeader.Info()
+                scanEvidence = if (qualityHeader.known) (if (qualityHeader.interlaced) "SPS interlaced" else "SPS progressive") else if (VideoRate.interlaced(format)) "MPEG-2 interlaced" else "unknown"
+            }
+            val info = VideoRate.observation(format, measured, codecRate, qualityHeader)
+            frameRates.request(info.fps)
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - qualityPostedAt >= 500) {
+                qualityPostedAt = now
+                // Player callbacks and persisted UI state have different threads.
+                // Check first-frame/media ownership only after entering the UI thread.
                 handler.post {
                     if (firstFrame && token == playbackToken) {
                         val size = player.videoSize
-                        val width = format.width.takeIf { it > 0 } ?: size.width
-                        val height = format.height.takeIf { it > 0 } ?: size.height
-                        if (width > 0 && height > 0) recordVideo(VideoInfo(width, height, fps.takeIf { it > 0 } ?: lastVideoInfo?.fps ?: 0f, scanInterlaced))
+                        val width = info.width.takeIf { it > 0 } ?: size.width
+                        val height = info.height.takeIf { it > 0 } ?: size.height
+                        if (width > 0 && height > 0) recordVideo(info.copy(width = width, height = height))
                     }
                 }
             }
@@ -721,7 +737,7 @@ class MainActivity : Activity() {
         if (playbackUrl.isBlank()) return
         cancelPlaybackCallbacks()
         playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
-        firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
+        firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(12000).setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
@@ -777,8 +793,7 @@ class MainActivity : Activity() {
         if (onDemand != null) { lastVideoInfo = info; return }
         val selected = source ?: return; val channel = current ?: return
         val previous = videoInfo[channel.id]
-        var observed = info.retainingKnownRate(previous)
-        if (previous != null && previous.width == observed.width && previous.height == observed.height && previous.interlaced == observed.interlaced && previous.fps > 0 && observed.fps > 0 && kotlin.math.abs(previous.fps - observed.fps) < .1f) observed = observed.copy(fps = previous.fps)
+        val observed = info.retainingKnownRate(previous)
         lastVideoInfo = observed
         if (previous == observed) return
         videoInfo[channel.id] = observed
@@ -1064,7 +1079,7 @@ class MainActivity : Activity() {
         val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
         val format = player.videoFormat
         fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
-        val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Source ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Timestamps ${rate(measuredFrameRate)} fps"
+        val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Source ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Timestamps ${rate(measuredFrameRate)} fps · $scanEvidence · ${videoInfo[channel.id]?.evidence.orEmpty()}"
         details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel))
     }
     private fun showDetails() {
@@ -1121,7 +1136,7 @@ class MainActivity : Activity() {
             "Guide filters" -> {
                 panel.page(page, "${filters.summary()}. Resolution and FPS use playback observations first, then provider-reported metadata/quality labels. Channels with no quality data stay hidden.")
                 panel.action(if (browseAll) "Use guide filters" else "Show unverified channels", "Temporarily pause filters to play and verify a channel", browseAll) { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); refresh() }
-                panel.action("FHD+ · 60 fps", "Use reported or observed 1080p+ / 59.94–60 fps") { saveFilters(filters.copy(minHeight = 1080, excludedFps = FrameRateFilter.onlySixty)); refresh() }
+                panel.action("FHD+ · 60 fps", "1080+ / 59.94–60 fps or confirmed interlaced fields") { saveFilters(filters.copy(minHeight = 1080, excludedFps = FrameRateFilter.onlySixty)); refresh() }
                 panel.note("Minimum resolution")
                 listOf(0 to "Any resolution", 720 to "HD · 720p or better", 1080 to "FHD · 1080p or better", 2160 to "4K · 2160p or better").forEach { (height, label) -> panel.action(label, selected = filters.minHeight == height) { saveFilters(filters.copy(minHeight = height)); refresh(label) } }
                 panel.note("Frame rates · select the rates you want to keep")

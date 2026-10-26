@@ -2,14 +2,21 @@ package io.github.mot1us.spare
 
 import org.json.JSONObject
 
-data class VideoInfo(val width: Int, val height: Int, val fps: Float, val interlaced: Boolean = false) {
+data class VideoInfo(val width: Int, val height: Int, val fps: Float, val interlaced: Boolean = false,
+    val encodedFps: Float = 0f, val evidence: String = "playback", val detector: Int = 3) {
     /** Missing metadata during a same-size reconnect does not invalidate a measured frame rate. */
     fun retainingKnownRate(previous: VideoInfo?): VideoInfo =
-        if ((!fps.isFinite() || fps <= 0) && previous != null && width == previous.width && height == previous.height && previous.fps.isFinite() && previous.fps > 0) copy(fps = previous.fps, interlaced = previous.interlaced) else this
+        if ((!fps.isFinite() || fps <= 0) && previous != null && width == previous.width && height == previous.height && previous.fps.isFinite() && previous.fps > 0) copy(fps = previous.fps, interlaced = previous.interlaced, encodedFps = previous.encodedFps, evidence = previous.evidence) else this
     fun json() = JSONObject().put("width", width).put("height", height).put("fps", fps.toDouble()).put("interlaced", interlaced)
+        .put("encodedFps", encodedFps.toDouble()).put("evidence", evidence).put("detector", detector)
     fun label(): String = "${height}${if (interlaced) "i" else "p"}" + if (fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} ${if (interlaced) "fields/s" else "fps"}" else " · FPS unavailable"
     companion object {
-        fun from(j: JSONObject) = VideoInfo(j.optInt("width"), j.optInt("height"), j.optDouble("fps", 0.0).toFloat(), j.optBoolean("interlaced"))
+        fun from(j: JSONObject): VideoInfo {
+            val current = j.optInt("detector") == 3
+            return VideoInfo(j.optInt("width"), j.optInt("height"), if (current) j.optDouble("fps", 0.0).toFloat() else 0f,
+                current && j.optBoolean("interlaced"), if (current) j.optDouble("encodedFps", 0.0).toFloat() else 0f,
+                if (current) j.optString("evidence", "playback") else "needs verification")
+        }
     }
 }
 

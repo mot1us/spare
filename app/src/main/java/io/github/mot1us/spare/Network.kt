@@ -28,6 +28,11 @@ object Network {
     }
 
     fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000, progress: ((Long, Long) -> Unit)? = null): ByteArray {
+        return consume(url, http, limit, timeoutMs, progress) { readLimited(it, limit) }
+    }
+
+    fun <T> consume(url: String, http: Boolean, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000,
+        progress: ((Long, Long) -> Unit)? = null, read: (InputStream) -> T): T {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -65,7 +70,18 @@ object Network {
                     }
                     val raw = bounded.buffered()
                     val input = if (connection.contentEncoding.equals("gzip", true)) GZIPInputStream(raw) else raw
-                    return input.use { readLimited(it, limit) }.also { progress?.invoke(bounded.consumed, total) }
+                    val decoded = object : java.io.FilterInputStream(input) {
+                        var size = 0L
+                        fun check(n: Int) {
+                            if (n > 0) size += n
+                            if (size > limit) throw SourceFailure(SourceProblem.LIMIT)
+                            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
+                            if (System.nanoTime() > deadline) throw java.net.SocketTimeoutException("Download deadline exceeded")
+                        }
+                        override fun read(): Int = `in`.read().also { check(if (it < 0) 0 else 1) }
+                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { check(it) }
+                    }
+                    return decoded.use(read).also { progress?.invoke(bounded.consumed, total) }
                 }
             } finally { connection.disconnect() }
         }

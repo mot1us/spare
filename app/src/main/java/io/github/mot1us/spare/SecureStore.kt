@@ -43,6 +43,11 @@ class SecureStore(private val context: Context) {
         }
         return cipher.doFinal(bytes, 13, bytes.size - 13)
     }
+    fun delete(name: String) { require(name.matches(Regex("[a-zA-Z0-9_.-]+"))); AtomicFile(File(context.filesDir, name)).delete() }
+    fun pruneCatalog(prefix: String, keep: Set<String>) {
+        require(prefix.matches(Regex("catalog-[a-zA-Z0-9_-]+-")))
+        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") && it.name !in keep }?.forEach { AtomicFile(it).delete() }
+    }
     fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
     } ?: emptyList()
@@ -79,6 +84,7 @@ class SecureStore(private val context: Context) {
     fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
     fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun removeCache(source: Source) {
+        pruneCatalog("catalog-${source.id}-", emptySet())
         AtomicFile(File(context.filesDir, "cache-${source.id}.enc")).delete()
         listOf("library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { AtomicFile(File(context.filesDir, it)).delete() }
         preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") } }
