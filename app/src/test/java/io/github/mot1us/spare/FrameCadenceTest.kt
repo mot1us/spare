@@ -5,6 +5,13 @@ import org.junit.Test
 import kotlin.math.roundToLong
 
 class FrameCadenceTest {
+    @Test fun shortMetadataFreeStreamsGetARateBeforeTheyLoop() {
+        listOf(23.976f, 24f, 25f, 29.97f, 30f, 50f, 59.94f, 60f).forEachIndexed { token, fps ->
+            val cadence = FrameCadence(); var measured = 0f
+            for (frame in 0..(fps * 2.4f).toInt()) measured = cadence.observe(token, (frame * 1000.0 / fps).roundToLong() * 1000)
+            assertEquals("Short $fps fps stream", fps, measured, .03f)
+        }
+    }
     @Test fun millisecondRoundedTimestampsDoNotInventThirtyPointThree() {
         listOf(23.976f, 24f, 29.97f, 30f, 50f, 59.94f, 60f).forEachIndexed { token, fps ->
             val cadence = FrameCadence(); var measured = 0f

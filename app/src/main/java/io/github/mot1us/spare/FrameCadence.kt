@@ -6,7 +6,7 @@ import kotlin.math.abs
 class FrameCadence {
     private var epoch = -1
     private var previous = Long.MIN_VALUE
-    private val intervals = LongArray(96)
+    private val intervals = LongArray(48)
     private var count = 0
     private var rate = 0f
     @Synchronized fun observe(token: Int, ptsUs: Long): Float {
