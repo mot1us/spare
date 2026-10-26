@@ -44,6 +44,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         } }
         return null
     }
+    fun unavailable(url: String) = url in failed
     fun pause() { paused = true; ++generation; workers.queue.clear(); pending.clear(); handler.removeCallbacksAndMessages(null) }
     fun resume() { paused = false }
     fun close() { closed = true; workers.shutdownNow(); handler.removeCallbacksAndMessages(null); cache.evictAll() }

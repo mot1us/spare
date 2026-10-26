@@ -121,13 +121,13 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
             val tile = FrameLayout(context).apply {
                 tag = "multiview-tile:$index"; isFocusableInTouchMode = true; isClickable = true
                 background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply { setColor(Color.TRANSPARENT); setStroke(dp(3), GuideTheme.current.accent) }); addState(intArrayOf(), GradientDrawable().apply { setColor(Color.TRANSPARENT); setStroke(dp(1), 0x44FFFFFF) }) }
-                val name = if (index == 0) primaryName else extras.getOrNull(index - 1)?.channel?.name ?: "＋ Add game"
+                val name = if (index == 0) primaryName else extras.getOrNull(index - 1)?.channel?.name ?: "＋ Add channel"
                 val title = TextView(context).apply { text = name; textSize = 11f; setTextColor(Color.WHITE); setPadding(dp(8), dp(4), dp(8), dp(4)); setBackgroundColor(0x99000000.toInt()); maxLines = 1 }
                 addView(title, FrameLayout.LayoutParams(-1, dp(26), Gravity.TOP))
                 extras.getOrNull(index - 1)?.error?.takeIf { it.isNotBlank() }?.let { message -> addView(TextView(context).apply { text = message; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER; setPadding(dp(20), dp(20), dp(20), dp(20)); setBackgroundColor(0xCC000000.toInt()) }, FrameLayout.LayoutParams(-1, -1)) }
                 contentDescription = "View ${index + 1}. $name. Focus for audio, OK for full screen."
                 setOnFocusChangeListener { _, focused -> if (focused && index < count) select(index) }
-                setOnClickListener { if (index >= count) chooseGame() else { val channel = extras.getOrNull(index - 1)?.channel; close(); if (channel == null) fullScreenMain() else fullScreen(channel) } }
+                setOnClickListener { if (index >= count) browse(addChannel) else { val channel = extras.getOrNull(index - 1)?.channel; close(); if (channel == null) fullScreenMain() else fullScreen(channel) } }
                 setOnKeyListener { _, key, event -> when (key) {
                     KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                         if (event.action == KeyEvent.ACTION_DOWN) { val next = when (key) { KeyEvent.KEYCODE_DPAD_LEFT -> if (index % 2 == 1) index - 1 else index; KeyEvent.KEYCODE_DPAD_RIGHT -> if (index % 2 == 0) index + 1 else index; KeyEvent.KEYCODE_DPAD_UP -> (index - 2).coerceAtLeast(0); else -> index + 2 }; if (next >= tiles.size) addButton?.requestFocus() else tiles.getOrNull(next)?.requestFocus() }; true
@@ -145,7 +145,7 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         twoButton = button("Two-up") { if (count <= 2) { fourUp = false; rebuild() } }.apply { tag = "multiview-two-up" }
         val four = button("Four-up") { fourUp = true; rebuild() }.apply { tag = "multiview-four-up" }
         removeButton = button("Remove view") { if (selected > 0) { val extra = extras.removeAt(selected - 1); extra.view.player = null; extra.player.release(); root.removeView(extra.view); selected = 0; if (count <= 2) fourUp = false; select(0); rebuild() } }.apply { tag = "multiview-remove" }
-        listOf(addButton!!, addAny, twoButton!!, four, removeButton!!, button("Sports") { close(); back() }).forEach { control -> actions.addView(control, LinearLayout.LayoutParams(0, dp(34), 1f).apply { marginEnd = dp(6) }); control.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_UP) { if (event.action == KeyEvent.ACTION_DOWN) tiles.getOrNull(selected)?.requestFocus(); true } else false } }
+        listOf(addButton!!, addAny, twoButton!!, four, removeButton!!, button("Close") { close(); back() }).forEach { control -> actions.addView(control, LinearLayout.LayoutParams(0, dp(34), 1f).apply { marginEnd = dp(6) }); control.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_UP) { if (event.action == KeyEvent.ACTION_DOWN) tiles.getOrNull(selected)?.requestFocus(); true } else false } }
         controls.addView(actions); surface.addView(controls, FrameLayout.LayoutParams(-1, dp(82), Gravity.BOTTOM).apply { marginStart = dp(12); marginEnd = dp(12); bottomMargin = dp(6) })
         root.bringChildToFront(surface); select(selected.coerceAtMost(count - 1)); tiles.getOrNull(selected)?.requestFocus()
     }

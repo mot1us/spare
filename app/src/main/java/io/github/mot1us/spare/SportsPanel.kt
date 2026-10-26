@@ -41,8 +41,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val heroDetail = label(11f).apply { tag = "sports-hero-detail"; maxLines = 2; setTextColor(Color.LTGRAY) }
     private val credit = label(8f).apply { maxLines = 1; gravity = Gravity.END; setTextColor(Color.LTGRAY) }
     private val heroContent = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(12), dp(210), dp(12)) }
-    private val crests = LinearLayout(context).apply { gravity = Gravity.CENTER; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    private val crestViews = List(2) { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; crests.addView(this, LayoutParams(dp(88), dp(100))) } }
+    private val crests = FrameLayout(context).apply { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0x002E4060, 0x8845688F.toInt(), 0xAA122136.toInt())) }
+    private val crestViews = List(2) { index -> ImageView(context).apply {
+        scaleType = ImageView.ScaleType.FIT_CENTER; alpha = .88f; rotation = if (index == 0) -8f else 8f
+        crests.addView(this, FrameLayout.LayoutParams(dp(190), dp(190), if (index == 0) Gravity.TOP or Gravity.START else Gravity.BOTTOM or Gravity.END).apply { topMargin = dp(if (index == 0) -12 else 0); bottomMargin = dp(if (index == 1) -12 else 0) })
+    } }
     private val findStreams = button("Find streams") { featured?.let(select) }.apply { tag = "sports-watch" }
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; tag = "sports-loading"; visibility = GONE }
     private val status = label(10f).apply { tag = "sports-status"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.LTGRAY) }
@@ -70,7 +73,6 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     var watchChannel: (Channel) -> Unit = {}
     var secondChannel: (Channel) -> Unit = {}
     var presentationChanged: (() -> Unit)? = null
-    private var streamActions: View? = null
     private val cards = object : RecyclerView.Adapter<GameCard>() {
         init { setHasStableIds(true) }
         override fun getItemCount() = games.size
@@ -104,13 +106,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): StreamCard {
             val box = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutParams = RecyclerView.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(6) } }
             val play = button("") {}.apply { maxLines = 2; textSize = 11f; isLongClickable = true }
-            val together = button("＋") {}.apply { contentDescription = "Watch together"; tag = "sports-add-view" }
-            box.addView(play, LayoutParams(0, -1, 1f).apply { marginEnd = dp(8) }); box.addView(together, LayoutParams(dp(54), -1)); return StreamCard(box, play, together)
+            val together = button("＋ View") {}.apply { contentDescription = "Add to multiview"; tag = "sports-add-view" }
+            box.addView(play, LayoutParams(0, -1, 1f).apply { marginEnd = dp(8) }); box.addView(together, LayoutParams(dp(82), -1)); return StreamCard(box, play, together)
         }
         override fun onBindViewHolder(holder: StreamCard, position: Int) {
-            val channel = streamsList[position]; holder.play.text = streamLabels(channel); holder.play.tag = "sports-stream:${channel.id}"; holder.together.contentDescription = "Watch together · " + channel.name
+            val channel = streamsList[position]; holder.play.text = streamLabels(channel); holder.play.tag = "sports-stream:${channel.id}"; holder.together.contentDescription = "Add to multiview · " + channel.name
             holder.play.setOnClickListener { watchChannel(channel) }; holder.play.setOnLongClickListener { secondChannel(channel); true }; holder.together.setOnClickListener { secondChannel(channel) }
-            listOf(holder.play, holder.together).forEach { view -> view.setOnFocusChangeListener { _, active -> if (active) streamActions = view }; view.setOnKeyListener { _, key, event -> when (key) {
+            listOf(holder.play, holder.together).forEach { view -> view.setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (view === holder.together) holder.play.requestFocus() else focusTeams() }; true }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) holder.together.requestFocus(); true }
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { val at = holder.bindingAdapterPosition; if (at != RecyclerView.NO_POSITION) { val next = at + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1; if (next < 0) scoresButton.requestFocus() else if (next in streamsList.indices) focusStream(next) } }; true }
@@ -126,7 +128,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         addView(sidebar, LayoutParams(dp(155), -1))
         hero.background = GuideTheme.glass(resources.displayMetrics.density); hero.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
         hero.addView(View(context).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF5091019.toInt(), 0x99091019.toInt(), 0x20091019)) }, FrameLayout.LayoutParams(-1, -1))
-        hero.addView(crests, FrameLayout.LayoutParams(dp(192), -1, Gravity.END))
+        hero.addView(crests, FrameLayout.LayoutParams(dp(310), -1, Gravity.END))
+        hero.addView(View(context).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF5091019.toInt(), 0xB0091019.toInt(), 0x00091019)) }, FrameLayout.LayoutParams(-1, -1))
         heroContent.addView(heroBadge); heroContent.addView(heroTitle); heroContent.addView(heroScore); heroContent.addView(heroDetail)
         heroContent.addView(findStreams, LayoutParams(dp(145), dp(34)).apply { topMargin = dp(10) }); linkAction(findStreams)
         hero.addView(heroContent, FrameLayout.LayoutParams(-1, -1)); hero.addView(credit, FrameLayout.LayoutParams(-1, dp(16), Gravity.BOTTOM).apply { marginEnd = dp(8) })
@@ -135,7 +138,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         main.addView(actions); listOf(scoresButton, filtersButton).forEach(::linkAction)
         rows.adapter = cards; streams.adapter = streamAdapter; main.addView(rows, LayoutParams(-1, dp(126))); main.addView(streams, LayoutParams(-1, 0, 1f))
         addView(main, LayoutParams(0, -1, 1f)); heroTitle.text = "Your game, one click away"; heroDetail.text = "Browse leagues or follow your teams."; findStreams.isEnabled = false
-        submit(emptyList(), emptySet(), null, "", false, 0, 0)
+        submit(emptyList(), emptySet(), null, "", false)
     }
     private fun badge(game: SportsGame) = when { game.live(System.currentTimeMillis()) -> "● LIVE"; game.state == "post" -> "FINAL"; game.state == "pre" -> "UPCOMING"; else -> "SAVED · REFRESH" }
     private fun linkAction(view: View) { view.setOnKeyListener { _, key, event -> when (key) {
@@ -166,7 +169,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!enabled) featured?.let { artwork.request(it) }
     }
     fun loading(message: String) { progress.isVisible = true; status.text = message; if (games.isEmpty()) { empty.text = "Loading scores and schedules…"; empty.isVisible = true } }
-    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean, hiddenGames: Int, guideChannels: Int) {
+    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean) {
         this.followed = followed
         if (scope != selected) { scope = selected; remembered = null; showGames() }
         if (signature != followed) {
@@ -207,7 +210,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     fun showStreams(game: SportsGame, channels: List<Channel>, label: (Channel) -> String) {
         if (!watchMode || matchingKey != game.key) return
         val same = streamsList == channels; val hadFocus = streams.hasFocus(); streamsList = channels; streamLabels = label
-        if (!same) streamAdapter.notifyDataSetChanged(); progress.isVisible = false; status.text = "${channels.size} streams · OK Preview · ＋ Watch together · Hold Back Full screen"
+        if (!same) streamAdapter.notifyDataSetChanged(); progress.isVisible = false; status.text = "${channels.size} streams · OK Preview · ＋ Add to multiview · Hold Back Full screen"
         empty.text = if (game.state == "post") "This game has ended." else "No channel matched these filters yet. Try Stream filters or refresh your guide."
         empty.isVisible = channels.isEmpty(); if (!hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }

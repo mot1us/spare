@@ -11,22 +11,24 @@ class LiveMetadata(private val store: SecureStore, private val changed: () -> Un
     private val cache = linkedMapOf<String, OnDemand?>()
     private val pending = hashSetOf<String>()
     private var closed = false
+    private var generation = 0
     private var addon: String? = null
     private var last: String? = null
     private var task: Runnable? = null
-    fun clear() { addon = null; cache.clear(); last = null }
+    fun clear() { ++generation; task?.let(handler::removeCallbacks); task = null; pending.clear(); addon = null; cache.clear(); last = null }
     fun get(programme: Programme): OnDemand? {
         val key = "${programme.title}:${programme.start}"
         if (cache.containsKey(key)) return cache[key]
         if (last == key || key in pending) return null
         last = key; task?.let(handler::removeCallbacks)
+        val token = generation
         task = Runnable {
             if (closed) return@Runnable
             pending.add(key)
             worker.execute {
-                val url = addon ?: runCatching { store.metadataAddon() }.getOrDefault("").also { addon = it }
+                val url = addon ?: runCatching { store.metadataAddon() }.getOrDefault("").also { if (token == generation) addon = it }
                 val result = if (url.isBlank()) null else runCatching { MetadataAddon.live(url, programme) }.getOrNull()
-                handler.post { if (!closed) { pending.remove(key); cache[key] = result; while (cache.size > 100) cache.remove(cache.keys.first()); if (last == key && result != null) changed() } }
+                handler.post { if (!closed && token == generation) { pending.remove(key); cache[key] = result; while (cache.size > 100) cache.remove(cache.keys.first()); if (last == key && result != null) changed() } }
             }
         }.also { handler.postDelayed(it, 500) }
         return null

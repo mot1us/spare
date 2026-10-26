@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -512,6 +512,22 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying && store.last(source) == "xc:1" } == true }
                 device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
                 assertEquals("xc:1", store.previous(source))
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("recent-add:xc:1")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("recent-watch:xc:1").isFocusable)
+                    activity.window.decorView.findViewWithTag<View>("recent-add:xc:1").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
+                device.pressBack(); holdBack()
+                waitFor(scenario) { channelList(it)?.isShown == false }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-multiview")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-multiview").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("multiview-controls")?.isShown == true }
+                scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
+                instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "recent-multiview.png"))
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -832,6 +848,11 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").requestFocus() }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
+                device.pressDPadLeft(); device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-search").hasFocus() }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(2)!!.itemView.apply { requestFocus(); performClick() } }
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
                 scenario.onActivity { activity -> assertEquals("Action", (activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findFocus() as android.widget.TextView).text.toString()) }
@@ -960,6 +981,23 @@ class SpareDeviceTest {
         assertEquals(url, SecureStore(context).metadataAddon())
         assertFalse(File(context.filesDir, "metadata-addon.enc").readBytes().toString(Charsets.UTF_8).contains("private-config-token"))
         store.saveMetadataAddon("")
+        FixtureServer().use { server ->
+            var panel: MediaBrowserPanel? = null; var cover: android.widget.ImageView? = null; var fallback: ((String) -> Unit)? = null
+            instrumentation.runOnMainSync {
+                val activityContext = android.view.ContextThemeWrapper(context, android.R.style.Theme_Material_NoActionBar)
+                panel = MediaBrowserPanel(activityContext, { text, action -> android.widget.Button(activityContext).apply { this.text = text; setOnClickListener { action() } } }, {}, {}, {})
+                panel!!.visibility = View.VISIBLE; panel!!.allowArtworkHttp(true)
+                panel!!.submit(listOf(BrowserRow("missing", "Missing artwork", requestPoster = { fallback = it }) {}))
+                panel!!.measure(View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY)); panel!!.layout(0, 0, 960, 540)
+                cover = find<android.widget.ImageView>(panel!!.findViewWithTag<View>("library-item:missing"))!!
+                assertNotNull(fallback); assertNull((cover!!.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap); fallback!!("${server.base}/logo.png")
+            }
+            val deadline = System.currentTimeMillis() + 7000
+            var loaded = false
+            while (!loaded && System.currentTimeMillis() < deadline) { instrumentation.runOnMainSync { loaded = (cover!!.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap != null }; Thread.sleep(50) }
+            assertTrue("Metadata poster is applied to the visible card", loaded)
+            instrumentation.runOnMainSync { panel!!.closeImages() }
+        }
     }
 
     private fun fixtureLiveSports(activity: MainActivity) {
@@ -1037,6 +1075,10 @@ class SpareDeviceTest {
                 activateSetting(scenario, "Font"); activateSetting(scenario, "Light")
                 waitFor(scenario) { store.font == "Light" }
                 scenario.onActivity { activity -> assertEquals(AppFont.face(true), activity.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface); assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
+                activateSetting(scenario, "Frame-rate matching"); activateSetting(scenario, "Off")
+                assertFalse(SecureStore(context).frameRateMatching)
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("settings-panel").isShown); assertEquals(0, it.window.attributes.preferredDisplayModeId) }
+                activateSetting(scenario, "On"); assertTrue(SecureStore(context).frameRateMatching)
                 activateSetting(scenario, "Subtitles"); activateSetting(scenario, "Subtitle appearance")
                 activateSetting(scenario, "Medium"); activateSetting(scenario, "Shadow")
                 waitFor(scenario) { store.subtitleSize == "Medium" && store.subtitleStyle == "Shadow" }

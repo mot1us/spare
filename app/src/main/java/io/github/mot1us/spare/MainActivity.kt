@@ -70,8 +70,6 @@ class MainActivity : Activity() {
     private val epgInFlight = mutableSetOf<String>()
     private val epgCheckedAt = mutableMapOf<String, Long>()
     private val epgDepth = mutableMapOf<String, Int>()
-    private var sportsRefreshing = false
-    private var sportsRefreshMessage = ""
     private val epgErrors = mutableMapOf<String, String>()
     private val fetchVisibleEpg = Runnable { collectVisibleEpg() }
     private val cacheEpg = Runnable {
@@ -92,7 +90,6 @@ class MainActivity : Activity() {
     private var sportsBackoffUntil = 0L
     private var sportsFailures = 0
     private val sportsForcedEpg = mutableSetOf<String>()
-    private var sportsWarmSignature: List<Any?>? = null
     private val renderSports = Runnable { sportsRenderPending = false; refreshSports() }
     private var liveSports = LiveSportsSnapshot.EMPTY
     private var liveSportsChecking = false
@@ -273,7 +270,7 @@ class MainActivity : Activity() {
             views.addChannel = { closeDetails(); switchMode(false) }
         }
         applySubtitleAppearance()
-        frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView)
+        frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView).apply { enabled = store.frameRateMatching }
         voiceInput = NativeVoiceInput(this, { guideSearch.message(it) }, { words ->
             if (guideSearch.isVisible && started) { guideSearch.setQuery(words); finishSearch(false) }
         }, { listening ->
@@ -512,9 +509,9 @@ class MainActivity : Activity() {
         retryActions.addView(button("Retry") { if (onDemand != null) playAttempt() else current?.let { tune(it) } })
         retryActions.addView(button("Guide") { retryPanel.visibility = View.GONE; returnToLive() }); retryPanel.addView(retryActions)
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
-        details = PlaybackDetails(this, ::button, { showGuide(true) }, ::recallPrevious, {
+        details = PlaybackDetails(this, ::button, { closeDetails(); showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) })
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) })
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         demandControls = OnDemandControls(this, ::button, { if (player.playbackState == Player.STATE_ENDED) { demandPosition = 0; demandPaused = false; playAttempt() } else { demandPaused = player.playWhenReady; player.playWhenReady = !demandPaused }; showDemandControls() },
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
@@ -639,7 +636,7 @@ class MainActivity : Activity() {
         // Right returns to the current screen. Only OK activates a highlighted destination.
         when {
             settingsPanel?.opened == true -> settingsPanel?.focusNavigation()
-            library.opened -> library.panel.focusRows()
+            library.opened -> library.panel.focusToolbar()
             sportsVisible -> sportsPanel.focusGames()
             else -> focusChannel()
         }
@@ -702,7 +699,7 @@ class MainActivity : Activity() {
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         cacheEpg.run(); cachedStartup = false
         val epoch = ++generation; guideTimeline.clear()
-        sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsWarmSignature = null; sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear(); sportsRefreshing = false; sportsRefreshMessage = ""
+        sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
@@ -1049,21 +1046,17 @@ class MainActivity : Activity() {
         val liveSnapshot = liveSports
         val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
         val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites
-        val profile = if (browseAll) GuideFilters() else filters
-        val quality = videoInfo.toMap(); val now = System.currentTimeMillis(); val hidden = unavailable.snapshot().filterValues { it > now }.keys
-        val signature = listOf(snapshot.channels, profile.groups, favoriteSnapshot, followed, selectedTeam, hidden)
+        val now = System.currentTimeMillis()
         sportsTask = sportsWorker.submit {
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
                 (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
             }
-            val games = rawGames.map { game -> game.copy(broadcasts = game.broadcasts.filter { it.channel.id !in hidden && profile.matches(it.channel, quality[it.channel.id]) }, candidates = game.candidates.filter { it.id !in hidden && profile.matches(it, quality[it.id]) }) }
-            val guideChannels = snapshot.programmes.size
+            val games = rawGames
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
                 if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
-                sportsWarmSignature = signature
                 selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
                 val scanning = liveSportsChecking
                 val progress = when {
@@ -1071,7 +1064,7 @@ class MainActivity : Activity() {
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
                     else -> "${if (selectedTeam == null) "All leagues" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
-                sportsPanel.submit(games, followed, selectedTeam, progress, scanning, 0, guideChannels)
+                sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
                 selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Schedules appear independently of channel matching. NFL shows this week’s matchups, scores and start times. Select a game to find playlist channels."
                 }
@@ -1123,10 +1116,10 @@ class MainActivity : Activity() {
     }
     private fun startMultiview(channel: Channel) {
         val selected = source ?: return
-        if (current == null || !hasPlayedChannel) { tune(channel); toast("Start a live channel, then choose Watch together"); return }
+        if (current == null || !hasPlayedChannel) { tune(channel); toast("Start a live channel, then open Multiview"); return }
         if (channel.id == current?.id) {
-            if (!multiview.active) multiview.open(current!!.name, current!!.id)
-            multiview.chooseGame(); return
+            showGuide(false); closeDetails(); nowPlaying.hide(immediate = true); frameRates.clear()
+            multiview.open(current!!.name, current!!.id); return
         }
         if (!Network.allowed(channel.url, selected.allowHttp)) { toast("This stream needs HTTP permission in playlist settings"); return }
         showGuide(false); nowPlaying.hide(immediate = true); frameRates.clear()
@@ -1151,18 +1144,20 @@ class MainActivity : Activity() {
         val format = player.videoFormat
         fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Source ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Timestamps ${rate(measuredFrameRate)} fps · $scanEvidence · ${videoInfo[channel.id]?.evidence.orEmpty()}"
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel))
+        val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
+        val recentById = guide.channels.filter { it.id in recentIds }.associateBy { it.id }
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentById::get), source?.allowHttp == true)
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }
         if (current == null) return
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
-        refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.guideButton.requestFocus()
+        details.resumeImages(); refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.guideButton.requestFocus()
         handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000)
     }
     private fun closeDetails() {
         handler.removeCallbacks(hideDetails)
-        if (::details.isInitialized) details.visibility = View.GONE
+        if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun editSource(existing: Source?) = SourceDialog.show(this, existing, { selected ->
         runCatching { val next = sources.filterNot { it.id == selected.id } + selected; store.saveSources(next); sources = next }
@@ -1185,7 +1180,7 @@ class MainActivity : Activity() {
         val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
-        panel.open(listOf("Playlists", "Navigation dock", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
+        panel.open(listOf("Playlists", "Navigation dock", "Frame-rate matching", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
@@ -1205,6 +1200,14 @@ class MainActivity : Activity() {
                 panel.page(page, "Hidden dock slides in when you move Left from categories. Right returns to your current screen; OK opens an item.")
                 listOf("Hidden dock", "Always open").forEachIndexed { index, label -> panel.action(label, selected = store.hiddenDock == (index == 0)) {
                     store.hiddenDock = index == 0; applyDockPreference(); refresh(label)
+                } }
+            }
+            "Frame-rate matching" -> {
+                panel.page(page, "Match the TV refresh rate to the current stream. Your TV may briefly go black when changing modes. Off leaves display timing to Android.")
+                listOf("On", "Off").forEachIndexed { index, label -> panel.action(label, selected = store.frameRateMatching == (index == 0)) {
+                    store.frameRateMatching = index == 0; frameRates.enabled = store.frameRateMatching
+                    if (store.frameRateMatching && !multiview.active) videoInfo[current?.id]?.fps?.let(frameRates::request)
+                    refresh(label)
                 } }
             }
             "Guide video" -> {
@@ -1246,6 +1249,7 @@ class MainActivity : Activity() {
             }
             "Metadata" -> {
                 panel.page("Metadata", "Provider artwork and descriptions are used by default. Optional AIO Metadata enrichment uses your configured Stremio addon URL. IPTV credentials and playback URLs stay in Spare. Enrichment is cached and never blocks playback.")
+                panel.action("Refresh metadata artwork", "Retry missing movie and series posters without reloading your playlist") { metadata.clear(); library.clearMetadata(); panel.note("Metadata cache cleared · Missing posters will load as you browse.") }
                 panel.action("Provider metadata") { imports.execute { store.saveMetadataAddon(""); handler.post { if (!closed) { metadata.clear(); library.clearMetadata(); panel.note("Provider metadata selected.") } } } }
                 panel.action("Configure AIO Metadata", "Enter the configured manifest.json URL from your existing setup") { configureMetadata() }
                 panel.note("Movies and series use provider IDs or an exact, unambiguous title/year match. Identifiable live programmes can also show enriched descriptions. Ambiguous matches retain provider data.")
@@ -1265,7 +1269,7 @@ class MainActivity : Activity() {
                 } }
             }
             "Subtitles" -> renderCaptionSettings()
-            "Sports" -> { panel.page("Sports", "Browse league scoreboards, follow teams, and select a game to find playlist streams. LIVE comes from fresh game status, not a programme title. Watch together supports two or four streams; your provider and TV hardware must support the chosen connection and decoder count. ESPN receives no playlist credentials."); panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) } }
+            "Sports" -> { panel.page("Sports", "Browse league scoreboards, follow teams, and select a game to find playlist streams. LIVE comes from fresh game status, not a programme title. Multiview supports two or four streams; your provider and TV hardware must support the chosen connection and decoder count. ESPN receives no playlist credentials."); panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) } }
             "Updates" -> { panel.page(page, "Spare ${BuildConfig.VERSION_NAME}. Updates are downloaded from verified GitHub releases. Android may request installation permission or confirmation."); panel.action(availableUpdate?.let { "Update $it" } ?: "Check for updates") { updater.offer() } }
             "Stream format" -> {
                 panel.page(page, "Auto tries the provider’s alternate transport format when a channel cannot open.")
@@ -1286,7 +1290,7 @@ class MainActivity : Activity() {
                 val value = input.text.toString()
                 imports.execute {
                     val result = runCatching { val url = MetadataAddon.validate(value); MetadataAddon.manifest(url); store.saveMetadataAddon(url) }
-                    handler.post { if (!closed) { result.onSuccess { metadata.clear(); library.clearMetadata(); toast("AIO Metadata connected") }.onFailure { notice("Could not connect metadata", "Use a valid configured HTTPS manifest.json URL. The addon must be reachable. Your playlist is unchanged.") } } }
+                    handler.post { if (!closed) { result.onSuccess { metadata.clear(); library.clearMetadata(); settingsPanel?.note("AIO Metadata connected · Missing posters load as you browse Movies and Series."); toast("AIO Metadata connected") }.onFailure { notice("Could not connect metadata", "Use a valid configured HTTPS manifest.json URL. The addon must be reachable. Your playlist is unchanged.") } } }
                 }
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1524,7 +1528,7 @@ class MainActivity : Activity() {
     override fun onStart() { super.onStart(); started = true; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
     override fun onStop() { if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); if (onDemand != null) demandPaused = !player.playWhenReady; handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onDestroy() { if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

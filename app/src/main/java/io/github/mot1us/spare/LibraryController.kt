@@ -42,6 +42,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var activeQuery = ""
     private data class BrowsePage(val version: String, val rows: List<BrowserRow>, val cursor: Int, val more: Boolean, val available: Int)
     private val browsePages = linkedMapOf<String, BrowsePage>()
+    private val posterMetadata = PosterMetadata(store)
     private val details = linkedMapOf<String, OnDemand>()
     private var detailItem: OnDemand? = null
     private var labels = emptyMap<String, String>()
@@ -49,6 +50,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val opened get() = panel.isVisible
     fun open(mode: String = kind) {
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
+        panel.selectTab(mode); panel.seriesArtwork(null)
         directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = source()
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
@@ -199,7 +201,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
         if (item.kind == "episode") "Episode ${item.episode} · ${item.runtime}" else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
-        poster = item.poster, description = item.description) { select(item) }
+        poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }) { select(posterMetadata.known(item)) }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query"
@@ -271,14 +273,14 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun episodes(selected: Source, series: OnDemand) {
         detailItem = null; parentSeries = series
         val cacheKey = "${selected.id}:${series.id}"
-        episodeCache[cacheKey]?.let { entries -> episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.focusRows(); return }
+        episodeCache[cacheKey]?.let { entries -> episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); panel.focusRows(); return }
         panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true)
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) }
-            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.focusRows()
+            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); panel.focusRows()
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
-                if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { if (enriched.description.isNotBlank()) panel.page(series.title, enriched.description, false) } }
+                if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { panel.seriesArtwork(enriched); if (enriched.description.isNotBlank()) panel.page(series.title, enriched.description, false) } }
             }
         } }.onFailure { ui(token) { panel.page(series.title, "Episodes unavailable · ${SourceErrors.message(it)} · Refresh to retry.", false); panel.focusRows() } } }
     }
@@ -301,6 +303,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun openCatchup(channel: Channel, direct: Boolean = false) {
         directCatchup = direct
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
+        panel.selectTab("catchup"); panel.seriesArtwork(null)
         kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
         task?.cancel(true); ++epoch
         val selected = source() ?: return
@@ -320,12 +323,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
         request { token -> runCatching { Catchup.load(selected, channel) }.onSuccess { entries -> ui(token) { show(entries, "${channel.catchupDays}-day provider archive · Back returns to channels", false); panel.focusRows() } }
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
-    fun clearMetadata() { details.clear() }
+    fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }
     fun reopen() { open(kind) }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
     fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
     fun dismiss() { pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
-    fun destroy() { catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

@@ -13,13 +13,16 @@ import kotlin.math.round
 class FrameRates(private val activity: Activity, private val view: SurfaceView) : SurfaceHolder.Callback {
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var rate = 0f
+    @Volatile var enabled = true
+        set(value) { field = value; if (!value) clear() }
     init { view.holder.addCallback(this) }
     fun request(value: Float) {
-        if (!value.isFinite() || value !in 10f..120f || abs(value - rate) < .1f) return
+        if (!enabled || !value.isFinite() || value !in 10f..120f || abs(value - rate) < .1f) return
         rate = value
         handler.post { apply() }
     }
     private fun apply() {
+        if (!enabled || rate <= 0f) return
         runCatching {
             val surface = view.holder.surface
             if (!surface.isValid) return

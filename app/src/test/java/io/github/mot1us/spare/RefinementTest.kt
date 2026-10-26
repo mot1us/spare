@@ -90,4 +90,20 @@ class RefinementTest {
         }
         assertEquals(item, result)
     }
+    @Test fun addonSeriesArtworkFallsBackFromProviderIdToExactCatalogSearch() {
+        val item = OnDemand("series:1", "US | The Show (2025) FHD", "Shows", "https://provider.example/secret", kind = "series", year = "0", externalId = "tmdb:12")
+        val requests = mutableListOf<String>()
+        val result = MetadataAddon.enrich("https://addon.example/config/manifest.json", item) { url ->
+            requests.add(url)
+            when {
+                url.endsWith("/manifest.json") -> """{"catalogs":[{"type":"series","id":"search","extra":[{"name":"search"}]}]}"""
+                url.contains("/catalog/") -> """{"metas":[{"id":"tvdb:123","name":"The Show","releaseInfo":"2025","poster":"https://images.example/show.jpg","background":"https://images.example/show-wide.jpg"}]}"""
+                else -> throw IllegalStateException("No detail metadata")
+            }
+        }
+        assertEquals("https://images.example/show.jpg", result.poster); assertEquals("https://images.example/show-wide.jpg", result.backdrop)
+        assertEquals(item.url, result.url); assertEquals("tvdb:123", result.externalId)
+        assertTrue(requests.any { it.endsWith("/meta/series/tmdb%3A12.json") }); assertFalse(requests.any { it.contains("provider.example") || it.contains("secret") })
+    }
+
 }

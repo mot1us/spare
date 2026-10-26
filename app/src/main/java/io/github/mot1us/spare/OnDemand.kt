@@ -26,7 +26,7 @@ object VodCatalog {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
         val action = if (kind == "movie") "get_vod_streams" else "get_series"
         require(category == null || numeric.matches(category))
-        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "plot", "stream_icon", "cover", "year", "releaseDate", "genre", "cast", "tmdb_id", "imdb_id")
+        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "plot", "stream_icon", "cover", "cover_big", "poster", "movie_image", "backdrop_path", "year", "releaseDate", "release_date", "genre", "cast", "tmdb_id", "tmdb", "tvdb_id", "imdb_id")
         Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
@@ -76,8 +76,8 @@ object VodCatalog {
             val id = j.optString(if (kind == "series") "series_id" else "stream_id")
             if (!numeric.matches(id)) return@mapNotNull null
             OnDemand("$kind:$id", j.optString("name").take(256).ifBlank { "Untitled" }, categories[j.optString("category_id")] ?: j.optString("category_id").take(80).let { if (it.isBlank()) "Other" else "Category $it" },
-                if (kind == "movie") streamUrl(source, "movie", id, j.optString("container_extension")) else "", kind, j.optString("plot").take(2048), poster = artwork(j.optString(if (kind == "movie") "stream_icon" else "cover"), source),
-                backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = j.optString("year").ifBlank { j.optString("releaseDate").take(4) }.take(8),
+                if (kind == "movie") streamUrl(source, "movie", id, j.optString("container_extension")) else "", kind, j.optString("plot").take(2048), poster = listOf(if (kind == "movie") "stream_icon" else "cover", "cover_big", "poster", "movie_image", "stream_icon").map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
+                backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { Regex("(?:19|20)[0-9]{2}").find(it)?.value }.firstOrNull().orEmpty(),
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
         }.distinctBy { it.id }
     }

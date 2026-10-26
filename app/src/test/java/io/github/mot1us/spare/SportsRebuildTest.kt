@@ -43,6 +43,8 @@ class SportsRebuildTest {
         val xml = "<tv><programme channel=\"one\" start=\"20270115080000 +0000\" stop=\"20270115100000 +0000\"><title>A show</title><icon src=\"https://images.example/poster.jpg\"/><image orient=\"L\">https://images.example/hero.jpg</image></programme></tv>"
         val start = Importers.timestamp("20270115080000 +0000")
         assertEquals("https://images.example/hero.jpg", Importers.xmltv(xml.toByteArray(), setOf("one"), start).getValue("one").single().artwork)
+        val castOnly = xml.replace("<icon src=\"https://images.example/poster.jpg\"/><image orient=\"L\">https://images.example/hero.jpg</image>", "<credits><actor><image>https://images.example/person.jpg</image></actor></credits>")
+        assertEquals("", Importers.xmltv(castOnly.toByteArray(), setOf("one"), start).getValue("one").single().artwork)
     }
     @Test fun gameArtworkMustBelongToTheRequestedEventAndUseAnAllowedUrl() {
         val json = """{"article":{"gameId":"123","images":[{"width":900,"url":"https://images.example/game.jpg","credit":"Photo agency"}]}}"""

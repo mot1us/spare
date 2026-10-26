@@ -21,9 +21,12 @@ class PlaybackDetails(
     onSubtitles: () -> Unit,
     onCatchup: () -> Unit,
     onMultiview: () -> Unit,
+    onRecent: (Channel) -> Unit,
+    onAddView: (Channel) -> Unit,
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color) }
+    private val recent = RecentChannels(context, onRecent, onAddView)
     private val channel = label(12f, Color.LTGRAY)
     private val title = label(20f).apply { typeface = AppFont.face(true); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
     private val description = label(12f, Color.LTGRAY).apply { maxLines = 3; ellipsize = TextUtils.TruncateAt.END }
@@ -38,11 +41,16 @@ class PlaybackDetails(
         background = GuideTheme.glass(resources.displayMetrics.density); elevation = dp(10).toFloat(); clipToOutline = true
         addView(channel); addView(title, LayoutParams(-1, -2).apply { topMargin = dp(4) })
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        addView(recent, LayoutParams(-1, -2))
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
-        addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Watch together", onMultiview).apply { tag = "channel-multiview" }) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
+        addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
     }
+    fun resumeImages() = recent.resume()
+    fun pauseImages() = recent.pause()
+    fun closeImages() = recent.close()
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
-    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean) {
+    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false) {
+        recent.bind(recentChannels, allowHttp)
         channel.text = "${current.name}  ·  $quality"
         title.text = programme?.title ?: current.name
         description.text = programme?.let { "${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}  ·  ${it.description}" } ?: "No programme information"

@@ -154,6 +154,9 @@ class SecureStore(private val context: Context) {
     var hiddenDock: Boolean
         get() = preferences.getBoolean("hidden-dock", true)
         set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
+    var frameRateMatching: Boolean
+        get() = preferences.getBoolean("frame-rate-matching", true)
+        set(value) { preferences.edit { putBoolean("frame-rate-matching", value) } }
     var smallPreview: Boolean
         get() = preferences.getBoolean("small-preview", true)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }
@@ -162,10 +165,16 @@ class SecureStore(private val context: Context) {
         set(value) { preferences.edit { putString("active", value) } }
     fun last(source: Source) = preferences.getString("last-${source.id}", "").orEmpty()
     fun previous(source: Source) = preferences.getString("previous-${source.id}", "").orEmpty()
+    fun recent(source: Source): List<String> = runCatching {
+        val entries = JSONArray(preferences.getString("recent-${source.id}", "[]"))
+        (List(minOf(entries.length(), 12)) { entries.optString(it) } + listOf(last(source), previous(source))).filter { it.isNotBlank() }.distinct().take(12)
+    }.getOrDefault(listOf(last(source), previous(source)).filter { it.isNotBlank() }.distinct())
     // Called only after a rendered frame: a failed tune must not replace watch history.
     fun setLast(source: Source, channel: Channel) {
         val prior = last(source)
+        val history = (listOf(channel.id) + recent(source)).distinct().take(12)
         preferences.edit {
+            putString("recent-${source.id}", JSONArray(history).toString())
             if (prior.isNotBlank() && prior != channel.id) putString("previous-${source.id}", prior)
             putString("last-${source.id}", channel.id)
         }

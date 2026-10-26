@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1 — 2026-10-26
+
+- Add persistent frame-rate matching On/Off controls without restarting playback.
+- Open Multiview directly and add recent-channel logo tiles with separate watch/add actions in playback details.
+- Restore remote access to Library tabs after the navigation dock opens; keep asynchronous artwork updates from moving focus.
+- Fill missing movie/series posters from optional AIO Metadata, cache artwork locally, and show series art beside episode details. Improve title matching and metadata retry controls.
+- Give Sports larger layered team artwork, reject nested cast portraits as programme art, and remove unused scoreboard work.
+
 ## 0.10.0 — 2026-10-26
 
 - Rebuild Sports around league navigation, featured game artwork, live/upcoming/final status and scores, and a remote-friendly game rail. Add NBA, NHL, Premier League, MLS and Champions League.

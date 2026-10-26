@@ -14,6 +14,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import androidx.core.view.isVisible
 import androidx.recyclerview.widget.GridLayoutManager
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -21,7 +22,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableId(key).take(16).toULong(16).toLong() }
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableId(key).take(16).toULong(16).toLong() }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -31,6 +32,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.WHITE); typeface = AppFont.face() }
     var navigation: (() -> Unit)? = null
     private var allCategoryTitle = "All"
+    private val banner = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = GONE; tag = "library-series-art" }
+    private var bannerUrl = ""
     private val heading = label(22f).apply { tag = "library-heading" }
     private val message = label(11f).apply { maxLines = 2; setTextColor(Color.LTGRAY); tag = "library-status" }
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
@@ -67,14 +70,28 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val body = LinearLayout(context)
     private var artworkHttp = false
     private var rememberedKey: String? = null
+    private val toolbarControls = mutableListOf<Button>()
+    private var selectedTab = "movie"
     private val tabs = listOf("Movies" to "movie", "Series" to "series", "Continue" to "continue", "Catch-up" to "catchup")
     init {
         orientation = VERTICAL; tag = "library-panel"; visibility = GONE; setPadding(dp(24), dp(18), dp(24), dp(18)); setBackgroundColor(0xEE0B1018.toInt())
         val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        toolbar.addView(button("Live TV", close).apply { tag = "library-live" })
-        tabs.forEach { (title, key) -> toolbar.addView(button(title) { hideKeyboard(); mode(key) }.apply { tag = "library-tab:$key" }) }
-        toolbar.addView(button("Refresh", refresh).apply { tag = "library-refresh" })
-        addView(toolbar, LayoutParams(-1, dp(42))); addView(heading, LayoutParams(-1, dp(36))); addView(message, LayoutParams(-1, dp(32))); addView(loading, LayoutParams(-1, dp(3)))
+        toolbarControls.add(button("Live TV", close).apply { tag = "library-live" })
+        tabs.forEach { (title, key) -> toolbarControls.add(button(title) { selectedTab = key; hideKeyboard(); mode(key) }.apply { tag = "library-tab:$key" }) }
+        toolbarControls.add(button("Refresh", refresh).apply { tag = "library-refresh" })
+        toolbarControls.forEachIndexed { index, control ->
+            toolbar.addView(control)
+            control.setOnKeyListener { _, key, event -> when (key) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { val next = index + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1; if (next < 0) navigation?.invoke() else toolbarControls.getOrNull(next)?.requestFocus() }; true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else search.requestFocus() }; true }
+                KeyEvent.KEYCODE_DPAD_UP -> true
+                else -> false
+            } }
+        }
+        addView(toolbar, LayoutParams(-1, dp(42)))
+        val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(heading, LayoutParams(-1, dp(36))); addView(message, LayoutParams(-1, dp(32))) }, LayoutParams(0, -2, 1f))
+        header.addView(banner, LayoutParams(dp(48), dp(68)).apply { marginStart = dp(12) }); addView(header, LayoutParams(-1, dp(68))); addView(loading, LayoutParams(-1, dp(3)))
         addView(search, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(10) })
         body.orientation = HORIZONTAL
         body.addView(categories, LayoutParams(dp(190), -1).apply { marginEnd = dp(16) })
@@ -130,9 +147,22 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}"
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); item.select() } }
                 holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) Color.BLACK else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
-                val poster = item.poster
-                fun draw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
-                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::draw))
+                var poster = item.poster; var requested = false
+                fun draw() {
+                    if (holder.box.tag != "library-item:${item.key}") return
+                    holder.image.setImageBitmap(images.get(poster, artworkHttp) {})
+                    if (!requested && (poster.isBlank() || images.unavailable(poster))) {
+                        requested = true
+                        item.requestPoster?.invoke { fallback ->
+                            if (fallback.isNotBlank() && fallback != poster && holder.box.tag == "library-item:${item.key}") {
+                                poster = fallback
+                                fun redraw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
+                                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::redraw))
+                            }
+                        }
+                    }
+                }
+                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::draw)); draw()
                 holder.box.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
@@ -158,7 +188,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         })
         search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (!changingSearch) { searchHandler.removeCallbacks(searchLater); searchHandler.postDelayed(searchLater, 180) } }; override fun afterTextChanged(s: Editable?) {} })
         search.setOnEditorActionListener { _, _, _ -> hideKeyboard(); focusAt(rows, 0); true }
-        search.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_DOWN) { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusAt(rows, 0) }; true } else false }
+        search.setOnKeyListener { _, key, event -> when (key) { KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusRows() }; true }; KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusToolbar() }; true }; else -> false } }
     }
     private fun cell(size: Float, height: Int) = label(size).apply {
         isFocusableInTouchMode = true; isClickable = true; gravity = Gravity.CENTER_VERTICAL; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
@@ -224,6 +254,15 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
+    fun selectTab(key: String) { selectedTab = key }
+    fun seriesArtwork(item: OnDemand?) {
+        bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
+        val url = bannerUrl
+        fun draw() { if (bannerUrl == url) banner.setImageBitmap(images.get(url, artworkHttp) {}) }
+        banner.setImageBitmap(images.get(url, artworkHttp, ::draw))
+    }
+    fun refreshPosters() { rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
+    fun focusToolbar() { ++focusEpoch; pending = null; catalogFocusRequested = false; hideKeyboard(); toolbarControls.firstOrNull { it.tag == "library-tab:$selectedTab" }?.requestFocus() }
     fun focusCategories() { focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0)) }
     fun focusRows() { if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
