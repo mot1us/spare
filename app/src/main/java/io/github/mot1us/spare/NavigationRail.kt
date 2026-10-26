@@ -22,6 +22,9 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     private var remembered: Button? = null
     var expanded = true
         private set
+    var moving = false
+        private set
+    private var motionEpoch = 0
     private var hiddenDock = false
     var expansionChanged: (() -> Unit)? = null
     fun configure(hidden: Boolean) {
@@ -33,10 +36,17 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         val next = !hiddenDock || open
         if (animated && expanded == next) return
         expanded = next
+        val epoch = ++motionEpoch
         animate().cancel()
-        if (animated && isLaidOut) animate().translationX(if (next) 0f else -dp(94).toFloat()).alpha(if (next) 1f else 0f)
-            .setDuration(160).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
-        else { translationX = if (next) 0f else -dp(94).toFloat(); alpha = if (next) 1f else 0f }
+        moving = animated && isLaidOut
+        if (moving) {
+            // Translate one cached surface; fading its shadow and children together caused closing shimmer.
+            alpha = 1f
+            animate().translationX(if (next) 0f else -dp(94).toFloat()).withLayer()
+                .setDuration(if (next) 180L else 150L)
+                .setInterpolator(android.view.animation.PathInterpolator(.2f, 0f, 0f, 1f))
+                .withEndAction { if (epoch == motionEpoch) { moving = false; alpha = if (expanded) 1f else 0f; expansionChanged?.invoke() } }.start()
+        } else { translationX = if (next) 0f else -dp(94).toFloat(); alpha = if (next) 1f else 0f }
         expansionChanged?.invoke()
     }
     fun focusChanged(inside: Boolean) { setExpanded(inside) }
@@ -86,6 +96,7 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     fun activate(key: String) { controls.forEach { it.isSelected = it.tag == key; it.invalidate() } }
     fun focusCurrent() { setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
+        background = if (hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }
     }
 }

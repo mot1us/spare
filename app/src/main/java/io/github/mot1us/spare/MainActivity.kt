@@ -638,7 +638,7 @@ class MainActivity : Activity() {
     }
     private fun updateDockHint() {
         if (!::dockHint.isInitialized) return
-        dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded
+        dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded && !navigationRail.moving
         if (dockHint.isVisible) root.bringChildToFront(dockHint)
     }
     private fun openNavigation() { ++focusEpoch; pendingFocusList = null; navigationRail.focusCurrent() }
@@ -1316,8 +1316,7 @@ class MainActivity : Activity() {
         source?.let { store.setFilters(it, next) }; filters = next; browseAll = false; group = null; applyFilter()
     }
     private fun applyTheme() {
-        val base = GuideTheme.current.background
-        guidePanel.background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(base or 0xF2000000.toInt(), base or 0xC9000000.toInt()))
+        guidePanel.background = GuideTheme.guideBackground()
         fun visit(view: View) {
             if (view is Button) { view.background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30)); view.setTextColor(GuideTheme.ink()) }
             else if (view is ImageButton) view.background = GuideTheme.background(resources.displayMetrics.density)

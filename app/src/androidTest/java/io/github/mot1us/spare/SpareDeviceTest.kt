@@ -608,6 +608,12 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.hasFocus() == true && it.window.decorView.findViewWithTag<View>("navigation-handle").isShown && it.window.decorView.findViewWithTag<View>("app-navigation").alpha < .01f }
                 device.pressDPadLeft(); device.pressDPadLeft(); repeat(3) { device.pressDPadDown() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings").hasFocus() && it.window.decorView.findViewWithTag<View>("app-navigation").alpha > .99f }
+                scenario.onActivity { activity ->
+                    val dock = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                    channelList(activity)!!.getChildAt(0).requestFocus()
+                    dock.postOnAnimation { dock.focusCurrent() }
+                }
+                waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation").let { it.expanded && !it.moving && it.alpha == 1f && it.hasFocus() } }
                 device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true && it.window.decorView.findViewWithTag<View>("settings-panel").isShown == false }
                 device.pressDPadLeft(); device.pressDPadLeft(); repeat(2) { device.pressDPadDown() }; device.pressDPadRight()
                 waitFor(scenario) { channelList(it)?.hasFocus() == true && !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
@@ -1036,6 +1042,11 @@ class SpareDeviceTest {
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))
                 activateSetting(scenario, "Style · Flat"); waitFor(scenario) { store.themeStyle == "Flat" && GuideTheme.style == "Flat" }
+                activateSetting(scenario, "Violet"); activateSetting(scenario, "Style · Outline")
+                waitFor(scenario) { store.theme == "Violet" && store.themeStyle == "Outline" && GuideTheme.style == "Outline" }
+                activateSetting(scenario, "Font"); activateSetting(scenario, "Light")
+                waitFor(scenario) { store.font == "Light" }
+                scenario.onActivity { activity -> assertEquals(AppFont.face(true), activity.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface); assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
                 activateSetting(scenario, "Subtitles"); activateSetting(scenario, "Subtitle appearance")
                 activateSetting(scenario, "Medium"); activateSetting(scenario, "Shadow")
                 waitFor(scenario) { store.subtitleSize == "Medium" && store.subtitleStyle == "Shadow" }

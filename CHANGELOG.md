@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.3 — 2026-10-26
+
+- Smooth the hidden dock with a cached slide, retarget interrupted movement, and reveal its handle after closing completes.
+- Add seven color palettes, Soft/Outline/Cinema styles, and six offline device font choices; refresh the dock appearance with the selected theme.
+
 ## 0.9.2 — 2026-10-26
 
 - Right from the dock returns to current content; only OK opens a destination. Add hidden or always-open navigation with a smooth overlay that keeps content layout steady.

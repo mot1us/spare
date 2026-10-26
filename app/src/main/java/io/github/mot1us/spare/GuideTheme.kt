@@ -14,21 +14,45 @@ object GuideTheme {
         Palette("Mint", 0xFF8CE5C1.toInt(), 0x000A1B17),
         Palette("Amber", 0xFFFFD28A.toInt(), 0x001E160B),
         Palette("Rose", 0xFFFFADC9.toInt(), 0x00200F19),
+        Palette("Violet", 0xFFC6B5FF.toInt(), 0x00160E26),
+        Palette("Sky", 0xFF99E1FF.toInt(), 0x000A1D27),
+        Palette("Coral", 0xFFFFAD9B.toInt(), 0x00221110),
+        Palette("Lime", 0xFFD3EFA0.toInt(), 0x00151C0B),
+        Palette("Ice", 0xFFD5E9F1.toInt(), 0x0010191E),
+        Palette("Copper", 0xFFEBC09E.toInt(), 0x001E1510),
+        Palette("Slate", 0xFFBAC8DC.toInt(), 0x00141A23),
     )
-    val styles = listOf("Glass", "Flat", "Grid")
+    val styles = listOf("Glass", "Flat", "Grid", "Soft", "Outline", "Cinema")
     var style = "Glass"
         private set
     fun selectStyle(name: String) { style = name.takeIf { it in styles } ?: "Glass" }
     var current = palettes.first()
         private set
     fun select(name: String) { current = palettes.firstOrNull { it.name == name } ?: palettes.first() }
-    fun glass(density: Float) = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-        if (style == "Glass") intArrayOf(0xEE202936.toInt(), 0xE80D131D.toInt()) else intArrayOf(0xEB10151C.toInt(), 0xEB10151C.toInt())).apply {
-        cornerRadius = if (style == "Glass") 12 * density else 0f; setStroke(density.toInt().coerceAtLeast(1), if (style == "Flat") Color.TRANSPARENT else 0x40FFFFFF)
+    private val radius get() = when (style) { "Glass" -> 6f; "Soft" -> 14f; "Outline" -> 3f; "Cinema" -> 8f; else -> 0f }
+    fun glass(density: Float) = GradientDrawable(GradientDrawable.Orientation.TL_BR, when (style) {
+        "Glass" -> intArrayOf(current.background or 0xEE202020.toInt(), current.background or 0xE8080808.toInt())
+        "Cinema" -> intArrayOf(current.background or 0xC0000000.toInt(), current.background or 0xA0000000.toInt())
+        else -> intArrayOf(current.background or 0xF0000000.toInt(), current.background or 0xF0000000.toInt())
+    }).apply {
+        cornerRadius = (if (style == "Glass") 12f else radius) * density
+        setStroke(density.toInt().coerceAtLeast(1), when (style) { "Flat", "Cinema", "Soft" -> Color.TRANSPARENT; "Outline" -> GuideTheme.current.accent; else -> 0x40FFFFFF })
     }
+    fun guideBackground() = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, when (style) {
+        "Cinema" -> intArrayOf(current.background or 0xC8000000.toInt(), current.background or 0x88000000.toInt())
+        "Flat", "Soft" -> intArrayOf(current.background or 0xF6000000.toInt(), current.background or 0xE8000000.toInt())
+        else -> intArrayOf(current.background or 0xF2000000.toInt(), current.background or 0xC9000000.toInt())
+    })
     fun ink() = ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE))
     fun background(density: Float, idle: Int = Color.TRANSPARENT, selected: Int = 0x553F4754): StateListDrawable {
-        fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = if (style == "Glass") 6 * density else 0f; setStroke(density.toInt().coerceAtLeast(1), if (style == "Flat" || color == Color.TRANSPARENT) Color.TRANSPARENT else 0x22FFFFFF) }
+        fun shape(color: Int) = GradientDrawable().apply {
+            setColor(color); cornerRadius = radius * density
+            setStroke(density.toInt().coerceAtLeast(1), when {
+                style == "Outline" -> if (color == GuideTheme.current.accent) Color.TRANSPARENT else GuideTheme.current.accent and 0x66FFFFFF
+                style == "Flat" || style == "Soft" || style == "Cinema" || color == Color.TRANSPARENT -> Color.TRANSPARENT
+                else -> 0x22FFFFFF
+            })
+        }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
             addState(intArrayOf(android.R.attr.state_selected), shape(selected))

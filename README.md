@@ -11,7 +11,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Resolution/FPS filters, including an FHD+ / 60 fps preset. Provider-reported quality is labelled; playback readings take priority.
 - NFL/MLB scoreboards with scores, team logos, start times, and playlist channel matching.
 - Provider movies, series, catch-up, and Continue watching.
-- Themes, fonts, 12/24-hour time, and optional AIO Metadata.
+- Twelve color palettes, six styles, eleven offline fonts, 12/24-hour time, and optional AIO Metadata.
 - In-app signed updates. No ads, analytics, or Spare account.
 
 Spare includes no channels or subscriptions. Provider features and device support vary.
@@ -34,7 +34,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Movie / episode / catch-up | Back | Return to live TV |
 | Library | Library action during playback | Pause and browse |
 
-Sports has separate Scores and Watch views. Hold OK on a Sports stream to add a second view; your provider must allow two connections. Subtitle size/style and Glass, Flat or Grid layouts are in Settings.
+Sports has separate Scores and Watch views. Hold OK on a Sports stream to add a second view; your provider must allow two connections. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
 
 ## Install
 
