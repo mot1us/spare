@@ -252,7 +252,7 @@ class MainActivity : Activity() {
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
-        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = store.sportsTeam.takeIf { it in SportsCatalog.byId || it.startsWith("league:") || it == "followed" }
+        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
@@ -630,6 +630,7 @@ class MainActivity : Activity() {
         settingsPanel?.visibility = View.GONE
         if (library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
+        if (sports) sportsTeam = "today"
         switchMode(sports)
     }
     private fun enterNavigationContent() {
@@ -969,7 +970,7 @@ class MainActivity : Activity() {
     private fun layoutGuideSurface() {
         val preview = guideVisible && store.smallPreview && !(sportsVisible && !sportsPanel.watching)
         val searchInset = if (guideSearch.isVisible) dp(60) else 0
-        video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
+        if (!::multiview.isInitialized || !multiview.active || guideVisible) video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
         headerSurface.visibility = if (sportsVisible) View.GONE else View.VISIBLE
         sportsPanel.previewMode(preview && sportsVisible)
         headerInfo.setPadding(0, 0, if (preview) dp(336) else 0, 0)
@@ -1051,7 +1052,7 @@ class MainActivity : Activity() {
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
-                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
+                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" || selectedTeam == "today" && SportsSchedule.onDay(it.start, now) }).distinctBy { it.key }
             }
             val games = rawGames
             handler.post {
@@ -1062,11 +1063,11 @@ class MainActivity : Activity() {
                 val progress = when {
                     scanning -> "Updating scores… Games appear as each league arrives."
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
-                    else -> "${if (selectedTeam == null) "All leagues" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
+                    else -> "${if (selectedTeam == "today") "Today · All leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
                 selectedGame?.let(::showGameInfo) ?: run {
-                    channelInfo.text = "Sports"; programmeInfo.text = "Schedules appear independently of channel matching. NFL shows this week’s matchups, scores and start times. Select a game to find playlist channels."
+                    channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
                 scheduleEpg()
                 if (sportsDirty) { sportsDirty = false; scheduleSports() }
@@ -1241,6 +1242,10 @@ class MainActivity : Activity() {
                 panel.page(page, "Layout style and colors. Video keeps playing.")
                 GuideTheme.palettes.forEach { palette -> panel.action(palette.name, selected = store.theme == palette.name) { store.theme = palette.name; GuideTheme.select(store.theme); applyTheme(); refresh(palette.name) } }
                 GuideTheme.styles.forEach { style -> panel.action("Style · $style", selected = store.themeStyle == style) { store.themeStyle = style; GuideTheme.selectStyle(style); applyTheme(); refresh("Style · $style") } }
+                panel.action("Nostalgia preset", "Retro green guide, square borders and monospace type", selected = store.themeStyle == "Nostalgia") {
+                    store.theme = "Phosphor"; store.themeStyle = "Nostalgia"; store.font = "Monospace"
+                    GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); applyTheme(); refresh("Nostalgia preset")
+                }
                 panel.action("Font", store.font) { panel.selectSetting("Font") }
             }
             "Font" -> {

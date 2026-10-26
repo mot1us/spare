@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.2 — 2026-10-26
+
+- Replace Android TV launcher art with a clean Spare wordmark. Add an optional Nostalgia preset with phosphor colors, square borders, a full guide grid and monospace type.
+- Open Sports on Today across supported leagues, independent of followed teams. Request explicit daily schedules and add illustrated game cards while retaining All games and My teams.
+- Keep Multiview video surfaces attached and reuse pane controls when returning from browsing; avoid an intermediate full-screen resize. Label recent-channel additions as + View.
+
 ## 0.10.1 — 2026-10-26
 
 - Add persistent frame-rate matching On/Off controls without restarting playback.

@@ -46,6 +46,7 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
     private var addButton: Button? = null
     private var removeButton: Button? = null
     private var twoButton: Button? = null
+    private var rendered = ""
     var browsing = false
         private set
     val active get() = overlay != null
@@ -88,12 +89,15 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
     fun chooseGame() { browse(addGame) }
     private fun browse(action: () -> Unit) {
         if (extras.size >= 3) { status?.text = "Four streams are open. Remove a view first."; return }
-        browsing = true; overlay?.visibility = View.GONE; extras.forEach { it.view.visibility = View.INVISIBLE }
+        browsing = true; overlay?.visibility = View.GONE
+        // Keep decoder surfaces attached while the guide covers them. Visibility changes
+        // can destroy surfaces on older Android versions and interrupt both streams.
+        extras.forEach { it.view.translationX = root.width.toFloat() }
         savedLayout?.let { primary.layoutParams = it }; action()
     }
     fun present() {
         if (!active) return
-        browsing = false; extras.forEach { it.view.visibility = View.VISIBLE }; rebuild()
+        browsing = false; extras.forEach { it.view.translationX = 0f }; rebuild()
     }
     private fun select(index: Int) {
         if (index >= count) return
@@ -105,18 +109,23 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         val name = if (selected == 0) primaryName else extras.getOrNull(selected - 1)?.channel?.name.orEmpty()
         val state = if (selected == 0) main.playbackState else extras.getOrNull(selected - 1)?.player?.playbackState
         val error = extras.getOrNull(selected - 1)?.error.orEmpty()
-        status?.text = if (error.isNotBlank()) error else "Audio: $name${if (state == Player.STATE_BUFFERING) " · Buffering" else ""} · OK Full screen · Back Sports"
+        status?.text = if (error.isNotBlank()) error else "Audio: $name${if (state == Player.STATE_BUFFERING) " · Buffering" else ""} · OK Full screen · Back Guide"
         removeButton?.isEnabled = selected > 0; removeButton?.alpha = if (selected > 0) 1f else .35f; twoButton?.isEnabled = count <= 2; twoButton?.alpha = if (count <= 2) 1f else .35f
     }
     private fun rebuild() {
         val surface = overlay ?: return
         if (browsing) return
-        surface.removeAllViews(); tiles.clear(); surface.visibility = View.VISIBLE
+        surface.visibility = View.VISIBLE
+        val signature = "$fourUp:${root.width}:${root.height}:$primaryId:" + extras.joinToString { "${it.channel.id}:${it.error}" }
+        if (rendered == signature) {
+            layoutPlayers(); root.bringChildToFront(surface); select(selected.coerceAtMost(count - 1)); tiles.getOrNull(selected)?.requestFocus(); return
+        }
+        rendered = signature; surface.removeAllViews(); tiles.clear()
         val columns = 2; val rows = if (fourUp) 2 else 1
         val width = root.width / columns; val height = (root.height - dp(92)).coerceAtLeast(dp(200)) / rows
         fun params(index: Int) = FrameLayout.LayoutParams(width, height).apply { leftMargin = index % columns * width; topMargin = index / columns * height }
-        primary.layoutParams = params(0); root.bringChildToFront(primary)
-        extras.forEachIndexed { index, extra -> extra.view.tag = when (index) { 0 -> "multiview-second"; 1 -> "multiview-third"; else -> "multiview-fourth" }; extra.view.layoutParams = params(index + 1); root.bringChildToFront(extra.view) }
+        layoutPlayers()
+        extras.forEachIndexed { index, extra -> extra.view.tag = when (index) { 0 -> "multiview-second"; 1 -> "multiview-third"; else -> "multiview-fourth" } }
         repeat(columns * rows) { index ->
             val tile = FrameLayout(context).apply {
                 tag = "multiview-tile:$index"; isFocusableInTouchMode = true; isClickable = true
@@ -149,11 +158,21 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         controls.addView(actions); surface.addView(controls, FrameLayout.LayoutParams(-1, dp(82), Gravity.BOTTOM).apply { marginStart = dp(12); marginEnd = dp(12); bottomMargin = dp(6) })
         root.bringChildToFront(surface); select(selected.coerceAtMost(count - 1)); tiles.getOrNull(selected)?.requestFocus()
     }
+    private fun layoutPlayers() {
+        val width = root.width / 2; val height = (root.height - dp(92)).coerceAtLeast(dp(200)) / if (fourUp) 2 else 1
+        fun place(view: PlayerView, index: Int) {
+            val left = index % 2 * width; val top = index / 2 * height
+            val old = view.layoutParams as? FrameLayout.LayoutParams
+            if (old?.width != width || old.height != height || old.leftMargin != left || old.topMargin != top || old.gravity != -1)
+                view.layoutParams = FrameLayout.LayoutParams(width, height).apply { leftMargin = left; topMargin = top }
+        }
+        place(primary, 0); extras.forEachIndexed { index, extra -> place(extra.view, index + 1) }
+    }
     fun appearance() { extras.forEach { SubtitleAppearance.apply(it.view, store.subtitleSize, store.subtitleStyle) } }
     fun close() {
         if (!active) return
         extras.forEach { it.view.player = null; it.player.release(); root.removeView(it.view) }; extras.clear()
-        overlay?.let(root::removeView); overlay = null; tiles.clear(); savedLayout?.let { primary.layoutParams = it }; savedLayout = null
+        overlay?.let(root::removeView); overlay = null; rendered = ""; tiles.clear(); savedLayout?.let { primary.layoutParams = it }; savedLayout = null
         main.volume = primaryVolume; browsing = false; finished()
     }
 }

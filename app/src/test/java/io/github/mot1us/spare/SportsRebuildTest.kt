@@ -52,4 +52,19 @@ class SportsRebuildTest {
         assertEquals("" to "", SportsArtwork.parse(json, "456"))
         assertEquals("" to "", SportsArtwork.parse(json.replace("https://images.example/game.jpg", "file:///secret"), "123"))
     }
+    @Test fun todayIncludesUnfollowedUpcomingGamesAcrossLeaguesAndKeepsOtherDaysSeparate() {
+        val time = Instant.parse("2026-10-26T21:00:00Z").toEpochMilli()
+        val tonight = LiveEvent("monday", setOf("nfl:DAL", "nfl:PHI"), time + 3 * 3600000L, "pre", league = "NFL")
+        val basketball = LiveEvent("nba", setOf("nba:LAL", "nba:BOS"), time - 300000, "in", league = "NBA")
+        val tomorrow = tonight.copy(id = "tomorrow", start = time + 30 * 3600000L)
+        val saved = tonight.copy(id = "yesterday", start = time - 30 * 3600000L, state = "post")
+        val snapshot = LiveSportsSnapshot(listOf(tonight, basketball, tomorrow, saved), time, setOf("NFL", "NBA"))
+        val games = SportsSchedule.games(snapshot, Guide.EMPTY, "today", emptySet(), time, false, java.time.ZoneId.of("America/Los_Angeles"))
+        assertEquals(setOf("monday", "nba"), games.map { it.eventId }.toSet())
+        assertEquals(4, SportsSchedule.games(snapshot, Guide.EMPTY, null, emptySet(), time, false).size)
+        val zone = java.time.ZoneId.of("America/Los_Angeles")
+        assertTrue(SportsSchedule.onDay(tonight.start, time, zone))
+        assertFalse(SportsSchedule.onDay(Instant.parse("2026-10-27T08:00:00Z").toEpochMilli(), time, zone))
+    }
+
 }

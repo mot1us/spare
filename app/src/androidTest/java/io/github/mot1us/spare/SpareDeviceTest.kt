@@ -683,6 +683,11 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var samePlayer: Player? = null; scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-team:today").isSelected)
+                    activity.window.decorView.findViewWithTag<View>("sports-team:mlb:NYY").performClick()
+                }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<View>("sports-panel")
@@ -698,6 +703,22 @@ class SpareDeviceTest {
                 waitFor(scenario) { store.last(source) == "sports:3" }; assertEquals("/channel3.mp4", playingPath(scenario))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2").performLongClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var retainedPlayer: Player? = null; var retainedSurface: android.view.Surface? = null; var retainedTile: View? = null
+                scenario.onActivity { activity ->
+                    val extra = activity.window.decorView.findViewWithTag<PlayerView>("multiview-second")
+                    retainedPlayer = extra.player; retainedSurface = (extra.videoSurfaceView as android.view.SurfaceView).holder.surface
+                    retainedTile = activity.window.decorView.findViewWithTag<View>("multiview-tile:1")
+                    activity.window.decorView.findViewWithTag<View>("multiview-add-channel").performClick()
+                }
+                waitFor(scenario) { channelList(it)?.isShown == true }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("multiview-controls")?.isShown == true }
+                scenario.onActivity { activity ->
+                    val extra = activity.window.decorView.findViewWithTag<PlayerView>("multiview-second")
+                    assertSame(retainedPlayer, extra.player); assertTrue(retainedPlayer!!.isPlaying)
+                    assertSame(retainedSurface, (extra.videoSurfaceView as android.view.SurfaceView).holder.surface)
+                    assertSame("Returning reuses the existing pane controls", retainedTile, activity.window.decorView.findViewWithTag<View>("multiview-tile:1"))
+                }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("multiview-add-game").performClick(); it.window.decorView.findViewWithTag<View>("sports-scope").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(1)!!.itemView.performClick() }
@@ -818,6 +839,12 @@ class SpareDeviceTest {
                 waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
                 scenario.onActivity { activity -> activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
                     LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), now - 300000), LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), now + 4 * 86400000L, "pre")), now, setOf("NFL", "MLB")) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-team:today").isSelected)
+                    assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo"))
+                    activity.window.decorView.findViewWithTag<View>("sports-scope").performClick()
+                }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
                 scenario.onActivity { activity ->
@@ -1075,6 +1102,13 @@ class SpareDeviceTest {
                 activateSetting(scenario, "Font"); activateSetting(scenario, "Light")
                 waitFor(scenario) { store.font == "Light" }
                 scenario.onActivity { activity -> assertEquals(AppFont.face(true), activity.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface); assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
+                activateSetting(scenario, "Theme"); activateSetting(scenario, "Nostalgia preset")
+                waitFor(scenario) { store.themeStyle == "Nostalgia" && store.font == "Monospace" && store.theme == "Phosphor" }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
+                leaveSettings(scenario); device.pressBack()
+                waitFor(scenario) { channelList(it)?.isShown == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "nostalgia.png"))
+                device.pressMenu()
                 activateSetting(scenario, "Frame-rate matching"); activateSetting(scenario, "Off")
                 assertFalse(SecureStore(context).frameRateMatching)
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("settings-panel").isShown); assertEquals(0, it.window.attributes.preferredDisplayModeId) }

@@ -126,7 +126,7 @@ class SecureStore(private val context: Context) {
     }
     var sportsTeam: String
         get() = preferences.getString("sports-team-selected", "").orEmpty()
-        set(value) { preferences.edit { putString("sports-team-selected", value.takeIf { it in SportsCatalog.byId }.orEmpty()) } }
+        set(value) { preferences.edit { putString("sports-team-selected", value.takeIf { it in SportsCatalog.byId || it in setOf("today", "followed") || it.removePrefix("league:") in SportsLeagues.byId }.orEmpty()) } }
     var followedTeams: Set<String>
         get() = preferences.getStringSet("sports-teams", emptySet()).orEmpty().filter { it in SportsCatalog.byId }.toSet()
         set(value) { preferences.edit { putStringSet("sports-teams", value.filter { it in SportsCatalog.byId }.toSet()) } }

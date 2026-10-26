@@ -36,8 +36,8 @@ class RecentChannels(context: Context, private val watch: (Channel) -> Unit, pri
             val name = TextView(context).apply { text = channel.name; textSize = 10f; typeface = AppFont.face(); setTextColor(Color.WHITE); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER }
             tile.addView(logo, LayoutParams(-1, dp(31))); tile.addView(name, LayoutParams(-1, dp(18)))
             tile.setOnFocusChangeListener { _, active -> name.setTextColor(if (active) Color.BLACK else Color.WHITE) }; tile.setOnClickListener { watch(channel) }
-            val plus = Button(context).apply { text = "+"; tag = "recent-add:${channel.id}"; contentDescription = "Add ${channel.name} to multiview"; isFocusableInTouchMode = true; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(0, 0, 0, 0); stateListAnimator = null; background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B); setTextColor(GuideTheme.ink()); setOnClickListener { add(channel) } }
-            group.addView(tile, LayoutParams(dp(114), -1)); group.addView(plus, LayoutParams(dp(34), -1).apply { marginStart = dp(3) }); entries.addView(group, LayoutParams(-2, -1))
+            val plus = Button(context).apply { text = "+ View"; textSize = 10f; tag = "recent-add:${channel.id}"; contentDescription = "Add ${channel.name} to multiview"; isFocusableInTouchMode = true; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(0, 0, 0, 0); stateListAnimator = null; background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B); setTextColor(GuideTheme.ink()); setOnClickListener { add(channel) } }
+            group.addView(tile, LayoutParams(dp(114), -1)); group.addView(plus, LayoutParams(dp(60), -1).apply { marginStart = dp(3) }); entries.addView(group, LayoutParams(-2, -1))
             fun draw() { if (channel in shown) logo.setImageBitmap(images.get(channel.logo, http) {}) }
             logo.setImageBitmap(images.get(channel.logo, http, ::draw))
         }

@@ -86,7 +86,7 @@ class GuideAdapter(
             val channel = channel ?: return
             val leftWidth = CHANNEL_WIDTH_DP * density
             val base = height / 2f + text.textSize * .35f
-            val ink = if (hasFocus()) Color.BLACK else Color.WHITE
+            val ink = if (hasFocus()) Color.BLACK else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
             text.color = ink
             val logo = logos.get(channel.logo, source()?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
             if (logo != null) {
@@ -122,8 +122,8 @@ class GuideAdapter(
                 val x1 = leftWidth + (maxOf(p.start, start) - start).toFloat() / duration * available
                 val x2 = leftWidth + (minOf(p.end, start + duration) - start).toFloat() / duration * available
                 paint.color = if (hasFocus()) Color.LTGRAY else Color.rgb(56, 56, 56)
-                canvas.drawLine(x1, if (GuideTheme.style == "Grid") 0f else 6 * density, x1, if (GuideTheme.style == "Grid") height.toFloat() else height - 6 * density, paint)
-                if (GuideTheme.style == "Grid") canvas.drawLine(x1, height - density, x2, height - density, paint)
+                canvas.drawLine(x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) 0f else 6 * density, x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) height.toFloat() else height - 6 * density, paint)
+                if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) canvas.drawLine(x1, height - density, x2, height - density, paint)
                 if (x2 - x1 > 20 * density) canvas.drawText(TextUtils.ellipsize(if (ahead) "${time(p.start)} · ${p.title}" else p.title, text, x2 - x1 - 16 * density, TextUtils.TruncateAt.END).toString(), x1 + 8 * density, base, text)
             }
             val now = System.currentTimeMillis()

@@ -20,9 +20,10 @@ object GuideTheme {
         Palette("Lime", 0xFFD3EFA0.toInt(), 0x00151C0B),
         Palette("Ice", 0xFFD5E9F1.toInt(), 0x0010191E),
         Palette("Copper", 0xFFEBC09E.toInt(), 0x001E1510),
+        Palette("Phosphor", 0xFFB2F59B.toInt(), 0x00081108),
         Palette("Slate", 0xFFBAC8DC.toInt(), 0x00141A23),
     )
-    val styles = listOf("Glass", "Flat", "Grid", "Soft", "Outline", "Cinema")
+    val styles = listOf("Glass", "Flat", "Grid", "Soft", "Outline", "Cinema", "Nostalgia")
     var style = "Glass"
         private set
     fun selectStyle(name: String) { style = name.takeIf { it in styles } ?: "Glass" }
@@ -36,7 +37,7 @@ object GuideTheme {
         else -> intArrayOf(current.background or 0xF0000000.toInt(), current.background or 0xF0000000.toInt())
     }).apply {
         cornerRadius = (if (style == "Glass") 12f else radius) * density
-        setStroke(density.toInt().coerceAtLeast(1), when (style) { "Flat", "Cinema", "Soft" -> Color.TRANSPARENT; "Outline" -> GuideTheme.current.accent; else -> 0x40FFFFFF })
+        setStroke((density * if (style == "Nostalgia") 2 else 1).toInt().coerceAtLeast(1), when (style) { "Nostalgia" -> GuideTheme.current.accent; "Flat", "Cinema", "Soft" -> Color.TRANSPARENT; "Outline" -> GuideTheme.current.accent; else -> 0x40FFFFFF })
     }
     fun guideBackground() = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, when (style) {
         "Cinema" -> intArrayOf(current.background or 0xC8000000.toInt(), current.background or 0x88000000.toInt())
@@ -48,6 +49,7 @@ object GuideTheme {
         fun shape(color: Int) = GradientDrawable().apply {
             setColor(color); cornerRadius = radius * density
             setStroke(density.toInt().coerceAtLeast(1), when {
+                style == "Nostalgia" -> GuideTheme.current.accent and 0x88FFFFFF.toInt()
                 style == "Outline" -> if (color == GuideTheme.current.accent) Color.TRANSPARENT else GuideTheme.current.accent and 0x66FFFFFF
                 style == "Flat" || style == "Soft" || style == "Cinema" || color == Color.TRANSPARENT -> Color.TRANSPARENT
                 else -> 0x22FFFFFF
