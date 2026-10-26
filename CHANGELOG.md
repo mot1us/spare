@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 — 2026-10-26
+
+- Right from the dock returns to current content; only OK opens a destination. Add hidden or always-open navigation with a smooth overlay that keeps content layout steady.
+- Give Sports Scores the full screen area; keep the live preview when finding and watching streams.
+- Keep Library category focus and loaded poster pages stable during imports, reject stale category callbacks, and make manual refresh apply once.
+
 ## 0.9.1 — 2026-10-26
 
 - Replace mixed controls with a uniform, fixed navigation rail: Search, Guide, Sports, Library, Settings. Preserve the selected category when moving between columns.

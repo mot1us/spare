@@ -20,6 +20,27 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private val controls = mutableListOf<Button>()
     private var remembered: Button? = null
+    var expanded = true
+        private set
+    private var hiddenDock = false
+    var expansionChanged: (() -> Unit)? = null
+    fun configure(hidden: Boolean) {
+        hiddenDock = hidden; background = if (hidden) GuideTheme.glass(resources.displayMetrics.density) else null
+        elevation = if (hidden) dp(10).toFloat() else 0f
+        setExpanded(!hidden || hasFocus(), animated = false)
+    }
+    fun setExpanded(open: Boolean, animated: Boolean = true) {
+        val next = !hiddenDock || open
+        if (animated && expanded == next) return
+        expanded = next
+        animate().cancel()
+        if (animated && isLaidOut) animate().translationX(if (next) 0f else -dp(94).toFloat()).alpha(if (next) 1f else 0f)
+            .setDuration(160).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        else { translationX = if (next) 0f else -dp(94).toFloat(); alpha = if (next) 1f else 0f }
+        expansionChanged?.invoke()
+    }
+    fun focusChanged(inside: Boolean) { setExpanded(inside) }
+
     private fun item(label: String, key: String, icon: Int, click: () -> Unit): Button {
         val control = object : Button(context) {
             private val marker = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -63,7 +84,7 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         appearance(); activate("guide-mode")
     }
     fun activate(key: String) { controls.forEach { it.isSelected = it.tag == key; it.invalidate() } }
-    fun focusCurrent() { (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
+    fun focusCurrent() { setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }
     }

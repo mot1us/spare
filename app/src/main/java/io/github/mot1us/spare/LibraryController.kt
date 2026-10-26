@@ -40,7 +40,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var activeSnapshot: LibraryCatalog.Snapshot? = null
     private var activeGroup: String? = null
     private var activeQuery = ""
-    private data class BrowsePage(val version: String, val rows: List<BrowserRow>, val cursor: Int, val more: Boolean)
+    private data class BrowsePage(val version: String, val rows: List<BrowserRow>, val cursor: Int, val more: Boolean, val available: Int)
     private val browsePages = linkedMapOf<String, BrowsePage>()
     private val details = linkedMapOf<String, OnDemand>()
     private var detailItem: OnDemand? = null
@@ -73,9 +73,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun bind(names: Map<String, String>) {
             categoryNames[root] = names
             panel.page(title, "Choose a category · Only the selected category is downloaded", false)
+            var refreshPending = force
             panel.bindCatalog(root, names, { group, query ->
-                val scope = group ?: names.keys.first()
-                scopedCatalog(selected, mode, root, scope, names, query, force)
+                val scope = group ?: names.keys.first(); val reload = refreshPending; refreshPending = false
+                scopedCatalog(selected, mode, root, scope, names, query, reload)
             }, { loadCatalogPage(null, activeQuery, true) }, "Featured")
         }
         val memory = categoryNames[root]
@@ -91,7 +92,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun scopedCatalog(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>, query: String, force: Boolean) {
         val key = "$root:category:$scope"
-        catalogImports.filterKeys { it.startsWith("$root:category:") && it != key }.values.forEach { if (!it.isDone) it.cancel(true) }
+        catalogImports.filterKeys { it.startsWith("$root:category:") && it != key }.forEach { (oldKey, task) ->
+            if (!task.isDone) { catalogGenerations.remove(oldKey); task.cancel(true) }
+        }
+        if (activeCatalog != key || activeQuery != query) {
+            pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null; panel.catalogBusy(block = true)
+        }
         activeCatalog = key; activeGroup = null; activeQuery = query
         val title = names[scope].orEmpty()
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
@@ -100,13 +106,16 @@ class LibraryController(private val activity: Activity, private val store: Secur
             loadCatalogPage(null, activeQuery, false)
         }
         val memory = catalogs[key]
-        if (memory != null) display(memory, !memory.complete) else { panel.catalogPage(emptyList(), false, false); panel.catalogBusy(); panel.page(title, "Loading this category…", true) }
+        if (memory != null) display(memory, !memory.complete) else { panel.catalogBusy(block = true); panel.page(title, "Loading this category…", true) }
         if (!force && catalogImports[key]?.isDone == false) return
         if (!force && memory?.complete == true && System.currentTimeMillis() - memory.updated in 0 until 6 * 3600000L) return
         catalogImports[key]?.cancel(true)
         val generation = ++catalogGeneration; catalogGenerations[key] = generation
         fun deliver(snapshot: LibraryCatalog.Snapshot, busy: Boolean) { handler.post {
             if (!destroyed && catalogGenerations[key] == generation) {
+                val prior = catalogs[key]
+                // A restarted import must not replace a useful page with a smaller partial page.
+                if (!snapshot.complete && prior != null && snapshot.count < prior.count) return@post
                 catalogs[key] = snapshot
                 if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) display(snapshot, busy)
             }
@@ -123,7 +132,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 }
                 writer.finish(names)
             }.onSuccess { deliver(it, false) }.onFailure { failure -> handler.post {
-                if (!destroyed && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (cached != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
+                if (!destroyed && catalogGenerations[key] == generation && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (cached != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
             } }
         }
     }
@@ -194,17 +203,20 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query"
-        val version = "${snapshot.updated}:${snapshot.count}:${snapshot.labels.hashCode()}"
+        val version = "${snapshot.updated}:${snapshot.labels.hashCode()}"
         activeGroup = group; activeQuery = query
         pageTask?.cancel(true); val token = ++pageEpoch
         val old = browsePages[stateKey]?.takeIf { it.version == version }
-        if (!more && old != null) { panel.catalogPage(old.rows, false, old.more); return }
-        if (more && old?.more == false) return
+        if (!more && old != null && (old.rows.size >= 80 || old.available == snapshot.count)) {
+            val updated = old.copy(more = old.cursor < snapshot.count, available = snapshot.count)
+            browsePages[stateKey] = updated; panel.catalogPage(updated.rows, false, updated.more); return
+        }
+        if (more && old?.more == false && old.available == snapshot.count) return
         panel.catalogBusy()
         pageTask = catalogReader.submit {
             runCatching {
                 val page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0)
-                BrowsePage(version, (if (more) old?.rows.orEmpty() else emptyList()) + page.entries.map(::browserRow), page.cursor, page.more)
+                BrowsePage(version, (if (more) old?.rows.orEmpty() else emptyList()) + page.entries.map(::browserRow), page.cursor, page.more, snapshot.count)
             }.onSuccess { page -> handler.post {
                 if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null) {
                     browsePages[stateKey] = page

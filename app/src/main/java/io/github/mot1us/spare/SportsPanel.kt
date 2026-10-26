@@ -28,6 +28,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     val teamsButton = button("Teams", chooseTeams).apply { tag = "sports-teams" }
     var watchChannel: (Channel) -> Unit = {}
     var secondChannel: (Channel) -> Unit = {}
+    var presentationChanged: (() -> Unit)? = null
+    val watching get() = watchMode
     private var watchMode = false
     private var matchingKey: String? = null
     private var lastSelected: String? = null
@@ -119,11 +121,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     init {
         orientation = VERTICAL; tag = "sports-panel"; visibility = GONE
-        val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; addView(label(20f).apply { text = "Sports"; setTextColor(Color.WHITE) }, LayoutParams(0, -1, 1f)) }
         val refreshButton = button("Refresh", refresh).apply { tag = "sports-refresh" }
         val filtersButton = button("Filters", filters).apply { tag = "sports-filters" }
         scoresTab = button("Scores") { watchMode = false; matchingKey = null; showGames(); focusGames() }.apply { tag = "sports-scores"; isSelected = true }
-        watchTab = button("Watch") { watchMode = true; scoresTab.isSelected = false; watchTab.isSelected = true; games.firstOrNull { it.key == remembered }?.let(select) ?: games.firstOrNull()?.let(select) }.apply { tag = "sports-watch" }
+        watchTab = button("Watch") { watchMode = true; scoresTab.isSelected = false; watchTab.isSelected = true; presentationChanged?.invoke(); games.firstOrNull { it.key == remembered }?.let(select) ?: games.firstOrNull()?.let(select) }.apply { tag = "sports-watch" }
         listOf(scoresTab, watchTab, teamsButton, refreshButton, filtersButton).forEach { toolbar.addView(it); toolbarControls.add(it) }
         toolbarControls.forEach(::linkControl)
         addView(toolbar, LayoutParams(-1, dp(38)))
@@ -190,7 +192,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
     }
     fun matching(game: SportsGame) {
-        watchMode = true; matchingKey = game.key; scoresTab.isSelected = false; watchTab.isSelected = true
+        watchMode = true; matchingKey = game.key; scoresTab.isSelected = false; watchTab.isSelected = true; presentationChanged?.invoke()
         progressBar.visibility = VISIBLE; progress.text = "Finding streams for ${game.title}…"
     }
     @SuppressLint("NotifyDataSetChanged")
@@ -203,7 +205,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         empty.visibility = if (channels.isEmpty()) VISIBLE else GONE
         if (channels.isNotEmpty()) focusStream(0) else watchTab.requestFocus()
     }
-    private fun showGames() { streams.visibility = GONE; rows.visibility = VISIBLE; scoresTab.isSelected = !watchMode; watchTab.isSelected = watchMode }
+    private fun showGames() { streams.visibility = GONE; rows.visibility = VISIBLE; scoresTab.isSelected = !watchMode; watchTab.isSelected = watchMode; presentationChanged?.invoke() }
     private fun focusStream(at: Int) {
         val token = ++focusEpoch
         if (streams.findViewHolderForAdapterPosition(at) == null) streams.scrollToPosition(at)

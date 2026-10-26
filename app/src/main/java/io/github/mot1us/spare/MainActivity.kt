@@ -178,6 +178,8 @@ class MainActivity : Activity() {
         }
     }
     private lateinit var playbackError: TextView
+    private lateinit var dockHint: View
+    private lateinit var categoryColumn: LinearLayout
     private lateinit var navigationRail: NavigationRail
     private lateinit var searchButton: Button
     private lateinit var settingsButton: Button
@@ -382,6 +384,9 @@ class MainActivity : Activity() {
             if (waiting != null && next != null && generateSequence(next) { it.parent as? View }.none { it === waiting }) {
                 ++focusEpoch; pendingFocusList = null
             }
+            if (::navigationRail.isInitialized && navigationRail.isVisible && next != null) {
+                navigationRail.focusChanged(generateSequence(next) { it.parent as? View }.any { it === navigationRail })
+            }
         }
         video = PlayerView(this).apply {
             useController = false; isFocusable = false; resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -404,7 +409,7 @@ class MainActivity : Activity() {
             ::enterNavigationContent, { ++focusEpoch; pendingFocusList = null })
         searchButton = navigationRail.search; settingsButton = navigationRail.settings; guideMode = navigationRail.guide
         sportsMode = navigationRail.sports; libraryButton = navigationRail.library; updateBadge = navigationRail.badge
-        val navigation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(12), 0) }
+        val navigation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, dp(12), 0); tag = "category-column" }; categoryColumn = navigation
         categoryHeading = text("CATEGORIES", 9f).apply { setTextColor(0xFF929FAF.toInt()); letterSpacing = .12f; setPadding(dp(10), dp(3), 0, dp(7)) }
         navigation.addView(categoryHeading)
         sidebar = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; setHasFixedSize(true); overScrollMode = View.OVER_SCROLL_NEVER; tag = "guide-categories" }
@@ -422,7 +427,7 @@ class MainActivity : Activity() {
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         body.addView(content, LinearLayout.LayoutParams(0, -1, 1f))
-        headerInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headerInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; tag = "guide-header" }
         channelInfo = text("", 20f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
         headerInfo.addView(channelInfo, LinearLayout.LayoutParams(-1, -2))
         programmeInfo = text("Add a playlist in Settings to start watching.", 12f).apply { maxLines = 5; setTextColor(Color.LTGRAY) }
@@ -467,6 +472,7 @@ class MainActivity : Activity() {
         }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, { playbackMenu(); settingsPanel?.selectSetting("Guide filters") }, { focusSidebar() })
         sportsPanel.watchChannel = { channel -> if (channel.id == current?.id && hasPlayedChannel) showGuide(false) else tune(channel) }
         sportsPanel.secondChannel = ::startMultiview
+        sportsPanel.presentationChanged = { if (guideVisible && sportsVisible) layoutGuideSurface() }
         content.addView(sportsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
         remoteHint = text("← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) }
         content.addView(remoteHint)
@@ -505,7 +511,14 @@ class MainActivity : Activity() {
         library.panel.setPadding(dp(104), dp(18), dp(24), dp(18))
         root.addView(library.panel, FrameLayout.LayoutParams(-1, -1))
         root.addView(navigationRail, FrameLayout.LayoutParams(dp(76), -1, Gravity.START).apply { marginStart = dp(14); topMargin = dp(18); bottomMargin = dp(14) })
-        applyTheme(); updateTimes(); showGuide(true)
+        dockHint = View(this).apply {
+            tag = "navigation-handle"; contentDescription = "Left for navigation"; isClickable = true
+            background = GradientDrawable().apply { setColor(0x80FFFFFF.toInt()); cornerRadius = dp(3).toFloat() }
+            setOnClickListener { openNavigation() }
+        }
+        root.addView(dockHint, FrameLayout.LayoutParams(dp(4), dp(34), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(5) })
+        navigationRail.expansionChanged = ::updateDockHint
+        applyDockPreference(); applyTheme(); updateTimes(); showGuide(true)
     }
     private fun openLibrary(channel: Channel? = null) {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
@@ -599,7 +612,7 @@ class MainActivity : Activity() {
         focusListRow(list, position)
     }
     private fun showNavigation(key: String) {
-        navigationRail.visibility = View.VISIBLE; navigationRail.activate(key); root.bringChildToFront(navigationRail)
+        navigationRail.visibility = View.VISIBLE; navigationRail.activate(key); root.bringChildToFront(navigationRail); navigationRail.focusChanged(navigationRail.hasFocus()); updateDockHint()
     }
     private fun openSection(sports: Boolean) {
         settingsPanel?.visibility = View.GONE
@@ -608,16 +621,28 @@ class MainActivity : Activity() {
         switchMode(sports)
     }
     private fun enterNavigationContent() {
-        when (navigationRail.findFocus()?.tag) {
-            "search" -> if (guideSearch.isVisible && guideVisible) guideSearch.input.requestFocus() else search()
-            "guide-mode" -> { if (settingsPanel?.opened == true || library.opened || sportsVisible) openSection(false); focusSidebar(remember = true) }
-            "sports-mode" -> { if (settingsPanel?.opened == true || library.opened || !sportsVisible) openSection(true); sportsPanel.focusTeams() }
-            "library" -> { if (settingsPanel?.opened == true || !library.opened) openLibrary(); library.panel.focusCategories() }
-            "settings" -> { if (settingsPanel?.opened != true) playbackMenu(); settingsPanel?.focusNavigation() }
+        // Right returns to the current screen. Only OK activates a highlighted destination.
+        when {
+            settingsPanel?.opened == true -> settingsPanel?.focusNavigation()
+            library.opened -> library.panel.focusRows()
+            sportsVisible -> sportsPanel.focusGames()
+            else -> focusChannel()
         }
     }
+    private fun applyDockPreference() {
+        val inset = if (store.hiddenDock) 24 else 104
+        guidePanel.setPadding(dp(inset), dp(18), dp(18), dp(14))
+        library.panel.setPadding(dp(inset), dp(18), dp(24), dp(18))
+        settingsPanel?.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24))
+        navigationRail.configure(store.hiddenDock); updateDockHint()
+    }
+    private fun updateDockHint() {
+        if (!::dockHint.isInitialized) return
+        dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded
+        if (dockHint.isVisible) root.bringChildToFront(dockHint)
+    }
     private fun openNavigation() { ++focusEpoch; pendingFocusList = null; navigationRail.focusCurrent() }
-    private fun focusSidebar(remember: Boolean = false) {
+    private fun focusSidebar(remember: Boolean = true) {
         if (sportsVisible) { ++focusEpoch; sportsMode.requestFocus(); return }
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
     }
@@ -891,6 +916,7 @@ class MainActivity : Activity() {
         updateGroups()
         if (::sportsPanel.isInitialized) {
             if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
+            categoryColumn.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             sidebar.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             categoryHeading.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             sportsPanel.visibility = if (sportsVisible) View.VISIBLE else View.GONE
@@ -919,9 +945,16 @@ class MainActivity : Activity() {
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
-        val preview = show && store.smallPreview
+        layoutGuideSurface()
+        if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
+        else { navigationRail.visibility = View.GONE; updateDockHint(); ++focusEpoch; showNowPlaying() }
+        scheduleEpg()
+    }
+    private fun layoutGuideSurface() {
+        val preview = guideVisible && store.smallPreview && !(sportsVisible && !sportsPanel.watching)
         val searchInset = if (guideSearch.isVisible) dp(60) else 0
         video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
+        headerInfo.visibility = if (sportsVisible && !sportsPanel.watching) View.GONE else View.VISIBLE
         headerInfo.setPadding(0, 0, if (preview) dp(336) else 0, 0)
         headerInfo.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
         previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
@@ -930,9 +963,6 @@ class MainActivity : Activity() {
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
         previewCaption.text = if (current == null) "Select a channel" else "Full screen · ${current?.name}"
         positionPlaybackLoading()
-        if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
-        else { navigationRail.visibility = View.GONE; ++focusEpoch; showNowPlaying() }
-        scheduleEpg()
     }
     private fun showNowPlaying() {
         if (onDemand != null) return
@@ -1122,15 +1152,15 @@ class MainActivity : Activity() {
         if (existing?.opened == true) { existing.focusNavigation(); return }
         settingsReturnGuide = guideVisible; settingsReturnLibrary = library.opened; ++focusEpoch; handler.removeCallbacks(backHold)
         showGuide(false); nowPlaying.hide(immediate = true); previewCaption.visibility = View.GONE
-        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
-        panel.open(listOf("Playlists", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
+        panel.open(listOf("Playlists", "Navigation dock", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
         if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation("library"); library.panel.focusCategories() } else showGuide(settingsReturnGuide)
-        if (settingsReturnGuide) { ++focusEpoch; settingsButton.requestFocus() }
+        if (settingsReturnGuide) { ++focusEpoch; if (store.hiddenDock) focusChannel() else settingsButton.requestFocus() }
     }
     private fun renderSettingsPage(page: String) {
         val panel = settingsPanel ?: return
@@ -1140,6 +1170,12 @@ class MainActivity : Activity() {
                 panel.page("Playlists", "Save several playlists; one plays at a time. Credentials stay encrypted on this TV.")
                 sources.forEach { selected -> panel.action(selected.name, if (selected.id == source?.id) "Active playlist" else "Switch playlist", selected.id == source?.id) { closeSettings(); load(selected) } }
                 panel.action("Add playlist") { editSource(null) }; if (source != null) panel.action("Edit current playlist") { editSource(source) }
+            }
+            "Navigation dock" -> {
+                panel.page(page, "Hidden dock slides in when you move Left from categories. Right returns to your current screen; OK opens an item.")
+                listOf("Hidden dock", "Always open").forEachIndexed { index, label -> panel.action(label, selected = store.hiddenDock == (index == 0)) {
+                    store.hiddenDock = index == 0; applyDockPreference(); refresh(label)
+                } }
             }
             "Guide video" -> {
                 panel.page(page, "Choose how live video appears while browsing. Playback continues while you change settings.")

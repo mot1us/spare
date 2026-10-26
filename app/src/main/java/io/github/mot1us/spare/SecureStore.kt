@@ -151,6 +151,9 @@ class SecureStore(private val context: Context) {
     var captions: Boolean
         get() = preferences.getBoolean("captions", false)
         set(value) { preferences.edit { putBoolean("captions", value) } }
+    var hiddenDock: Boolean
+        get() = preferences.getBoolean("hidden-dock", true)
+        set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
     var smallPreview: Boolean
         get() = preferences.getBoolean("small-preview", true)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }

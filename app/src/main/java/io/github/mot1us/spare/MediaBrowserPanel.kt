@@ -36,13 +36,14 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     private val search = EditText(context).apply { hint = "Search this list"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
     private val categories = RecyclerView(context).apply { layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-categories" }
-    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = true; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
+    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
     private var categoryNames = emptyList<String>()
     private var categoryLabels = emptyMap<String, String>()
     private var catalogFocusRequested = false
+    private var contentsAvailable = true
     private var rowGroups = emptyMap<String, String>()
     private var group: String? = null
     private var catalogQuery: ((String?, String) -> Unit)? = null
@@ -88,7 +89,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 val name = if (position == 0) null else categoryNames[position - 1]
                 holder.text.text = name?.let { categoryLabels[it] ?: it } ?: allCategoryTitle; holder.text.isSelected = group == name
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
-                holder.text.setOnClickListener { catalogFocusRequested = true; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]; filter(); notifyItemRangeChanged(0, itemCount); if (catalogQuery == null) focusRows() }
+                holder.text.setOnClickListener {
+                    val before = if (group == null) 0 else categoryNames.indexOf(group).plus(1)
+                    catalogFocusRequested = false; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]; filter()
+                    if (before in 0 until itemCount) notifyItemChanged(before); notifyItemChanged(position)
+                    if (catalogQuery == null) focusRows()
+                }
+                holder.text.setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pending = null; catalogFocusRequested = false } }
                 holder.text.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
@@ -121,7 +128,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.text.layoutParams = if (grid) LayoutParams(-1, dp(45)) else LayoutParams(0, -1, 1f)
                 holder.text.setTextColor(if (holder.box.hasFocus()) Color.BLACK else Color.WHITE)
                 holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}"
-                holder.box.setOnClickListener { hideKeyboard(); item.select() }
+                holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); item.select() } }
                 holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) Color.BLACK else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
                 val poster = item.poster
                 fun draw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
@@ -167,6 +174,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         grid = posters; columns = if (grid) 4 else 1
         (rows.layoutManager as? GridLayoutManager)?.spanCount = columns
         if (reset) { group = null; search.setText(""); rememberedKey = null }
+        contentsAvailable = true; rows.alpha = 1f
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
         if (group !in categoryNames) group = null
         categories.adapter?.notifyDataSetChanged(); filter()
@@ -204,6 +212,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val old = shownRows
         val samePrefix = values.size >= old.size && old.indices.all { old[it].key == values[it].key }
         val focus = rows.hasFocus(); val restore = rememberedKey
+        contentsAvailable = true; rows.alpha = 1f
         shownRows = values; allRows = emptyList(); hasMore = more
         if (samePrefix) {
             if (values.size > old.size) rows.adapter?.notifyItemRangeInserted(old.size, values.size - old.size)
@@ -211,12 +220,12 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             ++focusEpoch; pending = null; rows.adapter?.notifyDataSetChanged()
         }
         empty.visibility = if (values.isEmpty()) VISIBLE else GONE; empty.text = "No matching titles."
-        if (!append && (focus || catalogFocusRequested) && values.isNotEmpty()) { catalogFocusRequested = false; rememberedKey = restore; focusRows() }
+        if (!append && ((focus && !samePrefix) || catalogFocusRequested) && values.isNotEmpty()) { catalogFocusRequested = false; rememberedKey = restore; focusRows() }
     }
-    fun catalogBusy() { hasMore = false; loading.visibility = VISIBLE }
+    fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
     fun focusCategories() { focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0)) }
-    fun focusRows() { if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
+    fun focusRows() { if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
         val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView

@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.smallPreview = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -596,13 +596,23 @@ class SpareDeviceTest {
                 device.pressDPadLeft()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-mode").hasFocus() }
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search").hasFocus() }
-                device.pressDPadDown(); device.pressDPadRight(); waitFor(scenario) { device.hasObject(By.text("Category 29").focused(true)) }
+                device.pressDPadDown(); device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressDPadLeft(); waitFor(scenario) { device.hasObject(By.text("Category 29").focused(true)) }
                 scenario.onActivity {
                     assertTrue(kotlin.math.abs(first - (it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").layoutManager as androidx.recyclerview.widget.LinearLayoutManager).findFirstVisibleItemPosition()) <= 1)
                     assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                 }
                 device.pressDPadLeft(); repeat(3) { device.pressDPadDown() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Playlists")), 5000)); device.pressBack()
+                assertTrue(device.wait(Until.hasObject(By.text("Playlists")), 5000))
+                activateSetting(scenario, "Navigation dock"); activateSetting(scenario, "Hidden dock"); leaveSettings(scenario)
+                waitFor(scenario) { channelList(it)?.hasFocus() == true && it.window.decorView.findViewWithTag<View>("navigation-handle").isShown && it.window.decorView.findViewWithTag<View>("app-navigation").alpha < .01f }
+                device.pressDPadLeft(); device.pressDPadLeft(); repeat(3) { device.pressDPadDown() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings").hasFocus() && it.window.decorView.findViewWithTag<View>("app-navigation").alpha > .99f }
+                device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true && it.window.decorView.findViewWithTag<View>("settings-panel").isShown == false }
+                device.pressDPadLeft(); device.pressDPadLeft(); repeat(2) { device.pressDPadDown() }; device.pressDPadRight()
+                waitFor(scenario) { channelList(it)?.hasFocus() == true && !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                device.pressMenu(); activateSetting(scenario, "Navigation dock"); activateSetting(scenario, "Always open"); leaveSettings(scenario)
+                waitFor(scenario) { !store.hiddenDock && it.window.decorView.findViewWithTag<View>("app-navigation").alpha == 1f && !it.window.decorView.findViewWithTag<View>("navigation-handle").isShown }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -658,6 +668,13 @@ class SpareDeviceTest {
                 scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { r -> r.isShown && r.adapter?.itemCount == 1 && r.hasFocus() } == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
+                scenario.onActivity { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<View>("sports-panel")
+                    assertTrue(panel.height > activity.window.decorView.height * .75f)
+                    assertTrue(panel.width > activity.window.decorView.width * .8f)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("guide-header").isShown)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("category-column").isShown)
+                }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
                 device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.textContains("★ YES · Quality unverified")), 5000))
@@ -794,7 +811,7 @@ class SpareDeviceTest {
                     LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), now - 300000), LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), now + 4 * 86400000L, "pre")), now, setOf("NFL", "MLB")) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
-                assertTrue(device.hasObject(By.textContains("Channel not matched yet")))
+                assertTrue(device.hasObject(By.textContains("Buffalo Bills")))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
@@ -808,7 +825,7 @@ class SpareDeviceTest {
     }
 
     @Test fun libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive() {
-        FixtureServer().use { server ->
+        FixtureServer(libraryCategories = true).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -819,6 +836,15 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
+                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(2)!!.itemView.apply { requestFocus(); performClick() } }
+                waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
+                scenario.onActivity { activity -> assertEquals("Action", (activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findFocus() as android.widget.TextView).text.toString()) }
+                device.pressDPadDown(); device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("library-heading").text.toString() == "Comedy" }
+                server.finishActionCatalog.countDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:3001")?.isShown == true }
+                scenario.onActivity { activity -> assertEquals("Comedy", (activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findFocus() as android.widget.TextView).text.toString()); activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(1)!!.itemView.apply { requestFocus(); performClick() } }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 device.pressMenu(); activateSetting(scenario, "Time format"); activateSetting(scenario, "24 hour · 19:30")
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && store.clock24 }
                 leaveSettings(scenario)
@@ -1131,7 +1157,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -1158,6 +1184,9 @@ class SpareDeviceTest {
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
+        val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
+        val finishActionCatalog = java.util.concurrent.CountDownLatch(1)
+        private val actionMovies = (1..400).joinToString(",", "[", "]") { """{"stream_id":${2000+it},"name":"Action title $it","category_id":"2","container_extension":"mp4"}""" }.toByteArray()
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         val catalogTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
@@ -1203,8 +1232,12 @@ class SpareDeviceTest {
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
-                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) """[{"category_id":"1","category_name":"Fixture cinema"}]""".toByteArray()
-                                else if (target.contains("get_vod_streams")) """[{"stream_id":101,"name":"Fixture movie","category_id":"1","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
+                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
+                                else if (target.contains("get_vod_streams")) when {
+                                    libraryCategories && target.contains("category_id=2") -> actionMovies
+                                    libraryCategories && target.contains("category_id=3") -> """[{"stream_id":3001,"name":"Comedy title","category_id":"3","container_extension":"mp4"}]""".toByteArray()
+                                    else -> """[{"stream_id":101,"name":"Fixture movie","category_id":"1","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
+                                }
                                 else if (target.contains("get_vod_info")) """{"info":{"plot":"A provider-supplied film description.","cover_big":"$base/logo.png","releasedate":"2025-01-01","duration":"01:30:00","genre":"Drama"}}""".toByteArray()
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
                                 else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"1"}]""".toByteArray()
@@ -1223,6 +1256,12 @@ class SpareDeviceTest {
                             output.write(body, 0, split); output.flush()
                             resumeStream.await(14, java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, split, body.size - split); output.flush()
+                        } else if (libraryCategories && target.contains("get_vod_streams") && target.contains("category_id=2")) {
+                            val value = body.toString(Charsets.UTF_8); var cut = 0
+                            repeat(264) { cut = value.indexOf("},{", cut) + 2 }
+                            output.write(body, 0, cut); output.flush(); actionCatalogStarted.countDown()
+                            finishActionCatalog.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            output.write(body, cut, body.size - cut); output.flush()
                         } else if (slowPlaylist && path == "/playlist.m3u") {
                             for (chunk in body.asList().chunked(200)) { output.write(chunk.toByteArray()); output.flush(); Thread.sleep(200) }
                         } else { output.write(body); output.flush() }
@@ -1230,6 +1269,6 @@ class SpareDeviceTest {
                 }
             }
         }
-        override fun close() { finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
+        override fun close() { finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
     }
 }
