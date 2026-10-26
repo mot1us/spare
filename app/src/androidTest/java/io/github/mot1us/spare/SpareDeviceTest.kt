@@ -145,13 +145,15 @@ class SpareDeviceTest {
                 assertNull("Xtream must not require the whole provider XMLTV", server.requests["/xmltv.php"])
                 scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
                 val expected = listOf("USA | News", "CA | News", "UK | News", "US | MLB")
-                waitFor(scenario) { store.cached(source)?.categoryOrder == expected }
+                waitFor(scenario) { File(context.filesDir, "cache-${source.id}.enc").exists() }
+                assertEquals(expected, store.cached(source)?.categoryOrder)
                 scenario.onActivity { activity ->
                     val categories = activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories")
                     expected.forEachIndexed { index, name -> assertEquals(name, (categories.findViewHolderForAdapterPosition(index + 2)!!.itemView as android.widget.TextView).text.toString()) }
                 }
                 scenario.recreate()
-                waitFor(scenario) { store.cached(source)?.categoryOrder == expected && channelList(it)?.adapter?.itemCount == 25001 }
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 25001 }
+                assertEquals(expected, store.cached(source)?.categoryOrder)
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -401,6 +403,7 @@ class SpareDeviceTest {
     }
 
     @Test fun inlineSearchUsesNativeRecognitionAndKeepsFailedVoiceEditable() {
+        assertTrue("Reset isolated voice fixture", device.executeShellCommand("run-as ${instrumentation.context.packageName} rm -f files/voice-first-result").isBlank())
         val previous = device.executeShellCommand("settings get secure voice_recognition_service").trim()
         device.executeShellCommand("settings put secure voice_recognition_service io.github.mot1us.spare.debug.test/io.github.mot1us.spare.FakeRecognitionService")
         device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
