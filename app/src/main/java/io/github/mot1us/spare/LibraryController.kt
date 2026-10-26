@@ -46,6 +46,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() }, { dismiss(); live() })
     val opened get() = panel.isVisible
     fun open(mode: String = kind) {
+        pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = source()
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
@@ -141,13 +142,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 val page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0)
                 BrowsePage(version, (if (more) old?.rows.orEmpty() else emptyList()) + page.entries.map(::browserRow), page.cursor, page.more)
             }.onSuccess { page -> handler.post {
-                if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && detailItem == null && parentSeries == null) {
+                if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null) {
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
                     panel.page(if (kind == "movie") "Movies" else "Series", "${page.rows.size} titles shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
                 }
-            } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
+            } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
         }
     }
     private fun showItems(items: List<OnDemand>, title: String, detail: String, busy: Boolean) {
@@ -222,6 +223,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.submit(channels.map { channel -> BrowserRow(channel.id, channel.name, "${channel.catchupDays} days · ${channel.group}") { openCatchup(channel) } }, channels.associate { it.id to it.group }, posters = false); panel.focusRows()
     }
     fun openCatchup(channel: Channel) {
+        pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
         task?.cancel(true); ++epoch
         val selected = source() ?: return
