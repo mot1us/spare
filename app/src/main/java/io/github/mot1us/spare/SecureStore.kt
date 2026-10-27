@@ -157,6 +157,9 @@ class SecureStore(private val context: Context) {
         while (entries.length() > 5000) entries.remove(entries.keys().next())
         preferences.edit { putString("channel-captions-${source.id}", entries.toString()) }
     }
+    var hideCompletedScores: Boolean
+        get() = preferences.getBoolean("sports-hide-completed-scores", false)
+        set(value) { preferences.edit { putBoolean("sports-hide-completed-scores", value) } }
     var sportsTeam: String
         get() = preferences.getString("sports-team-selected", "").orEmpty()
         set(value) { preferences.edit { putString("sports-team-selected", value.takeIf { it in SportsCatalog.byId || it in setOf("today", "followed") || it.removePrefix("league:") in SportsLeagues.byId }.orEmpty()) } }

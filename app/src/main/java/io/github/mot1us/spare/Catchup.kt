@@ -42,9 +42,9 @@ object Catchup {
         }
         return value.takeIf { Network.allowed(it, http) }
     }
-    fun load(source: Source, channel: Channel): List<Programme> {
+    fun load(source: Source, channel: Channel, timeoutMs: Int = 20000): List<Programme> {
         require(source.kind == "xtream" && channel.id.matches(Regex("xc:[0-9]{1,20}")))
         val url = Importers.endpoint(source, "player_api.php", "get_simple_data_table") + "&stream_id=${channel.id.removePrefix("xc:")}"
-        return XtreamEpg.parse(Network.get(url, source.allowHttp, 4 * 1024 * 1024).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
+        return XtreamEpg.parse(Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeoutMs).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
     }
 }

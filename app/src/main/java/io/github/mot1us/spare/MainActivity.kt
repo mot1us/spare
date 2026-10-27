@@ -122,6 +122,8 @@ class MainActivity : Activity() {
     private var sportsRenderPending = false
     private var sportsComputing = false
     private var sportsDirty = false
+    private var sportsReplayGame: SportsGame? = null
+    private val replayCache = linkedMapOf<String, Pair<Long, List<SportsReplay>>>()
     private var sportsChannels = emptyList<Channel>()
     private var selectedGame: SportsGame? = null
     private var sportsBackoffUntil = 0L
@@ -550,6 +552,8 @@ class MainActivity : Activity() {
             runCatching { reminders.toggle(game) }.onSuccess { enabled -> saveGameReminders(); reminderCheckedAt = 0; toast(if (enabled) "Reminder set · ${GuideClock.sportsDate(game.start)}" else "Reminder removed") }.onFailure { toast("Up to 64 upcoming game reminders can be saved") }
         }
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
+        sportsPanel.setSpoilers(store.hideCompletedScores)
+        sportsPanel.watchReplay = ::playSportsReplay
         sportsPanel.presentationChanged = { if (guideVisible && sportsVisible) layoutGuideSurface() }
         content.addView(sportsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
         remoteHint = text("← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) }
@@ -611,6 +615,7 @@ class MainActivity : Activity() {
         saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(); root.bringChildToFront(library.panel); showNavigation("library")
     }
     private fun playOnDemand(item: OnDemand, position: Long) {
+        sportsReplayGame = null
         val selected = source ?: return
         if (!Network.allowed(item.url, selected.allowHttp)) { toast("This title needs an allowed HTTP or HTTPS address"); return }
         saveDemandProgress(); closeDetails(); cancelPlaybackCallbacks()
@@ -645,6 +650,7 @@ class MainActivity : Activity() {
         if (player.isPlaying) handler.postDelayed(hideDemandControls, 8000)
     }
     private fun returnToLive() {
+        sportsReplayGame = null
         sportsVisible = false; applyFilter()
         library.dismiss(); retryPanel.visibility = View.GONE
         val channel = current ?: adapter.channels.firstOrNull()
@@ -861,6 +867,7 @@ class MainActivity : Activity() {
         scheduleEpg()
     }
     private fun tune(channel: Channel) {
+        sportsReplayGame = null
         pendingSportsTune = null
         val selected = source ?: return
         if (!Network.allowed(channel.url, selected.allowHttp)) { showPlaybackFailure("This channel needs an allowed HTTP or HTTPS address. Check this source’s HTTP setting."); return }
@@ -1206,6 +1213,7 @@ class MainActivity : Activity() {
         val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites
         val now = System.currentTimeMillis()
         sportsTask = sportsWorker.submit {
+            val archiveDays = snapshot.channels.maxOfOrNull { if (Catchup.supported(it)) it.catchupDays else 0 } ?: 0
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
@@ -1222,7 +1230,8 @@ class MainActivity : Activity() {
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
                     else -> "${if (selectedTeam == "today") "Today · All leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
-                sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
+                sportsPanel.archiveWindowDays = archiveDays
+                sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
                 selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
@@ -1273,12 +1282,60 @@ class MainActivity : Activity() {
     }
     private fun showGameInfo(game: SportsGame) {
         selectedGame = game; channelInfo.text = game.title
-        programmeInfo.text = "${game.scoreLine}\n${game.teams.first().league} · ${game.statusLine(System.currentTimeMillis())}\n" +
+        programmeInfo.text = "${sportsPanel.scoreText(game)}\n${game.teams.first().league} · ${sportsPanel.statusText(game)}\n" +
             (game.networks.joinToString(" · ").ifBlank { "Broadcaster to be announced" }) + "\n" +
             (if (game.broadcasts.isNotEmpty() || game.titleMatches.isNotEmpty()) "${game.broadcasts.size + game.titleMatches.size} EPG/title matches · OK Choose channel" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible network channels · OK Review" else "Channel not matched yet")
         sportsChannels = emptyList()
     }
+    private fun findSportsReplay(game: SportsGame) {
+        val selected = source ?: run { toast("Add a playlist to find replays"); return }
+        pendingSportsTune = null; sportsMatchTask?.cancel(true)
+        val snapshot = guide; val sourceEpoch = generation; val epoch = ++sportsMatchEpoch; val favoriteSnapshot = favorites; val quality = videoInfo.toMap()
+        showGameInfo(game); sportsPanel.matching(game)
+        val key = "${selected.id}:$sourceEpoch:${game.key}"
+        val now = System.currentTimeMillis()
+        replayCache[key]?.takeIf { now - it.first < 60000 && it.second.all { replay -> Catchup.available(replay.channel, replay.programme, now) && snapshot.channels.any { channel -> channel.id == replay.channel.id && channel.url == replay.channel.url } } }?.let {
+            sportsPanel.showReplays(game, it.second); return
+        }
+        sportsMatchTask = sportsMatchWorker.submit {
+            var choices = SportsReplays.find(game, snapshot, System.currentTimeMillis())
+            if (choices.isEmpty() && selected.kind == "xtream" && !Thread.currentThread().isInterrupted) {
+                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis())
+                val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { Catchup.load(selected, channel, 1200) } }
+                val listings = linkedMapOf<String, List<Programme>>()
+                val deadline = System.nanoTime() + 4_000_000_000L
+                try {
+                    requests.entries.forEachIndexed { index, (channel, task) ->
+                        if (Thread.currentThread().isInterrupted) return@submit
+                        val left = deadline - System.nanoTime()
+                        if (left > 0 || task.isDone) runCatching { task.get(maxOf(1L, left), java.util.concurrent.TimeUnit.NANOSECONDS) }.getOrNull()?.let { listings[snapshot.key(channel)] = it }
+                        handler.post { if (!closed && started && epoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, "Checking provider archives · ${index + 1} / ${targets.size}", index + 1, targets.size) }
+                    }
+                } finally { requests.values.forEach { it.cancel(true) } }
+                choices = SportsReplays.find(game, Guide(targets, listings), System.currentTimeMillis())
+            }
+            val result = choices.sortedWith(compareByDescending<SportsReplay> { it.channel.id in favoriteSnapshot }.thenByDescending { it.channel.quality(quality[it.channel.id])?.height ?: 0 })
+            handler.post {
+                if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || selectedGame?.key != game.key) return@post
+                if (result.isNotEmpty()) { replayCache[key] = System.currentTimeMillis() to result; while (replayCache.size > 16) replayCache.remove(replayCache.keys.first()) }
+                sportsPanel.showReplays(game, result)
+            }
+        }
+    }
+    private fun playSportsReplay(replay: SportsReplay) {
+        val selected = source ?: return
+        val game = selectedGame?.takeIf { it.state == "post" } ?: return
+        if (guide.channels.none { it.id == replay.channel.id && it.url == replay.channel.url }) { toast("Playlist changed · find this replay again"); return }
+        val item = replay.item(game, selected.allowHttp, System.currentTimeMillis()) ?: run { toast("This replay has expired or is unavailable"); findSportsReplay(game); return }
+        if (::multiview.isInitialized) multiview.close()
+        library.dismiss(); playOnDemand(item, 0); sportsReplayGame = game
+    }
+    private fun returnToSportsReplay() {
+        if (sportsReplayGame == null) return
+        returnToLive(); switchMode(true); sportsPanel.back(); sportsPanel.focusGames()
+    }
     private fun selectGame(game: SportsGame, autoWatch: Boolean = false) {
+        if (game.state == "post") { findSportsReplay(game); return }
         pendingSportsTune = null; sportsMatchTask?.cancel(true)
         val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = if (browseAll) GuideFilters() else filters; val quality = videoInfo.toMap(); val sourceEpoch = generation
@@ -1497,6 +1554,7 @@ class MainActivity : Activity() {
             "Subtitles" -> renderCaptionSettings()
             "Sports" -> {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best selects an EPG-matched FHD/60 fps stream verified by playback; otherwise it opens the matching streams for review.")
+                panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
                 panel.note("Saved reminders")
                 if (reminders.events.isEmpty()) panel.note("No reminders. Choose an upcoming game in Sports.")
@@ -1784,7 +1842,7 @@ class MainActivity : Activity() {
         }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
         if (library.opened) { library.back(); return }
-        if (onDemand != null) { if (onDemand?.kind == "catchup") returnToLiveChannel() else returnToLive(); return }
+        if (onDemand != null) { if (sportsReplayGame != null) returnToSportsReplay() else if (onDemand?.kind == "catchup") returnToLiveChannel() else returnToLive(); return }
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.0 — 2026-10-26
+
+- Find completed Sports games in provider catch-up, using historical EPG and per-channel replay windows. Show replay expiry, bound provider lookups, and return Back to the selected Sports game.
+- Add persistent completed-score hiding, per-game reveal/hide controls, and spoiler-safe Sports cards, hero details and artwork. Live scores remain visible.
+
 ## 0.12.3 — 2026-10-26
 
 - Let Right enter Sports game cards from either left menu when the featured game has no enabled actions. Let Up return to leagues instead of trapping focus on completed games.

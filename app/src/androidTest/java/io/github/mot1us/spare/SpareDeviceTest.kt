@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.hideCompletedScores = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -1042,6 +1042,55 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsReplayFindsArchiveHidesScoresAndReturnsToTheGame() {
+        FixtureServer(archivedSports = true).use { server ->
+            val source = Source(name = "Sports replay fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channel = Channel("xc:1", "ESPN FHD", "NFL", "${server.base}/live/test/test-secret/1.mp4", catchupDays = 2, catchupMode = "xc")
+            store.saveSources(listOf(source)); store.active = source.id; store.hideCompletedScores = true
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    var player: Player? = null
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> player = p; p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                    device.pressBack()
+                    scenario.onActivity { activity ->
+                        val now = System.currentTimeMillis()
+                        val finals = LiveSportsSnapshot(listOf(LiveEvent("sports-archive", setOf("nfl:SEA", "nfl:SF"), now - 7200000, "post", networks = listOf("ESPN"), scores = mapOf("nfl:SEA" to "24", "nfl:SF" to "21"), status = "Seahawks win 24–21", league = "NFL")), now, setOf("NFL"))
+                        activity.liveSportsLoader = { finals }
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, finals)
+                        activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                        activity.window.decorView.findViewWithTag<View>("sports-scope").performClick()
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text == "Score hidden" && it.window.decorView.findViewWithTag<View>("sports-watch").isEnabled }
+                    scenario.onActivity { activity ->
+                        assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail")?.text?.contains("win") == true)
+                        activity.window.decorView.findViewWithTag<View>("sports-watch").requestFocus()
+                    }
+                    device.pressDPadCenter()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
+                    assertEquals("Only the matching broadcaster's metadata archive is queried", 1, server.archiveRequests.get())
+                    device.pressDPadCenter()
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && (player?.videoSize?.width ?: 0) > 0 }
+                    scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player) }
+                    device.pressBack()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/live/") == true }
+                    scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("sports-reminder").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.contains("24") }
+                    scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("sports-reminder").performClick(); activity.window.decorView.findViewWithTag<View>("sports-watch").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
+                    assertEquals("Repeat replay lookup uses its saved match", 1, server.archiveRequests.get())
+                    scenario.onActivity { activity ->
+                        assertEquals("Score hidden", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.toString())
+                        activity.window.decorView.findViewWithTag<View>("settings").performClick()
+                        activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel").selectSetting("Sports")
+                        activity.window.decorView.findViewWithTag<View>("settings-option:Hide completed-game scores").performClick()
+                        assertFalse(SecureStore(context).hideCompletedScores)
+                    }
+                }
+            } finally { store.hideCompletedScores = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable() {
         FixtureServer(channelCount = 12).use { server ->
             val source = Source(name = "Schedule fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -1474,7 +1523,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -1504,6 +1553,7 @@ class SpareDeviceTest {
         val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
         val finishActionCatalog = java.util.concurrent.CountDownLatch(1)
         private val actionMovies = (1..400).joinToString(",", "[", "]") { """{"stream_id":${2000+it},"name":"Action title $it","category_id":"2","container_extension":"mp4"}""" }.toByteArray()
+        val archiveRequests = java.util.concurrent.atomic.AtomicInteger()
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         val catalogTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
@@ -1525,6 +1575,7 @@ class SpareDeviceTest {
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
                         if (target.contains("get_vod_streams")) catalogTargets.add(target)
+                        if (target.contains("get_simple_data_table")) archiveRequests.incrementAndGet()
                         if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {
                             val location = if (path == "/redirect.mp4") "$base/redirect-relative.mp4" else "/channel1.mp4"
                             connection.getOutputStream().write("HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); return@use
@@ -1558,7 +1609,7 @@ class SpareDeviceTest {
                                 else if (target.contains("get_vod_info")) """{"info":{"plot":"A provider-supplied film description.","cover_big":"$base/logo.png","releasedate":"2025-01-01","duration":"01:30:00","genre":"Drama"}}""".toByteArray()
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
                                 else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"1"}]""".toByteArray()
-                                else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"Archived fixture","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
+                                else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"${if (archivedSports) "NFL: Seattle Seahawks vs San Francisco 49ers" else "Archived fixture"}","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
                                 else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
