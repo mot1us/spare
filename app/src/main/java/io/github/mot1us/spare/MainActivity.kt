@@ -111,6 +111,7 @@ class MainActivity : Activity() {
     private var sportsMatchTask: java.util.concurrent.Future<*>? = null
     private var pendingSportsTune: String? = null
     private var sportsManager: SettingsPanel? = null
+    private var sportsCalendar: SportsCalendarPanel? = null
     private var sportsManagerReturnGuide = false
     private var sportsManagerReturnSettings = false
     private var sportsPreferencesChanged = false
@@ -567,12 +568,7 @@ class MainActivity : Activity() {
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, { playbackMenu(); settingsPanel?.selectSetting("Guide filters") }, { focusSidebar() })
-        sportsPanel.chooseDate = {
-            val today = java.time.LocalDate.now(); val days = (-7L..14L).map(today::plusDays)
-            AlertDialog.Builder(this).setTitle("Games by date").setSingleChoiceItems(days.map { it.format(java.time.format.DateTimeFormatter.ofPattern("EEE, MMM d")) }.toTypedArray(), days.indexOf(SportsSchedule.selectedDate(sportsTeam) ?: today).coerceAtLeast(0)) { dialog, at ->
-                sportsTeam = "date:${days[at]}"; sportsPanel.loading("Loading games for ${days[at]}…"); checkLiveSports(force = true); scheduleSports(); dialog.dismiss()
-            }.setNegativeButton("Cancel", null).show()
-        }
+        sportsPanel.chooseDate = ::openSportsCalendar
         sportsPanel.watchChannel = { channel -> if (::multiview.isInitialized && multiview.browsing) startMultiview(channel) else if (channel.id == current?.id && hasPlayedChannel) showGuide(false) else tune(channel) }
         sportsPanel.secondChannel = ::startMultiview
         sportsPanel.hasReminder = reminders::has
@@ -1196,7 +1192,7 @@ class MainActivity : Activity() {
         val now = System.currentTimeMillis()
         reminderPending?.let { (game, checked) ->
             if (!reminders.has(game) || now - checked > 120000L) reminderPending = null
-            else if (reminderGame == null && !guideVisible && !library.opened && settingsPanel?.opened != true && sportsManager?.opened != true && !details.isVisible && player.isPlaying) {
+            else if (reminderGame == null && !guideVisible && !library.opened && settingsPanel?.opened != true && sportsManager?.opened != true && sportsCalendar?.opened != true && !details.isVisible && player.isPlaying) {
                 reminderGame = game; reminderReturnFocus = currentFocus
                 reminders.delivered(game); saveGameReminders(); root.bringChildToFront(reminderBanner); reminderBanner.show(game)
                 handler.removeCallbacks(hideReminder); handler.postDelayed(hideReminder, 30000)
@@ -1294,6 +1290,18 @@ class MainActivity : Activity() {
         }
     }
     private fun refreshSportsGuide() { checkLiveSports(force = true); sportsPanel.loading("Updating schedules…"); scheduleSports() }
+    private fun openSportsCalendar() {
+        showGuide(false); nowPlaying.hide(immediate = true)
+        val panel = sportsCalendar ?: SportsCalendarPanel(this, ::button, { day ->
+            sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty(); sportsPanel.home()
+            closeSportsCalendar(); sportsPanel.loading("Loading games for $day…"); checkLiveSports(force = true); scheduleSports()
+        }, ::closeSportsCalendar).also { sportsCalendar = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        root.bringChildToFront(panel); panel.open(SportsSchedule.selectedDate(sportsTeam) ?: java.time.LocalDate.now())
+    }
+    private fun closeSportsCalendar() {
+        sportsCalendar?.visibility = View.GONE
+        showGuide(true); sportsPanel.focusCalendar()
+    }
     private fun sportsTeams() {
         sportsManagerReturnGuide = guideVisible; sportsManagerReturnSettings = settingsPanel?.opened == true
         if (sportsManagerReturnSettings) settingsPanel?.visibility = View.GONE
@@ -1429,7 +1437,7 @@ class MainActivity : Activity() {
             if (autoWatch && selected.kind == "xtream" && selected.epgUrl.isBlank()) {
                 val choices = SportsStreams.rank(result, profile, quality)
                 if (SportsStreams.bestConfirmed(result, choices, quality, System.currentTimeMillis()) == null) {
-                    val targets = choices.filter { (quality[it.id]?.fps ?: 0f) > 0 && GuideFilters(1080, FrameRateFilter.sixtyOrBetter).matches(it, quality[it.id]) }.take(2)
+                    val targets = choices.filter { SportsStreams.qualifies(it, quality[it.id]) }.take(2)
                     val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { XtreamEpg.load(selected, channel, 6, 1200) } }
                     val deadline = System.nanoTime() + 1_500_000_000L
                     if (requests.isNotEmpty()) progress("Confirming current coverage · ${requests.size} channels")
@@ -1451,19 +1459,19 @@ class MainActivity : Activity() {
                 if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !sportsVisible || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return@post
                 if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
                 val now = System.currentTimeMillis(); val confirmed = matched.broadcasts.map { it.channel.id }.toSet()
-                val channels = SportsStreams.rank(matched, profile, quality) { !unavailable.contains(it.id, now) }
+                val latestQuality = videoInfo.toMap()
+                val channels = SportsStreams.rank(matched, profile, latestQuality) { !unavailable.contains(it.id, now) }
                 if (autoWatch) {
-                    val best = SportsStreams.bestConfirmed(matched, channels, quality, now)
+                    val best = SportsStreams.bestConfirmed(matched, channels, latestQuality, now)
                     if (best != null) {
                         showGameInfo(matched); sportsChannels = channels.take(4)
                         sportsPanel.showStreams(matched, channels) { it.name }
-                        sportsPanel.matchingProgress(matched, "Tuning ${best.name} · ${quality[best.id]?.label()}")
+                        sportsPanel.matchingProgress(matched, "Tuning ${best.name} · ${best.quality(latestQuality[best.id])?.label()}")
                         multiview.close(); tune(best); pendingSportsTune = best.id; return@post
                     }
-                    toast("No verified FHD/60 match yet · review available streams")
                 }
                 showGameInfo(matched); sportsChannels = channels.take(4); scheduleEpg()
-                sportsPanel.showStreams(matched, channels) { c ->
+                sportsPanel.showStreams(matched, channels, if (autoWatch) SportsStreams.unavailableReason(matched, channels, latestQuality, now) else null) { c ->
                     (if (c.id in favorites) "★ " else "") + c.name + " · " + (c.quality(videoInfo[c.id])?.let { it.label() + if ((videoInfo[c.id]?.fps ?: 0f) <= 0f) " · Provider reported" else " · Verified by playback" } ?: "Quality unverified") + if (c.id in confirmed) " · EPG matched" else if (matched.titleMatches.any { it.id == c.id }) " · Channel title matched" else " · Possible coverage"
                 }
             }
@@ -1861,6 +1869,7 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (sportsCalendar?.opened == true) return sportsCalendar!!.dispatchKeyEvent(event)
         sportsManager?.takeIf { it.opened }?.let { panel ->
             if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) { if (event.keyCode == KeyEvent.KEYCODE_MENU) closeSportsManager() else panel.back() }; return true }
             return super.dispatchKeyEvent(event)
@@ -1936,6 +1945,7 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // The TV activity opts out of predictive back for remote hold detection.
     override fun onBackPressed() = navigateBack()
     private fun navigateBack() {
+        if (sportsCalendar?.opened == true) { closeSportsCalendar(); return }
         if (sportsManager?.opened == true) { sportsManager?.back(); return }
         if (sportsVisible && sportsPanel.watching) { pendingSportsTune = null; sportsMatchTask?.cancel(true); ++sportsMatchEpoch }
 

@@ -89,3 +89,6 @@ For 0.11.0, check cached launch with the provider offline, first-import progress
 
 
 For 0.14.2, focused audit regressions cover a newer Sports header action cancelling delayed card focus, artwork retry after a paused binding, Library metadata retaining Back focus, episode Refresh making a new provider request, M3U detail Back retaining the catalog, and deleting the last playlist during VOD before background/resume. The existing 32-test release gate remains intact.
+
+
+For 0.14.3, Watch Best must accept explicit provider 59.94/60 data before playback while rejecting unknown FPS and measured lower rates. Matching title/EPG coverage is still required; fallback results distinguish FPS from coverage. The isolated Sports tests also check decoded card crest resolution, the full-screen 42-cell calendar, day selection, month navigation and Back cancellation without retuning. Compare card sharpness on the onn at its output resolution.

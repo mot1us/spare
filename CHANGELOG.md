@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.3 — 2026-10-27
+
+- Let Watch Best use the same explicit provider or playback FHD+/60 evidence as guide filters, including 4K/59.94; keep measured quality authoritative.
+- Explain missing FPS separately from unconfirmed game coverage in the stream results.
+- Decode Sports card logos at higher resolution with smooth scaling.
+- Replace the date dialog with a full-screen translucent month calendar, remote navigation, month controls and Today.
+
 ## 0.14.2 — 2026-10-27
 
 - Keep Sports focus on the latest remote action, prioritize focused-game artwork and cancel obsolete queued artwork work.

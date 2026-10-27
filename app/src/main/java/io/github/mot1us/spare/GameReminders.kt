@@ -46,6 +46,8 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 }
 
 object SportsStreams {
+    private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
+    fun qualifies(channel: Channel, observed: VideoInfo?) = preferredQuality.matches(channel, observed)
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
         val confirmed = epg + game.titleMatches.map { it.id }
@@ -60,6 +62,13 @@ object SportsStreams {
     }
     fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
         game.live(now) && (game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } || game.titleMatches.any { it.id == channel.id }) &&
-            (quality[channel.id]?.fps ?: 0f) > 0 && GuideFilters(1080, FrameRateFilter.sixtyOrBetter).matches(channel, quality[channel.id])
+            qualifies(channel, quality[channel.id])
+    }
+    fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
+        !game.live(now) -> "This game is not live yet. Choose a stream to preview."
+        ranked.isEmpty() -> "No streams match your current filters."
+        ranked.any { qualifies(it, quality[it.id]) } -> "FHD+/60 streams found · game coverage unconfirmed. Choose a stream."
+        ranked.any { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0) } == true } -> "FHD/4K found · FPS unknown. Preview a stream to measure it."
+        else -> "No FHD+/60 stream found. Choose a stream or adjust filters."
     }
 }

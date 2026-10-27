@@ -444,6 +444,20 @@ class SpareDeviceTest {
                     device.pressBack()
                     waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
                     scenario.onActivity { assertTrue(playing!!.isPlaying); assertSame(playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    scenario.onActivity { activity ->
+                        val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000)
+                        val reported = Channel("provider-game", "Seattle Seahawks vs San Francisco 49ers 4K 60fps", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
+                        val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                        val snapshot = guideField.get(activity) as Guide
+                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + reported))
+                        val scores = LiveSportsSnapshot(listOf(LiveEvent(live.eventId, teams.map { it.id }.toSet(), live.start, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
+                        activity.liveSportsLoader = { scores }
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, live, true)
+                    }
+                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && playing?.isPlaying == true }
+                    scenario.onActivity { assertSame("Watch Best uses explicit provider FHD+/60 data before the first playback measurement", playing, find<PlayerView>(it.window.decorView)!!.player) }
                 }
             } finally {
                 writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
@@ -983,6 +997,38 @@ class SpareDeviceTest {
                         assertFalse(rail.expanded); rail.contentHasFocus = false; rail.sports.requestFocus(); assertFalse(rail.expanded)
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                    waitFor(scenario) { activity ->
+                        val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)?.itemView
+                        val drawable = card?.let { find<android.widget.ImageView>(it) }?.drawable as? android.graphics.drawable.BitmapDrawable
+                        (drawable?.bitmap?.width ?: 0) >= 256 && drawable?.isFilterBitmap == true
+                    }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                    val calendarToday = java.time.LocalDate.now()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == true && it.window.decorView.findViewWithTag<View>("calendar-day:$calendarToday")?.hasFocus() == true }
+                    scenario.onActivity { activity ->
+                        val calendar = activity.window.decorView.findViewWithTag<View>("sports-calendar")
+                        assertEquals(activity.window.decorView.width, calendar.width); assertEquals(activity.window.decorView.height, calendar.height)
+                        assertSame(playback, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playback!!.isPlaying)
+                        assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                        val image = Bitmap.createBitmap(calendar.width, calendar.height, Bitmap.Config.ARGB_8888)
+                        calendar.draw(Canvas(image))
+                        File(context.getExternalFilesDir(null), "sports-calendar.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
+                    }
+                    device.pressDPadRight(); device.pressDPadCenter()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-date")?.isSelected == true }
+                    scenario.onActivity { activity ->
+                        assertEquals("date:${calendarToday.plusDays(1)}", MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.get(activity))
+                        activity.window.decorView.findViewWithTag<View>("sports-date").performClick()
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-day:${calendarToday.plusDays(1)}")?.hasFocus() == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("calendar-next").apply { requestFocus(); performClick() } }
+                    device.pressBack()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-date")?.hasFocus() == true }
+                    scenario.onActivity { activity ->
+                        assertEquals("date:${calendarToday.plusDays(1)}", MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.get(activity))
+                        activity.window.decorView.findViewWithTag<View>("sports-today").performClick()
+                        activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
+                    }
                     device.pressDPadDown(); device.pressDPadRight()
                     scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation").expanded) }
                     device.pressDPadDown(); device.pressDPadRight()

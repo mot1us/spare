@@ -7,6 +7,20 @@ class SportsCoverageTest {
     private val now = java.time.Instant.parse("2026-10-26T23:00:00Z").toEpochMilli()
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000, emptyList(), "game", "in", networks = listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, name: String) = Channel(id, name, "NFL", "https://example.com/$id")
+    @Test fun watchBestUsesTheSameProviderQualityAsFiltersAndExplainsMissingEvidence() {
+        val reported = channel("reported", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 59.94f))
+        val listing = Programme(reported.id, game.title, now - 60000, now + 3600000)
+        val matched = game.copy(broadcasts = listOf(SportsBroadcast(reported, listing)))
+        val ranked = SportsStreams.rank(matched, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap())
+        assertEquals(reported, SportsStreams.bestConfirmed(matched, ranked, emptyMap(), now))
+        assertNull(SportsStreams.bestConfirmed(matched, ranked, mapOf(reported.id to VideoInfo(3840, 2160, 50f)), now))
+        val unknown = reported.copy(reportedQuality = VideoInfo(3840, 2160, 0f))
+        assertNull(SportsStreams.bestConfirmed(matched, listOf(unknown), emptyMap(), now))
+        assertTrue(SportsStreams.unavailableReason(matched, listOf(unknown), emptyMap(), now).contains("FPS unknown"))
+        val possible = game.copy(candidates = listOf(reported))
+        assertNull(SportsStreams.bestConfirmed(possible, ranked, emptyMap(), now))
+        assertTrue(SportsStreams.unavailableReason(possible, ranked, emptyMap(), now).contains("coverage unconfirmed"))
+    }
     @Test fun schedulesOnlyRequestChosenLeagues() {
         val urls = java.util.Collections.synchronizedList(mutableListOf<String>())
         val snapshot = SportsSchedule.load(emptySet(), enabledLeagues = setOf("NFL"), get = { url -> urls.add(url); """{"events":[]}""" })
