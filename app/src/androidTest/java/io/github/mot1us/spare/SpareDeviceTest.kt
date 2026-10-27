@@ -1181,7 +1181,7 @@ class SpareDeviceTest {
     }
 
     @Test fun libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive() {
-        FixtureServer(libraryCategories = true).use { server ->
+        FixtureServer(libraryCategories = true, longVideo = true).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -1536,7 +1536,7 @@ class SpareDeviceTest {
         scenario.onActivity { activity ->
             val player = find<PlayerView>(activity.window.decorView)?.player
             player?.playerError?.let { android.util.Log.e("SpareFixture", "Synthetic playback failed", it) }
-            android.util.Log.e("SpareFixture", "State=${player?.playbackState}; textDisabled=${player?.trackSelectionParameters?.disabledTrackTypes}; language=${player?.trackSelectionParameters?.preferredTextLanguages}; selectDefault=${player?.trackSelectionParameters?.selectTextByDefault}; text=${player?.currentTracks?.let { tracks -> CaptionTracks.choices(tracks).map { listOf(it.key, it.group.isTrackSelected(it.index)) } }}")
+            android.util.Log.e("SpareFixture", "State=${player?.playbackState}; video=${player?.videoSize}; duration=${player?.duration}; archive=${player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/")}; textDisabled=${player?.trackSelectionParameters?.disabledTrackTypes}; language=${player?.trackSelectionParameters?.preferredTextLanguages}; selectDefault=${player?.trackSelectionParameters?.selectTextByDefault}; text=${player?.currentTracks?.let { tracks -> CaptionTracks.choices(tracks).map { listOf(it.key, it.group.isTrackSelected(it.index)) } }}")
         }
         fail("Timed out waiting for app state")
     }
