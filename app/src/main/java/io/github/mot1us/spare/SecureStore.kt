@@ -163,6 +163,9 @@ class SecureStore(private val context: Context) {
     var followedTeams: Set<String>
         get() = preferences.getStringSet("sports-teams", emptySet()).orEmpty().filter { it in SportsCatalog.byId }.toSet()
         set(value) { preferences.edit { putStringSet("sports-teams", value.filter { it in SportsCatalog.byId }.toSet()) } }
+    var sportsLeagues: Set<String>
+        get() = preferences.getStringSet("sports-leagues", SportsLeagues.byId.keys).orEmpty().filter { it in SportsLeagues.byId }.toSet().ifEmpty { SportsLeagues.byId.keys }
+        set(value) { val valid = value.filter { it in SportsLeagues.byId }.toSet(); require(valid.isNotEmpty()); preferences.edit { putStringSet("sports-leagues", valid) } }
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }

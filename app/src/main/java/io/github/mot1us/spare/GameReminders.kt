@@ -47,17 +47,19 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 
 object SportsStreams {
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
-        val confirmed = game.broadcasts.map { it.channel.id }.toSet()
+        val epg = game.broadcasts.map { it.channel.id }.toSet()
+        val confirmed = epg + game.titleMatches.map { it.id }
         val smooth = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
-        return (game.broadcasts.map { it.channel } + game.candidates).distinctBy { it.id }
+        return (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).distinctBy { it.id }
             .filter { available(it) && filters.matches(it, quality[it.id]) }
             .sortedWith(compareByDescending<Channel> { it.id in confirmed }
                 .thenByDescending { smooth.matches(it, quality[it.id]) }
                 .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }
-                .thenByDescending { it.quality(quality[it.id])?.fps ?: 0f })
+                .thenByDescending { it.quality(quality[it.id])?.fps ?: 0f }
+                .thenByDescending { it.id in epg })
     }
     fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
-        game.live(now) && game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } &&
+        game.live(now) && (game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } || game.titleMatches.any { it.id == channel.id }) &&
             (quality[channel.id]?.fps ?: 0f) > 0 && GuideFilters(1080, FrameRateFilter.sixtyOrBetter).matches(channel, quality[channel.id])
     }
 }

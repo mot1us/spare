@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1 — 2026-10-26
+
+- Stabilize fractional FPS readings without losing real channel/frame-rate changes.
+- Speed up game coverage lookup with target-team prefiltering, independent search workers, bounded EPG confirmation and visible search/tuning progress. Include live event-channel title matches without EPG.
+- Add selected leagues and full-screen team management using the Settings layout.
+- Enter hero actions directly from league navigation; retain horizontal card focus while scrolling and prevent accidental dock focus.
+
 ## 0.12.0 — 2026-10-26
 
 - Add saved game reminders, in-player live-game alerts, and one-click Watch best for confirmed FHD/60 fps coverage. Keep unmatched or unverified streams available for review.

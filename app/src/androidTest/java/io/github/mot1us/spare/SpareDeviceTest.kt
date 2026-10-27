@@ -47,7 +47,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -869,6 +869,60 @@ class SpareDeviceTest {
                 device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
             }
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet()
+        }
+    }
+
+    @Test fun sportsHeroRailAndFullScreenTeamManagerKeepFocusAndLeaguePreferences() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports focus fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("focus", "News", "News", "${server.base}/channel1.mp4")
+            store.saveSources(listOf(source)); store.active = source.id; store.hiddenDock = true
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                    device.pressBack()
+                    scenario.onActivity { activity ->
+                        val now = System.currentTimeMillis()
+                        val snapshot = LiveSportsSnapshot((1..8).map { LiveEvent("focus-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL") }, now, setOf("NFL"))
+                        activity.liveSportsLoader = { snapshot }
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, snapshot)
+                        activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 8 }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:league:NFL").apply { performClick(); requestFocus() } }
+                    device.pressDPadRight()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-watch").hasFocus() }
+                    device.pressDPadDown()
+                    repeat(12) { device.pressDPadRight() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                    scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").expanded) }
+                    repeat(7) { device.pressDPadLeft() }
+                    scenario.onActivity { activity ->
+                        assertTrue(activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus())
+                        activity.window.decorView.findViewWithTag<View>("sports-teams").performClick()
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-manager").isShown }
+                    scenario.onActivity { activity ->
+                        val manager = activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager")
+                        manager.selectSetting("Leagues"); manager.focusOption("Champions League")
+                        manager.findViewWithTag<View>("settings-option:Champions League").performClick()
+                        assertTrue(manager.opened); assertFalse("UCL" in SecureStore(context).sportsLeagues)
+                        manager.selectSetting("NFL")
+                    }
+                    device.pressDPadCenter()
+                    waitFor(scenario) { "nfl:ARI" in store.followedTeams }
+                    device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-manager.png"))
+                    device.pressBack(); device.pressBack()
+                    waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-manager").isShown && it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:league:UCL") == null }
+                    scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("sports-team:league:UCL")); it.window.decorView.findViewWithTag<View>("sports-team:league:NFL").requestFocus() }
+                    device.pressDPadLeft()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
+                    device.pressDPadRight()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-watch").hasFocus() }
+                }
+            } finally { store.sportsLeagues = SportsLeagues.byId.keys; store.hiddenDock = false; store.followedTeams = emptySet(); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
 

@@ -31,25 +31,26 @@ object SportsSchedule {
     }
     private val boardCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
     private val teamCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
-    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {
+    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {
         val now = System.currentTimeMillis(); val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
         val events = linkedMapOf<String, LiveEvent>(); val leagues = mutableSetOf<String>()
         val urls = mutableListOf<Pair<String, String>>()
+        val enabled = SportsLeagues.all.filter { it.id in enabledLeagues }
         if (requestedDate != null) {
-            listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1)).forEach { day -> SportsLeagues.all.forEach { league ->
+            listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1)).forEach { day -> enabled.forEach { league ->
                 urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
             } }
         } else {
-        SportsLeagues.all.forEach { league ->
+        enabled.forEach { league ->
             urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
         }
-        SportsLeagues.all.forEach { league ->
+        enabled.forEach { league ->
             if (league.id == "NFL" || league.path.startsWith("soccer/")) urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?limit=100")
             urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.minusDays(1).format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
         }
         }
         (if (requestedDate == null) followed else emptySet()).sorted().take(24).forEach { id -> SportsCatalog.byId[id]?.let { team ->
-            team.competitions.forEach { leagueId ->
+            team.competitions.filter { it in enabledLeagues }.forEach { leagueId ->
                 val league = SportsLeagues.byId[leagueId] ?: return@forEach
                 val key = "$leagueId:$id"; val cached = teamCache[key]
                 if (cached != null && now - cached.first in 0 until 6 * 3600000L) cached.second.filter { it.state == "pre" && it.start > now }.forEach { events["${it.league}:${it.id}"] = it }
@@ -122,31 +123,55 @@ object SportsSchedule {
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
-    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long): SportsGame {
+    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE, progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
         if (game.state == "post") return game
         val target = game.teams.map { it.id }.toSet()
-        val parsed = HashMap<Pair<String, String>, List<SportsTeam>?>()
-        val byGuideKey = guide.channels.filter { !it.media }.groupBy { guide.key(it) }
-        val matches = mutableListOf<SportsBroadcast>()
-        for ((key, channels) in byGuideKey) {
-            if (Thread.currentThread().isInterrupted) return game
-            val programme = guide.programmes[key].orEmpty().firstOrNull { p ->
-                p.end > now && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && run {
-                    val cacheKey = p.title to p.description
-                    val teams = if (parsed.containsKey(cacheKey)) parsed[cacheKey] else SportsGuide.teams(p).also { if (parsed.size < 10000) parsed[cacheKey] = it }
-                    teams?.map { it.id }?.toSet() == target
-                }
-            }
-            if (programme != null) channels.forEach { matches.add(SportsBroadcast(it, programme)) }
+        val hints = game.teams.map { team -> (team.aliases + team.name.split(' ').filter { it.length >= 4 }).distinct() }
+        fun relevant(title: String, description: String = "") = hints.all { aliases -> aliases.any { alias -> title.contains(alias, true) || description.contains(alias, true) } }
+        val parsed = HashMap<Pair<String, String>, Boolean>()
+        fun matchesTarget(p: Programme, context: String = ""): Boolean {
+            if (!relevant(p.title, p.description)) return false
+            val key = p.title to (p.description + context)
+            return parsed.getOrPut(key) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target }
         }
-        val names = game.networks.map { SportsCatalog.normalize(it) }.filter { it.length >= 3 }
-        val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }
+        val names = game.networks.map { " ${SportsCatalog.normalize(it)} " }.filter { it.length >= 5 }
+        val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }.map { " $it " }
+        val patterns = names + mascots
+        val dates = Regex("(?<!\\d)(\\d{1,2})/(\\d{1,2})(?!\\d)")
+        val gameDates = listOf(ZoneId.systemDefault(), ZoneId.of("America/New_York")).map { Instant.ofEpochMilli(game.start).atZone(it).toLocalDate() }
+        fun currentTitle(title: String): Boolean {
+            val declared = dates.findAll(title).map { it.groupValues[1].toInt() to it.groupValues[2].toInt() }.filter { it.first in 1..12 && it.second in 1..31 }.toList()
+            return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
+        }
+        val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
+        val channels = guide.channels.filter { !it.media }
+        for ((index, channel) in channels.withIndex()) {
+            if (Thread.currentThread().isInterrupted) return game
+            if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
+            if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
+            else if (patterns.any { it in channel.sportsKey }) candidates.add(channel)
+            if (index % 512 == 0) progress(index, channels.size * 2)
+        }
+        val byGuideKey = channels.groupBy { guide.key(it) }
+        val matches = mutableListOf<SportsBroadcast>()
+        val at = if (game.state == "pre") game.start else now
+        var complete = true
+        var checkedKeys = 0
+        for ((index, entry) in byGuideKey.entries.withIndex()) {
+            if (Thread.currentThread().isInterrupted) return game
+            if (System.nanoTime() >= deadlineNanos) { complete = false; break }
+            checkedKeys++
+            val programme = guide.programmes[entry.key].orEmpty().firstOrNull { p ->
+                p.start <= at && p.end > at && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && matchesTarget(p)
+            }
+            if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
+            if (index % 512 == 0) progress(channels.size + index, channels.size + byGuideKey.size)
+        }
         val confirmed = matches.map { it.channel.id }.toSet()
-        val candidates = guide.channels.asSequence().filter { channel ->
-            val name = " ${SportsCatalog.normalize(channel.name)} "
-            !channel.media && channel.id !in confirmed && (names + mascots).any { " $it " in name }
-        }.sortedByDescending { it.id in favorites }.take(512).toList()
-        return game.copy(broadcasts = matches, candidates = candidates)
+        val titleOnly = titles.filter { it.id !in confirmed }
+        val found = confirmed + titleOnly.map { it.id }
+        progress(channels.size + checkedKeys, channels.size + byGuideKey.size)
+        return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }.sortedByDescending { it.id in favorites }.take(512), coverageComplete = complete)
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
         .put("events", JSONArray(snapshot.events.take(500).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league) }))

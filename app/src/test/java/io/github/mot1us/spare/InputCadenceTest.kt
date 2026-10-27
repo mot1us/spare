@@ -7,6 +7,19 @@ import org.junit.Test
 import kotlin.math.roundToLong
 
 class InputCadenceTest {
+    @Test fun roundedSixtyFamilySettlesWithoutFlippingAndStillDetectsRealChanges() {
+        for (fps in listOf(59.94f, 60f)) {
+            val cadence = InputCadence(); val settled = mutableSetOf<Float>()
+            repeat(2400) { frame ->
+                val rate = cadence.observe(1, (frame * 1000.0 / fps).roundToLong() * 1000)
+                if (frame >= 1000) settled.add(rate)
+            }
+            assertEquals(setOf(fps), settled)
+            var rate = 0f
+            repeat(100) { rate = cadence.observe(2, (it * 1_000_000.0 / 50).roundToLong()) }
+            assertEquals(50f, rate, .001f)
+        }
+    }
     @Test fun measuresSourceSamplesInDecodeOrderWithBFramesAndRoundedTimestamps() {
         listOf(23.976f, 25f, 29.97f, 50f, 59.94f, 60f).forEach { fps ->
             val cadence = InputCadence(); var result = 0f

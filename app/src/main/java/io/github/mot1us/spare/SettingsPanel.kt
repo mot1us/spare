@@ -15,7 +15,7 @@ import androidx.core.view.isVisible
 
 /** One translucent TV surface: navigation stays on the left, actual settings on the right. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
-class SettingsPanel(context: Context, private val render: (String) -> Unit, private val close: () -> Unit) : LinearLayout(context) {
+class SettingsPanel(context: Context, private val render: (String) -> Unit, private val close: () -> Unit, heading: String = "Settings") : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private val navigation = LinearLayout(context).apply { orientation = VERTICAL; tag = "settings-navigation" }
     private val content = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(24), 0, dp(8), dp(16)); tag = "settings-content" }
@@ -30,7 +30,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         orientation = HORIZONTAL; visibility = GONE; tag = "settings-panel"; setPadding(dp(28), dp(24), dp(24), dp(24))
         background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF00B1018.toInt(), 0xD90B1018.toInt()))
         val left = LinearLayout(context).apply { orientation = VERTICAL; setPadding(0, 0, dp(18), 0) }
-        left.addView(label("Settings", 23f), LayoutParams(-1, dp(48)))
+        left.addView(label(heading, 23f), LayoutParams(-1, dp(48)))
         left.addView(ScrollView(context).apply { overScrollMode = OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false; addView(navigation) }, LayoutParams(-1, 0, 1f))
         left.addView(label("← / Back   Return", 10f), LayoutParams(-1, dp(26)))
         addView(left, LayoutParams(dp(220), -1))

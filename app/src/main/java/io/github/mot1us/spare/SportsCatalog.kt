@@ -75,8 +75,9 @@ object SportsCatalog {
     ) + SportsExtraTeams.teams
     val byId = teams.associateBy { it.id }
     private val punctuation = Regex("[^a-z0-9]+")
+    private val accents = Regex("\\p{M}+")
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)
-        .lowercase(Locale.ROOT).replace("@", " at ").replace(Regex("\\p{M}+"), ""), " ").trim()
+        .lowercase(Locale.ROOT).replace("@", " at ").replace(accents, ""), " ").trim()
     /** City-only listings need league context and a city unique within that league. */
     fun cities(normalized: String, league: String): Set<SportsTeam> {
         val clubs = teams.filter { it.league == league }

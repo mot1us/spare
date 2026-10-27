@@ -94,7 +94,8 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         appearance(); activate("guide-mode")
     }
     fun activate(key: String) { controls.forEach { it.isSelected = it.tag == key; it.invalidate() } }
-    fun focusCurrent() { setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
+    fun prepareFocus() { descendantFocusability = FOCUS_AFTER_DESCENDANTS }
+    fun focusCurrent() { prepareFocus(); setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
         background = if (hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }

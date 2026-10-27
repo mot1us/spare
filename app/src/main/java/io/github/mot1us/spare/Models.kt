@@ -20,6 +20,7 @@ data class Source(
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
     val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null) {
     val searchKey: String = ChannelSearch.key(name)
+    val sportsKey: String by lazy { " ${SportsCatalog.normalize(name)} " }
     fun quality(observed: VideoInfo?): VideoInfo? = if (observed == null) reportedQuality else if (observed.fps <= 0 && (reportedQuality?.fps ?: 0f) > 0) observed.copy(fps = reportedQuality!!.fps) else observed
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
         .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.json())

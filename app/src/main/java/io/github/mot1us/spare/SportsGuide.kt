@@ -3,7 +3,7 @@ package io.github.mot1us.spare
 import kotlin.math.abs
 
 data class SportsBroadcast(val channel: Channel, val programme: Programme)
-data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val competition: String = "") {
+data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val competition: String = "", val titleMatches: List<Channel> = emptyList(), val coverageComplete: Boolean = true) {
     val leagueId get() = competition.ifBlank { teams.first().league }
     val key: String get() = (if (competition.isNotBlank() && eventId.isNotBlank()) "$competition:$eventId" else eventId).ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
@@ -23,6 +23,7 @@ object SportsGuide {
     private val soccer = Regex("\\b(soccer|premier league|champions league|mls|uefa)\\b")
     private val football = Regex("\\b(nfl|football|super bowl)\\b")
     private val noise = Regex("\\b(replay|rerun|classic|highlights?|pregame|postgame|pre game|post game|preview|review|news|countdown|re air|reair|encore|condensed|talk|documentary|sportscenter|nfl live|baseball tonight|quick pitch|good morning football)\\b")
+    fun excludedTitle(normalized: String) = noise.containsMatchIn(normalized)
     private val sportsChannel = Regex("\\b(sports?|mlb|nfl|espn|fox|fs1|fs2|nfln|nbc|cbs|abc|tbs|tnt|yes|sny|nesn|masn|root|fanduel|bally|space city|marquee|snla|snny|sn|tsn)\\b")
     fun teams(programme: Programme, channelContext: String = ""): List<SportsTeam>? {
         val title = SportsCatalog.normalize(programme.title)
