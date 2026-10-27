@@ -444,7 +444,7 @@ class MainActivity : Activity() {
             }
             if (::navigationRail.isInitialized && navigationRail.isVisible && next != null) {
                 val inSports = ::sportsPanel.isInitialized && generateSequence(next) { it.parent as? View }.any { it === sportsPanel }
-                navigationRail.descendantFocusability = if (inSports) ViewGroup.FOCUS_BLOCK_DESCENDANTS else ViewGroup.FOCUS_AFTER_DESCENDANTS
+                navigationRail.contentHasFocus = inSports
                 navigationRail.focusChanged(generateSequence(next) { it.parent as? View }.any { it === navigationRail })
             }
         }
@@ -724,7 +724,7 @@ class MainActivity : Activity() {
     }
     private fun openNavigation() { ++focusEpoch; pendingFocusList = null; navigationRail.focusCurrent() }
     private fun focusSidebar(remember: Boolean = true) {
-        if (sportsVisible) { ++focusEpoch; navigationRail.prepareFocus(); sportsMode.requestFocus(); return }
+        if (sportsVisible) { ++focusEpoch; navigationRail.focusCurrent(); return }
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
     }
     private fun focusCategoryAt(position: Int) {

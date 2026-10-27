@@ -4,6 +4,7 @@
 
 - Bound decoded artwork dimensions and deliver images directly to their card bindings. Avoid whole-rail image callbacks and repeated decoding after cache eviction that can overwhelm Sports navigation.
 - Pause playback and Sports image work immediately when leaving the app; stop the player before background cleanup. Resume playback when returning.
+- Exclude the dock from automatic Sports focus search without blocking deliberate remote navigation into it.
 
 ## 0.12.1 — 2026-10-26
 

@@ -1067,6 +1067,12 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").hasFocus() }
+                scenario.onActivity { activity ->
+                    val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                    assertTrue(rail.contentHasFocus)
+                    assertEquals(ViewGroup.FOCUS_AFTER_DESCENDANTS, rail.descendantFocusability)
+                }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library").hasFocus() }
                 device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }

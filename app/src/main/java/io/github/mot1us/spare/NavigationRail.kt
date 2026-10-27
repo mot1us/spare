@@ -89,13 +89,18 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     val settings = item("Settings", "settings", R.drawable.ic_settings, settings)
     val badge = TextView(context).apply { text = "•"; textSize = 16f; setTextColor(Color.WHITE); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; visibility = GONE }
     init {
-        orientation = VERTICAL; tag = "app-navigation"; setPadding(dp(4), dp(4), dp(4), 0)
+        orientation = VERTICAL; descendantFocusability = FOCUS_AFTER_DESCENDANTS; tag = "app-navigation"; setPadding(dp(4), dp(4), dp(4), 0)
         (this.settings.parent as FrameLayout).addView(badge, FrameLayout.LayoutParams(dp(12), dp(20), Gravity.TOP or Gravity.END))
         appearance(); activate("guide-mode")
     }
     fun activate(key: String) { controls.forEach { it.isSelected = it.tag == key; it.invalidate() } }
-    fun prepareFocus() { descendantFocusability = FOCUS_AFTER_DESCENDANTS }
-    fun focusCurrent() { prepareFocus(); setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
+    // Exclude the dock from Android's automatic focus search while browsing Sports.
+    // Unlike BLOCK_DESCENDANTS, this never rejects an explicit remote requestFocus.
+    var contentHasFocus = false
+    override fun addFocusables(views: ArrayList<View>, direction: Int, focusableMode: Int) {
+        if (!contentHasFocus || hasFocus()) super.addFocusables(views, direction, focusableMode)
+    }
+    fun focusCurrent() { setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
         background = if (hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }
