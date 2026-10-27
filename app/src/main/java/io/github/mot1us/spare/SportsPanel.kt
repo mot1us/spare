@@ -92,7 +92,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var remembered: String? = null
     private var followed = emptySet<String>()
     private var enabledLeagues = SportsLeagues.byId.keys
-    private val loadHeroArt = Runnable { featured?.takeUnless(::scoresHidden)?.let(artwork::request) }
+    private val loadHeroArt = Runnable { featured?.takeUnless(::scoresHidden)?.let { game ->
+        artwork.request(game)
+        val at = games.indexOfFirst { it.key == game.key }
+        if (at >= 0) artwork.prefetch(games.asSequence().drop(at + 1).filterNot(::scoresHidden).take(2).toList())
+    } }
     fun setLeagues(leagues: Set<String>) { enabledLeagues = leagues }
     private var displayedRedZone = false
     private var initialReveal = true
@@ -140,7 +144,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
             fun ink(active: Boolean) { val color = if (active) Color.BLACK else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.badge.setTextColor(if (active) Color.BLACK else if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent) }
-            ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game); artwork.prefetch(games.drop(position + 1).filterNot(::scoresHidden).take(2)) } }
+            ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game) } }
             holder.box.setOnClickListener { openGame(game) }
             cardKeys(holder)
 
@@ -254,7 +258,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     private fun badge(game: SportsGame) = when { game.live(System.currentTimeMillis()) -> "● LIVE"; game.state == "post" -> "FINAL"; game.state == "pre" -> "UPCOMING"; else -> "SAVED · REFRESH" }
     private fun showHero(game: SportsGame) {
-        val changed = featured?.key != game.key; featured = game; artwork.resume()
+        val changed = featured?.key != game.key; featured = game
         heroBadge.text = SportsLeagues.label(game.leagueId).uppercase() + "  ·  " + badge(game); heroBadge.setTextColor(if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent)
         heroTitle.text = game.title; heroScore.text = if (scoresHidden(game)) "Score hidden" else if (game.state == "pre") GuideClock.time(game.start) else if (game.scores.isEmpty()) "Score unavailable" else game.teams.joinToString("   :   ") { game.scores[it.id] ?: "–" }
         heroDetail.text = GuideClock.sportsDate(game.start) + "\n" + statusText(game) + " · " + game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
@@ -291,7 +295,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         empty.text = "Loading Sports…"; empty.isVisible = true
     }
     private fun revealContent() {
-        if (!skeleton.isShown) return
+        if (skeleton.visibility != VISIBLE) return
         skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = true; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
         gridArea.alpha = 0f; heroContent.alpha = 0f
@@ -398,13 +402,23 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun focusAt(position: Int) { focusRow(rows, position) }
     private fun focusStream(position: Int) { focusRow(streams, position) }
     private fun focusRow(list: RecyclerView, position: Int) {
-        if (position !in 0 until (list.adapter?.itemCount ?: 0)) return
-        val token = ++focusEpoch
+        val adapter = list.adapter ?: return
+        if (position !in 0 until adapter.itemCount) return
+        val token = ++focusEpoch; val input = inputEpoch; val targetId = adapter.getItemId(position)
         if (list.findViewHolderForAdapterPosition(position) == null) { list.isFocusableInTouchMode = true; list.descendantFocusability = FOCUS_BEFORE_DESCENDANTS; list.requestFocus(); list.descendantFocusability = FOCUS_AFTER_DESCENDANTS; list.scrollToPosition(position) }
-        fun attempt(left: Int) { if (isShown && token == focusEpoch) { val item = list.findViewHolderForAdapterPosition(position)?.itemView; if (item != null) { if (list === streams) item.findViewWithTag<View>("sports-stream:${streamsList[position].id}").requestFocus() else item.requestFocus(); TvFocus.center(list, item) } else if (left > 0) list.postOnAnimation { attempt(left - 1) } } }; attempt(15)
+        fun attempt(left: Int) {
+            // A delayed layout must never reclaim focus after newer remote input or
+            // target a different card when a score/stream refresh changes the list.
+            if (!list.isShown || token != focusEpoch || input != inputEpoch || position !in 0 until adapter.itemCount || adapter.getItemId(position) != targetId) return
+            val holder = list.findViewHolderForAdapterPosition(position)
+            if (holder != null) {
+                val target = if (holder is StreamCard) holder.play else holder.itemView
+                if (target.requestFocus()) TvFocus.center(list, holder.itemView)
+            } else if (left > 0) list.postOnAnimation { attempt(left - 1) }
+        }; attempt(15)
     }
     @SuppressLint("NotifyDataSetChanged") fun refreshTheme() { hero.background = GuideTheme.glass(resources.displayMetrics.density); cards.notifyDataSetChanged(); streamAdapter.notifyDataSetChanged(); featured?.let(::showHero) }
-    fun pauseImages() { removeCallbacks(loadHeroArt); artwork.pause(); logos.pause(); pictures.pause(); cardLogos.pause(); thumbnails.pause() }
+    fun pauseImages() { ++focusEpoch; removeCallbacks(loadHeroArt); artwork.pause(); logos.pause(); pictures.pause(); cardLogos.pause(); thumbnails.pause() }
     fun resumeImages() { artwork.resume(); logos.resume(); pictures.resume(); cardLogos.resume(); thumbnails.resume(); redrawVisiblePosters(); featured?.let { showHero(it); if (!scoresHidden(it)) artwork.request(it) } }
     fun closeImages() { removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close(); thumbnails.close() }
     private fun fadeArtwork(view: ImageView, opacity: Float = 1f) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(opacity).setDuration(160).start() }

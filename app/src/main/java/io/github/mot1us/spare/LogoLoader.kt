@@ -22,7 +22,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     @Volatile private var closed = false
     @Volatile private var paused = false
     @Volatile private var generation = 0
-    fun get(url: String, http: Boolean, redraw: () -> Unit): Bitmap? = request(url, http) { redraw() }
+    fun get(url: String, http: Boolean, redraw: () -> Unit): Bitmap? = request(url, http, { redraw() })
 
     /** Deliver the decoded bitmap to this binding, even if the memory cache evicts it.
      * A completed image never triggers another card's fetch or whole-rail redraw. */
@@ -38,20 +38,23 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             loaded?.invoke(bitmap)
             if (bitmap == null) bindings.remove(image)
         }
-        val bitmap = request(url, http, ::apply)
+        var waiting = false
+        val bitmap = request(url, http, ::apply) { waiting = true }
+        // A skipped request has no completion callback. Let a later bind retry it.
+        if (bitmap == null && !waiting && bindings[view] === binding) bindings.remove(view)
         // Keep a pending binding so repeated score/layout updates do not subscribe again.
         if ((view.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) view.setImageBitmap(bitmap)
         loaded?.invoke(bitmap)
     }
 
-    private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit): Bitmap? {
+    private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit, queued: () -> Unit = {}): Bitmap? {
         if (url.isBlank()) return null
         cache.get(url)?.let { return it }
         if (closed || paused || !Network.allowed(url, http) || unavailable(url)) return null
         synchronized(pending) {
-            pending[url]?.let { if (it.size < 32) it.add(redraw); return null }
+            pending[url]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
             if (workers.queue.size >= 48) return null
-            pending[url] = mutableListOf(redraw)
+            pending[url] = mutableListOf(redraw); queued()
         }
         val token = generation
         workers.execute {
@@ -70,7 +73,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             }.getOrNull()
-            if (bitmap != null) cache.put(url, bitmap)
+            if (bitmap != null && !closed) cache.put(url, bitmap)
             if (token == generation) {
                 if (bitmap == null) failed[url] = System.currentTimeMillis() + 30000 else failed.remove(url)
                 while (failed.size > 256) failed.keys.firstOrNull()?.let(failed::remove)

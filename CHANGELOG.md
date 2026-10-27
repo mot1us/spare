@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.2 — 2026-10-27
+
+- Keep Sports focus on the latest remote action, prioritize focused-game artwork and cancel obsolete queued artwork work.
+- Retry artwork skipped while paused or busy, and clear completed Sports placeholders even when the page is hidden.
+- Preserve Library detail focus, reject stale backdrops, return M3U movies to their catalog and make episode Refresh fetch fresh data.
+- Cache numeric row IDs, remove duplicate channel scans and batch quality saves to reduce scrolling and playback overhead.
+- Refresh guide time labels with programme rows; clear removed-playlist playback/resume state and stale background refresh results.
+
 ## 0.14.1 — 2026-10-26
 
 - Open Sports on Today, add Live across enabled leagues and keep Calendar for other dates. Live includes unfollowed games and excludes replay/upcoming cards and unconfirmed RedZone status.

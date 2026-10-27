@@ -268,21 +268,28 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun closeDetails() {
         task?.cancel(true); ++epoch; detailItem = null; panel.browse()
         val selected = source() ?: return
-        if (kind == "continue") continueWatching(selected) else catalog(selected, kind, false)
+        when {
+            kind == "continue" -> continueWatching(selected)
+            selected.kind == "xtream" -> catalog(selected, kind, false)
+            else -> open(kind)
+        }
     }
-    private fun episodes(selected: Source, series: OnDemand) {
+    private fun episodes(selected: Source, series: OnDemand, force: Boolean = false) {
         detailItem = null; parentSeries = series
         val cacheKey = "${selected.id}:${series.id}"
-        episodeCache[cacheKey]?.let { entries -> episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); panel.focusRows(); return }
-        panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true)
+        val cached = episodeCache[cacheKey]
+        if (cached != null) {
+            episodeList = cached; showItems(cached, series.title, series.description.ifBlank { "${cached.size} episodes · Back returns to Series" }, force); panel.seriesArtwork(posterMetadata.known(series))
+            if (!force) { panel.focusRows(); return }
+        } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
-            if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) }
-            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); panel.focusRows()
+            if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
+            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); if (!force) panel.focusRows()
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
                 if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { panel.seriesArtwork(enriched); if (enriched.description.isNotBlank()) panel.page(series.title, enriched.description, false) } }
             }
-        } }.onFailure { ui(token) { panel.page(series.title, "Episodes unavailable · ${SourceErrors.message(it)} · Refresh to retry.", false); panel.focusRows() } } }
+        } }.onFailure { ui(token) { panel.page(series.title, "${if (cached != null) "Using saved episodes · " else "Episodes unavailable · "}${SourceErrors.message(it)} · Refresh to retry.", false); if (!force) panel.focusRows() } } }
     }
     private fun continueWatching(selected: Source) {
         panel.submit(emptyList()); panel.page("Continue watching", "Loading saved positions…", true)
@@ -326,7 +333,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }
     fun reopen() { open(kind) }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
+    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
     fun dismiss() { pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
     fun destroy() { posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }

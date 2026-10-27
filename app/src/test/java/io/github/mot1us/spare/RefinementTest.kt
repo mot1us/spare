@@ -5,6 +5,13 @@ import org.junit.Test
 import java.io.IOException
 
 class RefinementTest {
+    @Test fun numericRowIdsRetainExistingRecyclerIdentity() {
+        listOf("", "xc:12345", "group:USA | Sports", "日本語", "synthetic-99999").forEach { id ->
+            val expected = Channel.stableId(id).take(16).toULong(16).toLong()
+            assertEquals(expected, Channel.stableLongId(id))
+            assertEquals(expected, Channel(id, "Name", "", "https://example.test").rowId)
+        }
+    }
     private val now = 1800000000000L
     @Test fun channelSearchIgnoresProviderSpacingAndStyling() {
         listOf("US | KING5 FHD", "KING-5 Seattle", "ＫＩＮＧ ５ NBC", "𝙆𝙄𝙉𝙂𝟱").forEach { assertTrue(it, ChannelSearch.matches(it, "king 5")) }

@@ -13,6 +13,7 @@ import android.speech.RecognizerIntent
 import android.widget.CheckBox
 import android.widget.EditText
 import android.view.View
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.ViewConfiguration
 import androidx.media3.common.Player
@@ -305,6 +306,28 @@ class SpareDeviceTest {
                 assertNotNull(saved)
                 assertEquals(https.url, saved!!.url)
                 assertTrue(saved!!.allowHttp)
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, java.lang.Long.TYPE).apply { isAccessible = true }
+                        .invoke(activity, OnDemand("movie:remove", "Removal fixture", "", "${server.base}/channel1.mp4"), 0L)
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/channel1.mp4" }
+                scenario.onActivity { activity ->
+                    val removal = MainActivity::class.java.getDeclaredMethod("editSource", Source::class.java).apply { isAccessible = true }.invoke(activity, seed) as AlertDialog
+                    removal.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
+                }
+                waitFor(scenario) { store.sources().isEmpty() }
+                scenario.onActivity { activity ->
+                    assertNull(MainActivity::class.java.getDeclaredField("onDemand").apply { isAccessible = true }.get(activity))
+                    assertEquals("", MainActivity::class.java.getDeclaredField("playbackUrl").apply { isAccessible = true }.get(activity))
+                    assertEquals(0, find<PlayerView>(activity.window.decorView)!!.player!!.mediaItemCount)
+                }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED).moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.onActivity { activity ->
+                    val player = find<PlayerView>(activity.window.decorView)!!.player!!
+                    assertEquals("Removed VOD must not reopen after returning to the app", 0, player.mediaItemCount)
+                    assertFalse(player.isPlaying)
+                }
+                assertTrue(store.sources().isEmpty())
             }
             store.saveSources(emptyList()); store.removeCache(seed)
         }
@@ -897,6 +920,20 @@ class SpareDeviceTest {
                 repeat(32) { images.forEachIndexed { i, image -> loader.bind(image, urls[i]) { callbacks[i]++ } } }
                 images.forEachIndexed { i, image -> assertSame(original[i], (image.drawable as android.graphics.drawable.BitmapDrawable).bitmap); assertEquals(2, callbacks[i]) }
             }
+            val retryUrl = "https://images.example/retry-${System.nanoTime()}.png"
+            files.bytes(retryUrl) { bytes }
+            val retryImage = android.widget.ImageView(context)
+            instrumentation.runOnMainSync {
+                loader.pause(); loader.bind(retryImage, retryUrl)
+                assertNull(retryImage.drawable)
+                loader.resume(); loader.bind(retryImage, retryUrl)
+            }
+            val retryDeadline = System.currentTimeMillis() + 5000
+            var retried = false
+            while (!retried && System.currentTimeMillis() < retryDeadline) {
+                instrumentation.runOnMainSync { retried = retryImage.drawable != null }; Thread.sleep(30)
+            }
+            assertTrue("A bind skipped while paused must retry the same image after resume", retried)
         } finally { instrumentation.runOnMainSync { loader.close() } }
     }
 
@@ -987,6 +1024,23 @@ class SpareDeviceTest {
                     device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                     device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
+                    val focusFrames = java.util.concurrent.CountDownLatch(1)
+                    scenario.onActivity { activity ->
+                        val panel = activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")
+                        val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                        val target = (0 until grid.adapter!!.itemCount).first { grid.findViewHolderForAdapterPosition(it) == null }
+                        grid.suppressLayout(true)
+                        SportsPanel::class.java.getDeclaredMethod("focusAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(panel, target)
+                        // A user can move to the header before the requested offscreen
+                        // card is laid out. The old retry must not steal focus back.
+                        activity.window.decorView.findViewWithTag<View>("sports-today").requestFocus()
+                        panel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
+                        panel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT))
+                        grid.suppressLayout(false)
+                        grid.postOnAnimation { grid.postOnAnimation { focusFrames.countDown() } }
+                    }
+                    assertTrue("Offscreen Sports focus layout completes", focusFrames.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-live").hasFocus()) }
                     device.pressHome(); instrumentation.waitForIdleSync()
                     instrumentation.runOnMainSync { assertFalse(playback!!.playWhenReady) }
                     scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
@@ -1212,6 +1266,16 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown != true }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel")
+                    val play = panel.findViewWithTag<View>("library-play")
+                    val back = panel.findViewWithTag<View>("library-back")
+                    back.requestFocus()
+                    panel.detail(OnDemand("movie:101", "Fixture movie", "Fixture cinema", description = "Updated provider metadata"),
+                        { title, action -> android.widget.Button(activity).apply { text = title; setOnClickListener { action() } } },
+                        { play.performClick() }, { back.performClick() }, false)
+                    assertTrue("Provider metadata must preserve the focused Back action", panel.findViewWithTag<View>("library-back").hasFocus())
+                }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.playbackState == Player.STATE_READY }
                 scenario.onActivity {
@@ -1251,6 +1315,14 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
+                val beforeEpisodeRefresh = server.requests["/player_api.php"] ?: 0
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-refresh").apply { requestFocus(); performClick() } }
+                waitFor(scenario) {
+                    (server.requests["/player_api.php"] ?: 0) > beforeEpisodeRefresh &&
+                        it.window.decorView.findViewWithTag<View>("library-loading").isShown == false &&
+                        it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true
+                }
+                scenario.onActivity { assertTrue("Episode refresh must not move focus away from Refresh", it.window.decorView.findViewWithTag<View>("library-refresh").hasFocus()) }
                 instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "library.png"))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:episode:201").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/201.mp4" && samePlayer?.playbackState == Player.STATE_READY }
@@ -1287,6 +1359,25 @@ class SpareDeviceTest {
                 leaveSettings(scenario)
                 scenario.recreate(); waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 assertEquals("Monospace", store.font)
+                scenario.onActivity { activity ->
+                    val m3u = source.copy(id = "m3u-library-return", kind = "m3u")
+                    val movie = Channel("fixture-film", "M3U film", "Movies", "${server.base}/channel1.mp4", media = true)
+                    val controller = LibraryController(activity, store,
+                        { title, action -> android.widget.Button(activity).apply { text = title; setOnClickListener { action() } } },
+                        { m3u }, { Guide(listOf(movie), emptyMap()) }, { _, _ -> }, {}, {})
+                    try {
+                        controller.open("movie")
+                        val panel = controller.panel
+                        panel.measure(View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY))
+                        panel.layout(0, 0, 960, 540)
+                        panel.findViewWithTag<View>("library-item:m3u:fixture-film").performClick()
+                        assertTrue(panel.findViewWithTag<View>("library-details").visibility == View.VISIBLE)
+                        controller.back()
+                        assertEquals("Movies", panel.findViewWithTag<android.widget.TextView>("library-heading").text.toString())
+                        assertEquals("Returning to an M3U movie catalog must retain its titles", 1, panel.findViewWithTag<RecyclerView>("library-items").adapter!!.itemCount)
+                        assertEquals("M3U Back must not start an Xtream category request", View.GONE, panel.findViewWithTag<View>("library-loading").visibility)
+                    } finally { controller.destroy() }
+                }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }

@@ -22,7 +22,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableId(key).take(16).toULong(16).toLong() }
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -67,6 +67,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var grid = true
     private val images = LogoLoader(512, 12 * 1024 * 1024)
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
+    private var detailGeneration = 0
     private val body = LinearLayout(context)
     private var artworkHttp = false
     private var rememberedKey: String? = null
@@ -279,15 +280,17 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun hideKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0) }
     fun appearance() { AppFont.apply(this); categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1); rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
     fun allowArtworkHttp(value: Boolean) { artworkHttp = value }
-    fun browse() { detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE }
+    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE }
     fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, back: () -> Unit, busy: Boolean) {
         val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
+        val focusedAction = detailPane.findFocus()?.tag
+        val generation = ++detailGeneration
         hideKeyboard(); body.visibility = GONE; search.visibility = GONE; detailPane.visibility = VISIBLE
         // Keep focus on the toolbar while replacing focused detail controls.
         if (detailPane.hasFocus()) findViewWithTag<View>("library-tab:movie")?.requestFocus()
         detailPane.removeAllViews(); detailPane.background = null; page(item.title, listOf(item.year, item.genre, item.runtime).filter { it.isNotBlank() }.joinToString(" · "), busy)
         if (item.backdrop.isNotBlank()) {
-            fun background() { images.get(item.backdrop, artworkHttp) {}?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } } }
+            fun background() { if (generation == detailGeneration && detailPane.isVisible) images.get(item.backdrop, artworkHttp) {}?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } } }
             images.get(item.backdrop, artworkHttp, ::background)?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } }
         }
         val hero = LinearLayout(context)
@@ -299,8 +302,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         val actions = LinearLayout(context)
-        val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start); actions.addView(makeButton("Back to catalog", back)); detailPane.addView(actions, LayoutParams(-1, dp(40)))
-        if (restore) start.requestFocus()
+        val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start); actions.addView(makeButton("Back to catalog", back).apply { tag = "library-back" }); detailPane.addView(actions, LayoutParams(-1, dp(40)))
+        if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
     fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); ++focusEpoch; pending = null; images.pause() }
     fun resumeImages() { images.resume() }

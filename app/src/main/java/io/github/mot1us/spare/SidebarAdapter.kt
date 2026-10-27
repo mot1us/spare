@@ -12,7 +12,9 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-data class GuideSection(val title: String, val key: String, val active: Boolean = false)
+data class GuideSection(val title: String, val key: String, val active: Boolean = false) {
+    val rowId: Long by lazy { Channel.stableLongId(key) }
+}
 
 class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val openModes: () -> Unit, private val move: (Int) -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
@@ -29,7 +31,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         })
         items = next; diff.dispatchUpdatesTo(this)
     }
-    override fun getItemId(position: Int) = Channel.stableId(items[position].key).take(16).toULong(16).toLong()
+    override fun getItemId(position: Int) = items[position].rowId
     fun rememberedPosition() = items.indexOfFirst { it.key == focusedKey }.takeIf { it >= 0 } ?: activePosition()
     fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
     override fun getItemCount() = items.size

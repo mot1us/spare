@@ -19,6 +19,7 @@ data class Source(
 }
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
     val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null) {
+    val rowId: Long by lazy { stableLongId(id) }
     val searchKey: String = ChannelSearch.key(name)
     val sportsKey: String by lazy { " ${SportsCatalog.normalize(name)} " }
     fun quality(observed: VideoInfo?): VideoInfo? {
@@ -32,6 +33,8 @@ data class Channel(val id: String, val name: String, val group: String, val url:
     companion object {
         fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
             j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")))
+        /** Same first 64 SHA-256 bits as the existing RecyclerView IDs, without hex formatting. */
+        fun stableLongId(value: String): Long = java.nio.ByteBuffer.wrap(MessageDigest.getInstance("SHA-256").digest(value.toByteArray())).long
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }

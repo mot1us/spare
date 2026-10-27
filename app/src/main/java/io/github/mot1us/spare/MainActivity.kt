@@ -242,6 +242,16 @@ class MainActivity : Activity() {
     private var favoritesOnly = false
     private var filters = GuideFilters()
     private var videoInfo = mutableMapOf<String, VideoInfo>()
+    private var videoSavePending = false
+    private val saveVideoReadings = Runnable {
+        videoSavePending = false
+        source?.let { selected -> val saved = videoInfo.toMap(); cacheWrites.execute { store.saveVideoInfo(selected, saved) } }
+    }
+    private fun flushVideoReadings() {
+        if (videoSavePending) { handler.removeCallbacks(saveVideoReadings); saveVideoReadings.run() }
+    }
+    private var recentLookupChannels: List<Channel>? = null
+    private var recentLookup = emptyMap<String, Channel>()
     private var providerGroups = emptyList<String>()
     private var browseAll = false
     private var playbackUrl = ""
@@ -286,7 +296,7 @@ class MainActivity : Activity() {
     private val backHold = Runnable { if (guideVisible && settingsPanel?.opened != true && current != null) { backLongPressed = true; showGuide(false) } }
     private val hideNowPlaying = Runnable { nowPlaying.hide() }
     private val minuteTick = object : Runnable {
-        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { adapter.refreshRows(); if (sportsVisible) scheduleSports() else (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
+        override fun run() { if (!closed) { if (unavailable.prune(System.currentTimeMillis())) { saveUnavailable(); applyFilter() }; if (guideVisible) { updateTimes(); adapter.refreshRows(); if (sportsVisible) scheduleSports() else (focused ?: current)?.let(::showInfo) }; if (details.isVisible) refreshDetails(); handler.postDelayed(this, 60000) } }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -804,7 +814,7 @@ class MainActivity : Activity() {
         if (::multiview.isInitialized) multiview.close()
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
-        cacheEpg.run(); cachedStartup = false
+        flushVideoReadings(); cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L
         val epoch = ++generation; guideTimeline.clear()
         sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
@@ -974,13 +984,14 @@ class MainActivity : Activity() {
     }
     private fun recordVideo(info: VideoInfo) {
         if (onDemand != null) { lastVideoInfo = info; return }
-        val selected = source ?: return; val channel = current ?: return
+        if (source == null) return
+        val channel = current ?: return
         val previous = videoInfo[channel.id]
         val observed = info.retainingKnownRate(previous)
         lastVideoInfo = observed
         if (previous == observed) return
         videoInfo[channel.id] = observed
-        val saved = videoInfo.toMap(); cacheWrites.execute { store.saveVideoInfo(selected, saved) }
+        if (!videoSavePending) { videoSavePending = true; handler.postDelayed(saveVideoReadings, 5000) }
         if (!browseAll && filters.matches(channel, previous) != filters.matches(channel, observed)) applyFilter() else adapter.refreshRows()
         if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
@@ -1489,8 +1500,8 @@ class MainActivity : Activity() {
         fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${videoInfo[channel.id]?.evidence.orEmpty()}"
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
-        val recentById = guide.channels.filter { it.id in recentIds }.associateBy { it.id }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentById::get), source?.allowHttp == true)
+        if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true)
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }
@@ -1507,14 +1518,35 @@ class MainActivity : Activity() {
         runCatching { val next = sources.filterNot { it.id == selected.id } + selected; store.saveSources(next); sources = next; RefreshJobs.configure(this, sources) }
             .onSuccess { if (settingsPanel?.opened == true) closeSettings(); load(selected, force = true) }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
     }, { removed ->
+        if (source?.id == removed.id) { handler.removeCallbacks(saveVideoReadings); videoSavePending = false }
         runCatching { val next = sources.filterNot { it.id == removed.id }; store.saveSources(next); cacheWrites.execute { store.removeCache(removed) }; sources = next; RefreshJobs.configure(this, sources) }
             .onSuccess {
                 if (settingsPanel?.opened == true) closeSettings()
-                sources.firstOrNull()?.let { load(it) } ?: run {
-                    ++generation; importTask?.cancel(true); handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); playbackToken++; player.stop(); frameRates.clear(); loadingPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; source = null; current = null; filters = GuideFilters(); videoInfo.clear(); guide = Guide.EMPTY; sportsVisible = false; sportsChannels = emptyList(); ++sportsEpoch; updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
-                }
+                if (source?.id == removed.id) sources.firstOrNull()?.let { load(it) } ?: clearRemovedPlaylist()
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
     })
+    /** Deleting the last source must also clear VOD/resume and every source-owned callback. */
+    private fun clearRemovedPlaylist() {
+        ++generation; ++mergeEpoch; deferredRefresh = null; refreshRetryAt = 0L
+        handler.removeCallbacks(saveVideoReadings); videoSavePending = false; recentLookupChannels = null; recentLookup = emptyMap()
+        importTask?.cancel(true); cancelPlaybackCallbacks(); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(fetchVisibleEpg)
+        handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls); handler.removeCallbacks(filterSearch)
+        ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null
+        ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
+        handler.removeCallbacks(renderSports); handler.removeCallbacks(pollLiveSports); sportsRenderPending = false
+        library.dismiss(); multiview.close(); voiceInput.stop(); voiceSearchPending = false; closeDetails(); dismissGameReminder()
+        onDemand = null; demandPosition = 0; demandPaused = false; demandSubtitleMode = null; demandControls.visibility = View.GONE
+        playbackToken++; firstFrame = false; hasPlayedChannel = false; expectedMediaId = ""; playbackUrl = ""; pausedPlayback = null
+        player.stop(); player.clearMediaItems(); frameRates.clear()
+        source = null; store.active = ""; current = null; focused = null; lastWorkingChannel = null; lastVideoInfo = null
+        favorites = emptySet(); favoritesOnly = false; group = null; query = ""; browseAll = false
+        filters = GuideFilters(); videoInfo.clear(); unavailable = UnavailableChannels(); workingUrls.clear(); guideTimeline.clear()
+        guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery("")
+        epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear()
+        guide = Guide.EMPTY; sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsReplayGame = null; replayCache.clear(); sportsForcedEpg.clear()
+        listOf(loadingPanel, playbackLoading, retryPanel, refreshBar).forEach { it.visibility = View.GONE }
+        updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
+    }
     private fun playbackMenu() {
         if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         val existing = settingsPanel
@@ -1943,8 +1975,8 @@ class MainActivity : Activity() {
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { if (::player.isInitialized) player.stop(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { if (::player.isInitialized) player.stop(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

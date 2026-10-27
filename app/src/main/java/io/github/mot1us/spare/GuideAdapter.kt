@@ -33,7 +33,7 @@ class GuideAdapter(
     fun refreshRows() { recycler?.let { list -> for (i in 0 until list.childCount) list.getChildAt(i).invalidate() } }
     fun refreshTheme() { recycler?.let { list -> for (i in 0 until list.childCount) list.getChildAt(i).background = GuideTheme.background(context.resources.displayMetrics.density, 0x77303943) }; refreshRows() }
     override fun getItemCount() = channels.size
-    override fun getItemId(position: Int) = Channel.stableId(channels[position].id).take(16).toULong(16).toLong()
+    override fun getItemId(position: Int) = channels[position].rowId
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(Row(context))
     override fun onBindViewHolder(holder: Holder, position: Int) { holder.row.channel = channels[position]; holder.row.background = GuideTheme.background(context.resources.displayMetrics.density, 0x77303943); holder.row.invalidate(); if (holder.row.hasFocus()) focus(channels[position]) }
     class Holder(val row: Row) : RecyclerView.ViewHolder(row)
@@ -54,11 +54,7 @@ class GuideAdapter(
         }
         override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                channel?.let {
-                    val index = channels.indexOfFirst { row -> row.id == it.id }
-                    if (index >= 0)
-                        moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
-                }; return true
+                channel?.let { moveChannel(it.id, if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) }; return true
             }
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                 val row = channel
