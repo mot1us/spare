@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1 — 2026-10-26
+
+- Open Sports on Today, add Live across enabled leagues and keep Calendar for other dates. Live includes unfollowed games and excludes replay/upcoming cards and unconfirmed RedZone status.
+- Hold the first Sports layout behind fixed card placeholders, reveal the completed scoreboard together and keep existing cards stable during refresh.
+- Add a confirmed reset of Sports teams, leagues, reminders and preferences.
+- Preserve provider resolution during incomplete playback readings, accept more explicit provider FPS metadata, recover cached label declarations and show known/unknown quality counts.
+
 ## 0.14.0 — 2026-10-26
 
 - Rebuild Sports as a card grid with a focus-driven hero and fixed loading layout. Remove the Sports sidebar; configure leagues, followed teams, reminders and spoiler preferences in full-screen Sports settings.

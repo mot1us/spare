@@ -111,6 +111,7 @@ object SportsSchedule {
     fun games(snapshot: LiveSportsSnapshot, guide: Guide, team: String?, favorites: Set<String>, now: Long, matchChannels: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<SportsGame> {
         val selectedDay = selectedDate(team, now)
         val events = if (selectedDay != null) snapshot.events.filter { it.scoreboard && Instant.ofEpochMilli(it.start).atZone(zone).toLocalDate() == selectedDay }
+            else if (team == "live") snapshot.events.filter { it.scoreboard && it.state == "in" && it.start <= now + 60000 && snapshot.fresh(now) }
             else if (team == "today") snapshot.events.filter { it.scoreboard && (onDay(it.start, now, zone) || it.state == "in" && it.start in (now - 18 * 3600000L)..now) }
             else if (team == null || team.startsWith("league:")) snapshot.events.filter { it.scoreboard && (team == null || it.teams.any { id -> (it.league.ifBlank { SportsCatalog.byId[id]?.league.orEmpty() }) == team.substringAfter(':') }) }
             else snapshot.events.filter { team in it.teams && (it.state == "in" || it.state == "pre" && it.start > now) }

@@ -13,6 +13,15 @@ class SportsRebuildTest {
         assertTrue(SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).isEmpty())
         assertEquals(listOf("two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()) { it.id != "one" }.map { it.id })
     }
+    @Test fun liveScopeContainsOnlyFreshInProgressEventsAcrossLeagues() {
+        val events = listOf(LiveEvent("nfl", setOf("nfl:BUF", "nfl:KC"), now - 1000, league = "NFL"),
+            LiveEvent("mlb", setOf("mlb:NYY", "mlb:BOS"), now - 1000, league = "MLB"),
+            LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), now + 3600000, "pre", league = "NFL"),
+            LiveEvent("final", setOf("nfl:SEA", "nfl:SF"), now - 3600000, "post", league = "NFL"))
+        val snapshot = LiveSportsSnapshot(events, now, setOf("NFL", "MLB"))
+        assertEquals(setOf("nfl", "mlb"), SportsSchedule.games(snapshot, Guide.EMPTY, "live", emptySet(), now, false).map { it.eventId }.toSet())
+        assertTrue(SportsSchedule.games(snapshot.copy(checked = now - 86400000), Guide.EMPTY, "live", emptySet(), now, false).isEmpty())
+    }
     private val now = 1800000000000L
     @Test fun addedLeagueScoreboardsResolveTeamsAndShareSoccerClubIdentity() {
         listOf("NBA", "NHL", "EPL", "MLS", "UCL").forEach { league ->
