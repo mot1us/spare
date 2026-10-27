@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -49,7 +50,13 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         } else { translationX = if (next) 0f else -dp(94).toFloat(); alpha = if (next) 1f else 0f }
         expansionChanged?.invoke()
     }
-    fun focusChanged(inside: Boolean) { setExpanded(inside) }
+    var deliberateFocus = false
+        private set
+    fun focusChanged(inside: Boolean) {
+        if (inside && contentHasFocus && !deliberateFocus) return
+        if (!inside) deliberateFocus = false
+        setExpanded(inside)
+    }
 
     private fun item(label: String, key: String, icon: Int, click: () -> Unit): Button {
         val control = object : Button(context) {
@@ -100,7 +107,11 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     override fun addFocusables(views: ArrayList<View>, direction: Int, focusableMode: Int) {
         if (!contentHasFocus || hasFocus()) super.addFocusables(views, direction, focusableMode)
     }
-    fun focusCurrent() { setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
+    override fun onRequestFocusInDescendants(direction: Int, previouslyFocusedRect: Rect?): Boolean {
+        if (contentHasFocus && !hasFocus() && !deliberateFocus) return false
+        return super.onRequestFocusInDescendants(direction, previouslyFocusedRect)
+    }
+    fun focusCurrent() { deliberateFocus = true; setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
         background = if (hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }

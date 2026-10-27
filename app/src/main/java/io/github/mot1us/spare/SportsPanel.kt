@@ -47,11 +47,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         crests.addView(this, FrameLayout.LayoutParams(dp(190), dp(190), if (index == 0) Gravity.TOP or Gravity.START else Gravity.BOTTOM or Gravity.END).apply { topMargin = dp(if (index == 0) -12 else 0); bottomMargin = dp(if (index == 1) -12 else 0) })
     } }
     private val findStreams = button("Find streams") { featured?.let(select) }.apply { tag = "sports-watch" }
-    private val reminder = button("Remind me") { featured?.let { if (it.state == "post") { if (!revealed.add(it.key)) revealed.remove(it.key); cards.notifyItemRangeChanged(0, cards.itemCount); showHero(it); if (!scoresHidden(it)) artwork.request(it); focused(it) } else { if (it.state == "in") watchBest(it) else toggleReminder(it); updateReminder(it) } } }.apply { tag = "sports-reminder"; isEnabled = false }
+    private val reminder = button("Remind me") { featured?.takeIf { it.state != "post" }?.let { if (it.state == "in") watchBest(it) else toggleReminder(it); updateReminder(it) } }.apply { tag = "sports-reminder"; isEnabled = false }
     var hasReminder: (SportsGame) -> Boolean = { false }
     var toggleReminder: (SportsGame) -> Unit = {}
     var watchBest: (SportsGame) -> Unit = {}
-    private fun updateReminder(game: SportsGame) { if (game.state == "post") { reminder.text = if (scoresHidden(game)) "Reveal score" else "Hide score"; reminder.isEnabled = hideScores; return }; reminder.text = if (game.state == "in") "Watch best" else if (hasReminder(game)) "Reminder set ✓" else "Remind me"; reminder.isEnabled = game.state in setOf("pre", "in") || hasReminder(game) }
+    private fun updateReminder(game: SportsGame) {
+        reminder.isVisible = game.state != "post"
+        reminder.isEnabled = game.state == "pre" || game.state == "in"
+        reminder.text = if (game.state == "in") "Watch best" else if (hasReminder(game)) "Reminder set ✓" else "Remind me"
+    }
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; tag = "sports-loading"; visibility = GONE }
     private val status = label(10f).apply { tag = "sports-status"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.LTGRAY) }
     private val empty = label(13f).apply { tag = "sports-empty"; setPadding(dp(16), dp(12), dp(16), dp(12)) }
@@ -66,13 +70,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val gameArt = linkedMapOf<String, String>()
     var archiveWindowDays = 0
     private var hideScores = false
-    private val revealed = mutableSetOf<String>()
-    fun scoresHidden(game: SportsGame) = hideScores && game.state == "post" && game.key !in revealed
+    fun scoresHidden(game: SportsGame) = hideScores && game.state == "post"
     fun scoreText(game: SportsGame) = SportsText.score(game, scoresHidden(game))
     fun statusText(game: SportsGame) = SportsText.status(game, scoresHidden(game), System.currentTimeMillis())
     fun setSpoilers(hidden: Boolean) {
         if (hideScores == hidden) return
-        hideScores = hidden; revealed.clear(); cards.notifyItemRangeChanged(0, cards.itemCount); featured?.let { showHero(it); if (!scoresHidden(it)) artwork.request(it) }
+        hideScores = hidden; cards.notifyItemRangeChanged(0, cards.itemCount); featured?.let { showHero(it); if (!scoresHidden(it)) artwork.request(it) }
     }
     private var replayMode = false
     private var replays = emptyList<SportsReplay>()
@@ -238,7 +241,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                 val chip = button(title) { pendingEnter = false; if (value == "date-picker") chooseDate() else chooseTeam(value) }.apply { textSize = 11f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; isSelected = value == selected; tag = value?.let { "sports-team:$it" } ?: "sports-scope"; layoutParams = LayoutParams(-1, dp(34)).apply { bottomMargin = dp(5) } }
                 chip.setOnFocusChangeListener { _, active -> if (active) leagueIndex = index }
                 chip.setOnKeyListener { _, key, event -> when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { pendingEnter = false; if (index == 0) leave() else leagueList.getChildAt(index - 1)?.requestFocus() }; true }
+                    KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { pendingEnter = false; leagueList.getChildAt((index - 1).coerceAtLeast(0))?.requestFocus() }; true }
                     KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { pendingEnter = false; leagueList.getChildAt(index + 1)?.requestFocus() ?: teamsButton.requestFocus() }; true }
                     KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) leave(); true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusHero(); true }

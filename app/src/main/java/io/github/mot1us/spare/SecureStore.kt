@@ -158,7 +158,7 @@ class SecureStore(private val context: Context) {
         preferences.edit { putString("channel-captions-${source.id}", entries.toString()) }
     }
     var hideCompletedScores: Boolean
-        get() = preferences.getBoolean("sports-hide-completed-scores", false)
+        get() = preferences.getBoolean("sports-hide-completed-scores", true)
         set(value) { preferences.edit { putBoolean("sports-hide-completed-scores", value) } }
     var sportsTeam: String
         get() = preferences.getString("sports-team-selected", "").orEmpty()

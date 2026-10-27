@@ -923,13 +923,24 @@ class SpareDeviceTest {
                         activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 8 }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:today").requestFocus() }
+                    device.pressDPadUp()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:today").hasFocus() }
+                    scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").expanded) }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:league:NFL").apply { performClick(); requestFocus() } }
                     device.pressDPadRight()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-watch").hasFocus() }
                     device.pressDPadDown()
                     repeat(12) { device.pressDPadRight() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
-                    scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").expanded) }
+                    scenario.onActivity { activity ->
+                        val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                        assertFalse(rail.expanded)
+                        rail.contentHasFocus = false // Also cover focus restoration before the first Sports focus callback.
+                        rail.sports.requestFocus() // Simulate Android restoring a dock child directly.
+                        assertFalse("An incidental focus request must not open the hidden dock", rail.expanded)
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     repeat(7) { device.pressDPadLeft() }
                     scenario.onActivity { activity ->
                         assertTrue(activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus())
@@ -1046,7 +1057,9 @@ class SpareDeviceTest {
         FixtureServer(archivedSports = true).use { server ->
             val source = Source(name = "Sports replay fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             val channel = Channel("xc:1", "ESPN FHD", "NFL", "${server.base}/live/test/test-secret/1.mp4", catchupDays = 2, catchupMode = "xc")
-            store.saveSources(listOf(source)); store.active = source.id; store.hideCompletedScores = true
+            store.saveSources(listOf(source)); store.active = source.id
+            context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).edit().remove("sports-hide-completed-scores").commit()
+            assertTrue("Completed scores are hidden before the first Sports visit", store.hideCompletedScores)
             store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
             try {
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -1074,9 +1087,10 @@ class SpareDeviceTest {
                     scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player) }
                     device.pressBack()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/live/") == true }
-                    scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("sports-reminder").performClick() }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.contains("24") }
-                    scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("sports-reminder").performClick(); activity.window.decorView.findViewWithTag<View>("sports-watch").performClick() }
+                    scenario.onActivity { activity ->
+                        assertFalse("Completed games have no Hide/Reveal score button", activity.window.decorView.findViewWithTag<View>("sports-reminder").isShown)
+                        activity.window.decorView.findViewWithTag<View>("sports-watch").performClick()
+                    }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
                     assertEquals("Repeat replay lookup uses its saved match", 1, server.archiveRequests.get())
                     scenario.onActivity { activity ->
@@ -1085,7 +1099,10 @@ class SpareDeviceTest {
                         activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel").selectSetting("Sports")
                         activity.window.decorView.findViewWithTag<View>("settings-option:Hide completed-game scores").performClick()
                         assertFalse(SecureStore(context).hideCompletedScores)
+                        MainActivity::class.java.getDeclaredMethod("closeSettings").apply { isAccessible = true }.invoke(activity)
                     }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.contains("24") }
+                    scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<View>("sports-reminder").isShown) }
                 }
             } finally { store.hideCompletedScores = false; store.saveSources(emptyList()); store.removeCache(source) }
         }

@@ -1,3 +1,5 @@
+For 0.13.1, confirm a direct Android-style dock focus restoration during Sports browsing neither opens the dock nor takes lasting focus. Up on Today must stay on Today; deliberate Left still opens navigation. With no score preference saved, completed results must be hidden on the first Sports visit. Score visibility changes only in Settings → Sports, and completed games show no Hide/Reveal button.
+
 For 0.13.0, enable Settings → Sports → Hide completed-game scores. Verify cards, hero details and artwork conceal results until Reveal score. On a completed game within the provider archive window, Find replay must locate its historical broadcast, show expiry and play catch-up. Back restores Sports and the selected game. Check a missing/expired archive fails gracefully. The release gate contains 32 TV tests.
 
 For 0.12.3, browse a league/team with only completed games. Right from the league menu or main dock must reach the game cards even with both hero buttons disabled. Up from those cards returns to leagues. Live/upcoming games retain Right to hero actions, then Down to cards.

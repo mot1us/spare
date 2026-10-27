@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1 — 2026-10-26
+
+- Keep the Sports dock closed during incidental focus restoration; recover the previous Sports control and require deliberate Left navigation to enter the dock. Up at the first league stays in Sports.
+- Move completed-score visibility entirely to Settings → Sports. Hide final scores by default when no explicit preference exists, and remove in-card Hide/Reveal buttons.
+
 ## 0.13.0 — 2026-10-26
 
 - Find completed Sports games in provider catch-up, using historical EPG and per-channel replay windows. Show replay expiry, bound provider lookups, and return Back to the selected Sports game.

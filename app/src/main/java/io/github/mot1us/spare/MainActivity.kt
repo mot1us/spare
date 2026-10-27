@@ -439,6 +439,7 @@ class MainActivity : Activity() {
     }
     private fun buildUi() {
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }; setContentView(root)
+        var lastSportsFocus: java.lang.ref.WeakReference<View>? = null
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, next ->
             val waiting = pendingFocusList
             if (waiting != null && next != null && generateSequence(next) { it.parent as? View }.none { it === waiting }) {
@@ -446,8 +447,23 @@ class MainActivity : Activity() {
             }
             if (::navigationRail.isInitialized && navigationRail.isVisible && next != null) {
                 val inSports = ::sportsPanel.isInitialized && generateSequence(next) { it.parent as? View }.any { it === sportsPanel }
+                val inRail = generateSequence(next) { it.parent as? View }.any { it === navigationRail }
+                if (inSports) lastSportsFocus = java.lang.ref.WeakReference(next)
+                if (inRail && guideVisible && sportsVisible && !navigationRail.deliberateFocus) {
+                    // Android can restore a dock button directly when Sports replaces or
+                    // disables a focused view. Keep the dock closed and restore content.
+                    navigationRail.contentHasFocus = true
+                    navigationRail.focusChanged(false)
+                    root.post {
+                        if (started && guideVisible && sportsVisible && !navigationRail.deliberateFocus && navigationRail.hasFocus()) {
+                            val previous = lastSportsFocus?.get()
+                            if (previous?.isShown != true || !previous.isEnabled || !previous.requestFocus()) sportsPanel.focusGames()
+                        }
+                    }
+                    return@addOnGlobalFocusChangeListener
+                }
                 navigationRail.contentHasFocus = inSports
-                navigationRail.focusChanged(generateSequence(next) { it.parent as? View }.any { it === navigationRail })
+                navigationRail.focusChanged(inRail)
             }
         }
         video = PlayerView(this).apply {
@@ -698,6 +714,7 @@ class MainActivity : Activity() {
         focusListRow(list, position)
     }
     private fun showNavigation(key: String) {
+        navigationRail.contentHasFocus = key == "sports-mode" && guideVisible && sportsVisible
         navigationRail.visibility = View.VISIBLE; navigationRail.activate(key); root.bringChildToFront(navigationRail); navigationRail.focusChanged(navigationRail.hasFocus()); updateDockHint()
     }
     private fun openSection(sports: Boolean) {
