@@ -1066,7 +1066,28 @@ class SpareDeviceTest {
                 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Seattle Seahawks")) }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus() }
+                scenario.onActivity { activity ->
+                    val now = System.currentTimeMillis()
+                    val finals = LiveSportsSnapshot(listOf(LiveEvent("ended", setOf("nfl:SEA", "nfl:SF"), now - 3 * 3600000, "post", scores = mapOf("nfl:SEA" to "24", "nfl:SF" to "21"), league = "NFL")), now, setOf("NFL"))
+                    activity.liveSportsLoader = { finals }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, finals)
+                    MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("FINAL") }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isEnabled)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("sports-reminder").isEnabled)
+                    activity.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").requestFocus()
+                }
+                device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").focusedChild?.hasFocus() == true }
+                device.pressDPadUp()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").hasFocus() }
+                device.pressDPadLeft()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
+                device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").focusedChild?.hasFocus() == true }
+                device.pressDPadUp()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-team:nfl:SEA").hasFocus() }
                 scenario.onActivity { activity ->
                     val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")

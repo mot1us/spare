@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.3 — 2026-10-26
+
+- Let Right enter Sports game cards from either left menu when the featured game has no enabled actions. Let Up return to leagues instead of trapping focus on completed games.
+- Keep focus on visible stream controls when a game search has no matches.
+
 ## 0.12.2 — 2026-10-26
 
 - Bound decoded artwork dimensions and deliver images directly to their card bindings. Avoid whole-rail image callbacks and repeated decoding after cache eviction that can overwhelm Sports navigation.

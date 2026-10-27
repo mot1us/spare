@@ -117,7 +117,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             holder.box.setOnClickListener { select(game) }
             holder.box.setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { val at = holder.bindingAdapterPosition; if (at != RecyclerView.NO_POSITION) { val next = at + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1; if (next < 0) focusTeams() else if (next in games.indices) focusAt(next) } }; true }
-                KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) focusHero(); true }
+                KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { if (heroAction() == null) focusTeams() else focusHero() }; true }
                 KeyEvent.KEYCODE_DPAD_DOWN -> true
                 else -> false
             } }
@@ -272,8 +272,21 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     fun home() { remembered = null; showGames(); pendingEnter = true }
     fun back(): Boolean { if (!watchMode) return false; showGames(); focusGames(); return true }
     fun focusTeams() { ++focusEpoch; leagueList.getChildAt(leagueIndex)?.requestFocus() ?: teamsButton.requestFocus() }
-    fun focusHero() { ++focusEpoch; preferHero = true; if (findStreams.isEnabled) { pendingEnter = false; findStreams.requestFocus() } else if (reminder.isEnabled) { pendingEnter = false; reminder.requestFocus() } else { pendingEnter = true; focusTeams() } }
-    fun focusGames() { preferHero = false; if (watchMode && streamsList.isNotEmpty()) focusStream(0) else if (games.isNotEmpty()) { pendingEnter = false; focusAt(games.indexOfFirst { it.key == (remembered ?: featured?.key) }.coerceAtLeast(0)) } else { pendingEnter = true; focusTeams() } }
+    private fun heroAction(): View? = listOf(findStreams, reminder).firstOrNull { it.isShown && it.isEnabled }
+    fun focusHero() {
+        ++focusEpoch; preferHero = true
+        if (heroAction()?.requestFocus() == true) pendingEnter = false
+        else if (games.isNotEmpty() || watchMode) focusGames()
+        else { pendingEnter = true; focusTeams() }
+    }
+    fun focusGames() {
+        preferHero = false
+        when {
+            watchMode -> { pendingEnter = false; if (streamsList.isNotEmpty()) focusStream(0) else if (!filtersButton.requestFocus()) scoresButton.requestFocus() }
+            games.isNotEmpty() -> { pendingEnter = false; focusAt(games.indexOfFirst { it.key == (remembered ?: featured?.key) }.coerceAtLeast(0)) }
+            else -> { pendingEnter = true; focusTeams() }
+        }
+    }
     private fun focusAt(position: Int) { focusRow(rows, position) }
     private fun focusStream(position: Int) { focusRow(streams, position) }
     private fun focusRow(list: RecyclerView, position: Int) {

@@ -1,3 +1,5 @@
+For 0.12.3, browse a league/team with only completed games. Right from the league menu or main dock must reach the game cards even with both hero buttons disabled. Up from those cards returns to leagues. Live/upcoming games retain Right to hero actions, then Down to cards.
+
 For 0.12.2, rapidly browse Sports with large team artwork, then press Home and launch another app. Remote input must remain responsive, and Spare must stop audio as soon as it is paused. Reopen Spare and confirm playback resumes. The release gate contains 31 TV tests, including image-cache eviction and Sports background playback checks.
 
 # Device testing
