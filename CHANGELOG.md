@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0 — 2026-10-26
+
+- Rebuild Sports as a card grid with a focus-driven hero and fixed loading layout. Remove the Sports sidebar; configure leagues, followed teams, reminders and spoiler preferences in full-screen Sports settings.
+- Open live, replay and reminder actions only after selecting a game. Keep replay results free of duplicate search buttons and add an NFL RedZone playlist destination without inventing live status.
+- Replace both Android TV launcher banner and icon with a bespoke pixel wordmark and vintage TV, with an opaque background beyond all edges.
+
 ## 0.13.1 — 2026-10-26
 
 - Keep the Sports dock closed during incidental focus restoration; recover the previous Sports control and require deliberate Left navigation to enter the dock. Up at the first league stays in Sports.

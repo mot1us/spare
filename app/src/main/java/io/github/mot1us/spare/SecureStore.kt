@@ -160,6 +160,9 @@ class SecureStore(private val context: Context) {
     var hideCompletedScores: Boolean
         get() = preferences.getBoolean("sports-hide-completed-scores", true)
         set(value) { preferences.edit { putBoolean("sports-hide-completed-scores", value) } }
+    var sportsFollowedOnly: Boolean
+        get() = preferences.getBoolean("sports-followed-only", false)
+        set(value) { preferences.edit { putBoolean("sports-followed-only", value) } }
     var sportsTeam: String
         get() = preferences.getString("sports-team-selected", "").orEmpty()
         set(value) { preferences.edit { putString("sports-team-selected", value.takeIf { it in SportsCatalog.byId || it in setOf("today", "followed") || it.removePrefix("league:") in SportsLeagues.byId }.orEmpty()) } }

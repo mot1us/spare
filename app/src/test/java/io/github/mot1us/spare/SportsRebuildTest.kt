@@ -7,6 +7,12 @@ import org.junit.Test
 import java.time.Instant
 
 class SportsRebuildTest {
+    @Test fun redZoneDestinationUsesPlaylistNamesHonorsFiltersAndDoesNotInventAnEvent() {
+        val channels = listOf(Channel("one", "US: NFL RedZone FHD", "NFL", "https://example.test/one"), Channel("two", "NFL Red Zone 4K", "NFL", "https://example.test/two"), Channel("other", "NFL Network", "NFL", "https://example.test/three"))
+        assertEquals(listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()).map { it.id })
+        assertTrue(SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).isEmpty())
+        assertEquals(listOf("two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()) { it.id != "one" }.map { it.id })
+    }
     private val now = 1800000000000L
     @Test fun addedLeagueScoreboardsResolveTeamsAndShareSoccerClubIdentity() {
         listOf("NBA", "NHL", "EPL", "MLS", "UCL").forEach { league ->
@@ -27,6 +33,7 @@ class SportsRebuildTest {
         val mineNext = game("nfl:SEA", "nfl:SF", "pre", now + 86400000)
         val mineLive = mineNext.copy(eventId = "my-live", state = "in", start = now - 1000)
         assertEquals(mineNext, SportsPanel.featured(listOf(other, mineNext), setOf("nfl:SEA"), now))
+        assertEquals(mineNext, SportsPanel.ordered(listOf(other, mineNext), setOf("nfl:SEA"), now).first())
         assertEquals(mineLive, SportsPanel.featured(listOf(other, mineNext, mineLive), setOf("nfl:SEA"), now))
         assertEquals(other, SportsPanel.featured(listOf(other, mineNext.copy(state = "post")), setOf("nfl:SEA"), now))
         assertFalse(mineLive.copy(eventId = "", state = "post").live(now)); assertFalse(mineLive.copy(eventId = "", state = "hold").live(now))

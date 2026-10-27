@@ -294,7 +294,7 @@ class MainActivity : Activity() {
         store = SecureStore(this)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
-        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
+        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = null
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
@@ -568,6 +568,19 @@ class MainActivity : Activity() {
             runCatching { reminders.toggle(game) }.onSuccess { enabled -> saveGameReminders(); reminderCheckedAt = 0; toast(if (enabled) "Reminder set · ${GuideClock.sportsDate(game.start)}" else "Reminder removed") }.onFailure { toast("Up to 64 upcoming game reminders can be saved") }
         }
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
+        sportsPanel.findRedZone = {
+            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = if (browseAll) GuideFilters() else filters
+            sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
+            sportsPanel.matchingRedZone()
+            sportsMatchTask = sportsMatchWorker.submit {
+                val now = System.currentTimeMillis()
+                val channels = SportsDestinations.redZone(snapshot.channels, profile, quality) { !unavailable.contains(it.id, now) }
+                handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible) {
+                    sportsChannels = channels.take(4)
+                    sportsPanel.showRedZoneStreams(channels) { it.name + " · " + (it.quality(videoInfo[it.id])?.label() ?: "Quality unverified") }
+                } }
+            }
+        }
         sportsPanel.setSpoilers(store.hideCompletedScores)
         sportsPanel.watchReplay = ::playSportsReplay
         sportsPanel.presentationChanged = { if (guideVisible && sportsVisible) layoutGuideSurface() }
@@ -721,7 +734,7 @@ class MainActivity : Activity() {
         settingsPanel?.visibility = View.GONE
         if (library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
-        if (sports) { sportsTeam = "today"; sportsPanel.home() }
+        if (sports) { sportsTeam = null; sportsPanel.home() }
         switchMode(sports)
     }
     private fun enterNavigationContent() {
@@ -1071,7 +1084,7 @@ class MainActivity : Activity() {
             timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "← Leagues / navigation    OK Find streams    Hold Back Full screen"
+            remoteHint.text = if (sportsVisible) "← Main navigation    OK Game details    Hold Back Full screen"
                 else "← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }
@@ -1225,7 +1238,7 @@ class MainActivity : Activity() {
         if (sportsComputing) { sportsDirty = true; return }
         checkLiveSports(); handler.removeCallbacks(pollLiveSports); handler.postDelayed(pollLiveSports, 60000)
         sportsComputing = true
-        val liveSnapshot = liveSports
+        val liveSnapshot = liveSports; val checkingSnapshot = liveSportsChecking
         val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
         val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites
         val now = System.currentTimeMillis()
@@ -1234,18 +1247,19 @@ class MainActivity : Activity() {
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
-                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" || selectedTeam == "today" && SportsSchedule.onDay(it.start, now) }).distinctBy { it.key }
+                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "today" || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
             }
-            val games = rawGames.filter { it.leagueId in store.sportsLeagues }
+            val games = SportsPanel.ordered(rawGames.filter { it.leagueId in store.sportsLeagues && (!store.sportsFollowedOnly || it.teams.any { team -> team.id in followed }) }, followed, now)
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
                 if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
+                if (liveSnapshot !== liveSports) { sportsDirty = false; scheduleSports(); return@post }
                 selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
-                val scanning = liveSportsChecking
+                val scanning = checkingSnapshot
                 val progress = when {
                     scanning -> "Updating scores… Games appear as each league arrives."
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
-                    else -> "${if (selectedTeam == "today") "Today · All leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
+                    else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.archiveWindowDays = archiveDays
                 sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
@@ -1266,18 +1280,29 @@ class MainActivity : Activity() {
             sportsManager = it; it.tag = "sports-manager"; it.leaveNavigation = ::closeSportsManager
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
-        root.bringChildToFront(panel); panel.open(listOf("Leagues") + SportsLeagues.all.map { it.name })
+        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Leagues") + SportsLeagues.all.map { it.name })
     }
     private fun renderSportsManager(page: String) {
         val panel = sportsManager ?: return
-        if (page == "Leagues") {
+        if (page == "Preferences") {
+            panel.page("Your sports", "Choose leagues and teams on the left. Games appear together on the Sports home; selecting a card opens its watch, replay or reminder actions.")
+            panel.action("Show only my teams", selected = store.sportsFollowedOnly) { store.sportsFollowedOnly = !store.sportsFollowedOnly; sportsPreferencesChanged = true; panel.refresh("Show only my teams") }
+            panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); panel.refresh("Hide completed-game scores") }
+            panel.note("NFL RedZone appears whenever NFL is enabled. Its availability follows your playlist provider; it is not a scheduled matchup.")
+            panel.note("Saved reminders")
+            if (reminders.events.isEmpty()) panel.note("Choose an upcoming game to set a reminder.")
+            reminders.events.forEach { event ->
+                val name = event.teams.mapNotNull { SportsCatalog.byId[it]?.name }.joinToString(" vs ")
+                panel.action("Remove · $name", GuideClock.sportsDate(event.start)) { reminders.remove("${event.league}:${event.id}"); saveGameReminders(); panel.refresh() }
+            }
+        } else if (page == "Leagues") {
             panel.page("Your leagues", "Choose the leagues shown in Sports. Changes save automatically.")
             panel.action("All leagues", selected = store.sportsLeagues == SportsLeagues.byId.keys) { store.sportsLeagues = SportsLeagues.byId.keys; sportsPreferencesChanged = true; panel.refresh("All leagues") }
             SportsLeagues.all.forEach { league -> panel.action(league.name, selected = league.id in store.sportsLeagues) {
                 val chosen = store.sportsLeagues.toMutableSet(); if (!chosen.add(league.id)) chosen.remove(league.id)
                 if (chosen.isEmpty()) toast("Keep at least one league selected") else {
                     store.sportsLeagues = chosen; sportsPreferencesChanged = true
-                    if (sportsTeam?.startsWith("league:") == true && sportsTeam?.removePrefix("league:") !in chosen) sportsTeam = "today"
+                    if (sportsTeam?.startsWith("league:") == true && sportsTeam?.removePrefix("league:") !in chosen) sportsTeam = null
                     panel.refresh(league.name)
                 }
             } }
@@ -1572,7 +1597,7 @@ class MainActivity : Activity() {
             "Sports" -> {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best selects an EPG-matched FHD/60 fps stream verified by playback; otherwise it opens the matching streams for review.")
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
-                panel.action("Manage teams") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
+                panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
                 panel.note("Saved reminders")
                 if (reminders.events.isEmpty()) panel.note("No reminders. Choose an upcoming game in Sports.")
                 reminders.events.forEach { event ->
