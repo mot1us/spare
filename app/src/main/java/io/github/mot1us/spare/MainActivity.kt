@@ -877,7 +877,7 @@ class MainActivity : Activity() {
         scheduleEpg()
     }
     private fun playAttempt(phase: PlaybackPhase = PlaybackPhase.OPENING) {
-        if (playbackUrl.isBlank()) return
+        if (playbackUrl.isBlank() || pausedPlayback != null) return
         cancelPlaybackCallbacks()
         playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
@@ -1795,8 +1795,27 @@ class MainActivity : Activity() {
         else focusChannel()
     }
     override fun onStart() { super.onStart(); started = true; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
-    override fun onResume() { super.onResume(); if (::updater.isInitialized) updater.resume() }
-    override fun onStop() { ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); if (onDemand != null) demandPaused = !player.playWhenReady; handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::player.isInitialized) player.stop(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    private var pausedPlayback: Boolean? = null
+    override fun onResume() {
+        super.onResume()
+        val resume = pausedPlayback; pausedPlayback = null
+        if (resume != null && ::player.isInitialized) {
+            if (resume && player.playbackState == Player.STATE_IDLE) playAttempt(PlaybackPhase.RECONNECTING) else player.playWhenReady = resume
+            if (resume && player.playbackState == Player.STATE_BUFFERING) handler.postDelayed(startupTimeout, 15000)
+        }
+        if (::sportsPanel.isInitialized && guideVisible && sportsVisible) sportsPanel.resumeImages()
+        if (::updater.isInitialized) updater.resume()
+    }
+    override fun onPause() {
+        // Stop audio before any cache, image or lifecycle cleanup. A paused TV app
+        // must never continue playing over the launcher or another app.
+        if (::player.isInitialized) { pausedPlayback = player.playWhenReady; if (onDemand != null) demandPaused = !player.playWhenReady; player.pause() }
+        cancelPlaybackCallbacks()
+        if (::multiview.isInitialized) multiview.close()
+        if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
+        super.onPause()
+    }
+    override fun onStop() { if (::player.isInitialized) player.stop(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
     override fun onDestroy() { PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

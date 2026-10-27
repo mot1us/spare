@@ -872,8 +872,41 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun largeSportsImagesStayBoundAfterMemoryCacheEviction() {
+        val files = ArtworkFiles(context)
+        val bytes = ByteArrayOutputStream().also { output ->
+            Bitmap.createBitmap(2048, 1365, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, output); recycle()
+            }
+        }.toByteArray()
+        val urls = (1..2).map { "https://images.example/large-${System.nanoTime()}-$it.png" }
+        urls.forEach { files.bytes(it) { bytes } }
+        val loader = LogoLoader(1280, 32 * 1024, files) // Each image deliberately exceeds the LRU.
+        val images = List(2) { android.widget.ImageView(context) }
+        val callbacks = IntArray(2)
+        try {
+            instrumentation.runOnMainSync { images.forEachIndexed { i, image -> loader.bind(image, urls[i]) { callbacks[i]++ } } }
+            val deadline = System.currentTimeMillis() + 5000
+            var ready = false
+            while (!ready && System.currentTimeMillis() < deadline) {
+                instrumentation.runOnMainSync { ready = images.all { it.drawable != null } }; Thread.sleep(30)
+            }
+            assertTrue("Large artwork must finish even when evicted before its callback", ready)
+            instrumentation.runOnMainSync {
+                val original = images.map { (it.drawable as android.graphics.drawable.BitmapDrawable).bitmap }
+                original.forEach { assertTrue(maxOf(it.width, it.height) <= 1280) }
+                repeat(32) { images.forEachIndexed { i, image -> loader.bind(image, urls[i]) { callbacks[i]++ } } }
+                images.forEachIndexed { i, image -> assertSame(original[i], (image.drawable as android.graphics.drawable.BitmapDrawable).bitmap); assertEquals(2, callbacks[i]) }
+            }
+        } finally { instrumentation.runOnMainSync { loader.close() } }
+    }
+
     @Test fun sportsHeroRailAndFullScreenTeamManagerKeepFocusAndLeaguePreferences() {
         FixtureServer().use { server ->
+            val artFiles = ArtworkFiles(context)
+            val artBytes = ByteArrayOutputStream().also { out -> Bitmap.createBitmap(2048, 1365, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, out); recycle() } }.toByteArray()
+            val artUrls = (1..16).map { "https://images.example/rail-${System.nanoTime()}-$it.png" }
+            artUrls.forEach { artFiles.bytes(it) { artBytes } }
             val source = Source(name = "Sports focus fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val channel = Channel("focus", "News", "News", "${server.base}/channel1.mp4")
             store.saveSources(listOf(source)); store.active = source.id; store.hiddenDock = true
@@ -884,7 +917,7 @@ class SpareDeviceTest {
                     device.pressBack()
                     scenario.onActivity { activity ->
                         val now = System.currentTimeMillis()
-                        val snapshot = LiveSportsSnapshot((1..8).map { LiveEvent("focus-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL") }, now, setOf("NFL"))
+                        val snapshot = LiveSportsSnapshot((1..8).map { LiveEvent("focus-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, logos = mapOf("nfl:BUF" to artUrls[(it - 1) * 2], "nfl:KC" to artUrls[(it - 1) * 2 + 1]), league = "NFL") }, now, setOf("NFL"))
                         activity.liveSportsLoader = { snapshot }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, snapshot)
                         activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
@@ -921,6 +954,13 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                     device.pressDPadRight()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-watch").hasFocus() }
+                    var playback: Player? = null
+                    scenario.onActivity { playback = find<PlayerView>(it.window.decorView)?.player; assertTrue(playback?.isPlaying == true) }
+                    device.pressHome()
+                    instrumentation.waitForIdleSync()
+                    instrumentation.runOnMainSync { assertFalse("Home must pause playback while Sports is open", playback!!.playWhenReady) }
+                    scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                    instrumentation.runOnMainSync { assertEquals(Player.STATE_IDLE, playback!!.playbackState) }
                 }
             } finally { store.sportsLeagues = SportsLeagues.byId.keys; store.hiddenDock = false; store.followedTeams = emptySet(); store.saveSources(emptyList()); store.removeCache(source) }
         }

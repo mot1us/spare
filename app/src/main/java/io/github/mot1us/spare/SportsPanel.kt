@@ -186,16 +186,21 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
 
         findStreams.isEnabled = game.state != "post"; findStreams.text = if (game.state == "pre") "Find coverage" else "Find streams"
         updateReminder(game)
-        if (changed) { if (backdrop.drawable != null) backdrop.setImageDrawable(null); credit.text = ""; crests.isVisible = !preview }
-        game.teams.forEachIndexed { i, team -> val url = game.logos[team.id].orEmpty().ifBlank { team.logo }; fun draw() { if (featured?.key == game.key) { crestViews[i].setImageBitmap(logos.get(url, false) {}); redrawVisiblePosters() } }; crestViews[i].setImageBitmap(logos.get(url, false, ::draw)) }
+        if (changed) { pictures.bind(backdrop, ""); credit.text = ""; crests.isVisible = !preview }
+        game.teams.forEachIndexed { i, team -> logos.bind(crestViews[i], game.logos[team.id].orEmpty().ifBlank { team.logo }) }
         if (changed) { removeCallbacks(loadHeroArt); postDelayed(loadHeroArt, 150) }
     }
     private fun showArtwork(key: String, url: String, attribution: String) {
         if (url.isBlank()) return
         gameArt[key] = url; while (gameArt.size > 64) gameArt.remove(gameArt.keys.first())
-        if (preview || featured?.key != key) { redrawVisiblePosters(); return }
-        fun draw() { if (featured?.key == key && !preview) { val image = pictures.get(url, false) {}; backdrop.setImageBitmap(image); redrawVisiblePosters(); crests.isVisible = image == null; credit.text = if (image != null && attribution.isNotBlank()) "Photo: $attribution" else "" } }
-        val image = pictures.get(url, false, ::draw); backdrop.setImageBitmap(image); crests.isVisible = image == null; credit.text = if (image != null && attribution.isNotBlank()) "Photo: $attribution" else ""
+        redrawVisiblePosters()
+        if (preview || featured?.key != key) return
+        pictures.bind(backdrop, url) { image ->
+            if (featured?.key == key && !preview) {
+                crests.isVisible = image == null
+                credit.text = if (image != null && attribution.isNotBlank()) "Photo: $attribution" else ""
+            }
+        }
     }
     fun previewMode(enabled: Boolean) {
         val height = if (watchMode) dp(200) else 0; val weight = if (watchMode) 0f else 1f
@@ -203,7 +208,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (old?.height != height || old.weight != weight) hero.layoutParams = LayoutParams(-1, height, weight)
         if (preview == enabled) return
         preview = enabled; heroContent.setPadding(dp(20), dp(12), dp(if (enabled) 330 else 210), dp(12)); crests.isVisible = !enabled && backdrop.drawable == null
-        if (enabled) backdrop.setImageDrawable(null)
+        if (enabled) pictures.bind(backdrop, "")
         hero.layoutParams = LayoutParams(-1, if (watchMode) dp(200) else 0, if (watchMode) 0f else 1f)
         if (!enabled) featured?.let { artwork.request(it) }
     }
@@ -283,9 +288,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     fun closeImages() { removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close(); thumbnails.close() }
     private fun drawCard(holder: GameCard, game: SportsGame) {
         if (holder.box.tag != game.key) return
-        game.teams.forEachIndexed { index, team -> val bitmap = cardLogos.get(game.logos[team.id].orEmpty().ifBlank { team.logo }, false, ::redrawVisiblePosters); if ((holder.logos[index].drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) holder.logos[index].setImageBitmap(bitmap) }
-        val photo = thumbnails.get(gameArt[game.key].orEmpty(), false, ::redrawVisiblePosters)
-        if ((holder.photo.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== photo) holder.photo.setImageBitmap(photo); holder.photo.isVisible = photo != null
+        game.teams.forEachIndexed { index, team -> cardLogos.bind(holder.logos[index], game.logos[team.id].orEmpty().ifBlank { team.logo }) }
+        thumbnails.bind(holder.photo, gameArt[game.key].orEmpty()) { holder.photo.isVisible = it != null }
     }
     private fun redrawVisiblePosters() {
         for (index in 0 until rows.childCount) {

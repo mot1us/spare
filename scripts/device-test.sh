@@ -39,4 +39,4 @@ install_checked_apk() {
 install_checked_apk app/build/outputs/apk/debug/app-debug.apk
 install_checked_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 "$adb" -s "$serial" shell am instrument -w io.github.mot1us.spare.debug.test/io.github.mot1us.spare.SpareTestRunner | tee app/build/reports/device/results.txt
-grep -q '^OK (30 tests)' app/build/reports/device/results.txt
+grep -q '^OK (31 tests)' app/build/reports/device/results.txt

@@ -1,3 +1,5 @@
+For 0.12.2, rapidly browse Sports with large team artwork, then press Home and launch another app. Remote input must remain responsive, and Spare must stop audio as soon as it is paused. Reopen Spare and confirm playback resumes. The release gate contains 31 TV tests, including image-cache eviction and Sports background playback checks.
+
 # Device testing
 
 For 0.12.1, verify stable 59.94/60 readings after the initial sampling period, genuine rate/channel changes, and Watch best against a large lineup. Search should show checking/confirmation/tuning stages and keep the guide visible until the first frame. Confirm title-only live event channels match both teams and that old-date/replay titles cannot auto-tune. In Sports → Manage teams, choose visible leagues and teams in the full-screen Settings layout; confirm persistence. Right from a league enters hero actions, Down enters cards. Hold horizontal card navigation and confirm focus stays in Sports; the hidden dock should open only after deliberate Left navigation. The release gate now contains 30 TV tests.

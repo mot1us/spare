@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2 — 2026-10-26
+
+- Bound decoded artwork dimensions and deliver images directly to their card bindings. Avoid whole-rail image callbacks and repeated decoding after cache eviction that can overwhelm Sports navigation.
+- Pause playback and Sports image work immediately when leaving the app; stop the player before background cleanup. Resume playback when returning.
+
 ## 0.12.1 — 2026-10-26
 
 - Stabilize fractional FPS readings without losing real channel/frame-rate changes.
