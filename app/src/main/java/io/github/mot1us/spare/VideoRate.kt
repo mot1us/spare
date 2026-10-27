@@ -13,7 +13,7 @@ object VideoRate {
         val nearest = rates.minBy { abs(it - value) }
         return if (abs(nearest - value) <= .04f) nearest else value
     }
-    fun resolve(declared: Float, measured: Float, codec: Float = 0f, interlaced: Boolean = false): Float {
+    fun resolve(declared: Float, measured: Float, codec: Float = 0f, interlaced: Boolean = false, input: Float = 0f): Float {
         fun nominal(value: Float) = normalize(value).takeIf { rate -> rate > 0 && rates.any { abs(it - rate) <= .2f } } ?: 0f
         // Render callbacks can omit frames. A valid source rate describes the
         // stream; callback cadence is only a fallback when metadata is absent.
@@ -21,7 +21,10 @@ object VideoRate {
         val sample = normalize(measured)
         // Codec output often rounds 29.97 to 30. Prefer a stable timestamp rate
         // within the same family, while preserving explicit higher source rates.
-        val frames = when { metadata > 0 -> metadata; sample > 0 && (decoded == 0f || abs(sample - decoded) < 1f) -> sample; decoded > 0 -> decoded; else -> sample }
+        // Input samples describe the stream even when the decoder/display drops
+        // every other frame, or the container's declared rate is wrong.
+        val sourceSamples = nominal(input)
+        val frames = when { sourceSamples > 0 -> sourceSamples; metadata > 0 -> metadata; sample > 0 && (decoded == 0f || abs(sample - decoded) < 1f) -> sample; decoded > 0 -> decoded; else -> sample }
         return if (interlaced && (abs(frames - 25) < .1f || abs(frames - 29.97f) < .1f || abs(frames - 30) < .1f)) normalize(frames * 2) else frames
     }
     @UnstableApi fun interlaced(format: Format): Boolean {
@@ -44,12 +47,12 @@ object VideoRate {
         }
     }
 
-    @UnstableApi fun observation(format: Format, measured: Float, codecRate: Float, header: AvcHeader.Info): VideoInfo {
+    @UnstableApi fun observation(format: Format, measured: Float, codecRate: Float, header: AvcHeader.Info, input: Float = 0f): VideoInfo {
         val scan = if (header.known) header.interlaced else interlaced(format)
         val declared = header.fps.takeIf { it > 0 } ?: format.frameRate
-        val encoded = resolve(declared, measured, codecRate)
-        val motion = resolve(declared, measured, codecRate, scan)
-        val evidence = when { header.fps > 0 -> "SPS timing"; declared > 0 -> "stream"; measured > 0 -> "timestamps"; codecRate > 0 -> "decoder"; else -> "unverified" }
+        val encoded = resolve(declared, measured, codecRate, input = input)
+        val motion = resolve(declared, measured, codecRate, scan, input)
+        val evidence = when { input > 0 -> "input timestamps"; header.fps > 0 -> "SPS timing"; declared > 0 -> "stream"; measured > 0 -> "timestamps"; codecRate > 0 -> "decoder"; else -> "unverified" }
         return VideoInfo(format.width, format.height, motion, scan, encoded, evidence)
     }
 }

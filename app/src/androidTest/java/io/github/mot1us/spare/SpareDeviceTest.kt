@@ -350,10 +350,15 @@ class SpareDeviceTest {
     }
 
     @Test fun strictUnknownQualityFiltersAndBrowseAllPersistIndependently() {
-        FixtureServer().use { server ->
+        FixtureServer(longVideo = true).use { server ->
             val source = Source(name = "Filters Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             val profile = GuideFilters(1080, FrameRateFilter.onlySixty, setOf("News")); store.setFilters(source, profile)
+            val legacy = VideoInfo(3840, 2160, 29.97f).json().put("detector", 3)
+            context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).edit().putString("video-info-${source.id}", org.json.JSONObject().put("old", legacy).toString()).commit()
+            assertEquals("Old display-only FPS must be remeasured", 0f, store.videoInfo(source).getValue("old").fps, 0f)
+            assertEquals("Provider declarations are retained independently", 29.97f, Channel.from(Channel("old", "Old", "News", "https://example.com", reportedQuality = VideoInfo.from(legacy)).json()).reportedQuality!!.fps, .001f)
+            store.saveVideoInfo(source, emptyMap())
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
                 scenario.onActivity { assertEquals(0, channelList(it)!!.adapter!!.itemCount) }
@@ -364,7 +369,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.pressDPadCenter()
-                waitFor(scenario) { store.videoInfo(source).isNotEmpty() }
+                waitFor(scenario) { store.videoInfo(source).values.any { it.evidence == "input timestamps" } }
                 val observed = store.videoInfo(source).values.first(); assertTrue(observed.width > 0); assertTrue(observed.fps > 0)
                 assertEquals(profile, store.filters(source))
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
@@ -381,9 +386,47 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 device.pressBack()
                 waitFor(scenario) { device.hasObject(By.textContains("No known channels match")) }
-                assertEquals(profile, store.filters(source)); assertTrue(store.videoInfo(source).values.any { it.fps > 0 })
+                assertEquals(profile, store.filters(source))
+                waitFor(scenario) { store.videoInfo(source).values.any { it.evidence == "input timestamps" && it.fps > 0 } }
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun gameReminderOverlayKeepsPlaybackAndDismissesWithBack() {
+        val previousReminders = store.read("game-reminders.enc")
+        var writes: java.util.concurrent.ExecutorService? = null
+        FixtureServer().use { server ->
+            val source = Source(name = "Reminder Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis(); val teams = listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }
+            val game = SportsGame(teams, now + 86400000L, now + 90000000L, emptyList(), "synthetic-reminder", "pre", competition = "NFL")
+            val reminders = GameReminders(); reminders.toggle(game); store.write("game-reminders.enc", reminders.json().toString().toByteArray())
+            store.saveSources(listOf(source)); store.active = source.id
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
+                    var playing: Player? = null
+                    scenario.onActivity { activity ->
+                        playing = find<PlayerView>(activity.window.decorView)!!.player
+                        writes = MainActivity::class.java.getDeclaredField("cacheWrites").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                        MainActivity::class.java.getDeclaredField("reminderPending").apply { isAccessible = true }.set(activity, game.copy(state = "in", start = now - 1000) to System.currentTimeMillis())
+                        MainActivity::class.java.getDeclaredMethod("checkGameReminders").apply { isAccessible = true }.invoke(activity)
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
+                    scenario.onActivity { activity ->
+                        assertEquals("reminder-watch", activity.currentFocus?.tag)
+                        assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
+                    }
+                    device.pressBack()
+                    waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
+                    scenario.onActivity { assertTrue(playing!!.isPlaying); assertSame(playing, find<PlayerView>(it.window.decorView)!!.player) }
+                }
+            } finally {
+                writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
+                if (previousReminders == null) store.delete("game-reminders.enc") else store.write("game-reminders.enc", previousReminders)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
         }
     }
 
@@ -1310,7 +1353,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -1331,7 +1374,7 @@ class SpareDeviceTest {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); bitmap.recycle()
         }.toByteArray()
         private val playlist = ("#EXTM3U url-tvg=\"$base/guide.xml\"\n" + (1..8).joinToString("\n") {
-            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (captionsMode || embeddedHls) "m3u8" else if (tsMode || stalled || embeddedCaptions != 0) "ts" else "mp4"}"
+            "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (captionsMode || embeddedHls) "m3u8" else if (tsMode || stalled || longVideo || embeddedCaptions != 0) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
@@ -1398,7 +1441,7 @@ class SpareDeviceTest {
                                 else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
-                            else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
+                            else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (longVideo && path.endsWith(".ts")) longTransport to "video/mp2t" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
                         val status = if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"

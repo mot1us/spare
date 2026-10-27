@@ -9,6 +9,26 @@ import java.util.concurrent.Executors
 
 /** Schedules populate Sports independently of playlist EPG and channel quality filters. */
 object SportsSchedule {
+    fun reminderEvents(targets: Set<Pair<String, java.time.LocalDate>>, now: Long = System.currentTimeMillis(), get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): List<LiveEvent> {
+        if (targets.isEmpty()) return emptyList()
+        val pool = Executors.newFixedThreadPool(4)
+        try {
+            val completion = java.util.concurrent.ExecutorCompletionService<List<LiveEvent>>(pool)
+            val wanted = targets.take(14)
+            wanted.forEach { (id, day) -> completion.submit(java.util.concurrent.Callable {
+                val league = SportsLeagues.byId[id] ?: return@Callable emptyList()
+                runCatching { scoreboard(id, "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100", now, get) }.getOrDefault(emptyList())
+            }) }
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+            val result = mutableListOf<LiveEvent>()
+            repeat(wanted.size) {
+                val left = deadline - System.nanoTime(); if (left <= 0) return result
+                val done = completion.poll(left, java.util.concurrent.TimeUnit.NANOSECONDS) ?: return result
+                result.addAll(done.get())
+            }
+            return result.distinctBy { "${it.league}:${it.id}" }
+        } finally { pool.shutdownNow() }
+    }
     private val boardCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
     private val teamCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
     fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {

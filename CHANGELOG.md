@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0 — 2026-10-26
+
+- Add saved game reminders, in-player live-game alerts, and one-click Watch best for confirmed FHD/60 fps coverage. Keep unmatched or unverified streams available for review.
+- Measure video sample timestamps before decoding for AVC/HEVC and other video codecs, with B-frame reordering support. Feed this source rate to quality filters instead of allowing decoder/display cadence to undercount it.
+- Show input and display sample rates separately in channel details. Remeasure older playback FPS caches while retaining provider metadata and last-channel resume.
+
 ## 0.11.0 — 2026-10-26
 
 - Synchronize encrypted file access across refresh jobs and app instances to keep source saves atomic.

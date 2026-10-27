@@ -131,7 +131,10 @@ class SecureStore(private val context: Context) {
     fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
-        j.keys().asSequence().associateWith { VideoInfo.from(j.getJSONObject(it)) }.toMutableMap()
+        j.keys().asSequence().associateWith {
+            val value = j.getJSONObject(it); val info = VideoInfo.from(value)
+            if (value.optInt("detector") < 4) info.copy(fps = 0f, encodedFps = 0f, evidence = "needs verification") else info
+        }.toMutableMap()
     }.getOrDefault(mutableMapOf())
     fun saveVideoInfo(source: Source, values: Map<String, VideoInfo>) {
         val j = JSONObject(); values.entries.toList().takeLast(5000).forEach { j.put(it.key, it.value.json()) }

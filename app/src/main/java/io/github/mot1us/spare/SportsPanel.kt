@@ -47,6 +47,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         crests.addView(this, FrameLayout.LayoutParams(dp(190), dp(190), if (index == 0) Gravity.TOP or Gravity.START else Gravity.BOTTOM or Gravity.END).apply { topMargin = dp(if (index == 0) -12 else 0); bottomMargin = dp(if (index == 1) -12 else 0) })
     } }
     private val findStreams = button("Find streams") { featured?.let(select) }.apply { tag = "sports-watch" }
+    private val reminder = button("Remind me") { featured?.let { if (it.state == "in") watchBest(it) else toggleReminder(it); updateReminder(it) } }.apply { tag = "sports-reminder"; isEnabled = false }
+    var hasReminder: (SportsGame) -> Boolean = { false }
+    var toggleReminder: (SportsGame) -> Unit = {}
+    var watchBest: (SportsGame) -> Unit = {}
+    private fun updateReminder(game: SportsGame) { reminder.text = if (game.state == "in") "Watch best" else if (hasReminder(game)) "Reminder set ✓" else "Remind me"; reminder.isEnabled = game.state in setOf("pre", "in") || hasReminder(game) }
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; tag = "sports-loading"; visibility = GONE }
     private val status = label(10f).apply { tag = "sports-status"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.LTGRAY) }
     private val empty = label(13f).apply { tag = "sports-empty"; setPadding(dp(16), dp(12), dp(16), dp(12)) }
@@ -146,7 +151,14 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         hero.addView(crests, FrameLayout.LayoutParams(dp(310), -1, Gravity.END))
         hero.addView(View(context).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF5091019.toInt(), 0xB0091019.toInt(), 0x00091019)) }, FrameLayout.LayoutParams(-1, -1))
         heroContent.addView(heroBadge); heroContent.addView(heroTitle); heroContent.addView(heroScore); heroContent.addView(heroDetail)
-        heroContent.addView(findStreams, LayoutParams(dp(145), dp(34)).apply { topMargin = dp(10) }); linkAction(findStreams)
+        heroContent.addView(LinearLayout(context).apply { addView(findStreams, LayoutParams(dp(135), dp(34))); addView(reminder, LayoutParams(dp(140), dp(34)).apply { marginStart = dp(10) }) }, LayoutParams(-2, -2).apply { topMargin = dp(10) })
+        listOf(findStreams, reminder).forEach { view -> view.setOnKeyListener { _, key, event -> when (key) {
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && view === findStreams && reminder.isEnabled) reminder.requestFocus(); true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (view === reminder) findStreams.requestFocus() else focusTeams() }; true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusGames(); true }
+            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) focusTeams(); true }
+            else -> false
+        } } }
         hero.addView(heroContent, FrameLayout.LayoutParams(-1, -1)); hero.addView(credit, FrameLayout.LayoutParams(-1, dp(16), Gravity.BOTTOM).apply { marginEnd = dp(8) })
         val main = LinearLayout(context).apply { orientation = VERTICAL; addView(hero, LayoutParams(-1, 0, 1f)); addView(progress, LayoutParams(-1, dp(3))); addView(status, LayoutParams(-1, dp(24))); addView(empty, LayoutParams(-1, -2)) }
         val actions = LinearLayout(context).apply { addView(scoresButton); addView(filtersButton, LayoutParams(-2, -2).apply { marginStart = dp(8) }) }
@@ -169,6 +181,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         heroDetail.text = GuideClock.sportsDate(game.start) + "\n" + game.status.ifBlank { if (game.state == "pre") "Upcoming" else game.statusLine(System.currentTimeMillis()) } + " · " + game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
 
         findStreams.isEnabled = game.state != "post"; findStreams.text = if (game.state == "pre") "Find coverage" else "Find streams"
+        updateReminder(game)
         if (changed) { backdrop.setImageDrawable(null); credit.text = ""; crests.isVisible = !preview }
         game.teams.forEachIndexed { i, team -> val url = game.logos[team.id].orEmpty().ifBlank { team.logo }; fun draw() { if (featured?.key == game.key) { crestViews[i].setImageBitmap(logos.get(url, false) {}); redrawVisiblePosters() } }; crestViews[i].setImageBitmap(logos.get(url, false, ::draw)) }
         if (changed) artwork.request(game)
