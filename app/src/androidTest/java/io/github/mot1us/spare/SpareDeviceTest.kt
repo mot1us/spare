@@ -629,6 +629,9 @@ class SpareDeviceTest {
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                         val nba = game.copy(teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2), state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NBA", eventId = "nba-hd-only")
                         val hd = Channel("hd-only", nba.title + " 720p 30FPS", "NBA", "${server.base}/channel5.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
+                        val scoreboard = LiveSportsSnapshot(listOf(LiveEvent(nba.eventId, nba.teams.map { it.id }.toSet(), nba.start, league = "NBA")), System.currentTimeMillis(), setOf("NBA"))
+                        activity.liveSportsLoader = { scoreboard }
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scoreboard)
                         MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(hd), emptyMap()))
                         MainActivity::class.java.getDeclaredField("sportsFilters").apply { isAccessible = true }.set(activity, GuideFilters(1080, FrameRateFilter.sixtyOrBetter))
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
@@ -1483,11 +1486,13 @@ class SpareDeviceTest {
             val source = Source(name = "Schedule fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             val channels = (1..12).map { Channel("xc:$it", "ESPN $it", "Sports", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it") }
             val cachedAt = System.currentTimeMillis()
+            val midnight = java.time.Instant.ofEpochMilli(cachedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val upcomingAt = cachedAt + minOf(3600000L, (midnight - cachedAt) / 2)
             val programmes = channels.associate { it.guideId to listOf(Programme(it.guideId, "Cached guide", cachedAt - 60000, cachedAt + 3 * 3600000)) }
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             store.setSportsFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             val scoreboard = LiveSportsSnapshot(listOf(LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), cachedAt - 300000),
-                LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), cachedAt + 3600000L, "pre")), cachedAt, setOf("NFL", "MLB"))
+                LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), upcomingAt, "pre")), cachedAt, setOf("NFL", "MLB"))
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
                 scenario.onActivity { activity -> activity.liveSportsLoader = { scoreboard.copy(checked = System.currentTimeMillis()) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
