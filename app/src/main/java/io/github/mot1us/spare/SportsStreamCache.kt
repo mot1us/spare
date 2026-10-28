@@ -16,9 +16,9 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
         val previous = context
         if (previous != null && previous.source == source && previous.generation == generation && previous.guide.channels === guide.channels && previous.favorites == favorites) {
             if (previous.guide.programmes === guide.programmes) return previous
-            entries.entries.removeAll { (_, entry) -> entry.guideKeys.any { key ->
-                guide.programmes[key] !== previous.guide.programmes[key] &&
-                    (entry.match.warmed[key] == null || guide.programmes[key] !== entry.match.warmed[key])
+            entries.entries.removeAll { (_, entry) -> entry.guideKeys.isEmpty() || entry.guideKeys.any { key ->
+                guide.programmes[key] != previous.guide.programmes[key] &&
+                    (entry.match.warmed[key] == null || guide.programmes[key] != entry.match.warmed[key])
             } }
             return Context(source, generation, guide, favorites).also { context = it }
         }
@@ -32,10 +32,14 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
         return entry.match.takeIf { !forAuto || it.autoReady }?.current(game)
     }
     @Synchronized fun put(token: Context, match: Match, now: Long): Boolean {
-        if (context !== token || Thread.currentThread().isInterrupted || !match.game.live(now) || !match.game.coverageComplete) return false
+        val active = context ?: return false
+        if (Thread.currentThread().isInterrupted || !match.game.live(now) || !match.game.coverageComplete) return false
+        val keys = (match.game.broadcasts.map { it.channel } + match.game.titleMatches + match.game.candidates).map { token.guide.key(it) }.toSet()
+        if (active !== token && (active.source != token.source || active.generation != token.generation || active.guide.channels !== token.guide.channels || active.favorites != token.favorites ||
+            keys.isEmpty() && active.guide.programmes != token.guide.programmes || keys.any { key -> active.guide.programmes[key] != token.guide.programmes[key] &&
+                (match.warmed[key] == null || active.guide.programmes[key] != match.warmed[key]) })) return false
         val existing = entries[match.game.key]
         if (existing?.match?.autoReady == true && !match.autoReady) return false
-        val keys = (match.game.broadcasts.map { it.channel } + match.game.titleMatches + match.game.candidates).map { token.guide.key(it) }.toSet()
         val boundary = (match.game.broadcasts.asSequence().map { it.programme.end } + match.warmed.values.asSequence().flatten()
             .flatMap { sequenceOf(it.start, it.end) }).filter { it > now }.minOrNull() ?: Long.MAX_VALUE
         entries[match.game.key] = Entry(signature(match.game), match, minOf(now + lifetimeMs, boundary), keys)

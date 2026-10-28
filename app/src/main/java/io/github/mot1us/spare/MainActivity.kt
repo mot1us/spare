@@ -111,6 +111,7 @@ class MainActivity : Activity() {
     private val sportsWarmWorker = Executors.newSingleThreadExecutor()
     private var sportsWarmTask: java.util.concurrent.Future<*>? = null
     private var sportsWarmActive: String? = null
+    private var sportsWarmProgress = "Finding stream…"
     private var sportsWarmEpoch = 0
     private var sportsWarmGames = emptyList<SportsGame>()
     private var sportsWarmPriority: SportsGame? = null
@@ -1504,7 +1505,7 @@ class MainActivity : Activity() {
             val match = sportsStreamCache.get(token, game, System.currentTimeMillis(), forAuto = false)
             sportsStreamSummaries[game.key] = when {
                 match != null -> sportsStreamSummary(match)
-                sportsWarmActive == game.key -> "Finding stream…"
+                sportsWarmActive == game.key -> sportsWarmProgress
                 sportsWarmAttempted.containsKey(game.key) -> "Select to finish stream search"
                 else -> "Select to find stream"
             }
@@ -1513,12 +1514,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(warmSportsStreams); handler.postDelayed(warmSportsStreams, 300)
     }
     private fun sportsStreamSummary(match: SportsStreamCache.Match): String {
-        val profile = sportsStreamFilters()
         val evidence = guide.copy(programmes = guide.programmes + match.warmed)
-        val channel = SportsStreams.automaticChoices(match.game, profile, videoInfo, evidence, System.currentTimeMillis()) { !unavailable.contains(it.id, System.currentTimeMillis()) }.firstOrNull()
-            ?: return "No suitable stream matched"
-        val info = channel.quality(videoInfo[channel.id])
-        return channel.name + "\n" + (info?.label() ?: "Quality unknown") + if ((info?.fps ?: 0f) <= 0f) " · FPS unverified" else if ((videoInfo[channel.id]?.fps ?: 0f) > 0f) " · Measured" else " · Provider"
+        val now = System.currentTimeMillis()
+        return SportsStreams.cardSummary(match.game, sportsStreamFilters(), videoInfo, evidence, now) { !unavailable.contains(it.id, now) }
     }
     private fun prefetchSportsStream() {
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive != null) return
@@ -1529,19 +1527,33 @@ class MainActivity : Activity() {
             it.live(now) && sportsStreamCache.get(token, it, now, forAuto = false) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
         } ?: return
         sportsWarmAttempted[game.key] = now
-        sportsWarmActive = game.key; sportsStreamSummaries[game.key] = "Finding stream…"; sportsPanel.updateStreamSummaries(sportsStreamSummaries)
+        sportsWarmActive = game.key; sportsWarmProgress = "Finding stream…"; sportsStreamSummaries[game.key] = sportsWarmProgress; sportsPanel.updateStreamSummaries(sportsStreamSummaries)
         if (sportsWarmAttempted.size > 64) sportsWarmAttempted.keys.retainAll(sportsWarmGames.map { it.key }.toSet() + game.key)
         val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = sportsStreamFilters(); val quality = videoInfo.toMap()
         sportsWarmTask = sportsWarmWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             // Background cards use saved data only. Provider requests belong to an explicit selection.
-            val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, false, { _, _, _ -> }) }.getOrNull()
+            val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, false, { _, checked, total ->
+                handler.post {
+                    if (!closed && epoch == sportsWarmEpoch && sportsWarmActive == game.key) {
+                        sportsWarmProgress = "Finding stream · $checked / $total"; sportsStreamSummaries[game.key] = sportsWarmProgress
+                        sportsPanel.updateStreamSummaries(sportsStreamSummaries)
+                    }
+                }
+            }, background = true) }.getOrNull()
             handler.post {
                 if (closed || epoch != sportsWarmEpoch) return@post
                 sportsWarmTask = null; sportsWarmActive = null
-                if (result != null && sportsStreamCache.put(token, result, System.currentTimeMillis())) {
-                    sportsStreamSummaries[game.key] = sportsStreamSummary(result)
-                } else sportsStreamSummaries[game.key] = "Select to finish stream search"
+                val completedAt = System.currentTimeMillis()
+                val latest = sportsStreamCache.use(selected.id, generation, guide, favorites)
+                val retained = result?.takeIf { sportsStreamCache.put(token, it, completedAt) }
+                    ?: sportsStreamCache.get(latest, game, completedAt, forAuto = false)
+                if (retained != null) {
+                    sportsStreamSummaries[game.key] = sportsStreamSummary(retained)
+                } else {
+                    sportsStreamSummaries[game.key] = "Select to finish stream search"
+                    if (result != null && result.game.coverageComplete) sportsWarmAttempted.remove(game.key)
+                }
                 sportsPanel.updateStreamSummaries(sportsStreamSummaries)
                 if (started && sportsVisible && guideVisible && !sportsPanel.watching) handler.postDelayed(warmSportsStreams, 250)
             }
@@ -1587,9 +1599,12 @@ class MainActivity : Activity() {
             (channel.quality(videoInfo[channel.id])?.let { it.label() + if ((videoInfo[channel.id]?.fps ?: 0f) <= 0f) " · Provider reported" else " · Verified by playback" } ?: "Quality unverified") +
             if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
-        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null): SportsStreamCache.Match {
+        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null, background: Boolean = false): SportsStreamCache.Match {
         var lastProgress = 0L
-        var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), System.nanoTime() + 1_500_000_000L, quality = quality) { checked, total ->
+        // A finite local pass can finish on a large lineup at background priority. Tuning and
+        // lifecycle changes still interrupt it; only explicit foreground searches have a deadline.
+        val deadline = if (background) Long.MAX_VALUE else System.nanoTime() + 1_500_000_000L
+        var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), deadline, quality = quality) { checked, total ->
             val now = System.nanoTime()
             if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress("Checking playlist · $checked / $total", checked, total) }
         }

@@ -23,9 +23,9 @@ class SportsStreamCacheTest {
         val match = SportsStreamCache.Match(game.copy(candidates = listOf(c)))
         cache.put(first, match, now)
         val unrelated = cache.use("source", 1, guide.copy(programmes = guide.programmes + ("news" to listOf(p))), emptySet())
-        assertNotNull(cache.get(unrelated, game, now)); assertFalse(cache.put(first, match, now))
+        assertNotNull(cache.get(unrelated, game, now)); assertTrue("Unrelated EPG updates cannot discard completed work", cache.put(first, match, now))
         val changed = cache.use("source", 1, guide.copy(programmes = mapOf(c.id to listOf(p.copy(title = "Other game")))), emptySet())
-        assertNull(cache.get(changed, game, now))
+        assertNull(cache.get(changed, game, now)); assertFalse("Changed game coverage must reject old work", cache.put(first, match, now))
         cache.put(changed, match, now)
         val otherSource = cache.use("other", 2, guide, emptySet())
         assertNull(cache.get(otherSource, game, now)); assertFalse(cache.put(changed, match, now))
@@ -75,5 +75,18 @@ class SportsStreamCacheTest {
         val match = SportsSchedule.match(game, guide, emptySet(), now, quality = mapOf(observed.id to VideoInfo(3840,2160,60f)))
         assertEquals(512, match.candidates.size)
         assertTrue(declared in match.candidates); assertTrue(observed in match.candidates)
+    }
+    @Test fun cardDiscoveryRemainsVisibleWithoutVerifiedAutomaticPlayQuality() {
+        val unknown = channel("unknown").copy(name = "Seahawks vs 49ers", reportedQuality = null)
+        val low = channel("50fps", 50f)
+        val filters = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
+        val unverified = game.copy(titleMatches = listOf(unknown))
+        val guide = Guide(listOf(unknown, low), emptyMap())
+        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("1 stream found"))
+        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("Quality unverified"))
+        assertTrue(SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now).isEmpty())
+        assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).contains("Outside quality preferences"))
+        val verified = mapOf(unknown.id to VideoInfo(3840, 2160, 59.94f))
+        assertTrue(SportsStreams.cardSummary(unverified, filters, verified, guide, now).contains("59.94"))
     }
 }

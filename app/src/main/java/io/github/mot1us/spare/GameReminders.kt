@@ -89,6 +89,18 @@ object SportsStreams {
         val unknown = coverage.filter { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }
         return (known.filter { it.id in exact } + known.filter { it.id !in exact } + unknown.filter { it.id in exact } + unknown.filter { it.id !in exact }).distinctBy { it.id }
     }
+    fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
+        available: (Channel) -> Boolean = { true }): String {
+        val channel = automaticChoices(game, filters, quality, guide, now, available).firstOrNull()
+        if (channel != null) {
+            val info = channel.quality(quality[channel.id])
+            return channel.name + "\n" + (info?.label() ?: "Quality unknown") + if ((info?.fps ?: 0f) <= 0f) " · FPS unverified" else if ((quality[channel.id]?.fps ?: 0f) > 0f) " · Measured" else " · Provider"
+        }
+        val matches = rank(game, filters.copy(minHeight = 0, excludedFps = emptySet()), quality, available)
+        if (matches.isEmpty()) return "No playlist match found"
+        val unverified = matches.any { it.quality(quality[it.id])?.let { info -> info.height <= 0 || info.fps <= 0f || !info.fps.isFinite() } != false }
+        return "${matches.size} ${if (matches.size == 1) "stream" else "streams"} found\n" + if (unverified) "Quality unverified · Select to compare" else "Outside quality preferences · Select to compare"
+    }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."
         ranked.isEmpty() -> "No streams match your current filters."

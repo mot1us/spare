@@ -458,6 +458,7 @@ class SpareDeviceTest {
                     assertTrue("Automatic playback persists from main Settings", SecureStore(context).sportsAutoPlay)
                     leaveSettings(scenario)
                     val releaseWarmWorker = java.util.concurrent.CountDownLatch(1)
+                    val largeLineup = (1..25000).map { Channel("filler:$it", "Local news $it", "News", "${server.base}/unused.mp4") }
                     scenario.onActivity { activity ->
                         val worker = MainActivity::class.java.getDeclaredField("sportsWarmWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
                         worker.submit { releaseWarmWorker.await(20, java.util.concurrent.TimeUnit.SECONDS) }
@@ -466,13 +467,13 @@ class SpareDeviceTest {
                         val broken = reported.copy(id = "broken-game", name = "Seattle Seahawks vs San Francisco 49ers 4K 120fps", url = "${server.base}/live/test/test-secret/2.ts", reportedQuality = VideoInfo(3840, 2160, 120f))
                         val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                         val snapshot = guideField.get(activity) as Guide
-                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + broken + reported))
+                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + largeLineup + broken + reported))
                         val scores = LiveSportsSnapshot(listOf(LiveEvent(live.eventId, teams.map { it.id }.toSet(), live.start, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
                         activity.liveSportsLoader = { scores }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
                     }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}")?.text?.toString() == "Finding stream…" }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}")?.text?.startsWith("Finding stream") == true }
                     scenario.onActivity { activity ->
                         MainActivity::class.java.getDeclaredMethod("stopSportsPrefetch", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
                         assertEquals("Cancelled work leaves an actionable card", "Select to find stream", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}").text.toString())

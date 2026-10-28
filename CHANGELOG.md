@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.16.2 — 2026-10-27
+
+- Let background Sports matching finish its local playlist pass instead of discarding large lineups after 1.5 seconds. Show checked-channel progress and preserve cancellation when tuning or leaving Sports.
+- Keep completed matches across unrelated EPG updates and retry when relevant coverage changes during a search. Show found streams separately from verified automatic-play quality so missing quality data does not hide discovery.
+
 ## 0.16.1 — 2026-10-27
 
 - Move resolution and FPS preferences into Sports settings → Stream quality, preserving saved per-playlist choices. Keep all qualities visible in the main guide, Favorites and search.
