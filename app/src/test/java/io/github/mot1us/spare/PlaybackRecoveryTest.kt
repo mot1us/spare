@@ -18,6 +18,16 @@ class PlaybackRecoveryTest {
         val segment = StartupFailures(); segment.record(404, "https://example.com/segment.ts", "https://example.com/live.m3u8")
         assertFalse(segment.allEndpointsMissing())
     }
+    @Test fun onlyExpiredLiveHlsChildResourcesUseReconnectRecovery() {
+        val endpoint = "https://example.test/live.m3u8?token=fixture"
+        assertTrue(StartupFailures.expiredSegment(404, "https://cdn.example.test/segment.ts", endpoint, true))
+        assertTrue(StartupFailures.expiredSegment(410, "https://example.test/variant.m3u8", endpoint, true))
+        assertFalse(StartupFailures.expiredSegment(404, endpoint, endpoint, true))
+        assertFalse(StartupFailures.expiredSegment(404, "https://example.test/segment.ts", endpoint, false))
+        listOf(401, 403, 429, 500, null).forEach { assertFalse(StartupFailures.expiredSegment(it, "https://example.test/segment.ts", endpoint, true)) }
+        assertFalse(StartupFailures.expiredSegment(404, null, endpoint, true))
+        assertFalse(StartupFailures.expiredSegment(404, "file:///missing", endpoint, true))
+    }
     @Test fun unavailableExpiresAndCanBeRestoredWithoutScanningStreams() {
         val unavailable = UnavailableChannels(); unavailable.hide("sports", 1000)
         assertTrue(unavailable.contains("sports", 899999))

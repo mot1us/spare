@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.2 — 2026-10-28
+
+- Discover catch-up across completed Sports cards beyond the first eight, progressively check more archive variants, reuse exact-channel histories and retry negative results after guide updates. Keep replay badges for the same lifetime as their discovery cache and separate histories for channels sharing XMLTV IDs.
+- Exclude 24/7 collections and ambiguous station-name matches from Local results. Warm Local matches as the playlist loads, save an encrypted cache tied to location and lineup content, and show an animated indicator while matching.
+- Recover expired live HLS segments through the existing bounded reconnect path instead of treating a missing child segment as a missing channel. Preserve buffer sizes, retry limits and account-error handling.
+
 ## 0.18.1 — 2026-10-28
 
 - Rank Sports live, RedZone and catch-up streams by resolution first; use known/preferred FPS only between streams at the same resolution. Preserve game coverage, archive availability and lower-quality fallbacks.

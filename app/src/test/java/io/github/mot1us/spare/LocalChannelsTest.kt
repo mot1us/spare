@@ -19,6 +19,11 @@ class LocalChannelsTest {
         assertTrue(local.find(channels, "").isEmpty()); assertTrue(local.find(channels, "Unknown place").isEmpty())
         assertTrue(local.find(channels.map { it.copy(media = true) }, "Seattle").isEmpty())
     }
+    @Test fun continuousCollectionsAndOrdinaryKingTitlesAreNotSeattleStations() {
+        val unrelated = listOf(channel("show", "King of Queens", "US Locals"), channel("show2", "The King of the Hill", "Comedy"),
+            channel("all-day", "KING HD", "USA 24/7"), channel("all-day2", "FOX Seattle", "24x7 Shows"), channel("group-only", "Some series", "Seattle locals"))
+        assertEquals(setOf("king", "kiro", "label"), local.find(channels + unrelated, "Seattle WA"))
+    }
     @Test fun offlineSuggestionsIncludeCanonicalCitiesAndStatesWithoutDuplicates() {
         assertEquals(listOf("Seattle, WA"), local.locations("sea"))
         assertEquals(listOf("Seattle, WA"), local.locations("Seattle, W"))

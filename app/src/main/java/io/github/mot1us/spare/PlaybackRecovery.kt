@@ -10,6 +10,14 @@ class StartupFailures {
         missing.add(status in setOf(404, 410) && sameEndpoint)
     }
     fun allEndpointsMissing() = missing.isNotEmpty() && missing.all { it }
+    companion object {
+        /** Refresh a live HLS playlist for expired child resources; never mask endpoint/account errors. */
+        fun expiredSegment(status: Int?, failedUrl: String?, channelUrl: String, hls: Boolean): Boolean = hls && status in setOf(404, 410) && runCatching {
+            val child = URI(failedUrl.orEmpty()).normalize(); val endpoint = URI(channelUrl).normalize()
+            child.host != null && child.scheme in setOf("http", "https") && child != endpoint
+        }.getOrDefault(false)
+    }
+
 }
 
 class ReconnectBudget {

@@ -6,7 +6,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 
 - M3U playlists and Xtream Codes accounts; multiple saved playlists.
 - Live TV guide, channel categories, favorites, text and voice search.
-- Local guide tab with automatic city/state suggestions and playlist matching.
+- Local guide tab with city/state suggestions, cached station matches and a loading indicator.
 - Live preview or a guide with adjustable opacity and programme artwork from your provider or optional metadata.
 - Switchable frame-rate matching, audio tracks, and per-channel subtitles.
 - Sports stream selection by resolution first, with known FPS as a tie-breaker. FPS is learned during playback without extra stream probes; all qualities remain playable.

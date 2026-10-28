@@ -421,8 +421,11 @@ class SpareDeviceTest {
                 assertEquals(saved, SecureStore(context).sportsFilters(source)); assertEquals(categories, store.filters(source))
                 scenario.onActivity { activity ->
                     val channels = listOf(Channel("local:king", "KING5 FHD", "News", "${server.base}/channel1.ts"),
-                        Channel("local:kiro", "KIRO HD", "News", "${server.base}/channel2.ts"), Channel("other:abc", "WABC New York", "News", "${server.base}/channel3.ts"))
-                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(channels, emptyMap()))
+                        Channel("local:kiro", "KIRO HD", "News", "${server.base}/channel2.ts"), Channel("other:abc", "WABC New York", "News", "${server.base}/channel3.ts"),
+                        Channel("show:king", "King of Queens", "News", "${server.base}/channel4.ts"), Channel("show:24", "24/7 KING TV", "News", "${server.base}/channel5.ts"),
+                        Channel("show:fox", "FOX Seattle 24x7 Shows", "News", "${server.base}/channel6.ts"))
+                    val localGuide = Guide(channels, emptyMap()); store.cache(source, localGuide); store.markPlaylistRefreshed(source)
+                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, localGuide)
                     activity.window.decorView.findViewWithTag<View>("settings").performClick()
                     val panel = activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel")
                     panel.selectSetting("Local channels")
@@ -445,11 +448,35 @@ class SpareDeviceTest {
                 setThemeControl(scenario, "Guide", "Opacity", "80%")
                 assertEquals(80, SecureStore(context).guideOpacity)
                 leaveSettings(scenario)
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-local").performClick() }
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 }
+                val releaseLocal = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity { activity ->
+                    val worker = MainActivity::class.java.getDeclaredField("localWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    worker.submit { releaseLocal.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                    MainActivity::class.java.getDeclaredField("localLineup").apply { isAccessible = true }.set(activity, null)
+                    activity.window.decorView.findViewWithTag<View>("guide-local").performClick()
+                    assertTrue("Local matching has an animated loading indicator", activity.window.decorView.findViewWithTag<View>("local-matching-progress").isShown)
+                }
+                releaseLocal.countDown()
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 && !it.window.decorView.findViewWithTag<View>("local-matching-progress").isShown }
                 assertEquals("Seattle, WA", SecureStore(context).localLocation)
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-all").performClick() }
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 3 }
+                scenario.onActivity { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    val fingerprint = LocalMatchCache.fingerprint(guide.channels, store.localLocation)
+                    assertEquals(setOf("local:king", "local:kiro"), LocalMatchCache.decode(store.read("local-matches-${source.id}.enc"), fingerprint))
+                    activity.window.decorView.findViewWithTag<View>("guide-all").performClick()
+                }
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 6 }
+                scenario.recreate()
+                waitFor(scenario) { activity ->
+                    @Suppress("UNCHECKED_CAST") val ids = MainActivity::class.java.getDeclaredField("localIds").apply { isAccessible = true }.get(activity) as Set<String>
+                    ids == setOf("local:king", "local:kiro") && !MainActivity::class.java.getDeclaredField("localLoading").apply { isAccessible = true }.getBoolean(activity)
+                }
+                scenario.onActivity { activity ->
+                    assertFalse("Local is warmed before opening its tab", activity.window.decorView.findViewWithTag<View>("guide-local").isSelected)
+                    activity.window.decorView.findViewWithTag<View>("guide-local").performClick()
+                    assertEquals(2, channelList(activity)!!.adapter!!.itemCount)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("local-matching-progress").isShown)
+                }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -1398,6 +1425,13 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text == "Score hidden" && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
+                    waitFor(scenario) { !MainActivity::class.java.getDeclaredField("sportsComputing").apply { isAccessible = true }.getBoolean(it) }
+                    scenario.onActivity { activity ->
+                        @Suppress("UNCHECKED_CAST") val cache = MainActivity::class.java.getDeclaredField("replayCache").apply { isAccessible = true }.get(activity) as MutableMap<String, Pair<Long, List<SportsReplay>>>
+                        cache.entries.toList().forEach { entry -> cache[entry.key] = entry.value.first - 90000L to entry.value.second }
+                        MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(activity)
+                    }
+                    waitFor(scenario) { !MainActivity::class.java.getDeclaredField("sportsComputing").apply { isAccessible = true }.getBoolean(it) && it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
                     scenario.onActivity { activity ->
                         assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail")?.text?.contains("win") == true)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isShown)

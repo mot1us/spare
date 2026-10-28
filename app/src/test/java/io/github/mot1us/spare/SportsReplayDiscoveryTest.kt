@@ -42,7 +42,7 @@ class SportsReplayDiscoveryTest {
         } finally { discovery.close() }
     }
 
-    @Test fun focusedFinalRunsFirstAndOnlyEightGamesAreCheckedUsingSharedMetadataCache() {
+    @Test fun focusedFinalRunsFirstAndAllDisplayedFinalsShareMetadataCache() {
         val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
         val games = (0..11).map { game.copy(eventId = "final-$it", start = game.start - it * 600000, end = game.end - it * 600000) }
         val focused = games[10]; val guide = Guide(listOf(channel), emptyMap())
@@ -50,10 +50,10 @@ class SportsReplayDiscoveryTest {
             main::post, { initial }, { _, _, _ -> calls.incrementAndGet(); games.map(::listing) })
         try {
             discovery.update(source, 1, guide, games, focused, true)
-            main.await { results.size == 8 }
-            assertEquals((listOf(focused) + games.take(7)).map { it.key }, results.map { it.game.key })
+            main.await { results.size == 12 }
+            assertEquals((listOf(focused) + games.filter { it.key != focused.key }).map { it.key }, results.map { it.game.key })
             assertTrue(results.all { it.checked && it.replays.size == 1 }); assertEquals(1, calls.get())
-            assertEquals(8, discovery.checkedKeys.size)
+            assertEquals(12, discovery.checkedKeys.size)
             assertTrue(SportsReplayDiscovery.targets(listOf(game.copy(state = "in"), game.copy(state = "pre")), null, initial).isEmpty())
         } finally { discovery.close() }
     }
@@ -72,6 +72,47 @@ class SportsReplayDiscoveryTest {
             discovery.update(source, 1, guide, listOf(next), next, true)
             main.await { results.size == 2 }
             assertEquals(listOf("xc:2"), results.last().replays.map { it.channel.id }); assertEquals(2, calls.get())
+        } finally { discovery.close() }
+    }
+
+    @Test fun laterArchiveVariantsAreCheckedProgressivelyWithoutRepeatingCompletedRequests() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
+        val variants = (1..9).map { channel.copy(id = "xc:$it", url = "https://example.com/live/user/pass/$it.ts") }
+        val guide = Guide(variants, emptyMap())
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, candidate, _ -> calls.incrementAndGet(); if (candidate.id == "xc:9") listOf(listing()) else emptyList() })
+        try {
+            discovery.update(source, 1, guide, listOf(game), game, true)
+            main.await { results.any { it.replays.isNotEmpty() } }
+            assertEquals("xc:9", results.last().replays.single().channel.id)
+            assertEquals(9, calls.get()); assertTrue(results.last().checked)
+            assertEquals(9, discovery.cachedListings(source, 1).size)
+        } finally { discovery.close() }
+    }
+
+    @Test fun historyEvictionCannotRestartAProgressiveSearchForever() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
+        val variants = (1..24).map { channel.copy(id = "xc:$it", url = "https://example.com/live/user/pass/$it.ts") }
+        val unrelated = listing().copy(title = "Other programme", start = game.start - 4 * 3600000, end = game.start - 3 * 3600000)
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, _, _ -> calls.incrementAndGet(); List(2000) { unrelated } })
+        try {
+            discovery.update(source, 1, Guide(variants, emptyMap()), listOf(game), game, true)
+            main.await { results.lastOrNull()?.checked == true }
+            assertEquals(24, calls.get()); assertTrue(results.last().replays.isEmpty())
+            assertTrue(discovery.cachedListings(source, 1).values.sumOf { it.size } <= 16000)
+        } finally { discovery.close() }
+    }
+
+    @Test fun lateGuideDataInvalidatesAnEarlierNegativeResult() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val guide = Guide(listOf(channel), emptyMap())
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, _, _ -> emptyList() })
+        try {
+            discovery.update(source.copy(kind = "m3u"), 1, guide, listOf(game), game, true)
+            main.await { results.size == 1 }; assertTrue(results.single().replays.isEmpty())
+            discovery.update(source.copy(kind = "m3u"), 1, guide.copy(programmes = mapOf(channel.id to listOf(listing()))), listOf(game), game, true)
+            main.await { results.size == 2 }; assertEquals(channel, results.last().replays.single().channel)
         } finally { discovery.close() }
     }
 

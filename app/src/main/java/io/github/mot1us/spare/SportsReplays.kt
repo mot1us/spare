@@ -15,7 +15,7 @@ object SportsReplays {
     private fun eligible(game: SportsGame, channel: Channel, now: Long) = !channel.media && Catchup.supported(channel) && eligible(game, channel.catchupDays, now)
     fun find(game: SportsGame, guide: Guide, now: Long): List<SportsReplay> {
         val target = game.teams.map { it.id }.toSet()
-        val hints = game.teams.map { (it.aliases + it.name.split(' ').filter { word -> word.length >= 4 }).distinct() }
+        val hints = game.teams.map { (it.aliases + it.name.split(' ').filter { word -> word.length >= 4 }).map(SportsCatalog::normalize).distinct() }
         val parsed = hashMapOf<Triple<String, String, String>, Boolean>()
         val result = mutableListOf<SportsReplay>()
         for (channel in guide.channels) {
@@ -23,14 +23,21 @@ object SportsReplays {
             if (!eligible(game, channel, now)) continue
             val context = channel.name + " " + channel.group
             val match = guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { p ->
-                Catchup.available(channel, p, now) && abs(p.start - game.start) <= 90 * 60000L && p.end > game.start &&
-                    hints.all { aliases -> aliases.any { p.title.contains(it, true) || p.description.contains(it, true) } }
+                if (!Catchup.available(channel, p, now) || abs(p.start - game.start) > 90 * 60000L || p.end <= game.start) false else {
+                    val text = SportsCatalog.normalize(p.title + " " + p.description)
+                    hints.all { aliases -> aliases.any { it in text } }
+                }
             }.filter { p -> parsed.getOrPut(Triple(p.title, p.description, context)) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target } }
                 .minByOrNull { abs(it.start - game.start) }
             if (match != null) result.add(SportsReplay(channel, match))
         }
         return rank(result)
     }
+    /** Provider histories belong to a stream ID, even when XMLTV IDs are shared. */
+    fun findListings(game: SportsGame, guide: Guide, listings: Map<String, List<Programme>>, now: Long): List<SportsReplay> =
+        rank(guide.channels.asSequence().filter { listings.containsKey(it.id) }.flatMap { channel ->
+            find(game, Guide(listOf(channel), mapOf(guide.key(channel) to listings.getValue(channel.id))), now).asSequence()
+        }.toList())
     /** Live-channel quality is a preference for its archive, never an eligibility rule. */
     fun rank(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): List<SportsReplay> =
         choices.distinctBy { it.channel.id }.sortedWith(compareByDescending<SportsReplay> { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
@@ -41,7 +48,7 @@ object SportsReplays {
     fun best(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): SportsReplay? =
         rank(choices, quality, favorites).firstOrNull()
     /** Only a few likely broadcaster/team archives are queried when saved EPG is missing. */
-    fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long): List<Channel> {
+    fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, limit: Int = 6): List<Channel> {
         data class Candidate(val channel: Channel, val score: Int, val family: String)
         fun candidate(channel: Channel): Candidate {
             val name = channel.sportsKey
@@ -59,7 +66,7 @@ object SportsReplays {
             val info = entry.channel.quality(null)
             Triple(entry.family, info?.height ?: 0, info?.fps?.takeIf { it.isFinite() && it > 0f }?.let(FrameRateFilter::bucket) ?: -1)
         }
-        return (varied + sorted).distinctBy { it.channel.id }.take(6).map { it.channel }
+        return (varied + sorted).distinctBy { it.channel.id }.take(limit.coerceIn(1, 24)).map { it.channel }
     }
 }
 

@@ -151,7 +151,7 @@ class MainActivity : Activity() {
         if (!active) { replayDiscovery?.pause(); return }
         val discovery = replayDiscovery ?: SportsReplayDiscovery({ sourceId, epoch, game, choices, _ ->
             if (!closed && source?.id == sourceId && generation == epoch) {
-                if (choices.isNotEmpty()) { replayCache["$sourceId:$epoch:${game.key}"] = System.currentTimeMillis() to choices; while (replayCache.size > 48) replayCache.remove(replayCache.keys.first()) }
+                if (choices.isNotEmpty()) { replayCache["$sourceId:$epoch:${game.key}"] = System.currentTimeMillis() to choices; while (replayCache.size > 256) replayCache.remove(replayCache.keys.first()) }
                 replayDiscovery?.let { sportsPanel.updateReplayDiscovery(it.checkingKey, it.checkedKeys) }
                 scheduleSports()
             }
@@ -283,6 +283,8 @@ class MainActivity : Activity() {
     private var localLineup: List<Channel>? = null
     private var localQuery = ""
     private var localLoading = false
+    private var localSourceId = ""
+    private lateinit var localProgress: ProgressBar
     private val localWorker = Executors.newSingleThreadExecutor()
     private var localTask: java.util.concurrent.Future<*>? = null
     private val localStations by lazy { LocalChannels(assets.open("local-stations.tsv").bufferedReader().use { it.readText() }) }
@@ -467,7 +469,9 @@ class MainActivity : Activity() {
                 }
                 if (statusCode in setOf(401, 403, 429)) sportsPlaybackPlan?.accepted = true
                 if (!hasPlayedChannel && onDemand == null && sportsPlaybackPlan != null) { showPlaybackFailure(PlaybackErrors.message(error)); return }
-                if (statusCode != null && statusCode in 400..499 && statusCode !in setOf(408, 429)) showPlaybackFailure(PlaybackErrors.message(error))
+                val hls = player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest || playbackUrl.substringBefore('?').endsWith(".m3u8", true)
+                if (onDemand == null && hasPlayedChannel && StartupFailures.expiredSegment(statusCode, http?.dataSpec?.uri?.toString(), playbackUrl, hls)) reconnectOrFail(PlaybackErrors.message(error))
+                else if (statusCode != null && statusCode in 400..499 && statusCode !in setOf(408, 429)) showPlaybackFailure(PlaybackErrors.message(error))
                 else if (statusCode == 429) showPlaybackFailure(PlaybackErrors.message(error))
                 else reconnectOrFail(PlaybackErrors.message(error))
             }
@@ -577,9 +581,11 @@ class MainActivity : Activity() {
         allChannelsTab = button("All channels") { localOnly = false; group = null; favoritesOnly = false; applyFilter(); focusChannelAt(0) }.apply { tag = "guide-all" }
         localTab = button("Local") {
             if (store.localLocation.isBlank()) { playbackMenu(); settingsPanel?.selectSetting("Local channels") }
-            else { localOnly = true; group = null; favoritesOnly = false; applyFilter(); focusChannelAt(0) }
+            else { localOnly = true; group = null; favoritesOnly = false; applyFilter(); if (localLoading && adapter.itemCount == 0) localTab.requestFocus() else focusChannelAt(0) }
         }.apply { tag = "guide-local" }
         guideTabs.addView(allChannelsTab); guideTabs.addView(localTab)
+        localProgress = ProgressBar(this).apply { tag = "local-matching-progress"; isIndeterminate = true; visibility = View.GONE; contentDescription = "Finding local channels" }
+        guideTabs.addView(localProgress, LinearLayout.LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER_VERTICAL; marginStart = dp(8) })
         listOf(allChannelsTab, localTab).forEach { tab -> tab.setOnKeyListener { _, key, event -> when (key) {
             KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
             KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) openNavigation(); true }
@@ -1204,7 +1210,7 @@ class MainActivity : Activity() {
         programmeInfo.text = channel.name + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${enriched?.description?.ifBlank { it.description } ?: it.description}" } ?: "\n${epgErrors[channel.id] ?: if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
     }
     private fun applyFilter() {
-        if (localOnly) requestLocalMatches()
+        requestLocalMatches()
         val now = System.currentTimeMillis()
         val hidden = guide.channels.count { unavailable.contains(it.id, now) }
         val searchTerm = ChannelSearch.key(query)
@@ -1226,7 +1232,8 @@ class MainActivity : Activity() {
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty()) View.VISIBLE else View.GONE
         emptyInfo.text = if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or choose Categories in Settings."
         if (localOnly) emptyInfo.text = if (localLoading) "Finding local channels…" else "No local stations matched. Check your city/state in Settings → Local channels and visible categories. Matches use your existing playlist."
-        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly }
+        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; localProgress.isVisible = localOnly && localLoading }
+        if (localOnly && localLoading) filterInfo.text = "Finding local channels… · ${store.localLocation}"
         updateGroups()
         if (::sportsPanel.isInitialized) {
             if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
@@ -1253,15 +1260,26 @@ class MainActivity : Activity() {
             GuideSection("Favorites", "favorites", !sportsVisible && favoritesOnly)) + visibleGroups.map { GuideSection(if (it in setOf("Sports", "Favorites", "All channels")) "Category · $it" else it.ifBlank { "Uncategorized" }, "group:$it", !sportsVisible && !favoritesOnly && group == it && (group != null)) })
     }
     private fun requestLocalMatches() {
-        val lineup = guide.channels; val location = store.localLocation
-        if (localLineup === lineup && localQuery == location) return
-        localTask?.cancel(true); localLineup = lineup; localQuery = location; localIds = emptySet(); localLoading = location.isNotBlank()
+        val lineup = guide.channels; val location = store.localLocation; val selected = source
+        if (localLineup === lineup && localQuery == location && localSourceId == selected?.id.orEmpty()) return
+        localTask?.cancel(true); localLineup = lineup; localQuery = location; localSourceId = selected?.id.orEmpty(); localIds = emptySet()
+        localLoading = location.isNotBlank() && lineup.isNotEmpty() && selected != null
         localEditor?.updateMatches(0, localLoading)
-        if (!localLoading) return
+        if (!localLoading || selected == null) return
         localTask = localWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            val matches = runCatching { localStations.find(lineup, location) }.getOrDefault(emptySet())
-            handler.post { if (!closed && localLineup === lineup && localQuery == location) { localIds = matches; localLoading = false; localEditor?.updateMatches(matches.size, false); if (localOnly) applyFilter() } }
+            val matches = runCatching {
+                val fingerprint = LocalMatchCache.fingerprint(lineup, location)
+                val file = "local-matches-${selected.id}.enc"
+                LocalMatchCache.decode(runCatching { store.read(file) }.getOrNull(), fingerprint) ?: localStations.find(lineup, location).also {
+                    if (!Thread.currentThread().isInterrupted) runCatching { store.write(file, LocalMatchCache.encode(fingerprint, it)) }
+                }
+            }.getOrDefault(emptySet())
+            if (Thread.currentThread().isInterrupted) return@submit
+            handler.post { if (!closed && source?.id == selected.id && localLineup === lineup && localQuery == location) {
+                localIds = matches; localLoading = false; localEditor?.updateMatches(matches.size, false)
+                if (localOnly) { applyFilter(); if (localTab.hasFocus() && adapter.itemCount > 0) focusChannelAt(0) }
+            } }
         }
     }
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
@@ -1411,7 +1429,7 @@ class MainActivity : Activity() {
         val liveSnapshot = liveSports; val checkingSnapshot = liveSportsChecking
         val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
         val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites; val qualitySnapshot = videoInfo.toMap()
-        val replaySnapshot = replayCache.toMap(); val selectedSourceId = source?.id
+        val replaySnapshot = replayCache.toMap(); val replayChecked = replayDiscovery?.checkedKeys.orEmpty(); val selectedSourceId = source?.id
         val now = System.currentTimeMillis()
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
@@ -1423,10 +1441,10 @@ class MainActivity : Activity() {
             }
             val games = SportsPanel.ordered(rawGames.filter { it.leagueId in store.sportsLeagues && (selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed }) }, followed, now)
             val archiveGuide = snapshot.copy(channels = snapshot.channels.filter { Catchup.supported(it) })
-            val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(48).mapNotNull { game ->
-                val cached = replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.takeIf { now - it.first < 60000 }?.second.orEmpty()
+            val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(256).mapNotNull { game ->
+                val cached = replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.takeIf { now - it.first < SportsReplayDiscovery.HISTORY_MS }?.second.orEmpty()
                     .filter { Catchup.available(it.channel, it.programme, now) && archiveGuide.channels.any { channel -> channel.id == it.channel.id && channel.url == it.channel.url } }
-                SportsReplays.best(cached.ifEmpty { SportsReplays.find(game, archiveGuide, now) }, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
+                SportsReplays.best(cached.ifEmpty { if (game.key in replayChecked) emptyList() else SportsReplays.find(game, archiveGuide, now) }, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
             }.toMap()
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
@@ -1567,30 +1585,32 @@ class MainActivity : Activity() {
         showGameInfo(game); sportsPanel.matching(game)
         val key = "${selected.id}:$sourceEpoch:${game.key}"
         val now = System.currentTimeMillis()
-        replayCache[key]?.takeIf { now - it.first < 60000 && it.second.all { replay -> Catchup.available(replay.channel, replay.programme, now) && snapshot.channels.any { channel -> channel.id == replay.channel.id && channel.url == replay.channel.url } } }?.let {
+        replayCache[key]?.takeIf { now - it.first < SportsReplayDiscovery.HISTORY_MS && it.second.all { replay -> Catchup.available(replay.channel, replay.programme, now) && snapshot.channels.any { channel -> channel.id == replay.channel.id && channel.url == replay.channel.url } } }?.let {
             sportsPanel.showReplays(game, it.second); return
         }
+        val savedArchives = replayDiscovery?.cachedListings(selected, sourceEpoch).orEmpty()
         sportsMatchTask = sportsMatchWorker.submit {
-            var choices = SportsReplays.find(game, snapshot, System.currentTimeMillis())
+            val listings = savedArchives.toMutableMap()
+            var choices = SportsReplays.rank(SportsReplays.find(game, snapshot, System.currentTimeMillis()) + SportsReplays.findListings(game, snapshot, listings, System.currentTimeMillis()))
             if (choices.isEmpty() && selected.kind == "xtream" && !Thread.currentThread().isInterrupted) {
-                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis())
+                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis(), limit = 24).filter { it.id !in listings }.take(8)
                 val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { Catchup.load(selected, channel, 1200) } }
-                val listings = linkedMapOf<String, List<Programme>>()
                 val deadline = System.nanoTime() + 4_000_000_000L
                 try {
                     requests.entries.forEachIndexed { index, (channel, task) ->
                         if (Thread.currentThread().isInterrupted) return@submit
                         val left = deadline - System.nanoTime()
-                        if (left > 0 || task.isDone) runCatching { task.get(maxOf(1L, left), java.util.concurrent.TimeUnit.NANOSECONDS) }.getOrNull()?.let { listings[snapshot.key(channel)] = it }
+                        if (left > 0 || task.isDone) runCatching { task.get(maxOf(1L, left), java.util.concurrent.TimeUnit.NANOSECONDS) }.getOrNull()?.let { listings[channel.id] = it }
                         handler.post { if (!closed && started && epoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, "Checking provider archives · ${index + 1} / ${targets.size}", index + 1, targets.size) }
                     }
                 } finally { requests.values.forEach { it.cancel(true) } }
-                choices = SportsReplays.find(game, Guide(targets, listings), System.currentTimeMillis())
+                choices = SportsReplays.findListings(game, snapshot, listings, System.currentTimeMillis())
             }
             val result = SportsReplays.rank(choices, quality, favoriteSnapshot)
             handler.post {
                 if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || selectedGame?.key != game.key) return@post
-                if (result.isNotEmpty()) { replayCache[key] = System.currentTimeMillis() to result; while (replayCache.size > 16) replayCache.remove(replayCache.keys.first()) }
+                replayDiscovery?.remember(selected, sourceEpoch, snapshot, listings)
+                if (result.isNotEmpty()) { replayCache[key] = System.currentTimeMillis() to result; while (replayCache.size > 256) replayCache.remove(replayCache.keys.first()) }
                 sportsPanel.showReplays(game, result)
                 scheduleSports()
             }

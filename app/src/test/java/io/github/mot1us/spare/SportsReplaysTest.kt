@@ -63,6 +63,12 @@ class SportsReplaysTest {
         val fallback = SportsReplays.find(game, guide.copy(channels = listOf(variants[2])), now).single()
         assertNotNull(fallback.item(game, false, now))
     }
+    @Test fun explicitArchiveResponsesStayWithTheirExactStreamWhenGuideIdsAreShared() {
+        val first = channel.copy(id = "xc:1", guideId = "shared")
+        val second = channel.copy(id = "xc:2", guideId = "shared")
+        val found = SportsReplays.findListings(game, Guide(listOf(first, second), emptyMap()), mapOf(first.id to emptyList(), second.id to listOf(listing())), now)
+        assertEquals(listOf(second), found.map { it.channel })
+    }
     @Test fun providerShortlistSeparatesBroadcastersAndQualityRatherThanFillingWithDuplicates() {
         val duplicates = (1..12).map { channel.copy(id = "xc:$it", name = "ESPN FHD $it", guideId = "shared", reportedQuality = VideoInfo(1920, 1080, 60f)) }
         val sd = channel.copy(id = "xc:20", name = "ESPN SD", guideId = "shared", reportedQuality = VideoInfo(854, 480, 25f))
