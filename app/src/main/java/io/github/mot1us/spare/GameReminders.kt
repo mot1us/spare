@@ -67,16 +67,27 @@ object SportsStreams {
             qualifies(channel, quality[channel.id])
     }
     fun bestBroadcaster(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, guide: Guide, now: Long): Channel? {
-        if (!game.live(now)) return null
+        return ranked.firstOrNull { channel -> qualifies(channel, quality[channel.id]) && advertisedCoverage(game, channel, guide, now) }
+    }
+    private fun advertisedCoverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Boolean {
+        if (!game.live(now)) return false
         val networks = game.networks.map(::broadcasterKey).filter { it.trim().length >= 3 }
         val target = game.teams.map { it.id }.toSet()
-        return ranked.firstOrNull { channel ->
-            qualifies(channel, quality[channel.id]) && networks.any { network -> val name = broadcasterKey(channel.name); network in name && (network.trimEnd() + " plus ") !in name } &&
+        return networks.any { network -> val name = broadcasterKey(channel.name); network in name && (network.trimEnd() + " plus ") !in name } &&
                 guide.at(channel, now)?.let { programme ->
                     !SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) &&
                         SportsGuide.teams(programme, channel.group)?.map { it.id }?.toSet()?.let { it == target } != false
                 } != false
-        }
+    }
+    fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
+        available: (Channel) -> Boolean = { true }): List<Channel> {
+        if (!game.live(now)) return emptyList()
+        val relaxed = rank(game, filters.copy(excludedFps = emptySet()), quality, available)
+        val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
+        val coverage = relaxed.filter { it.id in exact || advertisedCoverage(game, it, guide, now) }
+        val known = coverage.filter { qualifies(it, quality[it.id]) && filters.matches(it, quality[it.id]) }
+        val unknown = coverage.filter { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }
+        return (known.filter { it.id in exact } + known.filter { it.id !in exact } + unknown.filter { it.id in exact } + unknown.filter { it.id !in exact }).distinctBy { it.id }
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."

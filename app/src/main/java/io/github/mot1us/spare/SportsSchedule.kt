@@ -136,7 +136,7 @@ object SportsSchedule {
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
-    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE, progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
+    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE, quality: Map<String, VideoInfo> = emptyMap(), progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
         if (game.state == "post") return game
         val target = game.teams.map { it.id }.toSet()
         val hints = game.teams.map { team -> (team.aliases + team.name.split(' ').filter { it.length >= 4 }).distinct() }
@@ -184,7 +184,9 @@ object SportsSchedule {
         val titleOnly = titles.filter { it.id !in confirmed }
         val found = confirmed + titleOnly.map { it.id }
         progress(channels.size + checkedKeys, channels.size + byGuideKey.size)
-        return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }.sortedByDescending { it.id in favorites }.take(512), coverageComplete = complete)
+        return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
+            .sortedWith(compareByDescending<Channel> { it.id in favorites }.thenByDescending { SportsStreams.qualifies(it, quality[it.id]) }
+                .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }.thenByDescending { it.quality(quality[it.id])?.fps ?: 0f }).take(512), coverageComplete = complete)
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
         .put("events", JSONArray(snapshot.events.take(500).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league) }))

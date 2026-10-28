@@ -57,6 +57,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     var toggleReminder: (SportsGame) -> Unit = {}
     var watchBest: (SportsGame) -> Unit = {}
     var playOnSelection: () -> Boolean = { false }
+    private var streamSummaries = emptyMap<String, String>()
     private fun updateReminder(game: SportsGame) {
         reminder.isVisible = actionsOpen && game.state == "pre"
         reminder.isEnabled = game.state == "pre"
@@ -126,16 +127,17 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun getItemCount() = games.size + if (displayedRedZone) 1 else 0
         override fun getItemId(position: Int) = Channel.stableId(tileKey(position)).take(16).toULong(16).toLong()
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GameCard {
-            val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(8)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(-1, dp(164)).apply { marginEnd = dp(8); bottomMargin = dp(8) } }
+            val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(8)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(-1, dp(190)).apply { marginEnd = dp(8); bottomMargin = dp(8) } }
             val badge = label(10f).apply { typeface = AppFont.face(true) }; val title = label(12f).apply { maxLines = 2; typeface = AppFont.face(true); ellipsize = android.text.TextUtils.TruncateAt.END }; val detail = label(10f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+            val stream = label(9f).apply { minLines = 2; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
             val poster = FrameLayout(context).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF172B40.toInt(), 0xFF344258.toInt())); clipChildren = true }
             val crests = LinearLayout(context).apply { gravity = Gravity.CENTER }
             val logos = List(2) { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(7), dp(3), dp(7), dp(3)); crests.addView(this, LayoutParams(0, -1, 1f)) } }
             poster.addView(crests, FrameLayout.LayoutParams(-1, -1))
             val photo = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = GONE }; poster.addView(photo, FrameLayout.LayoutParams(-1, -1))
-            box.addView(poster, LayoutParams(-1, dp(74)).apply { bottomMargin = dp(5) }); box.addView(badge); box.addView(title, LayoutParams(-1, 0, 1f)); box.addView(detail)
+            box.addView(poster, LayoutParams(-1, dp(74)).apply { bottomMargin = dp(5) }); box.addView(badge); box.addView(title, LayoutParams(-1, 0, 1f)); box.addView(detail); box.addView(stream)
             val special = label(24f).apply { text = "REDZONE"; typeface = AppFont.face(true); gravity = Gravity.CENTER; visibility = GONE; setTextColor(0xFFF2D9D9.toInt()) }; poster.addView(special, FrameLayout.LayoutParams(-1, -1))
-            return GameCard(box, badge, title, detail, logos, photo, special)
+            return GameCard(box, badge, title, detail, stream, logos, photo, special)
         }
         override fun onBindViewHolder(holder: GameCard, position: Int) {
             val game = games.getOrNull(position)
@@ -143,9 +145,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             holder.special.visibility = GONE; holder.box.tag = game.key; holder.badge.text = badge(game); holder.title.text = scoreText(game)
             drawCard(holder, game)
             holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + GuideClock.sportsDate(game.start) + if (game.state != "pre") "\n" + statusText(game) else ""
+            holder.stream.text = streamSummaries[game.key].orEmpty(); holder.stream.tag = "sports-coverage:${game.key}"
             holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
-            fun ink(active: Boolean) { val color = if (active) Color.BLACK else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.badge.setTextColor(if (active) Color.BLACK else if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent) }
+            fun ink(active: Boolean) { val color = if (active) Color.BLACK else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.stream.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.badge.setTextColor(if (active) Color.BLACK else if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent) }
             ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game) } }
             holder.box.setOnClickListener { openGame(game) }
             cardKeys(holder)
@@ -248,6 +251,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!findStreams.requestFocus()) todayButton.requestFocus()
     }
     private fun bindRedZone(holder: GameCard) {
+        holder.stream.text = ""; holder.stream.tag = null
         holder.special.isVisible = true; holder.box.contentDescription = "NFL RedZone. Find channels in your playlist"; holder.box.tag = REDZONE; holder.badge.text = "NFL"; holder.title.text = "NFL RedZone"; holder.detail.text = "Every touchdown, one destination"
         holder.logos.forEach { cardLogos.bind(it, "") }; thumbnails.bind(holder.photo, ""); holder.photo.visibility = GONE
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
@@ -361,6 +365,22 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         status.text = message
     }
     fun finishTuning() { progress.visibility = INVISIBLE }
+    fun refreshStreamLabels() {
+        if (replayMode) return
+        for (i in 0 until streams.childCount) {
+            val holder = streams.getChildViewHolder(streams.getChildAt(i)) as? StreamCard ?: continue
+            streamsList.getOrNull(holder.bindingAdapterPosition)?.let { holder.play.text = streamLabels(it) }
+        }
+    }
+    fun showMatchNotice(message: String) { matchNotice.text = message; matchNotice.isVisible = true; progress.visibility = INVISIBLE }
+    fun updateStreamSummaries(summaries: Map<String, String>) {
+        streamSummaries = summaries.toMap()
+        for (i in 0 until rows.childCount) {
+            val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard ?: continue
+            val next = streamSummaries[holder.box.tag].orEmpty()
+            if (holder.stream.text.toString() != next) holder.stream.text = next
+        }
+    }
     @SuppressLint("NotifyDataSetChanged")
     fun showStreams(game: SportsGame, channels: List<Channel>, message: String? = null, label: (Channel) -> String) {
         if (!watchMode || matchingKey != game.key) return
@@ -448,7 +468,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             games.getOrNull(holder.bindingAdapterPosition)?.let { drawCard(holder, it) }
         }
     }
-    private class GameCard(val box: LinearLayout, val badge: TextView, val title: TextView, val detail: TextView, val logos: List<ImageView>, val photo: ImageView, val special: TextView) : RecyclerView.ViewHolder(box)
+    private class GameCard(val box: LinearLayout, val badge: TextView, val title: TextView, val detail: TextView, val stream: TextView, val logos: List<ImageView>, val photo: ImageView, val special: TextView) : RecyclerView.ViewHolder(box)
     private class StreamCard(val box: LinearLayout, val play: Button, val together: Button) : RecyclerView.ViewHolder(box)
     companion object {
         private const val COLUMNS = 3

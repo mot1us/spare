@@ -419,7 +419,7 @@ class SpareDeviceTest {
     @Test fun gameReminderOverlayKeepsPlaybackAndDismissesWithBack() {
         val previousReminders = store.read("game-reminders.enc")
         var writes: java.util.concurrent.ExecutorService? = null
-        FixtureServer().use { server ->
+        FixtureServer(missingStatus = 404).use { server ->
             val source = Source(name = "Reminder Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val now = System.currentTimeMillis(); val teams = listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }
             val game = SportsGame(teams, now + 86400000L, now + 90000000L, emptyList(), "synthetic-reminder", "pre", competition = "NFL")
@@ -451,16 +451,23 @@ class SpareDeviceTest {
                     scenario.onActivity { activity ->
                         val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000)
                         val reported = Channel("provider-game", "Seattle Seahawks vs San Francisco 49ers 4K 60fps", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
+                        val broken = reported.copy(id = "broken-game", name = "Seattle Seahawks vs San Francisco 49ers 4K 120fps", url = "${server.base}/live/test/test-secret/2.ts", reportedQuality = VideoInfo(3840, 2160, 120f))
                         val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                         val snapshot = guideField.get(activity) as Guide
-                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + reported))
+                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + broken + reported))
                         val scores = LiveSportsSnapshot(listOf(LiveEvent(live.eventId, teams.map { it.id }.toSet(), live.start, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
                         activity.liveSportsLoader = { scores }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
-                        activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel").openGameActions(live)
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}")?.text?.contains("Seattle Seahawks") == true }
+                    assertNull("Prefetch never opens the candidate video", server.requests["/live/test/test-secret/2.ts"])
+                    assertNull(server.requests["/channel2.mp4"])
+                    scenario.onActivity { activity ->
+                        activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.performClick()
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && playing?.isPlaying == true }
+                    assertEquals("A failed cached pick falls through once to the next game stream", 1, server.requests["/live/test/test-secret/2.ts"])
                     scenario.onActivity { assertSame("Watch Best uses explicit provider FHD+/60 data before the first playback measurement", playing, find<PlayerView>(it.window.decorView)!!.player) }
                     scenario.onActivity { activity ->
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
@@ -476,7 +483,7 @@ class SpareDeviceTest {
                         val network = Channel("broadcaster", "USA ESPN 4K", "NFL", "${server.base}/channel3.mp4")
                         val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                         val saved = guideField.get(activity) as Guide
-                        guideField.set(activity, saved.copy(channels = saved.channels.filter { it.id != "provider-game" } + network))
+                        guideField.set(activity, saved.copy(channels = saved.channels.filter { it.id !in setOf("provider-game", "broken-game") } + network))
                         @Suppress("UNCHECKED_CAST") val readings = MainActivity::class.java.getDeclaredField("videoInfo").apply { isAccessible = true }.get(activity) as MutableMap<String, VideoInfo>
                         readings[network.id] = VideoInfo(3840, 2160, 59.94f)
                         val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, networks = listOf("ESPN"))
@@ -488,6 +495,22 @@ class SpareDeviceTest {
                         assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").text.contains("unconfirmed"))
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                     }
+                    scenario.onActivity { activity ->
+                        val nba = game.copy(teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2), state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NBA", eventId = "nba-unknown")
+                        val unknown = Channel("unknown-fps", nba.title + " 4K", "NBA", "${server.base}/channel4.mp4", reportedQuality = VideoInfo(3840, 2160, 0f))
+                        val low = unknown.copy(id = "known-50", name = nba.title + " 4K 50FPS", url = "${server.base}/channel5.mp4", reportedQuality = VideoInfo(3840, 2160, 50f))
+                        val scoreboard = LiveSportsSnapshot(listOf(LiveEvent(nba.eventId, nba.teams.map { it.id }.toSet(), nba.start, league = "NBA")), System.currentTimeMillis(), setOf("NBA"))
+                        activity.liveSportsLoader = { scoreboard }
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scoreboard)
+                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(unknown, low), emptyMap()))
+                        MainActivity::class.java.getDeclaredField("filters").apply { isAccessible = true }.set(activity, GuideFilters(1080, FrameRateFilter.sixtyOrBetter))
+                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, nba, true)
+                    }
+                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel4.mp4" && playing?.isPlaying == true }
+                    assertNull("Known 50 FPS is not an automatic fallback", server.requests["/channel5.mp4"])
+                    scenario.onActivity { assertSame("Unknown-FPS trials use the existing primary player", playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").text.contains("No measured FHD/60") }
                 }
             } finally {
                 writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)

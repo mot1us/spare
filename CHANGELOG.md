@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0 — 2026-10-27
+
+- Prepare live-game channel matches in the background and cache them for the active app session. Prioritize focused cards, pause work during buffering or multiview, and cancel it when leaving Sports.
+- Show matched channel, resolution and FPS evidence on Sports cards without moving focus or rebuilding the grid.
+- Prefer known FHD+/60 streams; automatically try FHD/4K coverage with unknown FPS and measure it during playback. Keep strict guide filters and exclude known lower rates from automatic selection.
+- Try up to three game streams after failed starts or measured lower quality, then show alternatives. Preserve account/authentication errors and offer Other game streams for later failures.
+- Prioritize provider quality before bounding broadcaster variants so a known 60 FPS channel is less likely to be omitted.
+
 ## 0.15.1 — 2026-10-27
 
 - Add an optional Sports setting to find and play the best known FHD+/60 stream when selecting a live game card, including calendar games. Show stream results if no suitable match is found.
