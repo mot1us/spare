@@ -322,6 +322,9 @@ class MainActivity : Activity() {
     private var started = false
     private var closed = false
     private var hasPlayedChannel = false
+    private var playbackRebuffers = 0
+    private var playbackReconnects = 0
+    private var playbackLoadErrors = 0
     private var playbackPhase = PlaybackPhase.OPENING
     private var startupFailures = StartupFailures()
     private var reconnects = ReconnectBudget()
@@ -410,6 +413,7 @@ class MainActivity : Activity() {
         var qualityFormat: androidx.media3.common.Format? = null
         var qualityCodec: android.media.MediaFormat? = null
         var qualityHeader = AvcHeader.Info()
+        var qualityCodecRate = 0f
         var qualityToken = -1
         var qualityPostedAt = 0L
         player.setVideoFrameMetadataListener { pts, _, format, codec ->
@@ -417,11 +421,14 @@ class MainActivity : Activity() {
             progressFrameUs = pts; progressFrameToken = token
             val measured = cadence.observe(token, pts)
             measuredFrameRate = measured
-            val codecRate = runCatching { codec?.getFloat(android.media.MediaFormat.KEY_FRAME_RATE) }.getOrNull()
-                ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull() ?: 0f
-            decoderFrameRate = codecRate
+            val now = android.os.SystemClock.elapsedRealtime()
+            // Keep frame progress/cadence exact; defer format parsing, exceptions,
+            // display requests and UI snapshots off the per-frame hot path.
+            if (qualityToken == token && now - qualityPostedAt < 500) return@setVideoFrameMetadataListener
             if (qualityToken != token || qualityFormat !== format || qualityCodec !== codec) {
                 qualityToken = token; qualityFormat = format; qualityCodec = codec
+                qualityCodecRate = runCatching { codec?.getFloat(android.media.MediaFormat.KEY_FRAME_RATE) }.getOrNull()
+                    ?: runCatching { codec?.getInteger(android.media.MediaFormat.KEY_FRAME_RATE)?.toFloat() }.getOrNull() ?: 0f
                 val buffers = format.initializationData.toMutableList()
                 listOf("csd-0", "csd-1").forEach { key -> runCatching {
                     codec?.getByteBuffer(key)?.duplicate()?.let { data -> if (data.remaining() in 4..65536) buffers.add(ByteArray(data.remaining()).also(data::get)) }
@@ -429,9 +436,9 @@ class MainActivity : Activity() {
                 qualityHeader = if (format.sampleMimeType == androidx.media3.common.MimeTypes.VIDEO_H264) AvcHeader.read(buffers) else AvcHeader.Info()
                 scanEvidence = if (qualityHeader.known) (if (qualityHeader.interlaced) "SPS interlaced" else "SPS progressive") else if (VideoRate.interlaced(format)) "MPEG-2 interlaced" else "unknown"
             }
-            val info = VideoRate.observation(format, measured, codecRate, qualityHeader, sourceVideoFrames.rate(token))
+            decoderFrameRate = qualityCodecRate
+            val info = VideoRate.observation(format, measured, qualityCodecRate, qualityHeader, sourceVideoFrames.rate(token))
             if (!multiview.active) frameRates.request(info.fps)
-            val now = android.os.SystemClock.elapsedRealtime()
             if (now - qualityPostedAt >= 500) {
                 qualityPostedAt = now
                 // Player callbacks and persisted UI state have different threads.
@@ -477,6 +484,7 @@ class MainActivity : Activity() {
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != player.playbackState) return
+                if (state == Player.STATE_BUFFERING && hasPlayedChannel && player.playWhenReady) playbackRebuffers++
                 if (state == Player.STATE_BUFFERING) stopSportsPrefetch()
                 else if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
                 syncPlaybackMonitoring(); syncReplayDiscovery()
@@ -485,6 +493,9 @@ class MainActivity : Activity() {
             }
         })
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onLoadError(eventTime: AnalyticsListener.EventTime, loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo, mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData, error: java.io.IOException, wasCanceled: Boolean) {
+                if (!wasCanceled && !eventTime.timeline.isEmpty && eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId == expectedMediaId) playbackLoadErrors++
+            }
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
                 firstFrame = true; hasPlayedChannel = true
@@ -1025,7 +1036,8 @@ class MainActivity : Activity() {
         if (!Network.allowed(channel.url, selected.allowHttp)) { showPlaybackFailure("This channel needs an allowed HTTP or HTTPS address. Check this source’s HTTP setting."); return }
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls)
         closeDetails(); cancelPlaybackCallbacks(); playbackToken++
-        hasPlayedChannel = false; startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
+        hasPlayedChannel = false; playbackRebuffers = 0; playbackReconnects = 0; playbackLoadErrors = 0
+        startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
         current = channel; previewCaption.text = "Full screen · ${channel.name}"; showInfo(channel)
         playbackUrl = if (selected.kind == "xtream") when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts") ?: channel.url; "hls" -> StreamUrls.format(channel.url, "m3u8") ?: channel.url; else -> channel.url } else channel.url
         if (selected.kind == "xtream" && store.streamFormat(selected) == "auto") playbackUrl = workingUrls[channel.id] ?: playbackUrl
@@ -1041,7 +1053,7 @@ class MainActivity : Activity() {
         playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
-        if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(12000).setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
+        if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
         val media = if (playbackUrl.substringBefore('?').endsWith(".m3u8", true)) {
             HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
@@ -1101,6 +1113,7 @@ class MainActivity : Activity() {
     private fun reconnectOrFail(detail: String) {
         cancelPlaybackCallbacks()
         if (!reconnects.take(android.os.SystemClock.elapsedRealtime())) { showPlaybackFailure(detail); return }
+        playbackReconnects++
         saveDemandProgress(); player.stop(); showPlaybackLoading(PlaybackPhase.RECONNECTING); handler.postDelayed(retry, 1500)
     }
     private fun saveUnavailable() { sportsStreamSummaries.clear(); source?.let { store.saveUnavailable(it, unavailable) } }
@@ -1862,9 +1875,11 @@ class MainActivity : Activity() {
         val format = player.videoFormat
         fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${videoInfo[channel.id]?.evidence.orEmpty()}"
+        val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
+        val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
         if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title)
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence + health, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title)
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }

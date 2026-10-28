@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.1 — 2026-10-28
+
+- Give transient provider reads Media3's normal bounded retries instead of escalating after one retry, and allow longer quiet intervals on live HTTP connections before declaring a timeout. Keep account/rate-limit errors and stalled-playback recovery bounded.
+- Let HLS honor provider segment timing and hold-back instead of forcing a 12-second live offset. Preserve normal playback speed and existing startup/rebuffer thresholds.
+- Move decoder metadata reads and quality/display updates out of the per-frame hot path. Add a local channel-details line for transport, buffered seconds, stalls, load errors and reconnects without exposing provider URLs.
+- Publish Android updates independently of optional Mac packaging so an unavailable Mac runner cannot block a checked, signed APK.
+
 ## 0.19.0 — 2026-10-28
 
 - Add a native macOS preview for Apple Silicon and Intel: M3U/Xtream playlist setup, live playback, cached guide, categories, favorites, search, audio/subtitle tracks and previous-channel controls.

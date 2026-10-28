@@ -13,6 +13,10 @@ on:
         description: Keep outside stable updates until hardware testing passes
         type: boolean
         default: true
+      macos:
+        description: Also build and append the Mac preview after the APK publishes
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -24,12 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.request.outputs.publish }}
+      macos: ${{ steps.request.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: request
         name: Read explicit release request
         env:
           MANUAL_PUBLISH: ${{ inputs.publish }}
+          MANUAL_MACOS: ${{ inputs.macos }}
         run: |
           python3 - <<'PYTHON'
           import json, os
@@ -42,6 +48,8 @@ jobs:
               publish = request['versionName'] == tracked['versionName'] and request['versionCode'] == int(tracked['versionCode'])
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('publish=' + str(publish).lower() + '\n')
+              macos = os.environ.get('MANUAL_MACOS') == 'true' if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' else bool(request.get('macos', False))
+              output.write('macos=' + str(publish and macos).lower() + '\n')
           print('Release requested' if publish else 'No release requested; only normal build checks are needed.')
           PYTHON
   build:
@@ -68,8 +76,8 @@ jobs:
           path: app/build/reports/
   macos:
     needs: request
-    if: needs.request.outputs.publish == 'true'
-    runs-on: macos-15
+    if: needs.request.outputs.macos == 'true'
+    runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,7 +137,7 @@ jobs:
           path: app/build/reports/device/
   release:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
-    needs: [build, device, macos]
+    needs: [build, device]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -176,5 +184,20 @@ jobs:
           flags=()
           channel="$(python3 scripts/version.py --channel)"
           if [ "$channel" = prerelease ] || [ "$MANUAL_PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "v$version" dist/spare.apk dist/SHA256SUMS dist/update.json --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Spare $version" --notes-file dist/release-notes.md "${flags[@]}"
+  publish-macos:
+    needs: [release, macos]
+    if: github.ref == 'refs/heads/main' && needs.macos.result == 'success' && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Append checked Mac artifacts to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(python3 scripts/version.py --name)"
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name spare-macos-preview --dir dist/macos
-          gh release create "v$version" dist/spare.apk dist/SHA256SUMS dist/update.json dist/macos/*.zip dist/macos/*.tar.xz dist/macos/MACOS-SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Spare $version" --notes-file dist/release-notes.md "${flags[@]}"
+          gh release upload "v$version" dist/macos/*.zip dist/macos/*.tar.xz dist/macos/MACOS-SHA256SUMS --repo "$GITHUB_REPOSITORY"
