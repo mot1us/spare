@@ -878,6 +878,7 @@ class SpareDeviceTest {
                 device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels[1].id }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isNotEmpty() == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
                 activateSetting(scenario, "Subtitles")
                 assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); activateSetting(scenario, "Off"); leaveSettings(scenario)
