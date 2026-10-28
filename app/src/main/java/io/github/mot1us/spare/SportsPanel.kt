@@ -56,6 +56,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     var hasReminder: (SportsGame) -> Boolean = { false }
     var toggleReminder: (SportsGame) -> Unit = {}
     var watchBest: (SportsGame) -> Unit = {}
+    var playOnSelection: () -> Boolean = { false }
     private fun updateReminder(game: SportsGame) {
         reminder.isVisible = actionsOpen && game.state == "pre"
         reminder.isEnabled = game.state == "pre"
@@ -239,7 +240,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     } }
     fun openGameActions(game: SportsGame) { showGames(); openGame(game) }
     private fun openGame(game: SportsGame) {
-        remembered = game.key; actionsOpen = true; showHero(game); focused(game)
+        remembered = game.key
+        if (playOnSelection() && game.live(System.currentTimeMillis())) { focused(game); watchBest(game); return }
+        actionsOpen = true; showHero(game); focused(game)
         rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true
         status.text = if (game.state == "post" && !findStreams.isEnabled) "Replay unavailable in this playlist’s catch-up window." else "Back returns to games"
         if (!findStreams.requestFocus()) todayButton.requestFocus()

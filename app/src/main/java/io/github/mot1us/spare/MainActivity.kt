@@ -579,6 +579,7 @@ class MainActivity : Activity() {
             runCatching { reminders.toggle(game) }.onSuccess { enabled -> saveGameReminders(); reminderCheckedAt = 0; toast(if (enabled) "Reminder set · ${GuideClock.sportsDate(game.start)}" else "Reminder removed") }.onFailure { toast("Up to 64 upcoming game reminders can be saved") }
         }
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
+        sportsPanel.playOnSelection = { store.sportsAutoPlay && !(::multiview.isInitialized && multiview.browsing) }
         sportsPanel.findRedZone = {
             val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = if (browseAll) GuideFilters() else filters
             sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
@@ -1335,7 +1336,8 @@ class MainActivity : Activity() {
     private fun renderSportsManager(page: String) {
         val panel = sportsManager ?: return
         if (page == "Preferences") {
-            panel.page("Your sports", "Choose leagues and teams on the left. Games appear together on the Sports home; selecting a card opens its watch, replay or reminder actions.")
+            panel.page("Your sports", "Choose leagues and teams on the left. Enable automatic playback to watch a live game directly from its card. Upcoming and completed games keep their reminder and replay options.")
+            panel.action("Play best stream on selection", "Selecting a live game finds a known FHD/60 or better stream and plays it full screen. If none is found, review the available streams.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; panel.refresh("Play best stream on selection") }
             panel.action("Show only my teams", selected = store.sportsFollowedOnly) { store.sportsFollowedOnly = !store.sportsFollowedOnly; sportsPreferencesChanged = true; panel.refresh("Show only my teams") }
             panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); panel.refresh("Hide completed-game scores") }
             panel.note("NFL RedZone appears whenever NFL is enabled. Its availability follows your playlist provider; it is not a scheduled matchup.")
@@ -1369,10 +1371,10 @@ class MainActivity : Activity() {
     }
     private fun confirmSportsReset() {
         val panel = sportsManager ?: return
-        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, enables every league, turns off My teams only and hides completed scores. Sports will open on Today.")
+        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, enables every league, turns off My teams only and automatic playback, and hides completed scores. Sports will open on Today.")
         panel.action("Cancel") { panel.refresh("Reset Sports settings") }
         panel.action("Reset Sports") {
-            store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.hideCompletedScores = true; store.sportsTeam = "today"
+            store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.hideCompletedScores = true; store.sportsTeam = "today"
             sportsTeam = "today"; reminders = GameReminders(); saveGameReminders(); reminderPending = null; dismissGameReminder()
             sportsPanel.setSpoilers(true); sportsPanel.home(); sportsPreferencesChanged = true
             panel.refresh("Reset Sports settings"); toast("Sports settings reset")
@@ -1687,6 +1689,7 @@ class MainActivity : Activity() {
             "Subtitles" -> renderCaptionSettings()
             "Sports" -> {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers a matching game in FHD/60 or better, using provider or playback quality. If only an advertised broadcaster matches, it tries that channel and labels coverage unconfirmed. Unknown quality remains available for manual review.")
+                panel.action("Play best stream on selection", "Skip the game actions for live cards. Find a known FHD/60 or better stream and play full screen, or show available streams if no suitable match is found.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
                 panel.note("Saved reminders")

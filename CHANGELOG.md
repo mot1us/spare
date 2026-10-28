@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.1 — 2026-10-27
+
+- Add an optional Sports setting to find and play the best known FHD+/60 stream when selecting a live game card, including calendar games. Show stream results if no suitable match is found.
+- Keep reminder and replay actions for upcoming and completed games, and preserve manual stream selection when adding a multiview pane. Reset Sports restores automatic playback to off.
+
 ## 0.15.0 — 2026-10-27
 
 - Show games beside the Sports calendar, including local start times, live/final states, saved-score preferences and counts on loaded dates. Open game actions directly from the calendar.

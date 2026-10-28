@@ -48,7 +48,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -444,6 +444,10 @@ class SpareDeviceTest {
                     device.pressBack()
                     waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
                     scenario.onActivity { assertTrue(playing!!.isPlaying); assertSame(playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    assertFalse(SecureStore(context).sportsAutoPlay)
+                    device.pressMenu(); activateSetting(scenario, "Sports"); activateSetting(scenario, "Play best stream on selection")
+                    assertTrue("Automatic playback persists from main Settings", SecureStore(context).sportsAutoPlay)
+                    leaveSettings(scenario)
                     scenario.onActivity { activity ->
                         val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000)
                         val reported = Channel("provider-game", "Seattle Seahawks vs San Francisco 49ers 4K 60fps", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
@@ -454,10 +458,20 @@ class SpareDeviceTest {
                         activity.liveSportsLoader = { scores }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
-                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, live, true)
+                        activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel").openGameActions(live)
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && playing?.isPlaying == true }
                     scenario.onActivity { assertSame("Watch Best uses explicit provider FHD+/60 data before the first playback measurement", playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    scenario.onActivity { activity ->
+                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        val panel = activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")
+                        panel.openGameActions(game)
+                        assertTrue("Upcoming games still offer reminders", panel.findViewWithTag<View>("sports-reminder").isShown)
+                        panel.openGameActions(game.copy(state = "post"))
+                        assertEquals("Find replay", panel.findViewWithTag<android.widget.Button>("sports-watch").text.toString())
+                        assertTrue("Completed games still show replay actions", panel.findViewWithTag<View>("sports-actions").isShown)
+                        assertEquals("/channel2.mp4", playing!!.currentMediaItem!!.localConfiguration!!.uri.path)
+                    }
                     scenario.onActivity { activity ->
                         val network = Channel("broadcaster", "USA ESPN 4K", "NFL", "${server.base}/channel3.mp4")
                         val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
@@ -1079,6 +1093,8 @@ class SpareDeviceTest {
                         val manager = activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager")
                         manager.selectSetting("Preferences"); manager.findViewWithTag<View>("settings-option:Show only my teams").performClick()
                         assertTrue(manager.opened); assertTrue(store.sportsFollowedOnly)
+                        manager.findViewWithTag<View>("settings-option:Play best stream on selection").performClick()
+                        assertTrue("Sports preferences save automatic playback without closing", manager.opened && SecureStore(context).sportsAutoPlay)
                         manager.selectSetting("Leagues"); manager.focusOption("Champions League"); manager.findViewWithTag<View>("settings-option:Champions League").performClick()
                         assertTrue(manager.opened); assertFalse("UCL" in SecureStore(context).sportsLeagues)
                         manager.selectSetting("NFL")
@@ -1092,7 +1108,7 @@ class SpareDeviceTest {
                         manager.findViewWithTag<View>("settings-option:Cancel").performClick(); assertTrue("nfl:ARI" in store.followedTeams)
                         manager.findViewWithTag<View>("settings-option:Reset Sports settings").performClick(); manager.findViewWithTag<View>("settings-option:Reset Sports").performClick()
                         assertTrue(store.followedTeams.isEmpty()); assertEquals(SportsLeagues.byId.keys, store.sportsLeagues)
-                        assertFalse(store.sportsFollowedOnly); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
+                        assertFalse(store.sportsFollowedOnly); assertFalse(SecureStore(context).sportsAutoPlay); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
                         assertEquals(source.id, store.active)
                     }
                     device.pressBack(); device.pressBack()
