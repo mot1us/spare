@@ -21,6 +21,31 @@ class ReconnectBudget {
     }
 }
 
+/** Monotonic, per-attempt progress checks. Brief buffering and deliberate pauses are harmless. */
+class PlaybackProgress {
+    private var owner: Int? = null
+    private var position = 0L
+    private var positionAt = 0L
+    private var frame: Long? = null
+    private var frameAt = 0L
+    private var readyAt = 0L
+    private var wasBuffering = false
+    fun reset() { owner = null }
+    fun stalled(token: Int, now: Long, positionMs: Long, frameUs: Long?, buffering: Boolean, active: Boolean): Boolean {
+        if (!active) { reset(); return false }
+        if (owner != token) {
+            owner = token; position = positionMs; positionAt = now; frame = frameUs; frameAt = now; readyAt = now; wasBuffering = buffering
+            return false
+        }
+        if (kotlin.math.abs(positionMs - position) >= 250) { position = positionMs; positionAt = now }
+        if (frameUs == null || frameUs != frame) { frame = frameUs; frameAt = now }
+        if (buffering || wasBuffering) readyAt = now
+        wasBuffering = buffering
+        if (now - positionAt >= 45000) return true
+        return !buffering && now - readyAt >= 3000 && (now - positionAt >= 20000 || frameUs != null && now - frameAt >= 20000)
+    }
+}
+
 enum class PlaybackPhase(val label: String) {
     OPENING("Opening channel…"), ALTERNATE("Trying alternate stream format…"),
     BUFFERING("Buffering…"), RECONNECTING("Reconnecting…")

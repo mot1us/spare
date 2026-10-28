@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.0 — 2026-10-27
+
+- Recover sustained live playback stalls with per-attempt progress monitoring, restore recovery after pause/resume and first frames, and keep reconnects bounded. Add Reconnect to channel details while preserving short-buffer recovery and existing buffer sizes.
+- Add a Local guide tab and Settings → Local channels for a U.S. city/state. Match your playlist offline using station call signs and explicit provider location labels; include a small attributed historical FCC reference, with no GPS or location requests.
+- Reuse Sports card summaries during focus changes and compute new summaries off the UI thread. Show Play replay directly on final-game cards for confirmed, unexpired catch-up matches; other eligible cards go straight to finding replays.
+- Treat Sports quality as a preference: prefer FHD/60, then fall back to lower-resolution, lower-FPS or unverified matches. Play a single fallback immediately or offer a chooser; keep working playback instead of rejecting its measured quality. Selecting a guide channel opens full screen.
+- Add guide background opacity percentages under Guide video, reserve space while the hidden dock is open or closing, and move the TV graphic after spare on the Android TV launcher banner and icon.
+
 ## 0.16.2 — 2026-10-27
 
 - Let background Sports matching finish its local playlist pass instead of discarding large lineups after 1.5 seconds. Show checked-channel progress and preserve cancellation when tuning or leaving Sports.

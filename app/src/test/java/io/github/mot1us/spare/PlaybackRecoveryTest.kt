@@ -37,4 +37,34 @@ class PlaybackRecoveryTest {
         val ordered = CategoryOrder.usaFirst(other + us)
         assertTrue(ordered.take(us.size).all(CategoryOrder::isUsa)); assertEquals((other + us).toSet(), ordered.toSet())
     }
+    @Test fun progressDetectsReadyFreezesWithoutReconnectingShortBuffers() {
+        val progress = PlaybackProgress()
+        assertFalse(progress.stalled(1, 0, 0, 1, true, true))
+        assertFalse(progress.stalled(1, 44000, 0, 1, true, true))
+        assertTrue(progress.stalled(1, 45000, 0, 1, true, true))
+        progress.reset()
+        assertFalse(progress.stalled(2, 0, 0, 1, false, true))
+        assertFalse(progress.stalled(2, 19999, 0, 1, false, true))
+        assertTrue(progress.stalled(2, 20000, 0, 1, false, true))
+        progress.reset()
+        assertFalse(progress.stalled(3, 0, 0, 1, true, true))
+        assertFalse(progress.stalled(3, 30000, 0, 1, false, true))
+        assertFalse(progress.stalled(3, 31000, 1000, 2, false, true))
+        assertFalse(progress.stalled(3, 34000, 4000, 3, false, true))
+    }
+    @Test fun pausesSuppressionAndNewPlaybackTokensCannotInheritAStall() {
+        val progress = PlaybackProgress()
+        progress.stalled(1, 0, 0, 1, false, true)
+        assertFalse(progress.stalled(1, 60000, 0, 1, false, false))
+        assertFalse(progress.stalled(1, 120000, 0, 1, false, true))
+        assertFalse(progress.stalled(2, 150000, 0, 1, false, true))
+        assertFalse(progress.stalled(2, 160000, 10000, 2, false, true))
+    }
+    @Test fun videoProgressIsCheckedWhileAudioOnlyPlaybackUsesItsPosition() {
+        val video = PlaybackProgress(); video.stalled(1, 0, 0, 1, false, true)
+        assertTrue(video.stalled(1, 20000, 20000, 1, false, true))
+        val audio = PlaybackProgress(); audio.stalled(1, 0, 0, null, false, true)
+        assertFalse(audio.stalled(1, 60000, 60000, null, false, true))
+        assertTrue(audio.stalled(1, 81000, 60000, null, false, true))
+    }
 }

@@ -58,6 +58,19 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     var watchBest: (SportsGame) -> Unit = {}
     var playOnSelection: () -> Boolean = { false }
     private var streamSummaries = emptyMap<String, String>()
+    private var cardReplays = emptyMap<String, SportsReplay>()
+    private fun cardStream(game: SportsGame): String = if (game.state != "post") streamSummaries[game.key].orEmpty()
+        else if (cardReplays[game.key]?.let { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) } == true) "▶ Play replay\nProvider catch-up"
+        else if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) "Find replay\nCheck provider catch-up"
+        else "Replay unavailable"
+    fun updateCardReplays(replays: Map<String, SportsReplay>) { cardReplays = replays; refreshCardStreams() }
+    private fun refreshCardStreams() {
+        for (i in 0 until rows.childCount) {
+            val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard ?: continue
+            val next = games.getOrNull(holder.bindingAdapterPosition)?.let(::cardStream).orEmpty()
+            if (holder.stream.text.toString() != next) holder.stream.text = next
+        }
+    }
     private fun updateReminder(game: SportsGame) {
         reminder.isVisible = actionsOpen && game.state == "pre"
         reminder.isEnabled = game.state == "pre"
@@ -145,7 +158,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             holder.special.visibility = GONE; holder.box.tag = game.key; holder.badge.text = badge(game); holder.title.text = scoreText(game)
             drawCard(holder, game)
             holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + GuideClock.sportsDate(game.start) + if (game.state != "pre") "\n" + statusText(game) else ""
-            holder.stream.text = streamSummaries[game.key].orEmpty(); holder.stream.tag = "sports-coverage:${game.key}"
+            holder.stream.text = cardStream(game); holder.stream.tag = "sports-coverage:${game.key}"
             holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
             fun ink(active: Boolean) { val color = if (active) Color.BLACK else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.stream.setTextColor(if (active) Color.BLACK else Color.LTGRAY); holder.badge.setTextColor(if (active) Color.BLACK else if (game.live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else GuideTheme.current.accent) }
@@ -241,9 +254,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             }; true
         }
     } }
-    fun openGameActions(game: SportsGame) { showGames(); openGame(game) }
-    private fun openGame(game: SportsGame) {
+    fun openGameActions(game: SportsGame) { showGames(); openGame(game, direct = false) }
+    private fun openGame(game: SportsGame, direct: Boolean = true) {
         remembered = game.key
+        if (direct && game.state == "post") {
+            cardReplays[game.key]?.takeIf { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) }?.let { focused(game); watchReplay(it); return }
+            if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) { focused(game); select(game); return }
+        }
         if (playOnSelection() && game.live(System.currentTimeMillis())) { focused(game); watchBest(game); return }
         actionsOpen = true; showHero(game); focused(game)
         rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true
@@ -374,12 +391,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     fun showMatchNotice(message: String) { matchNotice.text = message; matchNotice.isVisible = true; progress.visibility = INVISIBLE }
     fun updateStreamSummaries(summaries: Map<String, String>) {
+        if (streamSummaries == summaries) return
         streamSummaries = summaries.toMap()
-        for (i in 0 until rows.childCount) {
-            val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard ?: continue
-            val next = streamSummaries[holder.box.tag].orEmpty()
-            if (holder.stream.text.toString() != next) holder.stream.text = next
-        }
+        refreshCardStreams()
     }
     @SuppressLint("NotifyDataSetChanged")
     fun showStreams(game: SportsGame, channels: List<Channel>, message: String? = null, label: (Channel) -> String) {

@@ -82,12 +82,14 @@ object SportsStreams {
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {
         if (!game.live(now)) return emptyList()
-        val relaxed = rank(game, filters.copy(excludedFps = emptySet()), quality, available)
+        val relaxed = rank(game, filters.copy(minHeight = 0, excludedFps = emptySet()), quality, available)
         val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
         val coverage = relaxed.filter { it.id in exact || advertisedCoverage(game, it, guide, now) }
         val known = coverage.filter { qualifies(it, quality[it.id]) && filters.matches(it, quality[it.id]) }
         val unknown = coverage.filter { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }
-        return (known.filter { it.id in exact } + known.filter { it.id !in exact } + unknown.filter { it.id in exact } + unknown.filter { it.id !in exact }).distinctBy { it.id }
+        // Quality preferences order the choices; they must never make a playable game unavailable.
+        val preferred = coverage.filter { filters.matches(it, quality[it.id]) }
+        return (known + preferred + unknown + coverage).distinctBy { it.id }
     }
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {
@@ -103,9 +105,9 @@ object SportsStreams {
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."
-        ranked.isEmpty() -> "No streams match your current filters."
+        ranked.isEmpty() -> "No matching streams found in this playlist."
         ranked.any { qualifies(it, quality[it.id]) } -> "FHD+/60 streams found · game coverage unconfirmed. Choose a stream."
         ranked.any { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0) } == true } -> "FHD/4K found · FPS unknown. Preview a stream to measure it."
-        else -> "No FHD+/60 stream found. Choose a stream or adjust filters."
+        else -> "Best available matches shown first. Choose a stream to watch."
     }
 }

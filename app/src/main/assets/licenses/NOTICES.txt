@@ -27,3 +27,6 @@ Apache License, Version 2.0
 https://github.com/JetBrains/java-annotations
 
 Complete license texts follow. Exact dependency versions are recorded in app/gradle.lockfile in the public source repository. Test-only dependencies are excluded from production APKs.
+
+Local station reference: FCC Post-Auction Coverage Baseline 2.0, public domain U.S. government data. Historical station/community reference downloaded 2026-10-27. https://opendata.fcc.gov/Wireless/Post-Auction-Coverage-Baseline-2-0/42c8-wnh4
+State names: IPTV-org public factual subdivision metadata (Unlicense). https://github.com/iptv-org/api

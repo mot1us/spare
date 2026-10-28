@@ -1,9 +1,13 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="320" android:viewportHeight="320">
     <path android:fillColor="#0B1018" android:pathData="M-1,-1h322v322h-322z" />
+    <group android:translateX="204" android:translateY="10">
     <path android:fillColor="#FFF0D8" android:pathData="M34,136h48v4h-48z M30,140h56v32h-56z M34,172h48v4h-48z M38,176h8v4h-8z M70,176h8v4h-8z M46,128h4v4h-4z M50,132h4v4h-4z M66,128h4v4h-4z M62,132h4v4h-4z" />
     <path android:fillColor="#0B1018" android:pathData="M34,142h36v28h-36z" />
     <path android:fillColor="#88C8B5" android:pathData="M38,146h28v20h-28z" />
     <path android:fillColor="#0B1018" android:pathData="M76,146h4v4h-4z M76,158h4v8h-4z" />
     <path android:fillColor="#D7EEE5" android:pathData="M38,146h8v4h-8z" />
+    </group>
+    <group android:translateX="-80">
     <path android:fillColor="#FFF0D8" android:pathData="M116,147h6v6h-6z M122,147h6v6h-6z M128,147h6v6h-6z M134,147h6v6h-6z M110,153h6v6h-6z M116,159h6v6h-6z M122,159h6v6h-6z M128,159h6v6h-6z M134,165h6v6h-6z M110,171h6v6h-6z M116,171h6v6h-6z M122,171h6v6h-6z M128,171h6v6h-6z M146,147h6v6h-6z M152,147h6v6h-6z M158,147h6v6h-6z M164,147h6v6h-6z M146,153h6v6h-6z M170,153h6v6h-6z M146,159h6v6h-6z M170,159h6v6h-6z M146,165h6v6h-6z M152,165h6v6h-6z M158,165h6v6h-6z M164,165h6v6h-6z M146,171h6v6h-6z M146,177h6v6h-6z M146,183h6v6h-6z M188,147h6v6h-6z M194,147h6v6h-6z M200,147h6v6h-6z M206,153h6v6h-6z M188,159h6v6h-6z M194,159h6v6h-6z M200,159h6v6h-6z M206,159h6v6h-6z M182,165h6v6h-6z M206,165h6v6h-6z M188,171h6v6h-6z M194,171h6v6h-6z M200,171h6v6h-6z M206,171h6v6h-6z M218,147h6v6h-6z M230,147h6v6h-6z M236,147h6v6h-6z M218,153h6v6h-6z M224,153h6v6h-6z M242,153h6v6h-6z M218,159h6v6h-6z M218,165h6v6h-6z M218,171h6v6h-6z M260,147h6v6h-6z M266,147h6v6h-6z M272,147h6v6h-6z M254,153h6v6h-6z M278,153h6v6h-6z M254,159h6v6h-6z M260,159h6v6h-6z M266,159h6v6h-6z M272,159h6v6h-6z M278,159h6v6h-6z M254,165h6v6h-6z M260,171h6v6h-6z M266,171h6v6h-6z M272,171h6v6h-6z M278,171h6v6h-6z" />
+    </group>
 </vector>

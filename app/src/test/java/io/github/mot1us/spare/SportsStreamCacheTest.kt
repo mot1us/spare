@@ -51,13 +51,13 @@ class SportsStreamCacheTest {
         assertNull(cache.get(token, game.copy(eventId = "two"), now + 120000))
         cache.clear(); assertFalse(cache.put(token, SportsStreamCache.Match(game), now))
     }
-    @Test fun automaticTrialsKeepKnownSixtyFirstAllowUnknownAndRejectKnownLowRates() {
+    @Test fun automaticChoicesPreferKnownSixtyButKeepLowerQualityFallbacks() {
         val unknown = channel("unknown", 0f); val known = channel("known", 59.94f); val low = channel("low", 50f)
         val matched = game.copy(titleMatches = listOf(unknown, low, known))
         val filters = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
         val guide = Guide(listOf(unknown, known, low), emptyMap())
-        assertEquals(listOf(known, unknown), SportsStreams.automaticChoices(matched, filters, emptyMap(), guide, now))
-        assertEquals(listOf(unknown), SportsStreams.automaticChoices(matched, filters, mapOf(known.id to VideoInfo(3840,2160,30f)), guide, now))
+        assertEquals(listOf(known, unknown, low), SportsStreams.automaticChoices(matched, filters, emptyMap(), guide, now))
+        assertEquals(listOf(unknown, low, known), SportsStreams.automaticChoices(matched, filters, mapOf(known.id to VideoInfo(3840,2160,30f)), guide, now))
         assertFalse("Live guide remains strict", filters.matches(unknown, null))
         assertTrue(SportsStreams.automaticChoices(matched.copy(state = "pre"), filters, emptyMap(), guide, now).isEmpty())
     }
@@ -82,10 +82,15 @@ class SportsStreamCacheTest {
         val filters = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
         val unverified = game.copy(titleMatches = listOf(unknown))
         val guide = Guide(listOf(unknown, low), emptyMap())
-        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("1 stream found"))
-        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("Quality unverified"))
-        assertTrue(SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now).isEmpty())
-        assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).contains("Outside quality preferences"))
+        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains(unknown.name))
+        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("FPS unverified"))
+        assertEquals(listOf(unknown), SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now))
+        assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).contains("50 fps"))
+        val hd = channel("720", 29.97f).copy(reportedQuality = VideoInfo(1280, 720, 29.97f))
+        assertEquals("A lone HD/30 game must still be playable under FHD/60 preferences", listOf(hd),
+            SportsStreams.automaticChoices(game.copy(titleMatches = listOf(hd)), filters, emptyMap(), Guide(listOf(hd), emptyMap()), now))
+        assertTrue("Unavailable streams stay excluded", SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now) { false }.isEmpty())
+        assertTrue("Category visibility remains respected", SportsStreams.automaticChoices(unverified, filters.copy(groups = setOf("Other")), emptyMap(), guide, now).isEmpty())
         val verified = mapOf(unknown.id to VideoInfo(3840, 2160, 59.94f))
         assertTrue(SportsStreams.cardSummary(unverified, filters, verified, guide, now).contains("59.94"))
     }

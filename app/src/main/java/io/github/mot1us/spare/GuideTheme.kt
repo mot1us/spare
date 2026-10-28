@@ -39,7 +39,7 @@ object GuideTheme {
         cornerRadius = (if (style == "Glass") 12f else radius) * density
         setStroke((density * if (style == "Nostalgia") 2 else 1).toInt().coerceAtLeast(1), when (style) { "Nostalgia" -> GuideTheme.current.accent; "Flat", "Cinema", "Soft" -> Color.TRANSPARENT; "Outline" -> GuideTheme.current.accent; else -> 0x40FFFFFF })
     }
-    fun guideBackground() = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, when (style) {
+    fun guideBackground(opacity: Int = -1) = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, if (opacity >= 0) IntArray(2) { (current.background and 0x00FFFFFF) or ((opacity.coerceIn(0, 100) * 255 / 100) shl 24) } else when (style) {
         "Cinema" -> intArrayOf(current.background or 0xC8000000.toInt(), current.background or 0x88000000.toInt())
         "Flat", "Soft" -> intArrayOf(current.background or 0xF6000000.toInt(), current.background or 0xE8000000.toInt())
         else -> intArrayOf(current.background or 0xF2000000.toInt(), current.background or 0xC9000000.toInt())

@@ -16,6 +16,12 @@ import javax.crypto.spec.GCMParameterSpec
 
 class SecureStore(private val context: Context) {
     private val preferences = context.getSharedPreferences("view-state", Context.MODE_PRIVATE)
+    var localLocation: String
+        get() = preferences.getString("local-location", "").orEmpty()
+        set(value) { preferences.edit { putString("local-location", value.trim().take(80)) } }
+    var guideOpacity: Int
+        get() = preferences.getInt("guide-opacity", -1).coerceIn(-1, 100)
+        set(value) { preferences.edit { putInt("guide-opacity", value.coerceIn(-1, 100)) } }
     private val key: SecretKey by lazy { synchronized(keyLock) {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey("spare-v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {

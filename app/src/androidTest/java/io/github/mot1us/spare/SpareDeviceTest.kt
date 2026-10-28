@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.speech.RecognizerIntent
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.TextView
 import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -48,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -187,9 +188,8 @@ class SpareDeviceTest {
                 assertEquals("Browsing must not change streams", "/channel1.mp4", playingPath(scenario))
                 device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels[1].id }
-                scenario.onActivity { assertTrue("New selection must stay in the guide", channelList(it)!!.isShown) }
+                scenario.onActivity { assertFalse("Selecting a new channel opens full screen", channelList(it)!!.isShown) }
                 assertEquals("/channel2.mp4", playingPath(scenario))
-                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
                 device.pressDPadUp(); instrumentation.waitForIdleSync()
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.pressBack()
@@ -419,6 +419,24 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.adapter?.itemCount == 4 && channelList(it)?.isShown == true }
                 assertEquals(saved, SecureStore(context).sportsFilters(source)); assertEquals(categories, store.filters(source))
+                scenario.onActivity { activity ->
+                    val channels = listOf(Channel("local:king", "KING5 FHD", "News", "${server.base}/channel1.ts"),
+                        Channel("local:kiro", "KIRO HD", "News", "${server.base}/channel2.ts"), Channel("other:abc", "WABC New York", "News", "${server.base}/channel3.ts"))
+                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(channels, emptyMap()))
+                    activity.window.decorView.findViewWithTag<View>("settings").performClick()
+                    val panel = activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel")
+                    panel.selectSetting("Local channels")
+                    panel.findViewWithTag<EditText>("settings-input:City or state").setText("Seattle, WA")
+                    panel.findViewWithTag<View>("settings-option:Save location").performClick()
+                    panel.selectSetting("Guide video"); panel.findViewWithTag<View>("settings-option:Opacity · 85%").performClick()
+                    assertTrue(panel.opened); assertEquals(85, SecureStore(context).guideOpacity)
+                }
+                leaveSettings(scenario)
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-local").performClick() }
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 }
+                assertEquals("Seattle, WA", SecureStore(context).localLocation)
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-all").performClick() }
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 3 }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -532,10 +550,9 @@ class SpareDeviceTest {
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
                         MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, nba, true)
                     }
-                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel4.mp4" && playing?.isPlaying == true }
-                    assertNull("Known 50 FPS is not an automatic fallback", server.requests["/channel5.mp4"])
-                    scenario.onActivity { assertSame("Unknown-FPS trials use the existing primary player", playing, find<PlayerView>(it.window.decorView)!!.player) }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").text.contains("No measured FHD/60") }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:unknown-fps")?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-stream:known-50")?.isShown == true }
+                    assertNull("Multiple fallback streams offer a choice before opening one", server.requests["/channel4.mp4"])
+                    assertNull(server.requests["/channel5.mp4"])
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-filters").performClick() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-manager")?.isShown == true }
                     scenario.onActivity { activity ->
@@ -543,7 +560,25 @@ class SpareDeviceTest {
                     }
                     device.pressBack(); device.pressBack()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:known-50")?.isShown == true }
-                    assertEquals("Refreshing Sports quality never retunes the playing channel", "/channel4.mp4", playingPath(scenario))
+                    assertEquals("Refreshing Sports quality never retunes the playing channel", "/channel3.mp4", playingPath(scenario))
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:unknown-fps").performClick() }
+                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel4.mp4" && playing?.isPlaying == true }
+                    scenario.onActivity { activity ->
+                        assertSame("Unknown-FPS choices reuse the primary player", playing, find<PlayerView>(activity.window.decorView)!!.player)
+                        assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                        val nba = game.copy(teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2), state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NBA", eventId = "nba-hd-only")
+                        val hd = Channel("hd-only", nba.title + " 720p 30FPS", "NBA", "${server.base}/channel5.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
+                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(hd), emptyMap()))
+                        MainActivity::class.java.getDeclaredField("sportsFilters").apply { isAccessible = true }.set(activity, GuideFilters(1080, FrameRateFilter.sixtyOrBetter))
+                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, nba, true)
+                    }
+                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel5.mp4" && playing?.isPlaying == true }
+                    scenario.onActivity { activity ->
+                        MainActivity::class.java.getDeclaredMethod("finishSportsQualityTrial").apply { isAccessible = true }.invoke(activity)
+                        assertFalse("Lower measured quality must not interrupt a playable game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                        assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
+                    }
                 }
             } finally {
                 writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
@@ -651,11 +686,34 @@ class SpareDeviceTest {
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_BUFFERING }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED).moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.onActivity { activity ->
+                    assertTrue("Pause/resume must restore live stall monitoring", MainActivity::class.java.getDeclaredField("monitoringPlayback").apply { isAccessible = true }.getBoolean(activity))
+                }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-status")?.let { bar -> bar.isShown && bar.contentDescription.toString() == "Buffering…" } == true }
                 assertEquals(1, server.requests["/channel1.ts"])
                 server.resumeStream.countDown()
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.isPlaying == true && activity.window.decorView.findViewWithTag<View>("playback-status")?.isShown == false }
                 assertEquals("A recoverable buffer underrun must keep the existing stream", 1, server.requests["/channel1.ts"])
+                var samePlayer: Player? = null; var before = ""
+                scenario.onActivity { activity ->
+                    samePlayer = find<PlayerView>(activity.window.decorView)!!.player
+                    before = samePlayer!!.currentMediaItem!!.mediaId
+                    val progress = MainActivity::class.java.getDeclaredField("playbackProgress").apply { isAccessible = true }.get(activity) as PlaybackProgress
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 21000, samePlayer!!.currentPosition, null, false, true)
+                    (MainActivity::class.java.getDeclaredField("monitorPlayback").apply { isAccessible = true }.get(activity) as Runnable).run()
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.currentMediaItem?.mediaId != before && p.isPlaying } == true }
+                assertEquals("A frozen READY stream is reopened without replacing the app", 2, server.requests["/channel1.ts"])
+                scenario.onActivity { activity ->
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player)
+                    before = samePlayer!!.currentMediaItem!!.mediaId
+                    MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity)
+                    activity.window.decorView.findViewWithTag<View>("channel-reconnect").performClick()
+                }
+                waitFor(scenario) { samePlayer?.let { p -> p.currentMediaItem?.mediaId != before && p.isPlaying } == true }
+                assertEquals(3, server.requests["/channel1.ts"])
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -701,7 +759,7 @@ class SpareDeviceTest {
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "search.png"))
                 scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }; device.pressDPadCenter()
-                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == true }
+                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == false }
                 assertEquals("/channel7.mp4", playingPath(scenario))
             }
             store.saveSources(emptyList()); store.removeCache(source)
@@ -778,7 +836,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.name == "Test Channel 8" }
                 device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.last().id }
-                scenario.onActivity { assertTrue(channelList(it)!!.isShown) }
+                scenario.onActivity { assertFalse(channelList(it)!!.isShown) }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 var attempt = ""
                 scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000)); activateSetting(scenario, "Theme")
@@ -1307,7 +1366,6 @@ class SpareDeviceTest {
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isShown)
                         activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
                     }
-                    device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
                     scenario.onActivity { assertFalse("Replay results must not repeat Find replay", it.window.decorView.findViewWithTag<View>("sports-watch").isShown) }
                     assertEquals("Only the matching broadcaster's metadata archive is queried", 1, server.archiveRequests.get())
@@ -1318,11 +1376,12 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/live/") == true }
                     scenario.onActivity { activity ->
                         assertFalse("Completed games have no Hide/Reveal score button", activity.window.decorView.findViewWithTag<View>("sports-reminder").isShown)
-                        activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
-                        activity.window.decorView.findViewWithTag<View>("sports-watch").performClick()
                     }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick() }
+                    waitFor(scenario) { player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/") == true }
                     assertEquals("Repeat replay lookup uses its saved match", 1, server.archiveRequests.get())
+                    device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     scenario.onActivity { activity ->
                         assertEquals("Score hidden", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.toString())
                         activity.window.decorView.findViewWithTag<View>("settings").performClick()

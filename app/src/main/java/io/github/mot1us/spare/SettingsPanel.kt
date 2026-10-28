@@ -11,6 +11,7 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.EditText
 import androidx.core.view.isVisible
 
 /** One translucent TV surface: navigation stays on the left, actual settings on the right. */
@@ -38,6 +39,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         contentScroll.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_DOWN) focusNavigation(); true } else false }
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (findFocus() is EditText && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return super.dispatchKeyEvent(event)
         if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 if (contentScroll.hasFocus()) focusNavigation() else (leaveNavigation ?: close).invoke()
@@ -78,6 +80,19 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         if (description.isNotEmpty()) note(description)
     }
     fun note(message: String, identifier: String? = null) { content.addView(label(message, 12f).apply { tag = identifier; setTextColor(Color.LTGRAY); setPadding(0, dp(4), 0, dp(14)) }, LayoutParams(-1, -2)) }
+    fun input(title: String, value: String, hint: String): EditText {
+        note(title)
+        val field = EditText(context).apply {
+            tag = "settings-input:$title"; setText(value); this.hint = hint; setSingleLine(); setSelectAllOnFocus(true)
+            setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); textSize = 15f
+            filters = arrayOf(android.text.InputFilter.LengthFilter(80))
+            setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (event.action == KeyEvent.ACTION_DOWN) controls[(controls.indexOf(this) + if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1).coerceIn(controls.indices)].requestFocus(); true
+            } else false }
+        }
+        controls.add(field); content.addView(field, LayoutParams(-1, dp(48)).apply { bottomMargin = dp(12) })
+        return field
+    }
     fun action(title: String, detail: String = "", selected: Boolean = false, execute: () -> Unit) {
         val text = label(title, 13f); val subtitle = label(detail, 11f).apply { setTextColor(Color.LTGRAY) }
         val box = LinearLayout(context).apply {
