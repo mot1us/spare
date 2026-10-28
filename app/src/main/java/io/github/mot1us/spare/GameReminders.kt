@@ -47,6 +47,8 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 
 object SportsStreams {
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
+    private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
+    private fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
     fun qualifies(channel: Channel, observed: VideoInfo?) = preferredQuality.matches(channel, observed)
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
@@ -63,6 +65,18 @@ object SportsStreams {
     fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
         game.live(now) && (game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } || game.titleMatches.any { it.id == channel.id }) &&
             qualifies(channel, quality[channel.id])
+    }
+    fun bestBroadcaster(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, guide: Guide, now: Long): Channel? {
+        if (!game.live(now)) return null
+        val networks = game.networks.map(::broadcasterKey).filter { it.trim().length >= 3 }
+        val target = game.teams.map { it.id }.toSet()
+        return ranked.firstOrNull { channel ->
+            qualifies(channel, quality[channel.id]) && networks.any { network -> val name = broadcasterKey(channel.name); network in name && (network.trimEnd() + " plus ") !in name } &&
+                guide.at(channel, now)?.let { programme ->
+                    !SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) &&
+                        SportsGuide.teams(programme, channel.group)?.map { it.id }?.toSet()?.let { it == target } != false
+                } != false
+        }
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."

@@ -31,13 +31,19 @@ object SportsSchedule {
     }
     private val boardCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
     private val teamCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<LiveEvent>>>()
-    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): LiveSportsSnapshot {
+    fun calendarDates(day: java.time.LocalDate, zone: ZoneId = ZoneId.systemDefault()): List<java.time.LocalDate> {
+        val eastern = ZoneId.of("America/New_York")
+        val first = day.atStartOfDay(zone).withZoneSameInstant(eastern).toLocalDate()
+        val last = day.plusDays(1).atStartOfDay(zone).minusNanos(1).withZoneSameInstant(eastern).toLocalDate()
+        return generateSequence(first) { it.plusDays(1) }.takeWhile { !it.isAfter(last) }.toList()
+    }
+    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }, calendarOnly: Boolean = false): LiveSportsSnapshot {
         val now = System.currentTimeMillis(); val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
         val events = linkedMapOf<String, LiveEvent>(); val leagues = mutableSetOf<String>()
         val urls = mutableListOf<Pair<String, String>>()
         val enabled = SportsLeagues.all.filter { it.id in enabledLeagues }
         if (requestedDate != null) {
-            listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1)).forEach { day -> enabled.forEach { league ->
+            (if (calendarOnly) calendarDates(requestedDate) else listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1))).forEach { day -> enabled.forEach { league ->
                 urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
             } }
         } else {
@@ -58,18 +64,22 @@ object SportsSchedule {
             }
         } }
         if (events.isNotEmpty()) partial(LiveSportsSnapshot(events.values.toList(), now, emptySet()))
+        val completedBoards = mutableMapOf<String, Int>(); val expectedBoards = urls.groupingBy { it.first }.eachCount()
         val pool = Executors.newFixedThreadPool(4)
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<Triple<String, String, List<LiveEvent>>>(pool)
             urls.forEach { (league, url) -> completion.submit(java.util.concurrent.Callable { Triple(league, url, (if (url.contains("/scoreboard")) scoreboard(league, url, now, get) else LiveSports.parse(get(url), league, now, onlyLive = false)).map { it.copy(scoreboard = url.contains("/scoreboard")) }) }) }
-            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(12)
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(if (calendarOnly) 6 else 12)
             repeat(urls.size) {
                 if (Thread.currentThread().isInterrupted) return LiveSportsSnapshot.EMPTY
                 val remaining = deadline - System.nanoTime()
                 if (remaining <= 0) return LiveSportsSnapshot(events.values.toList(), now, leagues)
                 val finished = completion.poll(remaining, java.util.concurrent.TimeUnit.NANOSECONDS) ?: return LiveSportsSnapshot(events.values.toList(), now, leagues)
                 runCatching { finished.get() }.onSuccess { (league, url, entries) ->
-                    if (url.contains("/scoreboard")) leagues.add(league)
+                    if (url.contains("/scoreboard")) {
+                        completedBoards[league] = (completedBoards[league] ?: 0) + 1
+                        if (!calendarOnly || completedBoards[league] == expectedBoards[league]) leagues.add(league)
+                    }
                     entries.forEach { event -> if (event.scoreboard || events["${event.league}:${event.id}"]?.scoreboard != true) events["${event.league}:${event.id}"] = event }
                     if (url.contains("/teams/")) {
                         val code = url.substringAfter("/teams/").substringBefore('/').uppercase(java.util.Locale.ROOT)
@@ -94,7 +104,9 @@ object SportsSchedule {
                 entries = entries + LiveSports.parse(get(dated), league, now, onlyLive = false, includeCompleted = true)
             }
         }
-        entries = entries.distinctBy { it.id }; boardCache[url] = now to entries; return entries
+        entries = entries.distinctBy { it.id }; boardCache[url] = now to entries
+        while (boardCache.size > 96) boardCache.entries.minByOrNull { it.value.first }?.let { boardCache.remove(it.key, it.value) }
+        return entries
     }
     internal fun nextMatchday(text: String, now: Long): String? {
         val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.0 — 2026-10-27
+
+- Show games beside the Sports calendar, including local start times, live/final states, saved-score preferences and counts on loaded dates. Open game actions directly from the calendar.
+- Load highlighted dates after navigation settles, reuse cached schedules, reject stale responses and keep playback running under the overlay.
+- Let Watch Best try a known FHD+/60 advertised-broadcaster stream when no exact game listing exists, clearly label unconfirmed coverage and reject guide entries for other games or replays.
+- Open selected Sports stream results full screen; Back returns to the results. Show fallback explanations prominently and use Find streams for stale live status.
+
 ## 0.14.3 — 2026-10-27
 
 - Let Watch Best use the same explicit provider or playback FHD+/60 evidence as guide filters, including 4K/59.94; keep measured quality authoritative.

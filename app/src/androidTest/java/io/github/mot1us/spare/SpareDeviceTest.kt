@@ -458,6 +458,22 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && playing?.isPlaying == true }
                     scenario.onActivity { assertSame("Watch Best uses explicit provider FHD+/60 data before the first playback measurement", playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    scenario.onActivity { activity ->
+                        val network = Channel("broadcaster", "USA ESPN 4K", "NFL", "${server.base}/channel3.mp4")
+                        val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                        val saved = guideField.get(activity) as Guide
+                        guideField.set(activity, saved.copy(channels = saved.channels.filter { it.id != "provider-game" } + network))
+                        @Suppress("UNCHECKED_CAST") val readings = MainActivity::class.java.getDeclaredField("videoInfo").apply { isAccessible = true }.get(activity) as MutableMap<String, VideoInfo>
+                        readings[network.id] = VideoInfo(3840, 2160, 59.94f)
+                        val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, networks = listOf("ESPN"))
+                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, live, true)
+                    }
+                    waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel3.mp4" && playing?.isPlaying == true }
+                    scenario.onActivity { activity ->
+                        assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").text.contains("unconfirmed"))
+                        assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                    }
                 }
             } finally {
                 writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
@@ -845,6 +861,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:sports:3")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:3").performClick() }
                 waitFor(scenario) { store.last(source) == "sports:3" }; assertEquals("/channel3.mp4", playingPath(scenario))
+                scenario.onActivity { assertFalse("Selecting a Sports result opens full screen", it.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2").performLongClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var retainedPlayer: Player? = null; var retainedSurface: android.view.Surface? = null; var retainedTile: View? = null
@@ -970,6 +988,11 @@ class SpareDeviceTest {
                         val now = System.currentTimeMillis()
                         val snapshot = LiveSportsSnapshot((1..8).map { LiveEvent("focus-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, logos = mapOf("nfl:BUF" to artUrls[(it - 1) * 2], "nfl:KC" to artUrls[(it - 1) * 2 + 1]), league = "NFL") }, now, setOf("NFL"))
                         activity.liveSportsLoader = { scoresReady.await(5, java.util.concurrent.TimeUnit.SECONDS); snapshot }
+                        activity.calendarSportsLoader = { day, leagues ->
+                            val today = java.time.LocalDate.now()
+                            val start = if (day == today) System.currentTimeMillis() - 60000 else day.atTime(17, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            LiveSportsSnapshot(listOf(LiveEvent("calendar-$day", setOf("nfl:BUF", "nfl:KC"), start, if (day == today) "in" else if (day.isBefore(today)) "post" else "pre", scores = mapOf("nfl:BUF" to "24", "nfl:KC" to "21"), league = "NFL")), System.currentTimeMillis(), leagues)
+                        }
                         activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-skeleton")?.isShown == true }
@@ -1005,6 +1028,7 @@ class SpareDeviceTest {
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
                     val calendarToday = java.time.LocalDate.now()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == true && it.window.decorView.findViewWithTag<View>("calendar-day:$calendarToday")?.hasFocus() == true }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("calendar-games").adapter?.itemCount == 1 && !it.window.decorView.findViewWithTag<View>("calendar-games-loading").isShown }
                     scenario.onActivity { activity ->
                         val calendar = activity.window.decorView.findViewWithTag<View>("sports-calendar")
                         assertEquals(activity.window.decorView.width, calendar.width); assertEquals(activity.window.decorView.height, calendar.height)
@@ -1015,6 +1039,13 @@ class SpareDeviceTest {
                         File(context.getExternalFilesDir(null), "sports-calendar.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
                     }
                     device.pressDPadRight(); device.pressDPadCenter()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${calendarToday.plusDays(1)}")?.hasFocus() == true }
+                    scenario.onActivity { activity ->
+                        val panel = activity.window.decorView.findViewWithTag<SportsCalendarPanel>("sports-calendar")
+                        panel.submit(calendarToday, emptyList(), false, false, false)
+                        assertEquals("A stale date response cannot clear the current games", 1, activity.window.decorView.findViewWithTag<RecyclerView>("calendar-games").adapter!!.itemCount)
+                        activity.window.decorView.findViewWithTag<View>("calendar-open-date").performClick()
+                    }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-date")?.isSelected == true }
                     scenario.onActivity { activity ->
                         assertEquals("date:${calendarToday.plusDays(1)}", MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.get(activity))
@@ -1087,6 +1118,11 @@ class SpareDeviceTest {
                     }
                     assertTrue("Offscreen Sports focus layout completes", focusFrames.await(5, java.util.concurrent.TimeUnit.SECONDS))
                     scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-live").hasFocus()) }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}")?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-watch").isShown }
+                    scenario.onActivity { assertSame(playback, find<PlayerView>(it.window.decorView)!!.player); assertTrue(playback!!.isPlaying) }
                     device.pressHome(); instrumentation.waitForIdleSync()
                     instrumentation.runOnMainSync { assertFalse(playback!!.playWhenReady) }
                     scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)

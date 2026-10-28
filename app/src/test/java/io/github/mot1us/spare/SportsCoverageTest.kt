@@ -7,6 +7,23 @@ class SportsCoverageTest {
     private val now = java.time.Instant.parse("2026-10-26T23:00:00Z").toEpochMilli()
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000, emptyList(), "game", "in", networks = listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, name: String) = Channel(id, name, "NFL", "https://example.com/$id")
+    @Test fun watchBestCanTryTheAdvertisedBroadcasterButNeverKnownOtherGamesOrReplays() {
+        val espn = channel("network", "USA ESPN 4K")
+        val other = channel("other", "USA ESPN 2 4K")
+        val mascot = channel("mascot", "Seattle Seahawks TV")
+        val quality = listOf(espn, other, mascot).associate { it.id to VideoInfo(3840, 2160, 59.94f) }
+        val possible = game.copy(candidates = listOf(espn, other, mascot))
+        assertEquals(espn, SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, Guide.EMPTY, now))
+        assertNull(SportsStreams.bestBroadcaster(possible, listOf(other, mascot), quality, Guide.EMPTY, now))
+        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn.copy(name = "ESPN+ 4K")), quality, Guide.EMPTY, now))
+        assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = listOf("ESPN+")), listOf(espn), quality, Guide.EMPTY, now))
+        val different = Programme(espn.id, "NFL: Buffalo Bills vs Kansas City Chiefs", now - 60000, now + 3600000)
+        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), quality, Guide(listOf(espn), mapOf(espn.id to listOf(different))), now))
+        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), quality, Guide(listOf(espn), mapOf(espn.id to listOf(different.copy(title = "NFL Highlights")))), now))
+        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), emptyMap(), Guide.EMPTY, now))
+        assertNull(SportsStreams.bestBroadcaster(possible.copy(state = "pre"), listOf(espn), quality, Guide.EMPTY, now))
+        assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = emptyList()), listOf(espn, mascot), quality, Guide.EMPTY, now))
+    }
     @Test fun watchBestUsesTheSameProviderQualityAsFiltersAndExplainsMissingEvidence() {
         val reported = channel("reported", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 59.94f))
         val listing = Programme(reported.id, game.title, now - 60000, now + 3600000)

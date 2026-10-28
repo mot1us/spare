@@ -92,3 +92,6 @@ For 0.14.2, focused audit regressions cover a newer Sports header action cancell
 
 
 For 0.14.3, Watch Best must accept explicit provider 59.94/60 data before playback while rejecting unknown FPS and measured lower rates. Matching title/EPG coverage is still required; fallback results distinguish FPS from coverage. The isolated Sports tests also check decoded card crest resolution, the full-screen 42-cell calendar, day selection, month navigation and Back cancellation without retuning. Compare card sharpness on the onn at its output resolution.
+
+
+For 0.15.0, browse calendar dates with synthetic schedules and check the inline games panel, loading state, local-date timezone boundaries, counts, stale-response rejection, game actions and playback continuity. Verify completed-score hiding also applies in the calendar. Sports result selection opens full screen and Back restores results. Watch Best may try a quality-qualified advertised broadcaster when EPG/title coverage is missing; it must label the uncertainty and reject guide entries naming another matchup or a replay. A broadcaster match does not prove regional coverage on the real provider.
