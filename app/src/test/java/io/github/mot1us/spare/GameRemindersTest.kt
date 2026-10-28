@@ -48,8 +48,8 @@ class GameRemindersTest {
         val ranked = SportsStreams.rank(live, GuideFilters(), quality)
         assertEquals(reported, SportsStreams.bestConfirmed(live, ranked, quality, now))
         assertEquals("A measured 30 fps overrides the provider's 60 fps declaration", fhd, SportsStreams.bestConfirmed(live, ranked, quality + (reported.id to VideoInfo(3840, 2160, 30f)), now))
-        assertEquals(listOf(reported, fhd, uhdThirty, possible), ranked)
-        assertEquals("Sports quality preferences preserve every manual choice", listOf(reported, fhd, uhdThirty, possible), SportsStreams.rank(live, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), quality))
+        assertEquals(listOf(reported, uhdThirty, fhd, possible), ranked)
+        assertEquals("Sports quality preferences preserve every manual choice", listOf(reported, uhdThirty, fhd, possible), SportsStreams.rank(live, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), quality))
         assertNull(SportsStreams.bestConfirmed(live.copy(state = "pre"), ranked, quality, now))
         assertNull(SportsStreams.bestConfirmed(live.copy(broadcasts = listOf(SportsBroadcast(fhd, programme.copy(start = now + 60000)))), listOf(fhd), quality, now))
     }

@@ -33,7 +33,7 @@ class SportsCoverageTest {
         assertNull(SportsStreams.bestConfirmed(matched, ranked, mapOf(reported.id to VideoInfo(3840, 2160, 50f)), now))
         val unknown = reported.copy(reportedQuality = VideoInfo(3840, 2160, 0f))
         assertNull(SportsStreams.bestConfirmed(matched, listOf(unknown), emptyMap(), now))
-        assertTrue(SportsStreams.unavailableReason(matched, listOf(unknown), emptyMap(), now).contains("FPS unknown"))
+        assertTrue(SportsStreams.unavailableReason(matched, listOf(unknown), emptyMap(), now).contains("FPS is learned during playback"))
         val possible = game.copy(candidates = listOf(reported))
         assertNull(SportsStreams.bestConfirmed(possible, ranked, emptyMap(), now))
         assertTrue(SportsStreams.unavailableReason(possible, ranked, emptyMap(), now).contains("coverage unconfirmed"))

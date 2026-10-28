@@ -33,10 +33,10 @@ object SportsReplays {
     }
     /** Live-channel quality is a preference for its archive, never an eligibility rule. */
     fun rank(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): List<SportsReplay> =
-        choices.distinctBy { it.channel.id }.sortedWith(compareByDescending<SportsReplay> { SportsStreams.preferenceRank(it.channel, quality[it.channel.id]) }
-            .thenByDescending { it.channel.id in favorites }
-            .thenByDescending { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
+        choices.distinctBy { it.channel.id }.sortedWith(compareByDescending<SportsReplay> { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
+            .thenByDescending { SportsStreams.preferenceRank(it.channel, quality[it.channel.id]) }
             .thenByDescending { it.channel.quality(quality[it.channel.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
+            .thenByDescending { it.channel.id in favorites }
             .thenByDescending { it.expires })
     fun best(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): SportsReplay? =
         rank(choices, quality, favorites).firstOrNull()
@@ -51,8 +51,8 @@ object SportsReplays {
             return Candidate(channel, score, networks.firstOrNull()?.let(SportsCatalog::normalize) ?: teams.joinToString { it.id })
         }
         val sorted = guide.channels.asSequence().filter { eligible(game, it, now) }.distinctBy { it.id }.map(::candidate).filter { it.score > 0 }
-            .sortedWith(compareByDescending<Candidate> { it.score }.thenByDescending { it.channel.id in favorites }
-                .thenByDescending { SportsStreams.preferenceRank(it.channel, null) }.thenByDescending { it.channel.quality(null)?.height ?: 0 }).toList()
+            .sortedWith(compareByDescending<Candidate> { it.score }.thenByDescending { it.channel.quality(null)?.height ?: 0 }
+                .thenByDescending { SportsStreams.preferenceRank(it.channel, null) }.thenByDescending { it.channel.id in favorites }).toList()
         // Share the budget between broadcasters and rate/resolution variants.
         // A shared EPG ID never proves that two provider archives are interchangeable.
         val varied = sorted.distinctBy { entry ->

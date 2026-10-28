@@ -9,7 +9,7 @@ class SportsQualityPreferenceTest {
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60_000, now + 3_600_000, emptyList(), "quality", "in", networks = listOf("ESPN"))
     private fun channel(id: String, info: VideoInfo? = null) = Channel(id, "ESPN $id", "NFL", "https://example.test/live/user/pass/1.ts", reportedQuality = info)
 
-    @Test fun automaticSelectionPrefersFhdSixtyAndFallsBackThroughEveryAvailableQuality() {
+    @Test fun automaticSelectionPrefersResolutionBeforeFpsAndKeepsEveryAvailableQuality() {
         val sixty = channel("sixty", VideoInfo(1920, 1080, 59.94f))
         val unknown = channel("unknown", VideoInfo(3840, 2160, 0f))
         val thirty = channel("thirty", VideoInfo(3840, 2160, 30f))
@@ -19,10 +19,33 @@ class SportsQualityPreferenceTest {
         val listing = Programme("test", game.title, game.start, game.end)
         val covered = game.copy(broadcasts = choices.map { SportsBroadcast(it, listing) })
         val filters = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
-        assertEquals(listOf(sixty, unknown, thirty, low, noInfo), SportsStreams.automaticChoices(covered, filters, emptyMap(), Guide.EMPTY, now))
+        assertEquals(listOf(unknown, thirty, sixty, low, noInfo), SportsStreams.automaticChoices(covered, filters, emptyMap(), Guide.EMPTY, now))
         assertEquals(low, SportsStreams.automaticChoices(covered, filters, emptyMap(), Guide.EMPTY, now) { it.id == low.id }.single())
         assertEquals(noInfo, SportsStreams.automaticChoices(covered, filters, emptyMap(), Guide.EMPTY, now) { it.id == noInfo.id }.single())
         assertTrue(SportsStreams.rank(covered, filters.copy(groups = setOf("News")), emptyMap()).isEmpty())
+    }
+
+    @Test fun frameRatePreferencesOnlyBreakTiesAtTheSameResolution() {
+        val uhd = channel("uhd", VideoInfo(3840, 2160, 25f))
+        val sixty = channel("sixty", VideoInfo(1920, 1080, 59.94f))
+        val thirty = channel("thirty", VideoInfo(1920, 1080, 29.97f))
+        val unknown = channel("unknown", VideoInfo(1920, 1080, 0f))
+        val match = game.copy(titleMatches = listOf(unknown, thirty, sixty, uhd))
+        assertEquals(listOf(uhd, sixty, thirty, unknown), SportsStreams.rank(match, GuideFilters(), emptyMap()))
+        assertEquals(listOf(uhd, sixty, unknown, thirty), SportsStreams.rank(match, GuideFilters(excludedFps = FrameRateFilter.sixtyOrBetter), emptyMap()))
+        assertEquals(listOf(uhd, thirty, unknown, sixty), SportsStreams.rank(match, GuideFilters(excludedFps = setOf(60)), emptyMap()))
+        // Playback evidence can lower the resolution of a provider-labelled 4K stream.
+        assertEquals(sixty, SportsStreams.rank(match, GuideFilters(), mapOf(uhd.id to VideoInfo(1280, 720, 60f))).first())
+        val redzone = listOf(uhd, sixty).map { it.copy(name = "NFL RedZone " + it.id) }
+        assertEquals("uhd", SportsDestinations.redZone(redzone, GuideFilters(), emptyMap()).first().id)
+    }
+
+    @Test fun broadcasterShortlistKeepsHighestResolutionBeforeApplyingItsLimit() {
+        val lower = (1..600).map { channel("FHD-$it", VideoInfo(1920, 1080, 60f)) }
+        val uhd = channel("UHD", VideoInfo(3840, 2160, 0f))
+        val matched = SportsSchedule.match(game, Guide(lower + uhd, emptyMap()), lower.map { it.id }.toSet(), now)
+        assertEquals(512, matched.candidates.size)
+        assertEquals(uhd, matched.candidates.first())
     }
 
     @Test fun confirmedCoverageComesBeforeAHighQualityUnconfirmedCandidate() {

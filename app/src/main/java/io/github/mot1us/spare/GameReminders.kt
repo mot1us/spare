@@ -57,15 +57,15 @@ object SportsStreams {
     fun qualifies(channel: Channel, observed: VideoInfo?) = preferredQuality.matches(channel, observed)
     /** Sports quality settings order choices; category and availability still limit the list. */
     internal fun matchingCategory(channel: Channel, filters: GuideFilters) = filters.groups.isEmpty() || channel.group in filters.groups
-    internal fun preferenceRank(channel: Channel, observed: VideoInfo?): Int {
-        if (qualifies(channel, observed)) return 2
-        val info = channel.quality(observed)
-        return if (info != null && info.height >= 1080 && (!info.fps.isFinite() || info.fps <= 0f)) 1 else 0
+    /** FPS only orders streams at the same resolution; an unknown rate stays playable. */
+    internal fun preferenceRank(channel: Channel, observed: VideoInfo?, filters: GuideFilters = preferredQuality): Int {
+        val fps = channel.quality(observed)?.fps ?: 0f
+        if (!fps.isFinite() || fps <= 0f) return 1
+        return if (FrameRateFilter.bucket(fps) !in filters.excludedFps) 2 else 0
     }
     internal fun preferenceComparator(filters: GuideFilters, quality: Map<String, VideoInfo>): Comparator<Channel> =
-        compareByDescending<Channel> { preferenceRank(it, quality[it.id]) }
-            .thenByDescending { filters.matches(it, quality[it.id]) }
-            .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }
+        compareByDescending<Channel> { it.quality(quality[it.id])?.height ?: 0 }
+            .thenByDescending { preferenceRank(it, quality[it.id], filters) }
             .thenByDescending { it.quality(quality[it.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
@@ -113,7 +113,7 @@ object SportsStreams {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."
         ranked.isEmpty() -> "No matching streams found in this playlist."
         ranked.any { qualifies(it, quality[it.id]) } -> "FHD+/60 streams found · game coverage unconfirmed. Choose a stream."
-        ranked.any { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0) } == true } -> "FHD/4K found · FPS unknown. Preview a stream to measure it."
+        ranked.any { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0) } == true } -> "Highest-resolution matches shown first. FPS is learned during playback."
         else -> "Best available matches shown first. Choose a stream to watch."
     }
 }

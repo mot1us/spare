@@ -403,10 +403,10 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-manager")?.isShown == true }
                 scenario.onActivity { activity ->
                     val manager = activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager")
-                    manager.findViewWithTag<View>("settings-option:HD · 720p or better").performClick()
+                    assertNull("Resolution is always ranked first", manager.findViewWithTag<View>("settings-option:HD · 720p or better"))
                     manager.findViewWithTag<View>("settings-option:30 fps · includes 29.97").performClick()
                     assertTrue("Changing quality keeps Sports settings open", manager.opened)
-                    assertEquals(720, store.sportsFilters(source).minHeight)
+                    assertEquals(0, store.sportsFilters(source).minHeight)
                     assertFalse(30 in store.sportsFilters(source).excludedFps)
                     assertTrue(50 in store.sportsFilters(source).excludedFps)
                     assertEquals(categories, store.filters(source))
@@ -575,27 +575,22 @@ class SpareDeviceTest {
                         val nba = game.copy(teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2), state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NBA", eventId = "nba-unknown")
                         val unknown = Channel("unknown-fps", nba.title + " 4K", "NBA", "${server.base}/channel4.mp4", reportedQuality = VideoInfo(3840, 2160, 0f))
                         val low = unknown.copy(id = "known-50", name = nba.title + " 4K 50FPS", url = "${server.base}/channel5.mp4", reportedQuality = VideoInfo(3840, 2160, 50f))
+                        val fhd = unknown.copy(id = "fhd-sixty", name = nba.title + " FHD 60FPS", url = "${server.base}/channel6.mp4", reportedQuality = VideoInfo(1920, 1080, 60f))
                         val scoreboard = LiveSportsSnapshot(listOf(LiveEvent(nba.eventId, nba.teams.map { it.id }.toSet(), nba.start, league = "NBA")), System.currentTimeMillis(), setOf("NBA"))
                         activity.liveSportsLoader = { scoreboard }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scoreboard)
-                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(unknown, low), emptyMap()))
+                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(unknown, low, fhd), emptyMap()))
                         MainActivity::class.java.getDeclaredField("sportsFilters").apply { isAccessible = true }.set(activity, GuideFilters(1080, FrameRateFilter.sixtyOrBetter))
                         MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
                         MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, nba, true)
                     }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:unknown-fps")?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-stream:known-50")?.isShown == true }
-                    assertNull("Multiple fallback streams offer a choice before opening one", server.requests["/channel4.mp4"])
-                    assertNull(server.requests["/channel5.mp4"])
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-filters").performClick() }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-manager")?.isShown == true }
-                    scenario.onActivity { activity ->
-                        activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager").findViewWithTag<View>("settings-option:Reset stream quality").performClick()
-                    }
-                    device.pressBack(); device.pressBack()
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:known-50")?.isShown == true }
-                    assertEquals("Refreshing Sports quality never retunes the playing channel", "/channel3.mp4", playingPath(scenario))
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:unknown-fps").performClick() }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel4.mp4" && playing?.isPlaying == true }
+                    assertNull("The other 4K candidate is not probed", server.requests["/channel5.mp4"])
+                    assertNull("Known FHD/60 cannot displace an unplayed 4K match or open an extra connection", server.requests["/channel6.mp4"])
+                    waitFor(scenario) { activity ->
+                        @Suppress("UNCHECKED_CAST") val readings = MainActivity::class.java.getDeclaredField("videoInfo").apply { isAccessible = true }.get(activity) as Map<String, VideoInfo>
+                        (readings["unknown-fps"]?.fps ?: 0f) > 0f
+                    }
                     scenario.onActivity { activity ->
                         assertSame("Unknown-FPS choices reuse the primary player", playing, find<PlayerView>(activity.window.decorView)!!.player)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
@@ -608,7 +603,6 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel5.mp4" && playing?.isPlaying == true }
                     scenario.onActivity { activity ->
-                        MainActivity::class.java.getDeclaredMethod("finishSportsQualityTrial").apply { isAccessible = true }.invoke(activity)
                         assertFalse("Lower measured quality must not interrupt a playable game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                         assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
                     }

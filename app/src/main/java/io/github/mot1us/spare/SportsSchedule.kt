@@ -186,8 +186,7 @@ object SportsSchedule {
         val found = confirmed + titleOnly.map { it.id }
         progress(channels.size + checkedKeys, channels.size + byGuideKey.size)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
-            .sortedWith(compareByDescending<Channel> { it.id in favorites }.thenByDescending { SportsStreams.qualifies(it, quality[it.id]) }
-                .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }.thenByDescending { it.quality(quality[it.id])?.fps ?: 0f }).take(512), coverageComplete = complete)
+            .sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }).take(512), coverageComplete = complete)
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
         .put("events", JSONArray(snapshot.events.take(500).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league) }))

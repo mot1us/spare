@@ -55,8 +55,7 @@ class SportsPlaybackPlan(val game: SportsGame, candidates: List<Channel>) {
     private val attempted = mutableSetOf<String>()
     var channel: Channel? = null; private set
     var accepted = false
-    var qualityCheckScheduled = false
     fun next(available: (Channel) -> Boolean): Channel? = if (attempted.size >= 3) null else candidates.firstOrNull { it.id !in attempted && available(it) }?.also {
-        attempted.add(it.id); channel = it; accepted = false; qualityCheckScheduled = false
+        attempted.add(it.id); channel = it; accepted = false
     }
 }

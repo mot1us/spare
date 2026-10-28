@@ -59,7 +59,7 @@ class SportsReplaysTest {
         val guide = Guide(variants, mapOf("espn" to listOf(listing().copy(channel = "espn"))))
         assertEquals(variants.map { it.id }.toSet(), SportsReplays.find(game, guide, now).map { it.channel.id }.toSet())
         assertEquals(variants.map { it.id }.toSet(), SportsReplays.candidates(game, guide, emptySet(), now).map { it.id }.toSet())
-        assertEquals("xc:2", SportsReplays.best(SportsReplays.find(game, guide, now))!!.channel.id)
+        assertEquals("xc:1", SportsReplays.best(SportsReplays.find(game, guide, now))!!.channel.id)
         val fallback = SportsReplays.find(game, guide.copy(channels = listOf(variants[2])), now).single()
         assertNotNull(fallback.item(game, false, now))
     }

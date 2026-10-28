@@ -16,7 +16,7 @@ class GameReminderBanner(context: Context, button: (String, () -> Unit) -> Butto
     init {
         orientation = VERTICAL; visibility = GONE; tag = "game-reminder"; elevation = dp(18).toFloat(); clipToOutline = true; setPadding(dp(18), dp(14), dp(18), dp(14))
         addView(TextView(context).apply { text = "GAME STARTED"; textSize = 10f; setTextColor(GuideTheme.current.accent) }); addView(title)
-        addView(TextView(context).apply { text = "Find the best matching FHD/60 fps stream"; textSize = 11f; setTextColor(Color.LTGRAY); setPadding(0, dp(5), 0, dp(8)) })
+        addView(TextView(context).apply { text = "Find the highest-resolution matching stream"; textSize = 11f; setTextColor(Color.LTGRAY); setPadding(0, dp(5), 0, dp(8)) })
         addView(LinearLayout(context).apply { addView(action, LayoutParams(0, dp(36), 1f)); addView(button("Dismiss", dismiss).apply { tag = "reminder-dismiss" }, LayoutParams(dp(90), dp(36)).apply { marginStart = dp(10) }) })
     }
     fun show(game: SportsGame) { title.text = game.title; background = GuideTheme.glass(resources.displayMetrics.density); visibility = VISIBLE; action.requestFocus() }

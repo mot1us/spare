@@ -122,7 +122,6 @@ class MainActivity : Activity() {
     private var sportsResults: GameStreams? = null
     private var watchingSports: GameStreams? = null
     private var sportsPlaybackPlan: SportsPlaybackPlan? = null
-    private val verifySportsQuality = Runnable { finishSportsQualityTrial() }
     private val sportsLookupWorkers = Executors.newFixedThreadPool(2)
     private var sportsMatchTask: java.util.concurrent.Future<*>? = null
     private var pendingSportsTune: String? = null
@@ -486,8 +485,8 @@ class MainActivity : Activity() {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
                 firstFrame = true; hasPlayedChannel = true
                 sportsPlaybackPlan?.takeIf { it.channel?.id == current?.id }?.let { plan ->
-                    if (current?.let { SportsStreams.qualifies(it, videoInfo[it.id]) } == true) plan.accepted = true
-                    if (!plan.accepted && !plan.qualityCheckScheduled) { plan.qualityCheckScheduled = true; handler.postDelayed(verifySportsQuality, 12000) }
+                    // A working stream is accepted immediately; quality never triggers another connection.
+                    plan.accepted = true
                 }
                 if (pendingSportsTune == current?.id && pendingSportsTune != null) { pendingSportsTune = null; sportsPanel.finishTuning(); if (sportsVisible && guideVisible) showGuide(false) }
                 if (onDemand == null) lastWorkingChannel = current
@@ -929,7 +928,7 @@ class MainActivity : Activity() {
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
         cancelPlaybackCallbacks(); playbackToken++; player.stop(); frameRates.clear(); current = null; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE
         source = selected; focused = null; store.active = selected.id; favorites = store.favorites(selected)
-        filters = store.filters(selected); sportsFilters = store.sportsFilters(selected); videoInfo = store.videoInfo(selected); unavailable = store.unavailable(selected); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
+        filters = store.filters(selected); sportsFilters = store.sportsFilters(selected).copy(minHeight = 0); videoInfo = store.videoInfo(selected); unavailable = store.unavailable(selected); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
         importTask = imports.submit {
@@ -1122,7 +1121,7 @@ class MainActivity : Activity() {
         if (previous == observed) return
         videoInfo[channel.id] = observed
         // Coverage is independent of measured quality; cached matches are ranked using fresh readings.
-        if (SportsStreams.qualifies(channel, previous) != SportsStreams.qualifies(channel, observed) || channel.quality(previous)?.height != channel.quality(observed)?.height) {
+        if (SportsStreams.preferenceRank(channel, previous, sportsFilters) != SportsStreams.preferenceRank(channel, observed, sportsFilters) || FrameRateFilter.bucket(previous?.fps ?: 0f) != FrameRateFilter.bucket(observed.fps) || channel.quality(previous)?.height != channel.quality(observed)?.height) {
             sportsStreamSummaries.clear()
             if (guideVisible && sportsVisible && !sportsPanel.watching) queueSportsPrefetch()
         }
@@ -1501,7 +1500,7 @@ class MainActivity : Activity() {
         if (page == "Stream quality") { renderSportsQuality(panel); return }
         if (page == "Preferences") {
             panel.page("Your sports", "Choose leagues and teams on the left. Enable automatic playback to watch a live game directly from its card. Upcoming and completed games keep their reminder and replay options.")
-            panel.action("Play best stream on selection", "Prefer known FHD/60 streams. If FPS is missing, try an FHD/4K match and measure it during playback. Up to three automatic attempts, then choose another result.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; panel.refresh("Play best stream on selection") }
+            panel.action("Play best stream on selection", "Play the highest-resolution matching stream. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; panel.refresh("Play best stream on selection") }
             panel.action("Show only my teams", selected = store.sportsFollowedOnly) { store.sportsFollowedOnly = !store.sportsFollowedOnly; sportsPreferencesChanged = true; panel.refresh("Show only my teams") }
             panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); panel.refresh("Hide completed-game scores") }
             panel.note("NFL RedZone appears whenever NFL is enabled. Its availability follows your playlist provider; it is not a scheduled matchup.")
@@ -1683,7 +1682,7 @@ class MainActivity : Activity() {
             }
         }
     }
-    private fun clearSportsPlayback() { handler.removeCallbacks(verifySportsQuality); sportsPlaybackPlan = null; pendingSportsTune = null }
+    private fun clearSportsPlayback() { sportsPlaybackPlan = null; pendingSportsTune = null }
     private fun playNextSportsCandidate(reason: String): Boolean {
         val plan = sportsPlaybackPlan ?: return false
         val selected = source ?: return false
@@ -1691,24 +1690,10 @@ class MainActivity : Activity() {
             guide.channels.any { it.id == channel.id && it.url == channel.url } } ?: return false
         tune(next); sportsPlaybackPlan = plan; pendingSportsTune = next.id
         watchingSports = sportsResults?.takeIf { it.game.key == plan.game.key } ?: GameStreams(plan.game, plan.candidates)
-        val known = next.quality(videoInfo[next.id])?.fps?.let { it.isFinite() && it > 0f } == true
         val exact = plan.game.broadcasts.any { it.channel.id == next.id && System.currentTimeMillis() in it.programme.start until it.programme.end } || plan.game.titleMatches.any { it.id == next.id }
-        if (!exact) sportsPanel.showMatchNotice("Trying broadcaster match · game coverage unconfirmed" + if (known) "" else " · Measuring FPS")
-        else if (!known) sportsPanel.showMatchNotice("FPS unverified · measuring during playback")
-        val message = if (known) "$reason · ${next.name}" else "$reason · ${next.name} · measuring FPS"
-        sportsPanel.matchingProgress(plan.game, message); toast(message)
+        if (!exact) sportsPanel.showMatchNotice("Trying broadcaster match · game coverage unconfirmed")
+        sportsPanel.matchingProgress(plan.game, "$reason · ${next.name}"); toast("$reason · ${next.name}")
         return true
-    }
-    private fun finishSportsQualityTrial() {
-        val plan = sportsPlaybackPlan ?: return
-        val channel = current?.takeIf { it.id == plan.channel?.id } ?: return
-        if (!started || plan.accepted) return
-        if (!firstFrame || player.playbackState == Player.STATE_BUFFERING) { handler.postDelayed(verifySportsQuality, 1000); return }
-        val info = channel.quality(videoInfo[channel.id])
-        if (SportsStreams.qualifies(channel, videoInfo[channel.id])) { plan.accepted = true; return }
-        // Once a stream is playing, keep it. A lower measured rate is not a playback failure.
-        plan.accepted = true
-        if ((info?.fps ?: 0f) <= 0f) toast("FPS unavailable · playback continues")
     }
     private fun playbackGame(): GameStreams? {
         if (onDemand != null) return null
@@ -1809,9 +1794,7 @@ class MainActivity : Activity() {
             if (autoWatch) {
                 if (alternatives.isNotEmpty()) {
                     showGameInfo(matched); sportsChannels = channels.take(4)
-                    val chooseUnknown = alternatives.size > 1 && alternatives.none { SportsStreams.qualifies(it, latestQuality[it.id]) }
-                    sportsPanel.showStreams(matched, channels, if (chooseUnknown) "Choose a stream · best available quality is shown first. Missing FPS will be measured during playback." else null, streamLabel)
-                    if (chooseUnknown) return
+                    sportsPanel.showStreams(matched, channels, null, streamLabel)
                     multiview.close(); sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives)
                     if (!playNextSportsCandidate("Opening best game stream")) showSportsAlternatives("The available streams changed. Choose another result.")
                     return
@@ -2020,8 +2003,8 @@ class MainActivity : Activity() {
             }
             "Subtitles" -> renderCaptionSettings()
             "Sports" -> {
-                panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers a matching game in FHD/60 or better, using provider or playback quality. If only an advertised broadcaster matches, it tries that channel and labels coverage unconfirmed. Unknown quality remains available for manual review.")
-                panel.action("Play best stream on selection", "Skip live-game actions and play the best match. Prefer known FHD/60; try and measure unknown FPS. Failed starts can try another match, up to three attempts. Working lower-quality playback continues.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
+                panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers the highest-resolution matching game stream. Known FPS breaks resolution ties. Broadcaster matches are labelled when game coverage is unconfirmed. All qualities remain playable.")
+                panel.action("Play best stream on selection", "Skip live-game actions and play the highest-resolution match. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts. FPS is learned from normal playback.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }
                 panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
@@ -2138,24 +2121,23 @@ class MainActivity : Activity() {
     private fun saveFilters(next: GuideFilters) {
         source?.let { store.setFilters(it, next) }; filters = GuideFilters(groups = next.groups); group = null; applyFilter()
     }
-    private fun sportsStreamFilters() = sportsFilters.copy(groups = filters.groups)
+    private fun sportsStreamFilters() = sportsFilters.copy(minHeight = 0, groups = filters.groups)
     private fun saveSportsFilters(next: GuideFilters) {
-        sportsFilters = next.copy(groups = emptySet()); source?.let { store.setSportsFilters(it, sportsFilters) }
+        sportsFilters = next.copy(minHeight = 0, groups = emptySet()); source?.let { store.setSportsFilters(it, sportsFilters) }
         sportsQualityChanged = true
         stopSportsPrefetch(clear = true); scheduleSports()
     }
     private fun renderSportsQuality(panel: SettingsPanel) {
-        panel.page("Sports stream quality", "${sportsFilters.summary()}. Watch Best prefers this quality, then offers the best available stream. Lower resolution or missing FPS never blocks a game. Playback readings take priority over provider metadata.")
+        panel.page("Sports stream quality", "Watch Best ranks matching streams by resolution first. FPS preferences break ties at the same resolution. All qualities remain playable; playback readings take priority over provider metadata.")
         if (source == null) { panel.note("Add a playlist in Settings to save Sports quality preferences."); return }
-        panel.action("FHD+ · 60 fps", "Prefer 1080+ / 59.94, 60, 100 or 120 fps for Sports") { saveSportsFilters(GuideFilters(1080, FrameRateFilter.sixtyOrBetter)); panel.refresh("FHD+ · 60 fps") }
+        panel.action("Prefer 60 fps", "Prefer 59.94/60+ FPS among streams at the same resolution") { saveSportsFilters(GuideFilters(excludedFps = FrameRateFilter.sixtyOrBetter)); panel.refresh("Prefer 60 fps") }
         val profile = sportsStreamFilters()
         val channels = guide.channels.filter { !it.media && (profile.groups.isEmpty() || it.group in profile.groups) }
         val known = channels.count { (it.quality(videoInfo[it.id])?.fps ?: 0f).let { rate -> rate.isFinite() && rate > 0f } }
-        panel.note("${channels.count { profile.matches(it, videoInfo[it.id]) }} match your Sports preferences · $known with known FPS · ${channels.size - known} FPS unknown", "quality-data-summary")
-        panel.note("Watch Best prefers known FHD/60, then your preferred quality. If only lower-quality or unverified streams are available, play one directly or choose between several. Quality preferences do not hide guide channels.")
-        panel.note("Preferred resolution · other qualities remain available")
-        listOf(0 to "Any resolution", 720 to "HD · 720p or better", 1080 to "FHD · 1080p or better", 2160 to "4K · 2160p or better").forEach { (height, label) -> panel.action(label, selected = sportsFilters.minHeight == height) { saveSportsFilters(sportsFilters.copy(minHeight = height)); panel.refresh(label) } }
-        panel.note("Preferred frame rates · select the rates you prefer")
+        val resolutionKnown = channels.count { (it.quality(videoInfo[it.id])?.height ?: 0) > 0 }
+        panel.note("${channels.size} channels · $resolutionKnown with known resolution · $known with known FPS", "quality-data-summary")
+        panel.note("Resolution first: 4K, FHD, HD, then other available streams. FPS comes from provider metadata or normal playback; Spare never opens extra streams to check it. Missing FPS does not block Watch Best.")
+        panel.note("Frame-rate tie-breaker · select the rates you prefer at the same resolution")
         FrameRateFilter.choices.forEach { (rate, label) -> panel.action(label, selected = rate !in sportsFilters.excludedFps) {
             val excluded = sportsFilters.excludedFps.toMutableSet(); if (!excluded.add(rate)) excluded.remove(rate)
             saveSportsFilters(sportsFilters.copy(excludedFps = excluded)); panel.refresh(label)

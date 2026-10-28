@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.1 — 2026-10-28
+
+- Rank Sports live, RedZone and catch-up streams by resolution first; use known/preferred FPS only between streams at the same resolution. Preserve game coverage, archive availability and lower-quality fallbacks.
+- Let Watch Best play the highest-resolution match immediately when FPS is unknown. Accept working playback without an FPS trial or quality-driven retune; learn and cache FPS through the existing player, with no background stream probes.
+- Clarify Sports quality settings and metadata counts.
+
 ## 0.18.0 — 2026-10-28
 
 - Add a live theme editor with a persistent guide preview, compact Look/Colors/Type/Guide tabs, custom colors, fonts, corner/border controls, density, spacing, opacity and video preview options. Save changes automatically without restarting playback.
