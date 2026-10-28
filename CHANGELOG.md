@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.2 — 2026-10-27
+
+- Keep live-stall monitoring, reconnect and startup callbacks active when opening other game streams, including when returning to the current channel without selecting an alternative.
+
 ## 0.17.1 — 2026-10-27
 
 - Add Other streams for this game to the OK details panel, focused first for recognized games and available during buffering. Reuse discovered matches, preserve game context after manual selection or reconnect, and open selected alternatives full screen.

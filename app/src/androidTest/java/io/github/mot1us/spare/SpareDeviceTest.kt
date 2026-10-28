@@ -518,7 +518,10 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }
                     device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:provider-game")?.isShown == true }
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:provider-game").performClick() }
+                    scenario.onActivity { activity ->
+                        assertTrue("Opening game alternatives must preserve stall monitoring", MainActivity::class.java.getDeclaredField("monitoringPlayback").apply { isAccessible = true }.getBoolean(activity))
+                        activity.window.decorView.findViewWithTag<View>("sports-stream:provider-game").performClick()
+                    }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel")?.isShown == false }
                     scenario.onActivity { activity ->
                         MainActivity::class.java.getDeclaredMethod("showPlaybackFailure", String::class.java).apply { isAccessible = true }.invoke(activity, "Synthetic stream failure")

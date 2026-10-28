@@ -1715,7 +1715,7 @@ class MainActivity : Activity() {
         val now = System.currentTimeMillis(); val lineup = guide.channels.associateBy { it.id }
         val choices = context.channels.mapNotNull { lineup[it.id] }.distinctBy { it.id }
             .filter { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
-        stopSportsPrefetch(); clearSportsPlayback(); closeDetails(); cancelPlaybackCallbacks()
+        stopSportsPrefetch(); clearSportsPlayback(); closeDetails()
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
         sportsVisible = true; showGameInfo(context.game); applyFilter(); showGuide(true)
         if (choices.none { it.id != current?.id }) { selectGame(context.game); return }
