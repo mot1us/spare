@@ -83,7 +83,7 @@ class SportsStreamCacheTest {
         val unverified = game.copy(titleMatches = listOf(unknown))
         val guide = Guide(listOf(unknown, low), emptyMap())
         assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains(unknown.name))
-        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("FPS unverified"))
+        assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("Quality unknown"))
         assertEquals(listOf(unknown), SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now))
         assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).contains("50 fps"))
         val hd = channel("720", 29.97f).copy(reportedQuality = VideoInfo(1280, 720, 29.97f))

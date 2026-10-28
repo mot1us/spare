@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -426,11 +426,24 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("settings").performClick()
                     val panel = activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel")
                     panel.selectSetting("Local channels")
-                    panel.findViewWithTag<EditText>("settings-input:City or state").setText("Seattle, WA")
-                    panel.findViewWithTag<View>("settings-option:Save location").performClick()
-                    panel.selectSetting("Guide video"); panel.findViewWithTag<View>("settings-option:Opacity · 85%").performClick()
-                    assertTrue(panel.opened); assertEquals(85, SecureStore(context).guideOpacity)
+                    val location = panel.findViewWithTag<EditText>("local-location-input")
+                    location.requestFocus(); location.setText("Seatt")
+                    assertNull(panel.findViewWithTag<View>("settings-option:Save location"))
+                    assertTrue(location.hasFocus())
+                    assertNotNull(panel.findViewWithTag<View>("local-location-suggestion:Seattle, WA"))
                 }
+                waitFor(scenario) { SecureStore(context).localLocation == "Seatt" }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("local-location-input").requestFocus() }
+                device.pressDPadDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA")?.hasFocus() == true }
+                device.pressDPadCenter()
+                waitFor(scenario) { activity ->
+                    SecureStore(context).localLocation == "Seattle, WA" &&
+                        activity.window.decorView.findViewWithTag<EditText>("local-location-input").hasFocus() &&
+                        activity.window.decorView.findViewWithTag<TextView>("local-location-matches").text.toString() == "2 local channels matched"
+                }
+                setThemeControl(scenario, "Guide", "Opacity", "80%")
+                assertEquals(80, SecureStore(context).guideOpacity)
                 leaveSettings(scenario)
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-local").performClick() }
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 }
@@ -657,10 +670,8 @@ class SpareDeviceTest {
                     assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
                     activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
                 }
-                device.pressDPadCenter(); assertTrue(device.wait(Until.hasObject(By.text("Guide video")), 5000))
-                activateSetting(scenario, "Guide video")
-                assertTrue(device.wait(Until.hasObject(By.text("Small live preview")), 5000))
-                activateSetting(scenario, "Small live preview"); leaveSettings(scenario)
+                device.pressDPadCenter(); assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000))
+                setThemeControl(scenario, "Guide", "Guide video", "Small preview"); leaveSettings(scenario)
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
                 assertTrue(store.smallPreview)
                 scenario.onActivity { assertTrue(find<PlayerView>(it.window.decorView)!!.width >= it.window.decorView.width / 3) }
@@ -869,7 +880,7 @@ class SpareDeviceTest {
                 var attempt = ""
                 scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000)); activateSetting(scenario, "Theme")
-                assertTrue(device.wait(Until.hasObject(By.text("Ocean")), 5000)); activateSetting(scenario, "Ocean"); leaveSettings(scenario)
+                setThemeControl(scenario, "Look", "Palette", "Ocean"); leaveSettings(scenario)
                 waitFor(scenario) { store.theme == "Ocean" && GuideTheme.current.name == "Ocean" }
                 scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.text("Categories")), 5000)); activateSetting(scenario, "Categories")
@@ -976,10 +987,11 @@ class SpareDeviceTest {
                     assertEquals(if (digital) androidx.media3.common.MimeTypes.APPLICATION_CEA708 else androidx.media3.common.MimeTypes.APPLICATION_CEA608, selected.format.sampleMimeType)
                 }
                 device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-subtitles")?.isShown == true }; scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-subtitles").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); device.findObject(By.text("Off")).click()
+                activateSetting(scenario, "Off"); leaveSettings(scenario)
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isEmpty() == true }
                 assertEquals(CaptionTracks.OFF, SecureStore(context).channelCaptions(source, first)); assertTrue(store.captions)
-                device.pressBack(); device.pressDPadDown()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("settings-panel").isShown && channelList(it)?.isShown == false }
+                device.pressDPadDown()
                 waitFor(scenario) { store.last(source) != first.id && find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isNotEmpty() == true }
                 device.pressDPadLeft(); waitFor(scenario) { store.last(source) == first.id }
                 scenario.onActivity { assertTrue(find<PlayerView>(it.window.decorView)!!.player!!.trackSelectionParameters.disabledTrackTypes.contains(androidx.media3.common.C.TRACK_TYPE_TEXT)) }
@@ -1065,14 +1077,14 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
                 scenario.onActivity { activity ->
                     activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000)), now, setOf("NFL")) }
-                    activity.window.decorView.findViewWithTag<View>("sports-refresh").performClick()
+                    pollSportsFixture(activity)
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
                 scenario.onActivity { activity ->
                     val games = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
                     games.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
                     activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, status = "Updated score")), now, setOf("NFL")) }
-                    activity.window.decorView.findViewWithTag<View>("sports-refresh").performClick()
+                    pollSportsFixture(activity)
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail").text.contains("Updated score") }
                 scenario.onActivity { assertTrue("A scoreboard update keeps game-card focus", it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus()); assertFalse(it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").hasFocus()) }
@@ -1168,7 +1180,7 @@ class SpareDeviceTest {
                         val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
                         firstKey = grid.findFocus().tag; heroHeight = activity.window.decorView.findViewWithTag<View>("sports-hero").height
                         assertEquals(loadingHeroHeight, heroHeight); assertFalse(activity.window.decorView.findViewWithTag<View>("sports-skeleton").isShown)
-                        activity.window.decorView.findViewWithTag<View>("sports-refresh").performClick()
+                        pollSportsFixture(activity)
                     }
                     instrumentation.waitForIdleSync()
                     scenario.onActivity { activity ->
@@ -1315,7 +1327,7 @@ class SpareDeviceTest {
                 repeat(6) { device.pressDPadLeft() }
                 scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("settings").requestFocus() }; device.pressDPadCenter()
-                assertTrue(device.wait(Until.hasObject(By.text("Time format")), 5000)); activateSetting(scenario, "Time format")
+                assertTrue(device.wait(Until.hasObject(By.text("Guide")), 5000)); activateSetting(scenario, "Time format")
                 assertTrue(device.wait(Until.hasObject(By.text("24 hour · 19:30")), 5000)); activateSetting(scenario, "24 hour · 19:30"); leaveSettings(scenario)
                 waitFor(scenario) { store.clock24 && GuideClock.use24Hour }
                 scenario.recreate(); waitFor(scenario) { GuideClock.use24Hour && find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
@@ -1391,15 +1403,14 @@ class SpareDeviceTest {
                         MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "date:${java.time.Instant.ofEpochMilli(now - 7200000).atZone(java.time.ZoneId.systemDefault()).toLocalDate()}")
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text == "Score hidden" && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
                     scenario.onActivity { activity ->
                         assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail")?.text?.contains("win") == true)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isShown)
+                        assertEquals("Automatic discovery confirms the lower-quality archive", "↺ CATCH-UP", activity.window.decorView.findViewWithTag<TextView>("sports-badge:NFL:sports-archive").text.toString())
                         activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
                     }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:xc:1")?.isShown == true }
-                    scenario.onActivity { assertFalse("Replay results must not repeat Find replay", it.window.decorView.findViewWithTag<View>("sports-watch").isShown) }
                     assertEquals("Only the matching broadcaster's metadata archive is queried", 1, server.archiveRequests.get())
-                    device.pressDPadCenter()
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && (player?.videoSize?.width ?: 0) > 0 }
                     scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player) }
                     device.pressBack()
@@ -1561,7 +1572,10 @@ class SpareDeviceTest {
                 device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 && it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-live").performClick() }
+                scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
+                device.pressBack()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" && channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick(); it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
@@ -1605,8 +1619,8 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && channelList(it)?.isShown == false }
                 assertEquals(liveAttempt, playingPath(scenario))
                 scenario.onActivity { assertEquals("Closing the Catch-up browser must preserve the live connection", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
-                device.pressMenu(); activateSetting(scenario, "Font"); activateSetting(scenario, "Monospace")
-                waitFor(scenario) { store.font == "Monospace" }
+                device.pressMenu(); setThemeControl(scenario, "Type", "Font", "Monospace")
+                waitFor(scenario) { store.font == "Monospace" && it.window.decorView.findViewWithTag<TextView>("settings-page-title").typeface == AppFont.face(true) }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(AppFont.face(true), it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface) }
                 leaveSettings(scenario)
                 scenario.recreate(); waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
@@ -1616,7 +1630,7 @@ class SpareDeviceTest {
                     val movie = Channel("fixture-film", "M3U film", "Movies", "${server.base}/channel1.mp4", media = true)
                     val controller = LibraryController(activity, store,
                         { title, action -> android.widget.Button(activity).apply { text = title; setOnClickListener { action() } } },
-                        { m3u }, { Guide(listOf(movie), emptyMap()) }, { _, _ -> }, {}, {})
+                        { m3u }, { Guide(listOf(movie), emptyMap()) }, { _, _ -> }, {})
                     try {
                         controller.open("movie")
                         val panel = controller.panel
@@ -1672,7 +1686,7 @@ class SpareDeviceTest {
             var panel: MediaBrowserPanel? = null; var cover: android.widget.ImageView? = null; var fallback: ((String) -> Unit)? = null
             instrumentation.runOnMainSync {
                 val activityContext = android.view.ContextThemeWrapper(context, android.R.style.Theme_Material_NoActionBar)
-                panel = MediaBrowserPanel(activityContext, { text, action -> android.widget.Button(activityContext).apply { this.text = text; setOnClickListener { action() } } }, {}, {}, {})
+                panel = MediaBrowserPanel(activityContext, { text, action -> android.widget.Button(activityContext).apply { this.text = text; setOnClickListener { action() } } }, {}, {})
                 panel!!.visibility = View.VISIBLE; panel!!.allowArtworkHttp(true)
                 panel!!.submit(listOf(BrowserRow("missing", "Missing artwork", requestPoster = { fallback = it }) {}))
                 panel!!.measure(View.MeasureSpec.makeMeasureSpec(960, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(540, View.MeasureSpec.EXACTLY)); panel!!.layout(0, 0, 960, 540)
@@ -1742,29 +1756,67 @@ class SpareDeviceTest {
                     val nav = activity.window.decorView.findViewWithTag<View>("settings-navigation"); val content = activity.window.decorView.findViewWithTag<View>("settings-content")
                     val left = IntArray(2); val right = IntArray(2); nav.getLocationOnScreen(left); content.getLocationOnScreen(right)
                     assertTrue(left[0] + nav.width < right[0]); assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
+                    listOf("Playback", "Theme", "Guide", "Categories").forEach { assertNotNull(activity.window.decorView.findViewWithTag<View>("settings-nav:$it")) }
+                    listOf("Font", "Guide video", "Subtitles", "Time format").forEach { assertNull(activity.window.decorView.findViewWithTag<View>("settings-nav:$it")) }
                     activity.window.decorView.findViewWithTag<View>("settings-nav:Theme").requestFocus()
                 }
-                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-option:Monochrome").hasFocus() }
-                device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { store.theme == "Ocean" }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title")?.text.toString() == "Theme" && it.window.decorView.findViewWithTag<View>("settings-option:Ocean")?.hasFocus() == true }
-                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-nav:Theme").hasFocus() }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
+                var samePalette: View? = null; var samePreview: View? = null; var previousPreview: Bitmap? = null
+                scenario.onActivity { activity ->
+                    samePalette = activity.window.decorView.findViewWithTag<View>("theme-control:Palette")
+                    samePreview = activity.window.decorView.findViewWithTag<View>("theme-preview")
+                    assertTrue(samePreview!!.width > 0 && samePreview!!.height > 0)
+                    previousPreview = Bitmap.createBitmap(samePreview!!.width, samePreview!!.height, Bitmap.Config.ARGB_8888).also { samePreview!!.draw(Canvas(it)) }
+                }
+                device.pressDPadRight()
+                waitFor(scenario) { store.theme == "Ocean" && GuideTheme.current.name == "Ocean" && it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    assertSame(samePalette, activity.window.decorView.findViewWithTag<View>("theme-control:Palette"))
+                    assertSame(samePreview, activity.window.decorView.findViewWithTag<View>("theme-preview"))
+                    val changed = Bitmap.createBitmap(samePreview!!.width, samePreview!!.height, Bitmap.Config.ARGB_8888).also { samePreview!!.draw(Canvas(it)) }
+                    assertFalse("Palette changes immediately redraw the local preview", previousPreview!!.sameAs(changed))
+                    previousPreview!!.recycle(); changed.recycle()
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId)
+                }
+                device.pressDPadUp(); device.pressDPadLeft()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-nav:Theme").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings").hasFocus() }
                 device.pressDPadRight(); device.pressDPadRight()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-option:Monochrome").hasFocus() }
-                device.pressDPadCenter(); waitFor(scenario) { store.theme == "Monochrome" && it.window.decorView.findViewWithTag<View>("settings-panel").isShown }
-                activateSetting(scenario, "Ocean")
-                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
-                instrumentation.waitForIdleSync(); device.waitForIdle()
-                device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))
-                activateSetting(scenario, "Style · Flat"); waitFor(scenario) { store.themeStyle == "Flat" && GuideTheme.style == "Flat" }
-                activateSetting(scenario, "Violet"); activateSetting(scenario, "Style · Outline")
-                waitFor(scenario) { store.theme == "Violet" && store.themeStyle == "Outline" && GuideTheme.style == "Outline" }
-                activateSetting(scenario, "Font"); activateSetting(scenario, "Light")
-                waitFor(scenario) { store.font == "Light" }
-                scenario.onActivity { activity -> assertEquals(AppFont.face(true), activity.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface); assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
-                activateSetting(scenario, "Theme"); activateSetting(scenario, "Nostalgia preset")
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
+                device.pressDPadDown(); device.pressDPadLeft()
+                waitFor(scenario) { store.theme == "Monochrome" && it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
+                device.pressDPadCenter(); waitFor(scenario) { store.theme == "Ocean" && it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "settings.png"))
+                setThemeControl(scenario, "Look", "Style", "Flat"); waitFor(scenario) { store.themeStyle == "Flat" && GuideTheme.style == "Flat" }
+                setThemeControl(scenario, "Look", "Palette", "Violet"); setThemeControl(scenario, "Look", "Style", "Outline")
+                setThemeControl(scenario, "Look", "Corners", "12 dp"); setThemeControl(scenario, "Look", "Borders", "2 dp")
+                activateSetting(scenario, "Theme")
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("theme-tab:Colors").performClick()
+                    val accent = activity.window.decorView.findViewWithTag<EditText>("theme-control:Accent hex")
+                    val background = activity.window.decorView.findViewWithTag<EditText>("theme-control:Background hex")
+                    accent.requestFocus(); accent.setText("123456"); background.requestFocus(); background.setText("07131B")
+                    activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java).hideSoftInputFromWindow(background.windowToken, 0)
+                }
+                waitFor(scenario) { store.customAccent == 0xFF123456.toInt() && store.customBackground == 0x07131B && GuideTheme.current.accent == 0xFF123456.toInt() }
+                setThemeControl(scenario, "Type", "Font", "Light"); setThemeControl(scenario, "Type", "Guide text size", "110%")
+                setThemeControl(scenario, "Guide", "Row height", "36 dp"); setThemeControl(scenario, "Guide", "Row gap", "5 dp")
+                setThemeControl(scenario, "Guide", "Opacity", "80%"); setThemeControl(scenario, "Guide", "Guide video", "Small preview")
+                scenario.onActivity { activity ->
+                    val saved = SecureStore(context)
+                    assertEquals("Violet", saved.theme); assertEquals("Outline", saved.themeStyle); assertEquals("Light", saved.font)
+                    assertEquals(0xFF123456.toInt(), saved.customAccent); assertEquals(0x07131B, saved.customBackground)
+                    assertEquals(12, saved.cornerRadius); assertEquals(2, saved.borderWidth); assertEquals(110, saved.guideTextScale)
+                    assertEquals(36, saved.guideRowHeight); assertEquals(5, saved.guideRowGap); assertEquals(80, saved.guideOpacity); assertTrue(saved.smallPreview)
+                    assertEquals(AppFont.face(true), activity.window.decorView.findViewWithTag<TextView>("settings-page-title").typeface)
+                    assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId)
+                }
+                activateSetting(scenario, "Theme")
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("theme-control:Nostalgia").apply { requestFocus(); performClick() } }
                 waitFor(scenario) { store.themeStyle == "Nostalgia" && store.font == "Monospace" && store.theme == "Phosphor" }
-                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId) }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("theme-control:Nostalgia").hasFocus()) }
                 leaveSettings(scenario); device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "nostalgia.png"))
@@ -1792,16 +1844,44 @@ class SpareDeviceTest {
     }
 
     private fun activateSetting(scenario: ActivityScenario<MainActivity>, label: String) {
+        val parent = when (label) {
+            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels" -> "Playback"
+            "Navigation dock", "Time format" -> "Guide"
+            "Category order" -> "Categories"
+            else -> null
+        }
         waitFor(scenario) { activity ->
             val panel = activity.window.decorView.findViewWithTag<View>("settings-panel")
             if (panel?.isShown != true) false else {
                 val control = panel.findViewWithTag<View>("settings-nav:$label") ?: panel.findViewWithTag<View>("settings-option:$label")
-                control?.let { it.requestFocus(); it.performClick(); true } ?: false
+                if (control != null) { control.requestFocus(); control.performClick(); true }
+                else { parent?.let { panel.findViewWithTag<View>("settings-nav:$it")?.performClick() }; false }
             }
         }
     }
+    private fun setThemeControl(scenario: ActivityScenario<MainActivity>, tab: String, title: String, value: String) {
+        activateSetting(scenario, "Theme")
+        scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("theme-tab:$tab").apply { requestFocus(); performClick() } }
+        scenario.onActivity { activity ->
+            val control = activity.window.decorView.findViewWithTag<View>("theme-control:$title")
+            control.requestFocus()
+            var found = false
+            repeat(32) {
+                if (control.contentDescription.toString().startsWith("$title, $value.")) found = true
+                if (!found) control.performClick()
+            }
+            assertTrue("Theme control $title must offer $value", found)
+            assertTrue("Adjusting a theme row keeps remote focus", control.hasFocus())
+        }
+    }
+    private fun pollSportsFixture(activity: MainActivity) {
+        assertNull("Sports updates automatically without a Refresh control", activity.window.decorView.findViewWithTag<View>("sports-refresh"))
+        MainActivity::class.java.getDeclaredField("liveSportsAttempt").apply { isAccessible = true }.setLong(activity, 0)
+        MainActivity::class.java.getDeclaredMethod("checkLiveSports", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+        MainActivity::class.java.getDeclaredMethod("scheduleSports").apply { isAccessible = true }.invoke(activity)
+    }
     private fun leaveSettings(scenario: ActivityScenario<MainActivity>) {
-        repeat(2) {
+        repeat(5) {
             var open = false; scenario.onActivity { activity -> open = activity.window.decorView.findViewWithTag<View>("settings-panel")?.isShown == true }
             if (open) { device.pressBack(); instrumentation.waitForIdleSync() }
         }

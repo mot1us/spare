@@ -41,8 +41,12 @@ class PlaybackProgress {
         if (frameUs == null || frameUs != frame) { frame = frameUs; frameAt = now }
         if (buffering || wasBuffering) readyAt = now
         wasBuffering = buffering
+        // Keep an absolute no-position deadline even if READY and BUFFERING flap.
         if (now - positionAt >= 45000) return true
-        return !buffering && now - readyAt >= 3000 && (now - positionAt >= 20000 || frameUs != null && now - frameAt >= 20000)
+        // A rebuffer can leave the last video timestamp old while position resumes.
+        // Give READY its full observation window instead of counting buffer time
+        // toward the frozen-video deadline and reopening a recovering connection.
+        return !buffering && now - readyAt >= 20000 && (now - positionAt >= 20000 || frameUs != null && now - frameAt >= 20000)
     }
 }
 

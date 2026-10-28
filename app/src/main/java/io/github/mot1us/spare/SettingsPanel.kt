@@ -25,6 +25,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     private val controls = mutableListOf<View>()
     var leaveNavigation: (() -> Unit)? = null
     private var selected = "Playlists"
+    private var detailBack: (() -> Unit)? = null
     val currentPage get() = selected
     val opened get() = isVisible
     init {
@@ -39,7 +40,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         contentScroll.setOnKeyListener { _, key, event -> if (key == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_DOWN) focusNavigation(); true } else false }
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (findFocus() is EditText && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return super.dispatchKeyEvent(event)
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && (findFocus() is EditText || controls.filterIsInstance<SettingsContent>().any { it.handlesLeft(findFocus()) })) return super.dispatchKeyEvent(event)
         if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 if (contentScroll.hasFocus()) focusNavigation() else (leaveNavigation ?: close).invoke()
@@ -71,6 +72,10 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         visibility = VISIBLE; selectPage(selected); navRows[selected]?.requestFocus()
     }
     private fun selectPage(item: String) { selected = item; navRows.forEach { (name, row) -> row.isSelected = name == item }; render(item) }
+    fun onDetailBack(action: (() -> Unit)?) { detailBack = action }
+    fun custom(view: View, heightDp: Int = 390) {
+        controls.add(view); content.addView(view, LayoutParams(-1, dp(heightDp)))
+    }
     fun page(title: String, description: String) {
         // Keep focus on a stable content container while replacing a focused option.
         // Otherwise Android can enter a different navigation page during the render.
@@ -101,7 +106,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
             tag = "settings-option:$title"; contentDescription = title + (if (selected) ", selected" else "") + if (detail.isEmpty()) "" else ". $detail"
             val labels = LinearLayout(context).apply { orientation = VERTICAL; addView(text); if (detail.isNotEmpty()) addView(subtitle) }
             addView(labels, LayoutParams(0, -2, 1f)); if (selected) addView(label("✓", 14f))
-            setOnFocusChangeListener { _, focused -> text.setTextColor(if (focused) Color.BLACK else Color.WHITE); subtitle.setTextColor(if (focused) Color.BLACK else Color.LTGRAY); if (childCount > 1) (getChildAt(1) as TextView).setTextColor(if (focused) Color.BLACK else Color.WHITE) }
+            setOnFocusChangeListener { _, focused -> text.setTextColor(if (focused) GuideTheme.focusText else Color.WHITE); subtitle.setTextColor(if (focused) GuideTheme.focusText else Color.LTGRAY); if (childCount > 1) (getChildAt(1) as TextView).setTextColor(if (focused) GuideTheme.focusText else Color.WHITE) }
             setOnClickListener { execute() }
             setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) execute(); true }
@@ -157,7 +162,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     }
     fun selectSetting(item: String) { navRows[item]?.requestFocus(); selectPage(item); focusContent() }
     fun focusNavigation() { navRows[selected]?.requestFocus() }
-    fun focusContent() { controls.firstOrNull()?.requestFocus() ?: contentScroll.requestFocus() }
+    fun focusContent() { val first = controls.firstOrNull(); if (first is SettingsContent) first.focusContent() else if (first?.requestFocus() != true) contentScroll.requestFocus() }
     fun focusOption(title: String) { content.findViewWithTag<View>("settings-option:$title")?.requestFocus() }
-    fun back() { if (contentScroll.hasFocus()) focusNavigation() else close() }
+    fun back() { if (contentScroll.hasFocus() && detailBack != null) { val action = detailBack; detailBack = null; action?.invoke() } else if (contentScroll.hasFocus()) focusNavigation() else close() }
 }

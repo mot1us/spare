@@ -144,6 +144,22 @@ class MainActivity : Activity() {
     private var sportsDirty = false
     private var sportsReplayGame: SportsGame? = null
     private val replayCache = linkedMapOf<String, Pair<Long, List<SportsReplay>>>()
+    private var replayDiscovery: SportsReplayDiscovery? = null
+    private var replayGames = emptyList<SportsGame>()
+    private fun syncReplayDiscovery() {
+        if (!::sportsPanel.isInitialized || !::player.isInitialized) return
+        val active = !closed && started && sportsVisible && guideVisible && !sportsPanel.watching && !multiview.active && player.playWhenReady && player.playbackState != Player.STATE_BUFFERING
+        if (!active) { replayDiscovery?.pause(); return }
+        val discovery = replayDiscovery ?: SportsReplayDiscovery({ sourceId, epoch, game, choices, _ ->
+            if (!closed && source?.id == sourceId && generation == epoch) {
+                if (choices.isNotEmpty()) { replayCache["$sourceId:$epoch:${game.key}"] = System.currentTimeMillis() to choices; while (replayCache.size > 48) replayCache.remove(replayCache.keys.first()) }
+                replayDiscovery?.let { sportsPanel.updateReplayDiscovery(it.checkingKey, it.checkedKeys) }
+                scheduleSports()
+            }
+        }, { checking -> if (!closed) sportsPanel.updateReplayDiscovery(checking, replayDiscovery?.checkedKeys.orEmpty()) }).also { replayDiscovery = it }
+        discovery.update(source, generation, guide, replayGames, selectedGame, active)
+    }
+
     private var sportsChannels = emptyList<Channel>()
     private var selectedGame: SportsGame? = null
     private var sportsBackoffUntil = 0L
@@ -179,6 +195,9 @@ class MainActivity : Activity() {
     }
     private lateinit var sportsPanel: SportsPanel
     private var settingsPanel: SettingsPanel? = null
+    private var themeEditor: ThemeEditor? = null
+    private var localEditor: LocalChannelsEditor? = null
+    private val updateAppearance = Runnable { if (!closed) applyTheme() }
     private var settingsReturnGuide = true
     private var settingsReturnLibrary = false
     private lateinit var timeline: LinearLayout
@@ -358,7 +377,7 @@ class MainActivity : Activity() {
         store = SecureStore(this)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
-        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
+        configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
@@ -457,7 +476,7 @@ class MainActivity : Activity() {
                 if (state != player.playbackState) return
                 if (state == Player.STATE_BUFFERING) stopSportsPrefetch()
                 else if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
-                syncPlaybackMonitoring()
+                syncPlaybackMonitoring(); syncReplayDiscovery()
                 if (state == Player.STATE_ENDED && started && onDemand != null) { saveDemandProgress(ended = true); showDemandControls() }
                 else if (state == Player.STATE_ENDED && started && current != null) reconnectOrFail("The provider ended this stream. Try another channel or Retry. (STREAM_ENDED)")
             }
@@ -503,7 +522,7 @@ class MainActivity : Activity() {
     private fun button(value: String, click: () -> Unit) = Button(this).apply {
         isFocusableInTouchMode = true; text = value; textSize = 12f; isAllCaps = false; setPadding(dp(14), 0, dp(14), 0)
         minWidth = 0; minimumWidth = 0; minHeight = dp(34); minimumHeight = dp(34); typeface = AppFont.face(true)
-        setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))
+        setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(GuideTheme.focusText, Color.WHITE)))
         fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(4).toFloat() }
         background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
         background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30))
@@ -599,7 +618,7 @@ class MainActivity : Activity() {
         headerSurface.addView(headerArtwork, FrameLayout.LayoutParams(-1, -1))
         headerSurface.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF50B1018.toInt(), 0x700B1018)) }, FrameLayout.LayoutParams(-1, -1))
         headerInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; tag = "guide-header" }
-        channelInfo = text("", 20f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
+        channelInfo = text("", 20f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
         headerInfo.addView(channelInfo, LinearLayout.LayoutParams(-1, -2))
         programmeInfo = text("Add a playlist in Settings to start watching.", 12f).apply { maxLines = 5; setTextColor(Color.LTGRAY) }
         headerInfo.addView(programmeInfo, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(6) })
@@ -642,7 +661,7 @@ class MainActivity : Activity() {
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
-        }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
+        }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
         sportsPanel.watchChannel = { channel ->
             if (::multiview.isInitialized && multiview.browsing) startMultiview(channel) else {
@@ -679,7 +698,7 @@ class MainActivity : Activity() {
         content.addView(sportsPanel, LinearLayout.LayoutParams(-1, 0, 1f))
         remoteHint = text("← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite", 10f).apply { setTextColor(Color.LTGRAY); setPadding(0, dp(6), 0, 0) }
         content.addView(remoteHint)
-        previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; isFocusableInTouchMode = true; isClickable = true; setOnClickListener { if (current != null) showGuide(false) }; setOnFocusChangeListener { _, focused -> setTextColor(if (focused) Color.BLACK else Color.WHITE); setBackgroundColor(if (focused) GuideTheme.current.accent else 0xCC0B1018.toInt()) }; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        previewCaption = text("Select a channel", 10f).apply { setBackgroundColor(0xCC0B1018.toInt()); setPadding(dp(6), dp(2), dp(6), dp(2)); tag = "preview-caption"; isFocusableInTouchMode = true; isClickable = true; setOnClickListener { if (current != null) showGuide(false) }; setOnFocusChangeListener { _, focused -> setTextColor(if (focused) GuideTheme.focusText else Color.WHITE); setBackgroundColor(if (focused) GuideTheme.current.accent else 0xCC0B1018.toInt()) }; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         root.addView(previewCaption, FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178); marginEnd = dp(18) })
         nowPlaying = NowPlayingBanner(this)
         root.addView(nowPlaying, FrameLayout.LayoutParams(dp(480), -2, Gravity.BOTTOM or Gravity.START).apply { marginStart = dp(24); bottomMargin = dp(24) })
@@ -711,7 +730,7 @@ class MainActivity : Activity() {
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
             { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive)
         root.addView(demandControls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
-        library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::returnToLive, ::returnToLive)
+        library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::returnToLive)
         library.panel.navigation = { ++focusEpoch; libraryButton.requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
         library.panel.setPadding(dp(104), dp(18), dp(24), dp(18))
@@ -902,7 +921,7 @@ class MainActivity : Activity() {
         flushVideoReadings(); cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L
         stopSportsPrefetch(clear = true); clearSportsPlayback()
         val epoch = ++generation; guideTimeline.clear()
-        sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
+        sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; replayDiscovery?.pause(); replayGames = emptyList(); sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
@@ -1238,11 +1257,12 @@ class MainActivity : Activity() {
         val lineup = guide.channels; val location = store.localLocation
         if (localLineup === lineup && localQuery == location) return
         localTask?.cancel(true); localLineup = lineup; localQuery = location; localIds = emptySet(); localLoading = location.isNotBlank()
+        localEditor?.updateMatches(0, localLoading)
         if (!localLoading) return
         localTask = localWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val matches = runCatching { localStations.find(lineup, location) }.getOrDefault(emptySet())
-            handler.post { if (!closed && localLineup === lineup && localQuery == location) { localIds = matches; localLoading = false; if (localOnly) applyFilter() } }
+            handler.post { if (!closed && localLineup === lineup && localQuery == location) { localIds = matches; localLoading = false; localEditor?.updateMatches(matches.size, false); if (localOnly) applyFilter() } }
         }
     }
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
@@ -1256,7 +1276,7 @@ class MainActivity : Activity() {
         layoutGuideSurface()
         if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
         else { navigationRail.visibility = View.GONE; updateDockHint(); ++focusEpoch; showNowPlaying() }
-        scheduleEpg()
+        scheduleEpg(); syncReplayDiscovery()
         if (show && sportsQualityChanged) {
             sportsQualityChanged = false
             if (sportsVisible && sportsPanel.watching) selectedGame?.takeUnless { it.state == "post" }?.let { selectGame(it) }
@@ -1268,7 +1288,7 @@ class MainActivity : Activity() {
         if (!::multiview.isInitialized || !multiview.active || guideVisible) video.layoutParams = if (preview) FrameLayout.LayoutParams(dp(320), dp(180), Gravity.TOP or Gravity.END).apply { topMargin = dp(18) + searchInset; marginEnd = dp(18) } else FrameLayout.LayoutParams(-1, -1)
         headerSurface.visibility = if (sportsVisible) View.GONE else View.VISIBLE
         sportsPanel.previewMode(preview && sportsVisible)
-        headerInfo.setPadding(0, 0, if (preview) dp(336) else 0, 0)
+        headerInfo.setPadding(dp(12), dp(6), dp(if (preview) 348 else 12), dp(6))
         headerSurface.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
         previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
@@ -1391,7 +1411,7 @@ class MainActivity : Activity() {
         sportsComputing = true
         val liveSnapshot = liveSports; val checkingSnapshot = liveSportsChecking
         val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
-        val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites
+        val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites; val qualitySnapshot = videoInfo.toMap()
         val replaySnapshot = replayCache.toMap(); val selectedSourceId = source?.id
         val now = System.currentTimeMillis()
         sportsTask = sportsWorker.submit {
@@ -1407,7 +1427,7 @@ class MainActivity : Activity() {
             val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(48).mapNotNull { game ->
                 val cached = replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.takeIf { now - it.first < 60000 }?.second.orEmpty()
                     .filter { Catchup.available(it.channel, it.programme, now) && archiveGuide.channels.any { channel -> channel.id == it.channel.id && channel.url == it.channel.url } }
-                (cached.ifEmpty { SportsReplays.find(game, archiveGuide, now) }).maxByOrNull { it.channel.quality(null)?.height ?: 0 }?.let { game.key to it }
+                SportsReplays.best(cached.ifEmpty { SportsReplays.find(game, archiveGuide, now) }, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
             }.toMap()
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
@@ -1417,7 +1437,7 @@ class MainActivity : Activity() {
                 val scanning = checkingSnapshot
                 val progress = when {
                     scanning -> "Updating sports…"
-                    !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · saved upcoming games may still be shown · Refresh to retry"
+                    !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.archiveWindowDays = archiveDays
@@ -1427,12 +1447,12 @@ class MainActivity : Activity() {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
                 queueSportsPrefetch(games)
+                replayGames = games.filter { SportsReplays.eligible(it, archiveDays, now) }; syncReplayDiscovery()
                 scheduleEpg()
                 if (sportsDirty) { sportsDirty = false; scheduleSports() }
             }
         }
     }
-    private fun refreshSportsGuide() { stopSportsPrefetch(clear = true); checkLiveSports(force = true); sportsPanel.loading("Updating schedules…"); scheduleSports() }
     private fun openSportsCalendar() {
         showGuide(false); nowPlaying.hide(immediate = true)
         val panel = sportsCalendar ?: SportsCalendarPanel(this, ::button, { day ->
@@ -1533,7 +1553,7 @@ class MainActivity : Activity() {
         else { showGuide(sportsManagerReturnGuide); if (sportsVisible && guideVisible) sportsPanel.teamsButton.requestFocus() }
     }
     private fun showGameInfo(game: SportsGame) {
-        selectedGame = game; channelInfo.text = game.title
+        selectedGame = game; syncReplayDiscovery(); channelInfo.text = game.title
         programmeInfo.text = "${sportsPanel.scoreText(game)}\n${game.teams.first().league} · ${sportsPanel.statusText(game)}\n" +
             (game.networks.joinToString(" · ").ifBlank { "Broadcaster to be announced" }) + "\n" +
             (if (game.broadcasts.isNotEmpty() || game.titleMatches.isNotEmpty()) "${game.broadcasts.size + game.titleMatches.size} EPG/title matches · OK Choose channel" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible network channels · OK Review" else "Channel not matched yet")
@@ -1568,7 +1588,7 @@ class MainActivity : Activity() {
                 } finally { requests.values.forEach { it.cancel(true) } }
                 choices = SportsReplays.find(game, Guide(targets, listings), System.currentTimeMillis())
             }
-            val result = choices.sortedWith(compareByDescending<SportsReplay> { it.channel.id in favoriteSnapshot }.thenByDescending { it.channel.quality(quality[it.channel.id])?.height ?: 0 })
+            val result = SportsReplays.rank(choices, quality, favoriteSnapshot)
             handler.post {
                 if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || selectedGame?.key != game.key) return@post
                 if (result.isNotEmpty()) { replayCache[key] = System.currentTimeMillis() to result; while (replayCache.size > 16) replayCache.remove(replayCache.keys.first()) }
@@ -1724,8 +1744,7 @@ class MainActivity : Activity() {
         sportsPanel.showStreams(context.game, choices, message) { channel -> (if (channel.id == current?.id) "Current · " else "") + gameStreamLabel(context.game, channel) }
     }
     private fun gameStreamLabel(game: SportsGame, channel: Channel): String =
-        (if (channel.id in favorites) "★ " else "") + channel.name + " · " +
-            (channel.quality(videoInfo[channel.id])?.let { it.label() + if ((videoInfo[channel.id]?.fps ?: 0f) <= 0f) " · Provider reported" else " · Verified by playback" } ?: "Quality unverified") +
+        (if (channel.id in favorites) "★ " else "") + channel.name + " · " + channel.qualityLabel(videoInfo[channel.id]) +
             if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
         profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null, background: Boolean = false): SportsStreamCache.Match {
@@ -1739,11 +1758,12 @@ class MainActivity : Activity() {
         }
         val warmed = cached?.warmed.orEmpty().toMutableMap()
         val needsProvider = selected.kind == "xtream" && selected.epgUrl.isBlank()
-        val locallyConfirmed = SportsStreams.bestConfirmed(result, SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality), quality, System.currentTimeMillis()) != null
-        if (confirm && needsProvider && !Thread.currentThread().isInterrupted) {
+        val coverageNow = System.currentTimeMillis()
+        val locallyConfirmed = result.broadcasts.any { coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
+        if (confirm && needsProvider && !locallyConfirmed && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             if (SportsStreams.bestConfirmed(result, choices, quality, System.currentTimeMillis()) == null) {
-                val targets = choices.filter { channel -> SportsStreams.qualifies(channel, quality[channel.id]) || channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }.take(2)
+                val targets = choices.take(2)
                 val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { XtreamEpg.load(selected, channel, 6, 1200) } }
                 val deadline = System.nanoTime() + 1_500_000_000L
                 if (requests.isNotEmpty()) progress("Confirming current coverage · ${requests.size} channels", 0, 0)
@@ -1898,7 +1918,7 @@ class MainActivity : Activity() {
         val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
-        panel.open(listOf("Playlists", "Local channels", "Navigation dock", "Frame-rate matching", "Guide video", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
+        panel.open(listOf("Playlists", "Local channels", "Playback", "Theme", "Guide", "Categories", "Sports", "Metadata", "Updates", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
@@ -1907,7 +1927,18 @@ class MainActivity : Activity() {
     }
     private fun renderSettingsPage(page: String) {
         val panel = settingsPanel ?: return
-        fun refresh(focus: String? = null) = panel.refresh(focus)
+        if (page != "Theme") themeEditor = null
+        if (page != "Local channels") localEditor = null
+        val parent = when (page) {
+            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels" -> "Playback"
+            "Navigation dock", "Time format" -> "Guide"
+            "Category order" -> "Categories"
+            else -> null
+        }
+        panel.onDetailBack(parent?.let { { renderSettingsPage(it); panel.focusOption(page) } })
+        fun refresh(focus: String? = null) {
+            if (parent == null) panel.refresh(focus) else { renderSettingsPage(page); focus?.let(panel::focusOption) }
+        }
         when (page) {
             "Playlists" -> {
                 panel.page("Playlists", "Save several playlists; one plays at a time. Credentials stay encrypted on this TV.")
@@ -1916,11 +1947,23 @@ class MainActivity : Activity() {
                 panel.action("Add playlist") { editSource(null) }; if (source != null) panel.action("Edit current playlist") { editSource(source) }
             }
             "Local channels" -> {
-                panel.page(page, "Choose a U.S. city or state. Local matches station call signs and provider location labels in your playlist. Location stays on this device; no GPS or online lookup is needed.")
-                val location = panel.input("City or state", store.localLocation, "Seattle, WA · Seattle · Washington")
-                panel.action("Save location") { store.localLocation = location.text.toString(); localLineup = null; requestLocalMatches(); if (localOnly) applyFilter(); refresh("Save location") }
-                panel.action("Open Local guide") { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) }
-                panel.note("Reference data may be incomplete or contain historical call signs. Explicit playlist location labels also match. All quality variants remain available.")
+                panel.page(page, "Enter a U.S. city or state. Matches update automatically from your playlist; location stays on this device.")
+                val editor = LocalChannelsEditor(this, store.localLocation, { value ->
+                    store.localLocation = value; localLineup = null; requestLocalMatches(); if (localOnly) applyFilter()
+                }, { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) })
+                localEditor = editor; panel.custom(editor, 340); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
+            }
+            "Playback" -> {
+                panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
+                listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels").forEach { label ->
+                    panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> source?.let(store::streamFormat).orEmpty(); else -> "" }) { renderSettingsPage(label); panel.focusContent() }
+                }
+                panel.note("Live buffering adapts to available data. Sustained stalls reconnect automatically; OK offers other streams for recognized games.")
+            }
+            "Guide" -> {
+                panel.page(page, "Guide navigation and clock. Appearance, fonts, spacing, opacity and preview mode are in Theme.")
+                listOf("Navigation dock", "Time format").forEach { label -> panel.action(label) { renderSettingsPage(label); panel.focusContent() } }
+                panel.action("Theme editor") { panel.selectSetting("Theme") }
             }
             "Navigation dock" -> {
                 panel.page(page, "Hidden dock slides in when you move Left from categories. Right returns to your current screen; OK opens an item.")
@@ -1936,15 +1979,9 @@ class MainActivity : Activity() {
                     refresh(label)
                 } }
             }
-            "Guide video" -> {
-                panel.page(page, "Choose how live video appears while browsing. Playback continues while you change settings.")
-                listOf("Transparent overlay", "Small live preview").forEachIndexed { index, label -> panel.action(label, selected = store.smallPreview == (index == 1)) { store.smallPreview = index == 1; refresh(label) } }
-                panel.note("Guide background opacity · text and controls stay solid")
-                panel.action("Theme default", selected = store.guideOpacity < 0) { store.guideOpacity = -1; guidePanel.background = GuideTheme.guideBackground(store.guideOpacity); refresh("Theme default") }
-                listOf(25, 50, 65, 75, 85, 95, 100).forEach { percent -> panel.action("Opacity · $percent%", selected = store.guideOpacity == percent) { store.guideOpacity = percent; guidePanel.background = GuideTheme.guideBackground(percent); refresh("Opacity · $percent%") } }
-            }
             "Categories" -> {
                 panel.page(page, "Choose which provider categories appear in your guide. Presets use the provider’s country/language labels.")
+                panel.action("Category order") { renderSettingsPage("Category order"); panel.focusContent() }
                 CategoryPresets.names.forEachIndexed { index, label -> panel.action(label) {
                     if (index == 4) { renderCategoryChoices(); panel.focusContent() }
                     else { val chosen = if (index == 0) emptySet() else CategoryPresets.select(providerGroups, index); if (index > 0 && chosen.isEmpty()) panel.note("No matching labels. Choose categories manually.") else { saveFilters(filters.copy(groups = chosen)); refresh(label) } }
@@ -1956,18 +1993,9 @@ class MainActivity : Activity() {
                 if (selected == null) panel.note("Add a playlist first.") else listOf("Provider order", "USA first").forEachIndexed { index, label -> panel.action(label, selected = store.usaFirst(selected) == (index == 1)) { store.setUsaFirst(selected, index == 1); groupsForChannels = null; updateGroups(); refresh(label) } }
             }
             "Theme" -> {
-                panel.page(page, "Layout style and colors. Video keeps playing.")
-                GuideTheme.palettes.forEach { palette -> panel.action(palette.name, selected = store.theme == palette.name) { store.theme = palette.name; GuideTheme.select(store.theme); applyTheme(); refresh(palette.name) } }
-                GuideTheme.styles.forEach { style -> panel.action("Style · $style", selected = store.themeStyle == style) { store.themeStyle = style; GuideTheme.selectStyle(style); applyTheme(); refresh("Style · $style") } }
-                panel.action("Nostalgia preset", "Retro green guide, square borders and monospace type", selected = store.themeStyle == "Nostalgia") {
-                    store.theme = "Phosphor"; store.themeStyle = "Nostalgia"; store.font = "Monospace"
-                    GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle); AppFont.select(store.font); applyTheme(); refresh("Nostalgia preset")
-                }
-                panel.action("Font", store.font) { panel.selectSetting("Font") }
-            }
-            "Font" -> {
-                panel.page(page, "Built-in fonts for the guide, Library and settings. Video keeps playing.")
-                AppFont.names.forEach { name -> panel.action(name, selected = store.font == name) { store.font = name; AppFont.select(name); AppFont.apply(root); adapter.refreshRows(); refresh(name) } }
+                panel.page("Theme editor", "Live preview · changes save automatically · Left/Right changes a value")
+                val editor = ThemeEditor(this, store, ::appearanceChanged, { panel.focusNavigation() })
+                themeEditor = editor; panel.custom(editor, 390)
             }
             "Metadata" -> {
                 panel.page("Metadata", "Provider artwork and descriptions are used by default. Optional AIO Metadata enrichment uses your configured Stremio addon URL. IPTV credentials and playback URLs stay in Spare. Enrichment is cached and never blocks playback.")
@@ -1993,7 +2021,7 @@ class MainActivity : Activity() {
             "Subtitles" -> renderCaptionSettings()
             "Sports" -> {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers a matching game in FHD/60 or better, using provider or playback quality. If only an advertised broadcaster matches, it tries that channel and labels coverage unconfirmed. Unknown quality remains available for manual review.")
-                panel.action("Play best stream on selection", "Skip live-game actions and play the best match. Prefer known FHD/60; try and measure unknown FPS. Failed starts or measured lower quality can try another match, up to three attempts.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
+                panel.action("Play best stream on selection", "Skip live-game actions and play the best match. Prefer known FHD/60; try and measure unknown FPS. Failed starts can try another match, up to three attempts. Working lower-quality playback continues.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }
                 panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
@@ -2065,22 +2093,24 @@ class MainActivity : Activity() {
 
     private fun renderCaptionSettings() {
         val panel = settingsPanel ?: return
+        panel.onDetailBack { renderSettingsPage("Playback"); panel.focusOption("Subtitles") }
+        fun refresh(label: String) { renderCaptionSettings(); panel.focusOption(label) }
         if (onDemand != null) {
             panel.page("Subtitles", "For ${onDemand?.title}. The app default applies to other on-demand titles.")
             panel.action("Subtitle appearance", "${store.subtitleSize} · ${store.subtitleStyle}") { renderSubtitleAppearance(); panel.focusContent() }
-            listOf(null to "Use app default", CaptionTracks.OFF to "Off", CaptionTracks.AUTO to "Automatic").forEach { (mode, label) -> panel.action(label, selected = demandSubtitleMode == mode) { setSubtitleMode(mode); panel.refresh(label) } }
-            CaptionTracks.choices(player.currentTracks).forEach { choice -> panel.action(choice.label(), selected = demandSubtitleMode == choice.key) { setSubtitleMode(choice.key); panel.refresh(choice.label()) } }
+            listOf(null to "Use app default", CaptionTracks.OFF to "Off", CaptionTracks.AUTO to "Automatic").forEach { (mode, label) -> panel.action(label, selected = demandSubtitleMode == mode) { setSubtitleMode(mode); refresh(label) } }
+            CaptionTracks.choices(player.currentTracks).forEach { choice -> panel.action(choice.label(), selected = demandSubtitleMode == choice.key) { setSubtitleMode(choice.key); refresh(choice.label()) } }
             return
         }
         panel.page("Channel subtitles", current?.name?.let { "Saved for $it. App default applies to channels without an override." } ?: "Play a channel to choose its subtitles.")
         panel.action("Subtitle appearance", "${store.subtitleSize} · ${store.subtitleStyle}") { renderSubtitleAppearance(); panel.focusContent() }
         if (current != null && source != null) {
             val saved = store.channelCaptions(source!!, current!!)
-            panel.action("Use app default", selected = saved == null) { setSubtitleMode(null); panel.refresh("Use app default") }
-            panel.action("Off", selected = saved == CaptionTracks.OFF) { setSubtitleMode(CaptionTracks.OFF); panel.refresh("Off") }
-            panel.action("Automatic", selected = saved == CaptionTracks.AUTO) { setSubtitleMode(CaptionTracks.AUTO); panel.refresh("Automatic") }
+            panel.action("Use app default", selected = saved == null) { setSubtitleMode(null); refresh("Use app default") }
+            panel.action("Off", selected = saved == CaptionTracks.OFF) { setSubtitleMode(CaptionTracks.OFF); refresh("Off") }
+            panel.action("Automatic", selected = saved == CaptionTracks.AUTO) { setSubtitleMode(CaptionTracks.AUTO); refresh("Automatic") }
             val tracks = CaptionTracks.choices(player.currentTracks)
-            tracks.forEach { choice -> panel.action(choice.label(), selected = saved == choice.key) { setSubtitleMode(choice.key); panel.refresh(choice.label()) } }
+            tracks.forEach { choice -> panel.action(choice.label(), selected = saved == choice.key) { setSubtitleMode(choice.key); refresh(choice.label()) } }
             if (tracks.isEmpty() || tracks.all { it.compatibility }) panel.note("Automatic tries common embedded caption services. This programme must supply captions for them to appear.")
         }
         panel.action("App default") { renderDefaultCaptionSettings(); panel.focusContent() }
@@ -2088,6 +2118,7 @@ class MainActivity : Activity() {
     private fun applySubtitleAppearance() { SubtitleAppearance.apply(video, store.subtitleSize, store.subtitleStyle); if (::multiview.isInitialized) multiview.appearance() }
     private fun renderSubtitleAppearance() {
         val panel = settingsPanel ?: return
+        panel.onDetailBack { renderCaptionSettings(); panel.focusOption("Subtitle appearance") }
         panel.page("Subtitle appearance", "Applies to live TV, movies and series. Embedded subtitle font sizes are overridden.")
         panel.note("Size")
         SubtitleAppearance.sizes.keys.forEach { size -> panel.action(size, selected = store.subtitleSize == size) { store.subtitleSize = size; applySubtitleAppearance(); renderSubtitleAppearance(); panel.focusOption(size) } }
@@ -2096,6 +2127,7 @@ class MainActivity : Activity() {
     }
     private fun renderDefaultCaptionSettings() {
         val panel = settingsPanel ?: return
+        panel.onDetailBack { renderCaptionSettings(); panel.focusOption("App default") }
         panel.page("Default subtitles · all channels", "Channels with their own subtitle preference keep that preference.")
         listOf("Off", "Automatic").forEachIndexed { index, label -> panel.action(label, selected = store.captions == (index == 1)) {
             val wasEnabled = captionsEnabled(); store.captions = index == 1; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); applyCaptionPreference(); reconcileCaptions()
@@ -2119,22 +2151,35 @@ class MainActivity : Activity() {
         val profile = sportsStreamFilters()
         val channels = guide.channels.filter { !it.media && (profile.groups.isEmpty() || it.group in profile.groups) }
         val known = channels.count { (it.quality(videoInfo[it.id])?.fps ?: 0f).let { rate -> rate.isFinite() && rate > 0f } }
-        panel.note("${channels.count { profile.matches(it, videoInfo[it.id]) }} eligible Sports streams · $known with known FPS · ${channels.size - known} FPS unknown", "quality-data-summary")
+        panel.note("${channels.count { profile.matches(it, videoInfo[it.id]) }} match your Sports preferences · $known with known FPS · ${channels.size - known} FPS unknown", "quality-data-summary")
         panel.note("Watch Best prefers known FHD/60, then your preferred quality. If only lower-quality or unverified streams are available, play one directly or choose between several. Quality preferences do not hide guide channels.")
-        panel.note("Minimum resolution")
+        panel.note("Preferred resolution · other qualities remain available")
         listOf(0 to "Any resolution", 720 to "HD · 720p or better", 1080 to "FHD · 1080p or better", 2160 to "4K · 2160p or better").forEach { (height, label) -> panel.action(label, selected = sportsFilters.minHeight == height) { saveSportsFilters(sportsFilters.copy(minHeight = height)); panel.refresh(label) } }
-        panel.note("Frame rates · select the rates you want to keep")
+        panel.note("Preferred frame rates · select the rates you prefer")
         FrameRateFilter.choices.forEach { (rate, label) -> panel.action(label, selected = rate !in sportsFilters.excludedFps) {
             val excluded = sportsFilters.excludedFps.toMutableSet(); if (!excluded.add(rate)) excluded.remove(rate)
             saveSportsFilters(sportsFilters.copy(excludedFps = excluded)); panel.refresh(label)
         } }
         panel.action("Reset stream quality") { saveSportsFilters(GuideFilters()); panel.refresh("Reset stream quality") }
     }
+    private fun configureAppearance() {
+        GuideTheme.select(store.theme); GuideTheme.selectStyle(store.themeStyle)
+        GuideTheme.configure(store.customAccent, store.customBackground, store.cornerRadius, store.borderWidth, store.guideRowHeight, store.guideRowGap, store.guideTextScale)
+        AppFont.select(store.font)
+    }
+    private fun appearanceChanged() {
+        configureAppearance(); themeEditor?.refreshPreview()
+        handler.removeCallbacks(updateAppearance); handler.postDelayed(updateAppearance, 80)
+    }
     private fun applyTheme() {
+        configureAppearance()
+
         guidePanel.background = GuideTheme.guideBackground(store.guideOpacity)
         fun visit(view: View) {
             if (view is Button) { view.background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30)); view.setTextColor(GuideTheme.ink()) }
             else if (view is ImageButton) view.background = GuideTheme.background(resources.displayMetrics.density)
+            else if (view.tag?.toString()?.startsWith("settings-nav:") == true) { view.background = GuideTheme.background(resources.displayMetrics.density); (view as? TextView)?.setTextColor(GuideTheme.ink()) }
+            else if (view.tag?.toString()?.startsWith("settings-option:") == true) view.background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B)
             if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
         visit(root); navigationRail.appearance(); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
@@ -2174,53 +2219,9 @@ class MainActivity : Activity() {
         applyCaptionPreference(); reconcileCaptions()
         if (!wasEnabled && captionsEnabled() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) { saveDemandProgress(); playAttempt() }
     }
-    private fun defaultSubtitles() {
-        AlertDialog.Builder(this).setTitle("Default subtitles · all channels")
-            .setSingleChoiceItems(arrayOf("Off", "Automatic"), if (store.captions) 1 else 0) { dialog, which ->
-                val wasEnabled = captionsEnabled(); store.captions = which == 1; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); applyCaptionPreference(); reconcileCaptions(); dialog.dismiss()
-                if (!wasEnabled && captionsEnabled() && playbackUrl.substringBefore('?').endsWith(".m3u8", true)) { saveDemandProgress(); playAttempt() }
-            }.setNegativeButton("Close", null).show()
-    }
-    private fun subtitles() {
-        val selected = source; val channel = current
-        if (onDemand != null) {
-            val choices = CaptionTracks.choices(player.currentTracks)
-            val names = listOf("Off", "Automatic") + choices.map { it.label() }
-            AlertDialog.Builder(this).setTitle("Subtitles · ${onDemand?.title}").setItems(names.toTypedArray()) { _, index -> setSubtitleMode(when (index) { 0 -> CaptionTracks.OFF; 1 -> CaptionTracks.AUTO; else -> choices[index - 2].key }) }.setNegativeButton("Close", null).show(); return
-        }
-        if (selected == null || channel == null) { defaultSubtitles(); return }
-        val choices = CaptionTracks.choices(player.currentTracks)
-        val names = arrayListOf("Use app default · ${if (store.captions) "Automatic" else "Off"}", "Off", "Automatic")
-        names.addAll(choices.map { it.label() })
-        if (choices.isEmpty() || choices.all { it.compatibility }) names.add("Caption availability · help")
-        val saved = store.channelCaptions(selected, channel)
-        val checked = when (saved) { null -> 0; CaptionTracks.OFF -> 1; CaptionTracks.AUTO -> 2; else -> choices.indexOfFirst { it.key == saved }.takeIf { it >= 0 }?.plus(3) ?: 2 }
-        AlertDialog.Builder(this).setTitle("Subtitles · ${channel.name}").setSingleChoiceItems(names.toTypedArray(), checked) { dialog, index ->
-            dialog.dismiss()
-            when {
-                index == 0 -> setSubtitleMode(null)
-                index == 1 -> setSubtitleMode(CaptionTracks.OFF)
-                index == 2 -> setSubtitleMode(CaptionTracks.AUTO)
-                index - 3 in choices.indices -> setSubtitleMode(choices[index - 3].key)
-                else -> notice("Caption availability", "This setting is saved for this channel only. Automatic tries the common CC1 and Digital 1 services when the provider omits caption labels. Compatibility services may be silent if this programme supplies no captions. Select a service directly to keep it for this channel, or choose Use app default to remove the override.")
-            }
-        }.setNeutralButton("App default") { _, _ -> defaultSubtitles() }.setNegativeButton("Close", null).show()
-    }
     private fun tracks(type: Int) {
-        if (type == C.TRACK_TYPE_TEXT) { subtitles(); return }
-        val choices = ArrayList<Pair<Tracks.Group, Int>>()
-        val names = arrayListOf("Automatic")
-        player.currentTracks.groups.filter { it.type == type }.forEach { group ->
-            for (i in 0 until group.length) if (group.isTrackSupported(i)) {
-                val format = group.getTrackFormat(i); choices.add(group to i)
-                names.add(listOfNotNull(format.label, format.language, format.codecs).joinToString(" · ").ifBlank { "Track ${choices.size}" })
-            }
-        }
-        AlertDialog.Builder(this).setTitle("Audio").setItems(names.toTypedArray()) { _, index ->
-            val selection = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type).setTrackTypeDisabled(type, false)
-            if (index > 0) choices[index - 1].let { (group, track) -> selection.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track)) }
-            player.trackSelectionParameters = selection.build()
-        }.setNegativeButton("Close", null).show()
+        playbackMenu(); settingsPanel?.selectSetting("Playback")
+        renderSettingsPage(if (type == C.TRACK_TYPE_TEXT) "Subtitles" else "Audio track"); settingsPanel?.focusContent()
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -2326,7 +2327,7 @@ class MainActivity : Activity() {
         val resume = pausedPlayback; pausedPlayback = null
         if (resume != null && ::player.isInitialized) {
             if (resume && player.playbackState == Player.STATE_IDLE) playAttempt(PlaybackPhase.RECONNECTING) else player.playWhenReady = resume
-            if (resume && !firstFrame && player.playbackState == Player.STATE_BUFFERING) handler.postDelayed(startupTimeout, 15000)
+            if (resume && !firstFrame && player.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY)) { handler.removeCallbacks(startupTimeout); handler.postDelayed(startupTimeout, 15000) }
         }
         syncPlaybackMonitoring()
         if (::sportsPanel.isInitialized && guideVisible && sportsVisible) sportsPanel.resumeImages()
@@ -2336,13 +2337,13 @@ class MainActivity : Activity() {
         // Stop audio before any cache, image or lifecycle cleanup. A paused TV app
         // must never continue playing over the launcher or another app.
         if (::player.isInitialized) { pausedPlayback = player.playWhenReady; if (onDemand != null) demandPaused = !player.playWhenReady; player.pause() }
-        cancelPlaybackCallbacks(); stopSportsPrefetch(); clearSportsPlayback()
+        cancelPlaybackCallbacks(); stopSportsPrefetch(); clearSportsPlayback(); replayDiscovery?.pause()
         if (::multiview.isInitialized) multiview.close()
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

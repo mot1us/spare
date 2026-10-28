@@ -22,6 +22,27 @@ class SecureStore(private val context: Context) {
     var guideOpacity: Int
         get() = preferences.getInt("guide-opacity", -1).coerceIn(-1, 100)
         set(value) { preferences.edit { putInt("guide-opacity", value.coerceIn(-1, 100)) } }
+    var customAccent: Int
+        get() = preferences.getInt("theme-accent", 0)
+        set(value) { preferences.edit { putInt("theme-accent", value) } }
+    var customBackground: Int
+        get() = preferences.getInt("theme-background", -1).coerceIn(-1, 0xFFFFFF)
+        set(value) { preferences.edit { putInt("theme-background", value.coerceIn(-1, 0xFFFFFF)) } }
+    var cornerRadius: Int
+        get() = preferences.getInt("theme-corner", -1).coerceIn(-1, 20)
+        set(value) { preferences.edit { putInt("theme-corner", value.coerceIn(-1, 20)) } }
+    var borderWidth: Int
+        get() = preferences.getInt("theme-border", -1).coerceIn(-1, 3)
+        set(value) { preferences.edit { putInt("theme-border", value.coerceIn(-1, 3)) } }
+    var guideTextScale: Int
+        get() = preferences.getInt("guide-text-scale", 100).coerceIn(85, 120)
+        set(value) { preferences.edit { putInt("guide-text-scale", value.coerceIn(85, 120)) } }
+    var guideRowHeight: Int
+        get() = preferences.getInt("guide-row-height", 32).coerceIn(28, 44)
+        set(value) { preferences.edit { putInt("guide-row-height", value.coerceIn(28, 44)) } }
+    var guideRowGap: Int
+        get() = preferences.getInt("guide-row-gap", 3).coerceIn(2, 8)
+        set(value) { preferences.edit { putInt("guide-row-gap", value.coerceIn(2, 8)) } }
     private val key: SecretKey by lazy { synchronized(keyLock) {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey("spare-v1", null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {

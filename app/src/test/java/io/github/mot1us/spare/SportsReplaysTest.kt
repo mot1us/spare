@@ -44,10 +44,33 @@ class SportsReplaysTest {
         assertNull(SportsReplay(http, listing()).item(game, false, now)); assertNotNull(SportsReplay(http, listing()).item(game, true, now))
     }
     @Test fun providerLookupUsesOnlyABoundedArchiveShortlist() {
-        val channels = (1..100).map { channel.copy(id = "xc:$it", name = if (it <= 9) "ESPN $it" else "News $it") } + channel.copy(id = "no-archive", catchupDays = 0)
+        val channels = (1..100).map { channel.copy(id = "xc:$it", name = if (it <= 9) "ESPN FHD Backup $it" else "News $it") } + channel.copy(id = "no-archive", catchupDays = 0)
         val candidates = SportsReplays.candidates(game, Guide(channels, emptyMap()), setOf("xc:9"), now)
         assertEquals(6, candidates.size); assertEquals("xc:9", candidates.first().id)
         assertTrue(candidates.all { it.name.startsWith("ESPN") && it.catchupDays > 0 })
+    }
+    @Test fun sharedGuideDoesNotDiscardDifferentProviderArchivesOrLowerQualityVariants() {
+        val variants = listOf(
+            channel.copy(id = "xc:1", guideId = "espn", name = "ESPN UHD", reportedQuality = VideoInfo(3840, 2160, 30f)),
+            channel.copy(id = "xc:2", guideId = "espn", name = "ESPN FHD", reportedQuality = VideoInfo(1920, 1080, 59.94f)),
+            channel.copy(id = "xc:3", guideId = "espn", name = "ESPN SD", reportedQuality = VideoInfo(854, 480, 25f)),
+            channel.copy(id = "xc:4", guideId = "espn", name = "ESPN Unknown")
+        )
+        val guide = Guide(variants, mapOf("espn" to listOf(listing().copy(channel = "espn"))))
+        assertEquals(variants.map { it.id }.toSet(), SportsReplays.find(game, guide, now).map { it.channel.id }.toSet())
+        assertEquals(variants.map { it.id }.toSet(), SportsReplays.candidates(game, guide, emptySet(), now).map { it.id }.toSet())
+        assertEquals("xc:2", SportsReplays.best(SportsReplays.find(game, guide, now))!!.channel.id)
+        val fallback = SportsReplays.find(game, guide.copy(channels = listOf(variants[2])), now).single()
+        assertNotNull(fallback.item(game, false, now))
+    }
+    @Test fun providerShortlistSeparatesBroadcastersAndQualityRatherThanFillingWithDuplicates() {
+        val duplicates = (1..12).map { channel.copy(id = "xc:$it", name = "ESPN FHD $it", guideId = "shared", reportedQuality = VideoInfo(1920, 1080, 60f)) }
+        val sd = channel.copy(id = "xc:20", name = "ESPN SD", guideId = "shared", reportedQuality = VideoInfo(854, 480, 25f))
+        val otherNetwork = channel.copy(id = "xc:21", name = "NBC FHD", reportedQuality = VideoInfo(1920, 1080, 60f))
+        val wrongNetwork = listOf(channel.copy(id = "xc:22", name = "ESPN 2 FHD"), channel.copy(id = "xc:23", name = "ESPN+ FHD"))
+        val candidates = SportsReplays.candidates(game.copy(networks = listOf("ESPN", "NBC")), Guide(duplicates + sd + otherNetwork + wrongNetwork, emptyMap()), emptySet(), now)
+        assertEquals(6, candidates.size); assertTrue(sd in candidates); assertTrue(otherNetwork in candidates)
+        assertTrue(candidates.none { it in wrongNetwork })
     }
     @Test fun spoilerTextRemovesFinalScoresAndWinnerStatusButKeepsLiveScores() {
         assertEquals(game.title, SportsText.score(game, true)); assertEquals("Completed", SportsText.status(game, true, now))

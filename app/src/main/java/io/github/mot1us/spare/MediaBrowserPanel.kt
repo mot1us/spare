@@ -27,7 +27,7 @@ data class BrowserRow(val key: String, val title: String, val detail: String = "
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button, private val mode: (String) -> Unit,
-    refresh: () -> Unit, private val close: () -> Unit) : LinearLayout(context) {
+    refresh: () -> Unit) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.WHITE); typeface = AppFont.face() }
     var navigation: (() -> Unit)? = null
@@ -77,8 +77,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     init {
         orientation = VERTICAL; tag = "library-panel"; visibility = GONE; setPadding(dp(24), dp(18), dp(24), dp(18)); setBackgroundColor(0xEE0B1018.toInt())
         val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        toolbarControls.add(button("Live TV", close).apply { tag = "library-live" })
-        tabs.forEach { (title, key) -> toolbarControls.add(button(title) { selectedTab = key; hideKeyboard(); mode(key) }.apply { tag = "library-tab:$key" }) }
+        tabs.forEach { (title, key) -> toolbarControls.add(button(title) { selectTab(key); hideKeyboard(); mode(key) }.apply { tag = "library-tab:$key" }) }
         toolbarControls.add(button("Refresh", refresh).apply { tag = "library-refresh" })
         toolbarControls.forEachIndexed { index, control ->
             toolbar.addView(control)
@@ -144,26 +143,22 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.image.layoutParams = if (grid) LayoutParams(-1, 0, 1f) else LayoutParams(dp(70), -1).apply { marginEnd = dp(8) }
                 holder.text.text = item.title + if (item.detail.isBlank()) "" else "\n${item.detail}"
                 holder.text.layoutParams = if (grid) LayoutParams(-1, dp(45)) else LayoutParams(0, -1, 1f)
-                holder.text.setTextColor(if (holder.box.hasFocus()) Color.BLACK else Color.WHITE)
+                holder.text.setTextColor(if (holder.box.hasFocus()) GuideTheme.focusText else Color.WHITE)
                 holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}"
-                holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); item.select() } }
-                holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) Color.BLACK else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
-                var poster = item.poster; var requested = false
-                fun draw() {
-                    if (holder.box.tag != "library-item:${item.key}") return
-                    holder.image.setImageBitmap(images.get(poster, artworkHttp) {})
-                    if (!requested && (poster.isBlank() || images.unavailable(poster))) {
+                holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
+                holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) GuideTheme.focusText else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
+                val posterIdentity = "${item.key}\u0000${item.title}\u0000${item.poster}"
+                if (holder.posterIdentity != posterIdentity) { holder.posterIdentity = posterIdentity; ++holder.generation }
+                val generation = holder.generation
+                var requested = false
+                images.bind(holder.image, item.poster, artworkHttp) { bitmap ->
+                    if (holder.generation == generation && bitmap == null && !requested && (item.poster.isBlank() || images.unavailable(item.poster))) {
                         requested = true
                         item.requestPoster?.invoke { fallback ->
-                            if (fallback.isNotBlank() && fallback != poster && holder.box.tag == "library-item:${item.key}") {
-                                poster = fallback
-                                fun redraw() { if (holder.box.tag == "library-item:${item.key}") holder.image.setImageBitmap(images.get(poster, artworkHttp) {}) }
-                                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::redraw))
-                            }
+                            if (holder.generation == generation && fallback.isNotBlank() && fallback != item.poster) images.bind(holder.image, fallback, artworkHttp)
                         }
                     }
                 }
-                holder.image.setImageBitmap(images.get(poster, artworkHttp, ::draw)); draw()
                 holder.box.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
@@ -246,6 +241,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         contentsAvailable = true; rows.alpha = 1f
         shownRows = values; allRows = emptyList(); hasMore = more
         if (samePrefix) {
+            for (index in old.indices) {
+                val before = old[index]; val after = values[index]
+                if (before.title != after.title || before.detail != after.detail || before.poster != after.poster || before.description != after.description) rows.adapter?.notifyItemChanged(index)
+            }
             if (values.size > old.size) rows.adapter?.notifyItemRangeInserted(old.size, values.size - old.size)
         } else {
             ++focusEpoch; pending = null; rows.adapter?.notifyDataSetChanged()
@@ -255,7 +254,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
-    fun selectTab(key: String) { selectedTab = key }
+    fun selectTab(key: String) { selectedTab = key; toolbarControls.forEach { it.isSelected = it.tag == "library-tab:$key" } }
     fun seriesArtwork(item: OnDemand?) {
         bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
         val url = bannerUrl
@@ -308,6 +307,6 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); ++focusEpoch; pending = null; images.pause() }
     fun resumeImages() { images.resume() }
     fun closeImages() { images.close() }
-    private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box)
+    private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box) { var generation = 0; var posterIdentity = "" }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
 }

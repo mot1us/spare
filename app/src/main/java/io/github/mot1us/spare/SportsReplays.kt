@@ -29,19 +29,37 @@ object SportsReplays {
                 .minByOrNull { abs(it.start - game.start) }
             if (match != null) result.add(SportsReplay(channel, match))
         }
-        return result.distinctBy { it.channel.id }
+        return rank(result)
     }
+    /** Live-channel quality is a preference for its archive, never an eligibility rule. */
+    fun rank(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): List<SportsReplay> =
+        choices.distinctBy { it.channel.id }.sortedWith(compareByDescending<SportsReplay> { SportsStreams.preferenceRank(it.channel, quality[it.channel.id]) }
+            .thenByDescending { it.channel.id in favorites }
+            .thenByDescending { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
+            .thenByDescending { it.channel.quality(quality[it.channel.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
+            .thenByDescending { it.expires })
+    fun best(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): SportsReplay? =
+        rank(choices, quality, favorites).firstOrNull()
     /** Only a few likely broadcaster/team archives are queried when saved EPG is missing. */
     fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long): List<Channel> {
-        val networks = game.networks.map(SportsCatalog::normalize).filter { it.length >= 3 }
-        fun score(channel: Channel): Int {
+        data class Candidate(val channel: Channel, val score: Int, val family: String)
+        fun candidate(channel: Channel): Candidate {
             val name = channel.sportsKey
-            val teams = game.teams.count { team -> team.aliases.any { name.contains(" ${SportsCatalog.normalize(it)} ") } }
-            return teams * 4 + if (networks.any { name.contains(it) }) 2 else 0
+            val teams = game.teams.filter { team -> team.aliases.any { alias -> SportsCatalog.normalize(alias).let { it.length >= 3 && " $it " in name } } }
+            val networks = game.networks.filter { SportsStreams.broadcasterMatches(it, channel) }
+            val score = teams.size * 4 + if (networks.isNotEmpty()) 2 else 0
+            return Candidate(channel, score, networks.firstOrNull()?.let(SportsCatalog::normalize) ?: teams.joinToString { it.id })
         }
-        return guide.channels.asSequence().filter { eligible(game, it, now) }.map { it to score(it) }.filter { it.second > 0 }
-            .sortedWith(compareByDescending<Pair<Channel, Int>> { it.second }.thenByDescending { it.first.id in favorites })
-            .distinctBy { guide.key(it.first) }.take(6).map { it.first }.toList()
+        val sorted = guide.channels.asSequence().filter { eligible(game, it, now) }.distinctBy { it.id }.map(::candidate).filter { it.score > 0 }
+            .sortedWith(compareByDescending<Candidate> { it.score }.thenByDescending { it.channel.id in favorites }
+                .thenByDescending { SportsStreams.preferenceRank(it.channel, null) }.thenByDescending { it.channel.quality(null)?.height ?: 0 }).toList()
+        // Share the budget between broadcasters and rate/resolution variants.
+        // A shared EPG ID never proves that two provider archives are interchangeable.
+        val varied = sorted.distinctBy { entry ->
+            val info = entry.channel.quality(null)
+            Triple(entry.family, info?.height ?: 0, info?.fps?.takeIf { it.isFinite() && it > 0f }?.let(FrameRateFilter::bucket) ?: -1)
+        }
+        return (varied + sorted).distinctBy { it.channel.id }.take(6).map { it.channel }
     }
 }
 

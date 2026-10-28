@@ -60,6 +60,34 @@ class PlaybackRecoveryTest {
         assertFalse(progress.stalled(2, 150000, 0, 1, false, true))
         assertFalse(progress.stalled(2, 160000, 10000, 2, false, true))
     }
+    @Test fun recoveredBuffersGetAFullReadyWindowBeforeFrozenVideoRecovery() {
+        val progress = PlaybackProgress()
+        assertFalse(progress.stalled(1, 0, 0, 1, false, true))
+        assertFalse(progress.stalled(1, 1000, 1000, 2, true, true))
+        assertFalse(progress.stalled(1, 30000, 1000, 2, true, true))
+        assertFalse(progress.stalled(1, 31000, 1000, 2, false, true))
+        // Position resumes before another frame arrives. Its old buffer timestamp
+        // must not trigger the frozen-video watchdog three seconds after READY.
+        assertFalse(progress.stalled(1, 34000, 4000, 2, false, true))
+        assertFalse(progress.stalled(1, 50999, 20999, 2, false, true))
+        assertTrue(progress.stalled(1, 51000, 21000, 2, false, true))
+    }
+    @Test fun changingPlayerStatesCannotExtendTheAbsoluteNoPositionDeadline() {
+        val progress = PlaybackProgress()
+        assertFalse(progress.stalled(1, 0, 0, 1, false, true))
+        assertFalse(progress.stalled(1, 10000, 0, 1, true, true))
+        assertFalse(progress.stalled(1, 30000, 0, 1, false, true))
+        assertFalse(progress.stalled(1, 44000, 0, 1, true, true))
+        assertTrue(progress.stalled(1, 45000, 0, 1, true, true))
+    }
+    @Test fun freshFramesAfterBufferingDoNotInheritThePreviousFreeze() {
+        val progress = PlaybackProgress()
+        progress.stalled(1, 0, 0, 1, false, true)
+        progress.stalled(1, 1000, 1000, 2, true, true)
+        progress.stalled(1, 30000, 1000, 2, false, true)
+        assertFalse(progress.stalled(1, 34000, 5000, 3, false, true))
+        assertFalse(progress.stalled(1, 50000, 21000, 4, false, true))
+    }
     @Test fun videoProgressIsCheckedWhileAudioOnlyPlaybackUsesItsPosition() {
         val video = PlaybackProgress(); video.stalled(1, 0, 0, 1, false, true)
         assertTrue(video.stalled(1, 20000, 20000, 1, false, true))

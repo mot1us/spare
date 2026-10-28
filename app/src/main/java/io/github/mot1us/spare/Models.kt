@@ -25,11 +25,40 @@ data class Channel(val id: String, val name: String, val group: String, val url:
     fun quality(observed: VideoInfo?): VideoInfo? {
         if (observed == null) return reportedQuality
         val provider = reportedQuality ?: return observed
+        val sameFormat = (observed.height <= 0 || provider.height <= 0 || observed.height == provider.height) &&
+            (observed.width <= 0 || provider.width <= 0 || observed.width == provider.width) &&
+            (observed.height <= 0 || observed.interlaced == provider.interlaced)
         return observed.copy(width = observed.width.takeIf { it > 0 } ?: provider.width, height = observed.height.takeIf { it > 0 } ?: provider.height,
-            fps = observed.fps.takeIf { it.isFinite() && it > 0 } ?: provider.fps)
+            fps = observed.fps.takeIf { it.isFinite() && it > 0 } ?: provider.fps.takeIf { sameFormat } ?: 0f,
+            interlaced = if (observed.height <= 0 && (!observed.fps.isFinite() || observed.fps <= 0)) provider.interlaced else observed.interlaced)
+    }
+    /** Keep source declarations separate from rates actually observed during playback. */
+    fun qualityLabel(observed: VideoInfo?): String {
+        val info = quality(observed) ?: return "Quality unknown"
+        val observedRate = observed?.fps?.let { it.isFinite() && it > 0f } == true
+        val providerRate = !observedRate && info.fps.isFinite() && info.fps > 0f && reportedQuality != null
+        val source = when {
+            providerRate || observed == null -> "Provider reported"
+            observedRate -> when (observed?.evidence) {
+                "input timestamps", "timestamps" -> "Measured FPS"
+                "SPS timing" -> "Stream timing"
+                "stream" -> "Stream reported"
+                "decoder" -> "Decoder reported"
+                "provider" -> "Provider reported"
+                "unverified", "needs verification" -> "FPS unverified"
+                else -> "Observed in playback"
+            }
+            else -> "Playback resolution"
+        }
+        val mixed = when {
+            observedRate && (observed?.height ?: 0) <= 0 && (reportedQuality?.height ?: 0) > 0 -> " · Provider resolution"
+            providerRate && (observed?.height ?: 0) > 0 -> " · Playback resolution"
+            else -> ""
+        }
+        return info.label() + " · " + source + mixed
     }
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
-        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.json())
+        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.let(ProviderQuality::json))
     companion object {
         fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
             j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")))

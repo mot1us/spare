@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
+import androidx.core.graphics.withClip
 
 class GuideAdapter(
     private val context: Context, private val logos: LogoLoader,
@@ -31,26 +32,45 @@ class GuideAdapter(
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) { recycler = null; super.onDetachedFromRecyclerView(recyclerView) }
     /** Canvas data changes need a redraw, not a rebind that can steal TV focus. */
     fun refreshRows() { recycler?.let { list -> for (i in 0 until list.childCount) list.getChildAt(i).invalidate() } }
-    fun refreshTheme() { recycler?.let { list -> for (i in 0 until list.childCount) list.getChildAt(i).background = GuideTheme.background(context.resources.displayMetrics.density, 0x77303943) }; refreshRows() }
+    fun refreshTheme() { recycler?.let { list -> for (i in 0 until list.childCount) (list.getChildAt(i) as? Row)?.appearance() } }
     override fun getItemCount() = channels.size
     override fun getItemId(position: Int) = channels[position].rowId
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder = Holder(Row(context))
-    override fun onBindViewHolder(holder: Holder, position: Int) { holder.row.channel = channels[position]; holder.row.background = GuideTheme.background(context.resources.displayMetrics.density, 0x77303943); holder.row.invalidate(); if (holder.row.hasFocus()) focus(channels[position]) }
+    override fun onBindViewHolder(holder: Holder, position: Int) { holder.row.channel = channels[position]; holder.row.appearance(); if (holder.row.hasFocus()) focus(channels[position]) }
     class Holder(val row: Row) : RecyclerView.ViewHolder(row)
     inner class Row(context: Context) : View(context) {
         var channel: Channel? = null
-        private val density = resources.displayMetrics.density
+        private val rowDensity = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val logoBounds = RectF()
         private val star = android.graphics.Path()
-        private val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 11.5f * this@Row.density }
+        private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
+        private var regularFace: Typeface = AppFont.face()
+        private var titleFace: Typeface = AppFont.face(true)
+        private var textSizePx = 11.5f * rowDensity
+        private var smallTextSizePx = 8.5f * rowDensity
         init {
-            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (32 * density).toInt())
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (GuideTheme.rowHeightDp * rowDensity).toInt()).apply { bottomMargin = (GuideTheme.rowGapDp * rowDensity).toInt() }
             isFocusable = true; isFocusableInTouchMode = true; isClickable = true; isLongClickable = true
             setOnClickListener { channel?.let(selected) }
             setOnLongClickListener { channel?.let(favorite); true }
-            background = GuideTheme.background(density, 0x77303943); clipToOutline = true
-            setOnFocusChangeListener { _, hasFocus -> elevation = if (hasFocus) 4 * density else 0f; invalidate(); if (hasFocus) channel?.let(focus) }
+            appearance(); clipToOutline = true
+            setOnFocusChangeListener { _, hasFocus -> elevation = if (hasFocus) 4 * rowDensity else 0f; invalidate(); if (hasFocus) channel?.let(focus) }
+        }
+        /** Theme editing redraws the same focused row instead of replacing its holder. */
+        fun appearance() {
+            val height = (GuideTheme.rowHeightDp * rowDensity).toInt()
+            val gap = (GuideTheme.rowGapDp * rowDensity).toInt()
+            val params = layoutParams as RecyclerView.LayoutParams
+            if (params.height != height || params.bottomMargin != gap) {
+                params.height = height; params.bottomMargin = gap; layoutParams = params
+            }
+            regularFace = AppFont.face(); titleFace = AppFont.face(true)
+            textSizePx = 11.5f * rowDensity * GuideTheme.textScale
+            smallTextSizePx = 8.5f * rowDensity * GuideTheme.textScale
+            text.textSize = textSizePx
+            background = GuideTheme.background(rowDensity, 0x77303943)
+            invalidate()
         }
         override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
@@ -70,8 +90,8 @@ class GuideAdapter(
             super.onSizeChanged(w, h, oldw, oldh); star.reset()
             for (point in 0 until 10) {
                 val angle = -Math.PI / 2 + point * Math.PI / 5
-                val radius = (if (point % 2 == 0) 5.5 else 2.5) * density
-                val x = (CHANNEL_WIDTH_DP - 12) * density + (kotlin.math.cos(angle) * radius).toFloat()
+                val radius = (if (point % 2 == 0) 5.5 else 2.5) * rowDensity
+                val x = (CHANNEL_WIDTH_DP - 12) * rowDensity + (kotlin.math.cos(angle) * radius).toFloat()
                 val y = h / 2f + (kotlin.math.sin(angle) * radius).toFloat()
                 if (point == 0) star.moveTo(x, y) else star.lineTo(x, y)
             }
@@ -80,56 +100,58 @@ class GuideAdapter(
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val channel = channel ?: return
-            val leftWidth = CHANNEL_WIDTH_DP * density
+            val now = System.currentTimeMillis()
+            val snapshot = guide()
+            val start = windowStart(channel)
+            val favorite = channel.id in favorites()
+            val leftWidth = CHANNEL_WIDTH_DP * rowDensity
             val base = height / 2f + text.textSize * .35f
-            val ink = if (hasFocus()) Color.BLACK else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
+            val ink = if (hasFocus()) GuideTheme.focusText else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
             text.color = ink
             val logo = logos.get(channel.logo, source()?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
             if (logo != null) {
-                val size = 24 * density
+                val size = 24 * rowDensity
                 val ratio = minOf(size / logo.width, size / logo.height)
                 val w = logo.width * ratio; val h = logo.height * ratio
-                logoBounds.set(6 * density + (size - w) / 2, (height - h) / 2, 6 * density + (size + w) / 2, (height + h) / 2)
+                logoBounds.set(6 * rowDensity + (size - w) / 2, (height - h) / 2, 6 * rowDensity + (size + w) / 2, (height + h) / 2)
                 canvas.drawBitmap(logo, null, logoBounds, null)
             }
-            val favorite = channel.id in favorites()
-            val ahead = windowStart(channel) > GuideTimeline.live(System.currentTimeMillis())
-            text.typeface = AppFont.face(true)
-            canvas.drawText(TextUtils.ellipsize(channel.name, text, leftWidth - (if (favorite) 58 else 43) * density, TextUtils.TruncateAt.END).toString(), 36 * density, if (ahead) 13 * density else base, text)
+            val ahead = start > GuideTimeline.live(now)
+            text.typeface = titleFace
+            canvas.drawText(TextUtils.ellipsize(channel.name, text, leftWidth - (if (favorite) 58 else 43) * rowDensity, TextUtils.TruncateAt.END).toString(), 36 * rowDensity, if (ahead) height / 2f - 3 * rowDensity else base, text)
             if (ahead) {
-                text.textSize = 8.5f * density
-                canvas.drawText(time(windowStart(channel)), 36 * density, 26 * density, text)
-                text.textSize = 11.5f * density
+                text.textSize = smallTextSizePx
+                canvas.drawText(time(start), 36 * rowDensity, height / 2f + 10 * rowDensity, text)
+                text.textSize = textSizePx
             }
             if (favorite) {
-                paint.color = if (hasFocus()) Color.BLACK else 0xFFFFD28A.toInt(); canvas.drawPath(star, paint)
+                paint.color = if (hasFocus()) GuideTheme.focusText else 0xFFFFD28A.toInt(); canvas.drawPath(star, paint)
             }
-            text.typeface = AppFont.face()
-            val start = windowStart(channel); val duration = 3 * 3600000L
+            text.typeface = regularFace
+            val duration = 3 * 3600000L
             val available = width - leftWidth
-            val programmes = guide().programmes[guide().key(channel)].orEmpty()
-            val save = canvas.save()
-            canvas.clipRect(leftWidth, 0f, width.toFloat(), height.toFloat())
+            val programmes = snapshot.programmes[snapshot.key(channel)].orEmpty()
+            canvas.withClip(leftWidth, 0f, width.toFloat(), height.toFloat()) {
             if (programmes.none { it.end > start && it.start < start + duration }) {
-                canvas.drawText("No programme information", leftWidth + 12 * density, base, text)
+                canvas.drawText("No programme information", leftWidth + 12 * rowDensity, base, text)
             }
             programmes.forEach { p ->
                 if (p.end <= start || p.start >= start + duration) return@forEach
                 val x1 = leftWidth + (maxOf(p.start, start) - start).toFloat() / duration * available
                 val x2 = leftWidth + (minOf(p.end, start + duration) - start).toFloat() / duration * available
                 paint.color = if (hasFocus()) Color.LTGRAY else Color.rgb(56, 56, 56)
-                canvas.drawLine(x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) 0f else 6 * density, x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) height.toFloat() else height - 6 * density, paint)
-                if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) canvas.drawLine(x1, height - density, x2, height - density, paint)
-                if (x2 - x1 > 20 * density) canvas.drawText(TextUtils.ellipsize(if (ahead) "${time(p.start)} · ${p.title}" else p.title, text, x2 - x1 - 16 * density, TextUtils.TruncateAt.END).toString(), x1 + 8 * density, base, text)
+                canvas.drawLine(x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) 0f else 6 * rowDensity, x1, if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) height.toFloat() else height - 6 * rowDensity, paint)
+                if ((GuideTheme.style == "Grid" || GuideTheme.style == "Nostalgia")) canvas.drawLine(x1, height - rowDensity, x2, height - rowDensity, paint)
+                if (x2 - x1 > 20 * rowDensity) canvas.drawText(TextUtils.ellipsize(if (ahead) "${time(p.start)} · ${p.title}" else p.title, text, x2 - x1 - 16 * rowDensity, TextUtils.TruncateAt.END).toString(), x1 + 8 * rowDensity, base, text)
             }
-            val now = System.currentTimeMillis()
             if (now in start..start + duration) {
                 val x = leftWidth + (now - start).toFloat() / duration * available
-                paint.color = ink; paint.strokeWidth = density
+                paint.color = ink; paint.strokeWidth = rowDensity
                 canvas.drawLine(x, 0f, x, height.toFloat(), paint)
             }
-            canvas.restoreToCount(save)
-            contentDescription = "${channel.name}. ${guide().at(channel, maxOf(now, start))?.title ?: "No programme information"}${if (channel.id in favorites()) ". Favorite" else ""}"
+            }
+            val description = "${channel.name}. ${snapshot.at(channel, maxOf(now, start))?.title ?: "No programme information"}${if (favorite) ". Favorite" else ""}"
+            if (contentDescription != description) contentDescription = description
         }
     }
     companion object {

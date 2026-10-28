@@ -49,17 +49,31 @@ object SportsStreams {
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
     private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
     private fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
+    internal fun broadcasterMatches(network: String, channel: Channel): Boolean {
+        val key = broadcasterKey(network)
+        val name = broadcasterKey(channel.name)
+        return key.trim().length >= 3 && key in name && (key.trimEnd() + " plus ") !in name
+    }
     fun qualifies(channel: Channel, observed: VideoInfo?) = preferredQuality.matches(channel, observed)
+    /** Sports quality settings order choices; category and availability still limit the list. */
+    internal fun matchingCategory(channel: Channel, filters: GuideFilters) = filters.groups.isEmpty() || channel.group in filters.groups
+    internal fun preferenceRank(channel: Channel, observed: VideoInfo?): Int {
+        if (qualifies(channel, observed)) return 2
+        val info = channel.quality(observed)
+        return if (info != null && info.height >= 1080 && (!info.fps.isFinite() || info.fps <= 0f)) 1 else 0
+    }
+    internal fun preferenceComparator(filters: GuideFilters, quality: Map<String, VideoInfo>): Comparator<Channel> =
+        compareByDescending<Channel> { preferenceRank(it, quality[it.id]) }
+            .thenByDescending { filters.matches(it, quality[it.id]) }
+            .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }
+            .thenByDescending { it.quality(quality[it.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
         val confirmed = epg + game.titleMatches.map { it.id }
-        val smooth = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
         return (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).distinctBy { it.id }
-            .filter { available(it) && filters.matches(it, quality[it.id]) }
+            .filter { available(it) && matchingCategory(it, filters) }
             .sortedWith(compareByDescending<Channel> { it.id in confirmed }
-                .thenByDescending { smooth.matches(it, quality[it.id]) }
-                .thenByDescending { it.quality(quality[it.id])?.height ?: 0 }
-                .thenByDescending { it.quality(quality[it.id])?.fps ?: 0f }
+                .then(preferenceComparator(filters, quality))
                 .thenByDescending { it.id in epg })
     }
     fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
@@ -71,9 +85,8 @@ object SportsStreams {
     }
     private fun advertisedCoverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Boolean {
         if (!game.live(now)) return false
-        val networks = game.networks.map(::broadcasterKey).filter { it.trim().length >= 3 }
         val target = game.teams.map { it.id }.toSet()
-        return networks.any { network -> val name = broadcasterKey(channel.name); network in name && (network.trimEnd() + " plus ") !in name } &&
+        return game.networks.any { broadcasterMatches(it, channel) } &&
                 guide.at(channel, now)?.let { programme ->
                     !SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) &&
                         SportsGuide.teams(programme, channel.group)?.map { it.id }?.toSet()?.let { it == target } != false
@@ -82,26 +95,19 @@ object SportsStreams {
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {
         if (!game.live(now)) return emptyList()
-        val relaxed = rank(game, filters.copy(minHeight = 0, excludedFps = emptySet()), quality, available)
         val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
-        val coverage = relaxed.filter { it.id in exact || advertisedCoverage(game, it, guide, now) }
-        val known = coverage.filter { qualifies(it, quality[it.id]) && filters.matches(it, quality[it.id]) }
-        val unknown = coverage.filter { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }
-        // Quality preferences order the choices; they must never make a playable game unavailable.
-        val preferred = coverage.filter { filters.matches(it, quality[it.id]) }
-        return (known + preferred + unknown + coverage).distinctBy { it.id }
+        return rank(game, filters, quality, available).filter { it.id in exact || advertisedCoverage(game, it, guide, now) }
     }
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {
         val channel = automaticChoices(game, filters, quality, guide, now, available).firstOrNull()
         if (channel != null) {
-            val info = channel.quality(quality[channel.id])
-            return channel.name + "\n" + (info?.label() ?: "Quality unknown") + if ((info?.fps ?: 0f) <= 0f) " · FPS unverified" else if ((quality[channel.id]?.fps ?: 0f) > 0f) " · Measured" else " · Provider"
+            return channel.name + "\n" + channel.qualityLabel(quality[channel.id])
         }
-        val matches = rank(game, filters.copy(minHeight = 0, excludedFps = emptySet()), quality, available)
+        val matches = rank(game, filters, quality, available)
         if (matches.isEmpty()) return "No playlist match found"
         val unverified = matches.any { it.quality(quality[it.id])?.let { info -> info.height <= 0 || info.fps <= 0f || !info.fps.isFinite() } != false }
-        return "${matches.size} ${if (matches.size == 1) "stream" else "streams"} found\n" + if (unverified) "Quality unverified · Select to compare" else "Outside quality preferences · Select to compare"
+        return "${matches.size} ${if (matches.size == 1) "stream" else "streams"} found\n" + if (unverified) "Quality unverified · Select to compare" else "Game coverage unconfirmed · Select to compare"
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."

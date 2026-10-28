@@ -10,7 +10,7 @@ class SportsRebuildTest {
     @Test fun redZoneDestinationUsesPlaylistNamesHonorsFiltersAndDoesNotInventAnEvent() {
         val channels = listOf(Channel("one", "US: NFL RedZone FHD", "NFL", "https://example.test/one"), Channel("two", "NFL Red Zone 4K", "NFL", "https://example.test/two"), Channel("other", "NFL Network", "NFL", "https://example.test/three"))
         assertEquals(listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()).map { it.id })
-        assertTrue(SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).isEmpty())
+        assertEquals("Unknown quality remains watchable", listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).map { it.id })
         assertEquals(listOf("two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()) { it.id != "one" }.map { it.id })
     }
     @Test fun liveScopeContainsOnlyFreshInProgressEventsAcrossLeagues() {

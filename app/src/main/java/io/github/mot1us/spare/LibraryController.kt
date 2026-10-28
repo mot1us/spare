@@ -10,7 +10,7 @@ import java.util.concurrent.Executors
 
 /** Provider I/O and encrypted catalog reads stay off the UI thread. No catalog fetch at startup. */
 class LibraryController(private val activity: Activity, private val store: SecureStore, private val button: (String, () -> Unit) -> Button,
-    private val source: () -> Source?, private val guide: () -> Guide, private val play: (OnDemand, Long) -> Unit, private val live: () -> Unit,
+    private val source: () -> Source?, private val guide: () -> Guide, private val play: (OnDemand, Long) -> Unit,
     private val closed: () -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
@@ -45,8 +45,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val posterMetadata = PosterMetadata(store)
     private val details = linkedMapOf<String, OnDemand>()
     private var detailItem: OnDemand? = null
-    private var labels = emptyMap<String, String>()
-    val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() }, { dismiss(); live() })
+    val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     val opened get() = panel.isVisible
     fun open(mode: String = kind) {
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()

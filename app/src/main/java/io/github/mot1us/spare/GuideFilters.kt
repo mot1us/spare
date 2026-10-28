@@ -7,12 +7,13 @@ data class VideoInfo(val width: Int, val height: Int, val fps: Float, val interl
     /** Missing metadata during a same-size reconnect does not invalidate a measured frame rate. */
     fun retainingKnownRate(previous: VideoInfo?): VideoInfo {
         val sized = if (width <= 0 && height <= 0 && previous != null) copy(width = previous.width, height = previous.height) else this
-        return if ((!sized.fps.isFinite() || sized.fps <= 0) && previous != null && sized.width == previous.width && sized.height == previous.height && previous.fps.isFinite() && previous.fps > 0)
+        return if ((!sized.fps.isFinite() || sized.fps <= 0) && previous != null && sized.width == previous.width && sized.height == previous.height && sized.interlaced == previous.interlaced && previous.fps.isFinite() && previous.fps > 0)
             sized.copy(fps = previous.fps, interlaced = previous.interlaced, encodedFps = previous.encodedFps, evidence = previous.evidence) else sized
     }
     fun json() = JSONObject().put("width", width).put("height", height).put("fps", fps.toDouble()).put("interlaced", interlaced)
         .put("encodedFps", encodedFps.toDouble()).put("evidence", evidence).put("detector", detector)
-    fun label(): String = "${height}${if (interlaced) "i" else "p"}" + if (fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} ${if (interlaced) "fields/s" else "fps"}" else " · FPS unavailable"
+    fun label(): String = (if (height > 0) "${height}${if (interlaced) "i" else "p"}" else "Resolution unknown") +
+        if (fps.isFinite() && fps > 0) " · ${if (kotlin.math.abs(fps - fps.toInt()) < .01f) fps.toInt().toString() else "%.2f".format(java.util.Locale.US, fps)} ${if (interlaced) "fields/s" else "fps"}" else " · FPS unavailable"
     companion object {
         fun from(j: JSONObject): VideoInfo {
             val current = j.optInt("detector") in 3..4

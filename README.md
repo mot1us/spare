@@ -6,13 +6,13 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 
 - M3U playlists and Xtream Codes accounts; multiple saved playlists.
 - Live TV guide, channel categories, favorites, text and voice search.
-- Local guide tab matched to a U.S. city or state set in Settings.
+- Local guide tab with automatic city/state suggestions and playlist matching.
 - Live preview or a guide with adjustable opacity and programme artwork from your provider or optional metadata.
 - Switchable frame-rate matching, audio tracks, and per-channel subtitles.
-- Sports resolution/FPS preferences, including an FHD+ / 60 fps preset. Provider-reported quality is labelled; playback readings take priority.
+- Sports quality preferences, including FHD+ / 60 fps. All playable qualities remain available, with provider and stream evidence labelled.
 - Sports hub opening on Today, with illustrated game cards, a card grid, featured game artwork, live/final scores, followed teams, saved game reminders, Watch best stream selection, completed-game catch-up and optional hidden final scores. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
 - Provider movies, series, catch-up, and Continue watching.
-- Color palettes, layout styles, a retro Nostalgia preset, eleven offline fonts, 12/24-hour time, and optional AIO Metadata.
+- Live theme editor with a guide preview, custom colors, offline fonts, layout styles, density, spacing and opacity; a retro Nostalgia preset, 12/24-hour time, and optional AIO Metadata.
 - Saved startup, background playlist/EPG refresh schedules, and cached Sports artwork.
 - In-app signed updates. No ads, analytics, or Spare account.
 
@@ -36,7 +36,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Movie / episode / catch-up | Back | Return to live TV |
 | Library | Library action during playback | Pause and browse |
 
-Sports opens on Today. Live shows current games across your enabled leagues; Calendar selects another date. Configure or reset leagues, teams, reminders and spoilers in Sports settings. Select a card for live, replay or reminder actions; NFL includes a RedZone destination matched to your playlist. Background refresh schedules and last-success status are under Settings → Playlists → Refresh settings. Intervals follow Android’s background limits. Choose a game in Sports to find streams. Use ＋ View or playback details → Multiview for two-up/four-up viewing; the account and device must support the selected stream count. Recent-channel tiles in playback details offer Watch or ＋ Add view. Focus a pane for audio; OK makes it full screen. Subtitle size/style and Glass, Flat, Grid, Soft, Outline or Cinema layouts are in Settings.
+Sports opens on Today. Live shows current games across your enabled leagues; Calendar selects another date. Configure or reset leagues, teams, reminders and spoilers in Sports settings. Select a card for live, replay or reminder actions; NFL includes a RedZone destination matched to your playlist. Background refresh schedules and last-success status are under Settings → Playlists → Refresh settings. Intervals follow Android’s background limits. Choose a game in Sports to find streams. Use ＋ View or playback details → Multiview for two-up/four-up viewing; the account and device must support the selected stream count. Recent-channel tiles in playback details offer Watch or ＋ Add view. Focus a pane for audio; OK makes it full screen. Player, tracks and subtitle controls are grouped under Settings → Playback. Settings → Theme previews and saves appearance changes immediately. Sports refreshes automatically and checks supported catch-up archives in the background.
 
 ## Install
 

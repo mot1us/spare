@@ -63,7 +63,7 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
             private val marker = Paint(Paint.ANTI_ALIAS_FLAG)
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                if (isSelected) { marker.color = if (hasFocus()) Color.BLACK else GuideTheme.current.accent; canvas.drawRect(dp(2).toFloat(), dp(17).toFloat(), dp(4).toFloat(), (height - dp(17)).toFloat(), marker) }
+                if (isSelected) { marker.color = if (hasFocus()) GuideTheme.focusText else GuideTheme.current.accent; canvas.drawRect(dp(2).toFloat(), dp(17).toFloat(), dp(4).toFloat(), (height - dp(17)).toFloat(), marker) }
             }
         }.apply {
             text = label; tag = key; contentDescription = label; id = View.generateViewId()

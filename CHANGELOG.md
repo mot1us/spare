@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.18.0 — 2026-10-28
+
+- Add a live theme editor with a persistent guide preview, compact Look/Colors/Type/Guide tabs, custom colors, fonts, corner/border controls, density, spacing, opacity and video preview options. Save changes automatically without restarting playback.
+- Group frame matching, tracks, subtitles, stream format and recovery controls under Playback. Replace duplicate track dialogs with the native settings surface; streamline Guide and Library navigation.
+- Add inline automatic Local city/state suggestions and matching, more guide header/row padding, a trophy Sports icon and automatic Sports refresh.
+- Treat Sports quality consistently as preferences across live results and RedZone, preserve all playable variants, label provider versus observed evidence accurately, and stop guessing provider frame cadence or video aspect ratio.
+- Discover catch-up from saved guide data and bounded background provider metadata across archive-capable variants, independently of the live pick. Cache archive checks and show checking/confirmed/not-found states without hiding fixtures.
+- Fix recovery timing after buffering and restore first-frame timeouts after pause/resume; preserve the existing buffer and bounded reconnect policy. Reduce repeated font/poster binding work and remove unused duplicate controls.
+
 ## 0.17.2 — 2026-10-27
 
 - Keep live-stall monitoring, reconnect and startup callbacks active when opening other game streams, including when returning to the current channel without selecting an alternative.

@@ -132,7 +132,7 @@ object SportsSchedule {
         return events.sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(256).mapNotNull { event ->
             val teams = event.teams.mapNotNull { SportsCatalog.byId[it] }.sortedBy { it.id }; if (teams.size != 2) return@mapNotNull null
             val stale = event.state == "in" && !snapshot.fresh(now)
-            val game = SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · refresh for live status" else event.status, competition = event.league)
+            val game = SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league)
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
