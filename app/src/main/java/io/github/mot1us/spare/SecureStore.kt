@@ -119,9 +119,12 @@ class SecureStore(private val context: Context) {
         listOf("lineup-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { delete(it) }
         preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
-    fun filters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet(), preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
-    fun setFilters(source: Source, value: GuideFilters) { preferences.edit {
-        putInt("min-height-${source.id}", value.minHeight); remove("sixty-${source.id}"); putStringSet("excluded-fps-${source.id}", value.excludedFps.map { it.toString() }.toSet()); putStringSet("groups-${source.id}", value.groups)
+    fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
+    fun setFilters(source: Source, value: GuideFilters) { preferences.edit { putStringSet("groups-${source.id}", value.groups) } }
+    // Reuse the old quality keys so existing choices become Sports-only without a destructive migration.
+    fun sportsFilters(source: Source) = GuideFilters(preferences.getInt("min-height-${source.id}", 0), if (preferences.contains("excluded-fps-${source.id}")) preferences.getStringSet("excluded-fps-${source.id}", emptySet()).orEmpty().mapNotNull { it.toIntOrNull() }.toSet() else if (preferences.getBoolean("sixty-${source.id}", false)) FrameRateFilter.onlySixty else emptySet())
+    fun setSportsFilters(source: Source, value: GuideFilters) { preferences.edit {
+        putInt("min-height-${source.id}", value.minHeight); remove("sixty-${source.id}"); putStringSet("excluded-fps-${source.id}", value.excludedFps.map { it.toString() }.toSet())
     } }
     fun streamFormat(source: Source) = preferences.getString("stream-format-${source.id}", "auto").orEmpty()
     fun setStreamFormat(source: Source, value: String) { preferences.edit { putString("stream-format-${source.id}", value) } }

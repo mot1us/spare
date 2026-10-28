@@ -158,8 +158,10 @@ object SportsSchedule {
         }
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
         val channels = guide.channels.filter { !it.media }
+        var complete = true
         for ((index, channel) in channels.withIndex()) {
             if (Thread.currentThread().isInterrupted) return game
+            if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
             if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
             if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
             else if (patterns.any { it in channel.sportsKey }) candidates.add(channel)
@@ -168,7 +170,6 @@ object SportsSchedule {
         val byGuideKey = channels.groupBy { guide.key(it) }
         val matches = mutableListOf<SportsBroadcast>()
         val at = if (game.state == "pre") game.start else now
-        var complete = true
         var checkedKeys = 0
         for ((index, entry) in byGuideKey.entries.withIndex()) {
             if (Thread.currentThread().isInterrupted) return game

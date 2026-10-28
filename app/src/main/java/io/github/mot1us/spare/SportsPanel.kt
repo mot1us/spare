@@ -31,7 +31,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val dateButton = button("Calendar") { chooseDate() }.apply { tag = "sports-date" }
     private val todayButton = button("Today") { chooseTeam("today") }.apply { tag = "sports-today" }
     private val liveButton = button("Live") { chooseTeam("live") }.apply { tag = "sports-live" }
-    private val filtersButton = button("Stream filters", filters).apply { tag = "sports-filters"; visibility = GONE }
+    private val filtersButton = button("Stream quality", filters).apply { tag = "sports-filters"; visibility = GONE }
     private val scoresButton = button("Back to games") { showGames(); focusGames() }.apply { tag = "sports-scores"; visibility = GONE }
     private val actionRow = LinearLayout(context).apply { tag = "sports-actions"; visibility = GONE }
     private val hero = FrameLayout(context).apply { tag = "sports-hero"; clipToOutline = true }
@@ -387,7 +387,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         matchNotice.isVisible = message != null; matchNotice.text = message.orEmpty()
         val same = streamsList == channels; val hadFocus = streams.hasFocus(); streamsList = channels; streamLabels = label
         if (!same) streamAdapter.notifyDataSetChanged(); progress.visibility = INVISIBLE; status.text = message ?: "${channels.size} streams · ${if (game.coverageComplete) "OK Full screen" else "Partial guide results · Retry to check more"} · ＋ Add to multiview · Hold Back Full screen"
-        empty.text = if (game.state == "post") "This game has ended." else "No channel matched these filters yet. Try Stream filters or refresh your guide."
+        empty.text = if (game.state == "post") "This game has ended." else "No channel matched these filters yet. Try Stream quality or refresh your guide."
         empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE; val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }
     @SuppressLint("NotifyDataSetChanged")

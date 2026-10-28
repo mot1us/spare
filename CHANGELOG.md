@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.1 — 2026-10-27
+
+- Move resolution and FPS preferences into Sports settings → Stream quality, preserving saved per-playlist choices. Keep all qualities visible in the main guide, Favorites and search.
+- Keep category visibility separate, remove the obsolete guide quality pause controls, and change Sports quality without retuning playback or resetting the guide selection.
+- Fix Sports cards stuck on Finding stream: keep completed matches when quality changes, show loading only during active work, and defer unfinished searches to selection. Prepare cards from saved data without provider requests and reuse those results when confirming coverage.
+- Cancel background matching before channel changes and bound stalled live reads to 10 seconds instead of 30, preserving the playback buffer and retry policy.
+
 ## 0.16.0 — 2026-10-27
 
 - Prepare live-game channel matches in the background and cache them for the active app session. Prioritize focused cards, pause work during buffering or multiview, and cancel it when leaving Sports.

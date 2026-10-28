@@ -110,6 +110,7 @@ class MainActivity : Activity() {
     private val sportsStreamCache = SportsStreamCache()
     private val sportsWarmWorker = Executors.newSingleThreadExecutor()
     private var sportsWarmTask: java.util.concurrent.Future<*>? = null
+    private var sportsWarmActive: String? = null
     private var sportsWarmEpoch = 0
     private var sportsWarmGames = emptyList<SportsGame>()
     private var sportsWarmPriority: SportsGame? = null
@@ -256,6 +257,8 @@ class MainActivity : Activity() {
     private var favorites = emptySet<String>()
     private var favoritesOnly = false
     private var filters = GuideFilters()
+    private var sportsFilters = GuideFilters()
+    private var sportsQualityChanged = false
     private var videoInfo = mutableMapOf<String, VideoInfo>()
     private var videoSavePending = false
     private val saveVideoReadings = Runnable {
@@ -268,7 +271,6 @@ class MainActivity : Activity() {
     private var recentLookupChannels: List<Channel>? = null
     private var recentLookup = emptyMap<String, Channel>()
     private var providerGroups = emptyList<String>()
-    private var browseAll = false
     private var playbackUrl = ""
     @Volatile private var firstFrame = false
     private var expectedMediaId = ""
@@ -589,7 +591,7 @@ class MainActivity : Activity() {
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
-        }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, { playbackMenu(); settingsPanel?.selectSetting("Guide filters") }, { focusSidebar() })
+        }, ::refreshSportsGuide, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
         sportsPanel.watchChannel = { channel -> if (::multiview.isInitialized && multiview.browsing) startMultiview(channel) else { if (channel.id != current?.id || !hasPlayedChannel) tune(channel); showGuide(false) } }
         sportsPanel.secondChannel = ::startMultiview
@@ -600,7 +602,7 @@ class MainActivity : Activity() {
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
         sportsPanel.playOnSelection = { store.sportsAutoPlay && !(::multiview.isInitialized && multiview.browsing) }
         sportsPanel.findRedZone = {
-            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = if (browseAll) GuideFilters() else filters
+            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = sportsStreamFilters()
             sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
             sportsPanel.matchingRedZone()
             sportsMatchTask = sportsMatchWorker.submit {
@@ -846,7 +848,7 @@ class MainActivity : Activity() {
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
         cancelPlaybackCallbacks(); playbackToken++; player.stop(); frameRates.clear(); current = null; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE
         source = selected; focused = null; store.active = selected.id; favorites = store.favorites(selected)
-        filters = store.filters(selected); videoInfo = store.videoInfo(selected); unavailable = store.unavailable(selected); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null; browseAll = false
+        filters = store.filters(selected); sportsFilters = store.sportsFilters(selected); videoInfo = store.videoInfo(selected); unavailable = store.unavailable(selected); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
         importTask = imports.submit {
@@ -922,9 +924,7 @@ class MainActivity : Activity() {
         guide = if (source?.kind == "xtream" && source?.epgUrl.isNullOrBlank()) Guide(next.channels, next.programmes + guide.programmes, next.categoryOrder) else next; updateGroups(); applyFilter()
         if (resume && current == null) {
             val lastId = source?.let(store::last)
-            val recheck = guide.channels.firstOrNull { it.id == lastId && !it.media && !unavailable.contains(it.id, System.currentTimeMillis()) }
-                ?.takeIf { (videoInfo[it.id]?.fps ?: 0f) <= 0f && filters.copy(excludedFps = emptySet()).matches(it, videoInfo[it.id]) }
-            val last = adapter.channels.firstOrNull { it.id == lastId } ?: recheck ?: adapter.channels.firstOrNull()
+            val last = adapter.channels.firstOrNull { it.id == lastId } ?: adapter.channels.firstOrNull()
             if (last != null) { tune(last); showGuide(false) }
         } else current = next.channels.firstOrNull { it.id == current?.id } ?: current
         if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
@@ -932,6 +932,7 @@ class MainActivity : Activity() {
     }
     private fun tune(channel: Channel) {
         sportsReplayGame = null
+        stopSportsPrefetch(); ++sportsMatchEpoch; sportsMatchTask?.cancel(true); sportsMatchTask = null
         clearSportsPlayback()
         val selected = source ?: return
         if (!Network.allowed(channel.url, selected.allowHttp)) { showPlaybackFailure("This channel needs an allowed HTTP or HTTPS address. Check this source’s HTTP setting."); return }
@@ -1023,13 +1024,12 @@ class MainActivity : Activity() {
         lastVideoInfo = observed
         if (previous == observed) return
         videoInfo[channel.id] = observed
-        if (SportsStreams.qualifies(channel, previous) != SportsStreams.qualifies(channel, observed) || channel.quality(previous)?.height != channel.quality(observed)?.height) {
-            stopSportsPrefetch(); sportsStreamCache.clear(); sportsWarmAttempted.clear()
-            if (guideVisible && sportsVisible) scheduleSports()
-        }
+        // Coverage is independent of measured quality; cached matches are ranked using fresh readings.
+        if (guideVisible && sportsVisible && !sportsPanel.watching &&
+            (SportsStreams.qualifies(channel, previous) != SportsStreams.qualifies(channel, observed) || channel.quality(previous)?.height != channel.quality(observed)?.height)) queueSportsPrefetch()
         if (::sportsPanel.isInitialized) sportsPanel.refreshStreamLabels()
         if (!videoSavePending) { videoSavePending = true; handler.postDelayed(saveVideoReadings, 5000) }
-        if (!browseAll && filters.matches(channel, previous) != filters.matches(channel, observed)) applyFilter() else adapter.refreshRows()
+        adapter.refreshRows()
         if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
@@ -1109,16 +1109,10 @@ class MainActivity : Activity() {
         val now = System.currentTimeMillis()
         val hidden = guide.channels.count { unavailable.contains(it.id, now) }
         val searchTerm = ChannelSearch.key(query)
-        var unknownRate = 0; var unknownSize = 0
         val filtered = guide.channels.filter { channel ->
             val eligible = !channel.media && !unavailable.contains(channel.id, now) && (!favoritesOnly || channel.id in favorites) && (group == null || channel.group == group) &&
                 (searchTerm.isEmpty() || channel.searchKey.contains(searchTerm))
-            if (eligible && !browseAll && (filters.groups.isEmpty() || channel.group in filters.groups)) {
-                val quality = channel.quality(videoInfo[channel.id])
-                if (filters.excludedFps.isNotEmpty() && (quality == null || !quality.fps.isFinite() || quality.fps <= 0)) unknownRate++
-                if (filters.minHeight > 0 && (quality?.height ?: 0) <= 0) unknownSize++
-            }
-            eligible && (browseAll || filters.matches(channel, videoInfo[channel.id]))
+            eligible && (filters.groups.isEmpty() || channel.group in filters.groups)
         }
         adapter.submit(filtered)
         if (guideVisible) {
@@ -1128,11 +1122,10 @@ class MainActivity : Activity() {
         }
         searchButton.contentDescription = if (query.isEmpty()) "Search" else "Search · filter active"
         val selection = if (favoritesOnly) "Favorites" else group
-        val profileLabel = if (browseAll) "Filters paused" else filters.summary().takeUnless { it == "All channels" && selection != null }
-        filterInfo.text = "${filtered.size} channels · " + listOfNotNull(selection, profileLabel, if (unknownRate > 0) "$unknownRate FPS unknown" else if (unknownSize > 0) "$unknownSize resolution unknown" else null, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
+        val profileLabel = filters.summary().takeUnless { it == "All channels" && selection != null }
+        filterInfo.text = "${filtered.size} channels · " + listOfNotNull(selection, profileLabel, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty()) View.VISIBLE else View.GONE
-        emptyInfo.text = if (!browseAll && (filters.excludedFps.isNotEmpty() || filters.minHeight > 0)) "No known channels match ${filters.summary()}. ${videoInfo.size} playback readings saved. Channels without provider/playback quality stay hidden. Check Guide filters or play a channel with filters paused."
-            else if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or adjust Guide filters in Settings."
+        emptyInfo.text = if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or choose Categories in Settings."
         updateGroups()
         if (::sportsPanel.isInitialized) {
             if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
@@ -1154,7 +1147,7 @@ class MainActivity : Activity() {
             providerGroups = if (source?.let(store::usaFirst) == true) CategoryOrder.usaFirst(provider) else provider
             groupsForChannels = guide.channels; groupsForOrder = guide.categoryOrder
         }
-        val visibleGroups = providerGroups.filter { browseAll || filters.groups.isEmpty() || it in filters.groups }
+        val visibleGroups = providerGroups.filter { filters.groups.isEmpty() || it in filters.groups }
         sidebarAdapter.submit(listOf(GuideSection("All channels", "all", !sportsVisible && !favoritesOnly && (group == null)),
             GuideSection("Favorites", "favorites", !sportsVisible && favoritesOnly)) + visibleGroups.map { GuideSection(if (it in setOf("Sports", "Favorites", "All channels")) "Category · $it" else it.ifBlank { "Uncategorized" }, "group:$it", !sportsVisible && !favoritesOnly && group == it && (group != null)) })
     }
@@ -1170,6 +1163,10 @@ class MainActivity : Activity() {
         if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
         else { navigationRail.visibility = View.GONE; updateDockHint(); ++focusEpoch; showNowPlaying() }
         scheduleEpg()
+        if (show && sportsQualityChanged) {
+            sportsQualityChanged = false
+            if (sportsVisible && sportsPanel.watching) selectedGame?.takeUnless { it.state == "post" }?.let { selectGame(it) }
+        }
     }
     private fun layoutGuideSurface() {
         val preview = guideVisible && store.smallPreview && !(sportsVisible && !sportsPanel.watching)
@@ -1370,10 +1367,15 @@ class MainActivity : Activity() {
             sportsManager = it; it.tag = "sports-manager"; it.leaveNavigation = ::closeSportsManager
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
-        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Leagues") + SportsLeagues.all.map { it.name })
+        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Stream quality", "Leagues") + SportsLeagues.all.map { it.name })
+    }
+    private fun openSportsQuality() {
+        if (sportsManager?.opened != true) sportsTeams()
+        sportsManager?.selectSetting("Stream quality")
     }
     private fun renderSportsManager(page: String) {
         val panel = sportsManager ?: return
+        if (page == "Stream quality") { renderSportsQuality(panel); return }
         if (page == "Preferences") {
             panel.page("Your sports", "Choose leagues and teams on the left. Enable automatic playback to watch a live game directly from its card. Upcoming and completed games keep their reminder and replay options.")
             panel.action("Play best stream on selection", "Prefer known FHD/60 streams. If FPS is missing, try an FHD/4K match and measure it during playback. Up to three automatic attempts, then choose another result.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; panel.refresh("Play best stream on selection") }
@@ -1410,10 +1412,11 @@ class MainActivity : Activity() {
     }
     private fun confirmSportsReset() {
         val panel = sportsManager ?: return
-        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, enables every league, turns off My teams only and automatic playback, and hides completed scores. Sports will open on Today.")
+        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, enables every league, turns off My teams only and automatic playback, resets this playlist’s stream quality, and hides completed scores. Sports will open on Today.")
         panel.action("Cancel") { panel.refresh("Reset Sports settings") }
         panel.action("Reset Sports") {
             store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.hideCompletedScores = true; store.sportsTeam = "today"
+            saveSportsFilters(GuideFilters())
             sportsTeam = "today"; reminders = GameReminders(); saveGameReminders(); reminderPending = null; dismissGameReminder()
             sportsPanel.setSpoilers(true); sportsPanel.home(); sportsPreferencesChanged = true
             panel.refresh("Reset Sports settings"); toast("Sports settings reset")
@@ -1484,25 +1487,33 @@ class MainActivity : Activity() {
     }
     private fun stopSportsPrefetch(clear: Boolean = false) {
         ++sportsWarmEpoch; handler.removeCallbacks(warmSportsStreams); sportsWarmTask?.cancel(true); sportsWarmTask = null
+        sportsWarmActive?.let { key -> sportsWarmAttempted.remove(key); sportsStreamSummaries[key] = "Select to find stream" }
+        sportsWarmActive = null
         if (clear) { sportsStreamCache.clear(); sportsWarmAttempted.clear(); sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsStreamSummaries.clear(); if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(emptyMap()) }
+        else if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(sportsStreamSummaries)
     }
     private fun queueSportsPrefetch(games: List<SportsGame>? = null) {
         if (games != null) {
             sportsWarmGames = games.filter { it.live(System.currentTimeMillis()) }.take(12)
-            sportsStreamSummaries.keys.retainAll(sportsWarmGames.map { it.key }.toSet())
+            sportsStreamSummaries.keys.retainAll(sportsWarmGames.map { it.key }.toSet() + listOfNotNull(sportsWarmPriority?.key))
         }
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching) return
         val selected = source ?: return
         val token = sportsStreamCache.use(selected.id, generation, guide, favorites)
-        sportsWarmGames.forEach { game ->
-            val match = sportsStreamCache.get(token, game, System.currentTimeMillis())
-            sportsStreamSummaries[game.key] = if (match == null) "Finding stream…" else sportsStreamSummary(match)
+        (listOfNotNull(sportsWarmPriority) + sportsWarmGames).distinctBy { it.key }.forEach { game ->
+            val match = sportsStreamCache.get(token, game, System.currentTimeMillis(), forAuto = false)
+            sportsStreamSummaries[game.key] = when {
+                match != null -> sportsStreamSummary(match)
+                sportsWarmActive == game.key -> "Finding stream…"
+                sportsWarmAttempted.containsKey(game.key) -> "Select to finish stream search"
+                else -> "Select to find stream"
+            }
         }
         sportsPanel.updateStreamSummaries(sportsStreamSummaries)
         handler.removeCallbacks(warmSportsStreams); handler.postDelayed(warmSportsStreams, 300)
     }
     private fun sportsStreamSummary(match: SportsStreamCache.Match): String {
-        val profile = if (browseAll) GuideFilters() else filters
+        val profile = sportsStreamFilters()
         val evidence = guide.copy(programmes = guide.programmes + match.warmed)
         val channel = SportsStreams.automaticChoices(match.game, profile, videoInfo, evidence, System.currentTimeMillis()) { !unavailable.contains(it.id, System.currentTimeMillis()) }.firstOrNull()
             ?: return "No suitable stream matched"
@@ -1510,27 +1521,28 @@ class MainActivity : Activity() {
         return channel.name + "\n" + (info?.label() ?: "Quality unknown") + if ((info?.fps ?: 0f) <= 0f) " · FPS unverified" else if ((videoInfo[channel.id]?.fps ?: 0f) > 0f) " · Measured" else " · Provider"
     }
     private fun prefetchSportsStream() {
-        if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmTask?.isDone == false) return
-        if (player.playbackState == Player.STATE_BUFFERING) { handler.postDelayed(warmSportsStreams, 1000); return }
+        if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive != null) return
+        if (player.playbackState == Player.STATE_BUFFERING || current != null && (!firstFrame || player.playbackState != Player.STATE_READY)) { handler.postDelayed(warmSportsStreams, 1000); return }
         val selected = source ?: return
         val now = System.currentTimeMillis(); val snapshot = guide; val token = sportsStreamCache.use(selected.id, generation, snapshot, favorites)
         val game = (listOfNotNull(sportsWarmPriority) + sportsWarmGames).distinctBy { it.key }.firstOrNull {
-            it.live(now) && sportsStreamCache.get(token, it, now) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
+            it.live(now) && sportsStreamCache.get(token, it, now, forAuto = false) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
         } ?: return
         sportsWarmAttempted[game.key] = now
+        sportsWarmActive = game.key; sportsStreamSummaries[game.key] = "Finding stream…"; sportsPanel.updateStreamSummaries(sportsStreamSummaries)
         if (sportsWarmAttempted.size > 64) sportsWarmAttempted.keys.retainAll(sportsWarmGames.map { it.key }.toSet() + game.key)
-        val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = if (browseAll) GuideFilters() else filters; val quality = videoInfo.toMap()
+        val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = sportsStreamFilters(); val quality = videoInfo.toMap()
         sportsWarmTask = sportsWarmWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, true, { _, _, _ -> }, background = true) }.getOrNull()
+            // Background cards use saved data only. Provider requests belong to an explicit selection.
+            val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, false, { _, _, _ -> }) }.getOrNull()
             handler.post {
                 if (closed || epoch != sportsWarmEpoch) return@post
-                sportsWarmTask = null
+                sportsWarmTask = null; sportsWarmActive = null
                 if (result != null && sportsStreamCache.put(token, result, System.currentTimeMillis())) {
-                    sportsStreamSummaries[game.key] = sportsStreamSummary(result); sportsPanel.updateStreamSummaries(sportsStreamSummaries)
-                } else if (sportsStreamCache.current(token)) {
-                    sportsStreamSummaries[game.key] = "Select to finish stream search"; sportsPanel.updateStreamSummaries(sportsStreamSummaries)
-                }
+                    sportsStreamSummaries[game.key] = sportsStreamSummary(result)
+                } else sportsStreamSummaries[game.key] = "Select to finish stream search"
+                sportsPanel.updateStreamSummaries(sportsStreamSummaries)
                 if (started && sportsVisible && guideVisible && !sportsPanel.watching) handler.postDelayed(warmSportsStreams, 250)
             }
         }
@@ -1575,14 +1587,16 @@ class MainActivity : Activity() {
             (channel.quality(videoInfo[channel.id])?.let { it.label() + if ((videoInfo[channel.id]?.fps ?: 0f) <= 0f) " · Provider reported" else " · Verified by playback" } ?: "Quality unverified") +
             if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
-        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, background: Boolean = false): SportsStreamCache.Match {
+        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null): SportsStreamCache.Match {
         var lastProgress = 0L
-        var result = SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), System.nanoTime() + if (background) 400_000_000L else 1_500_000_000L, quality = quality) { checked, total ->
+        var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), System.nanoTime() + 1_500_000_000L, quality = quality) { checked, total ->
             val now = System.nanoTime()
             if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress("Checking playlist · $checked / $total", checked, total) }
         }
-        val warmed = linkedMapOf<String, List<Programme>>()
-        if (confirm && selected.kind == "xtream" && selected.epgUrl.isBlank()) {
+        val warmed = cached?.warmed.orEmpty().toMutableMap()
+        val needsProvider = selected.kind == "xtream" && selected.epgUrl.isBlank()
+        val locallyConfirmed = SportsStreams.bestConfirmed(result, SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality), quality, System.currentTimeMillis()) != null
+        if (confirm && needsProvider && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             if (SportsStreams.bestConfirmed(result, choices, quality, System.currentTimeMillis()) == null) {
                 val targets = choices.filter { channel -> SportsStreams.qualifies(channel, quality[channel.id]) || channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0f) } == true }.take(2)
@@ -1602,23 +1616,23 @@ class MainActivity : Activity() {
                 }
             }
         }
-        return SportsStreamCache.Match(result, warmed, confirm || selected.kind != "xtream" || selected.epgUrl.isNotBlank())
+        return SportsStreamCache.Match(result, warmed, confirm || !needsProvider || locallyConfirmed)
     }
     private fun selectGame(game: SportsGame, autoWatch: Boolean = false) {
         if (game.state == "post") { findSportsReplay(game); return }
         stopSportsPrefetch(); clearSportsPlayback()
         pendingSportsTune = null; sportsMatchTask?.cancel(true)
         val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
-        val profile = if (browseAll) GuideFilters() else filters; val quality = videoInfo.toMap(); val sourceEpoch = generation
+        val profile = sportsStreamFilters(); val quality = videoInfo.toMap(); val sourceEpoch = generation
         val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
-        val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = autoWatch)
+        val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = false)
         showGameInfo(game); val matchEpoch = ++sportsMatchEpoch
         sportsPanel.matching(game)
         fun present(prepared: SportsStreamCache.Match) {
             val warmed = prepared.warmed; val matched = prepared.game
             if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !sportsVisible || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return
             if (guide.channels !== snapshot.channels || guide.programmes !== snapshot.programmes) { selectGame(game, autoWatch); return }
-            if (cached == null) sportsStreamCache.put(cacheContext, prepared, System.currentTimeMillis())
+            sportsStreamCache.put(cacheContext, prepared, System.currentTimeMillis())
             if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
             val now = System.currentTimeMillis()
             val latestQuality = videoInfo.toMap()
@@ -1637,10 +1651,10 @@ class MainActivity : Activity() {
             showGameInfo(matched); sportsChannels = channels.take(4); scheduleEpg()
             sportsPanel.showStreams(matched, channels, if (autoWatch) SportsStreams.unavailableReason(matched, channels, latestQuality, now) else null, streamLabel)
         }
-        if (cached != null) { present(cached); return }
+        if (cached != null && (!autoWatch || cached.autoReady)) { present(cached); return }
         sportsMatchTask = sportsMatchWorker.submit {
             fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, message, checked, total) } }
-            val prepared = resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, autoWatch, ::progress)
+            val prepared = resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, autoWatch, ::progress, cached)
             handler.post { present(prepared) }
         }
     }
@@ -1717,8 +1731,8 @@ class MainActivity : Activity() {
         playbackToken++; firstFrame = false; hasPlayedChannel = false; expectedMediaId = ""; playbackUrl = ""; pausedPlayback = null
         player.stop(); player.clearMediaItems(); frameRates.clear()
         source = null; store.active = ""; current = null; focused = null; lastWorkingChannel = null; lastVideoInfo = null
-        favorites = emptySet(); favoritesOnly = false; group = null; query = ""; browseAll = false
-        filters = GuideFilters(); videoInfo.clear(); unavailable = UnavailableChannels(); workingUrls.clear(); guideTimeline.clear()
+        favorites = emptySet(); favoritesOnly = false; group = null; query = ""
+        filters = GuideFilters(); sportsFilters = GuideFilters(); videoInfo.clear(); unavailable = UnavailableChannels(); workingUrls.clear(); guideTimeline.clear()
         guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery("")
         epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear()
         guide = Guide.EMPTY; sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsReplayGame = null; replayCache.clear(); sportsForcedEpg.clear()
@@ -1735,7 +1749,7 @@ class MainActivity : Activity() {
         val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
-        panel.open(listOf("Playlists", "Navigation dock", "Frame-rate matching", "Guide video", "Guide filters", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
+        panel.open(listOf("Playlists", "Navigation dock", "Frame-rate matching", "Guide video", "Categories", "Category order", "Theme", "Font", "Metadata", "Time format", "Audio track", "Subtitles", "Sports", "Updates", "Stream format", "Temporarily hidden channels", "Refresh playlist & guide", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
@@ -1769,21 +1783,6 @@ class MainActivity : Activity() {
             "Guide video" -> {
                 panel.page(page, "Choose how live video appears while browsing. Playback continues while you change settings.")
                 listOf("Transparent overlay", "Small live preview").forEachIndexed { index, label -> panel.action(label, selected = store.smallPreview == (index == 1)) { store.smallPreview = index == 1; refresh(label) } }
-            }
-            "Guide filters" -> {
-                panel.page(page, "${filters.summary()}. Resolution and FPS use playback observations first, then provider-reported metadata/quality labels. Channels with no quality data stay hidden.")
-                panel.action(if (browseAll) "Use guide filters" else "Show unverified channels", "Temporarily pause filters to play and verify a channel", browseAll) { browseAll = !browseAll; group = null; favoritesOnly = false; applyFilter(); refresh() }
-                panel.action("FHD+ · 60 fps", "Find 1080+ / 59.94, 60, 100 or 120 fps across the playlist") { clearGuideSearch(); favoritesOnly = false; saveFilters(GuideFilters(1080, FrameRateFilter.sixtyOrBetter)); refresh() }
-                val qualityChannels = guide.channels.filter { !it.media && (filters.groups.isEmpty() || it.group in filters.groups) }
-                val knownRate = qualityChannels.count { (it.quality(videoInfo[it.id])?.fps ?: 0f).let { fps -> fps.isFinite() && fps > 0 } }
-                val knownSize = qualityChannels.count { (it.quality(videoInfo[it.id])?.height ?: 0) > 0 }
-                panel.note("${qualityChannels.count { filters.matches(it, videoInfo[it.id]) }} match · $knownRate with known FPS · $knownSize with known resolution · ${qualityChannels.size - knownRate} FPS unknown", "quality-data-summary")
-                panel.note("Explicit provider quality and saved playback readings are used. FHD/4K names alone do not establish FPS. Unknown FPS stays hidden under an FPS filter.")
-                panel.note("Minimum resolution")
-                listOf(0 to "Any resolution", 720 to "HD · 720p or better", 1080 to "FHD · 1080p or better", 2160 to "4K · 2160p or better").forEach { (height, label) -> panel.action(label, selected = filters.minHeight == height) { saveFilters(filters.copy(minHeight = height)); refresh(label) } }
-                panel.note("Frame rates · select the rates you want to keep")
-                FrameRateFilter.choices.forEach { (rate, label) -> panel.action(label, selected = rate !in filters.excludedFps) { val excluded = filters.excludedFps.toMutableSet(); if (!excluded.add(rate)) excluded.remove(rate); saveFilters(filters.copy(excludedFps = excluded)); refresh(label) } }
-                panel.action("Reset filters") { saveFilters(GuideFilters()); refresh() }
             }
             "Categories" -> {
                 panel.page(page, "Choose which provider categories appear in your guide. Presets use the provider’s country/language labels.")
@@ -1837,6 +1836,7 @@ class MainActivity : Activity() {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers a matching game in FHD/60 or better, using provider or playback quality. If only an advertised broadcaster matches, it tries that channel and labels coverage unconfirmed. Unknown quality remains available for manual review.")
                 panel.action("Play best stream on selection", "Skip live-game actions and play the best match. Prefer known FHD/60; try and measure unknown FPS. Failed starts or measured lower quality can try another match, up to three attempts.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
+                panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }
                 panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
                 panel.note("Saved reminders")
                 if (reminders.events.isEmpty()) panel.note("No reminders. Choose an upcoming game in Sports.")
@@ -1945,7 +1945,31 @@ class MainActivity : Activity() {
         } }
     }
     private fun saveFilters(next: GuideFilters) {
-        source?.let { store.setFilters(it, next) }; filters = next; browseAll = false; group = null; applyFilter()
+        source?.let { store.setFilters(it, next) }; filters = GuideFilters(groups = next.groups); group = null; applyFilter()
+    }
+    private fun sportsStreamFilters() = sportsFilters.copy(groups = filters.groups)
+    private fun saveSportsFilters(next: GuideFilters) {
+        sportsFilters = next.copy(groups = emptySet()); source?.let { store.setSportsFilters(it, sportsFilters) }
+        sportsQualityChanged = true
+        stopSportsPrefetch(clear = true); scheduleSports()
+    }
+    private fun renderSportsQuality(panel: SettingsPanel) {
+        panel.page("Sports stream quality", "${sportsFilters.summary()}. Applies to Sports stream results, Watch Best and RedZone. Main guide browsing, Favorites and search ignore resolution and FPS. Playback readings take priority over provider metadata.")
+        if (source == null) { panel.note("Add a playlist in Settings to save Sports quality preferences."); return }
+        panel.action("FHD+ · 60 fps", "Prefer 1080+ / 59.94, 60, 100 or 120 fps for Sports") { saveSportsFilters(GuideFilters(1080, FrameRateFilter.sixtyOrBetter)); panel.refresh("FHD+ · 60 fps") }
+        val profile = sportsStreamFilters()
+        val channels = guide.channels.filter { !it.media && (profile.groups.isEmpty() || it.group in profile.groups) }
+        val known = channels.count { (it.quality(videoInfo[it.id])?.fps ?: 0f).let { rate -> rate.isFinite() && rate > 0f } }
+        panel.note("${channels.count { profile.matches(it, videoInfo[it.id]) }} eligible Sports streams · $known with known FPS · ${channels.size - known} FPS unknown", "quality-data-summary")
+        panel.note("Watch Best prefers known FHD/60. When FPS is missing, it can try an FHD/4K match and measure playback. Quality filters do not hide channels in the main guide.")
+        panel.note("Minimum resolution")
+        listOf(0 to "Any resolution", 720 to "HD · 720p or better", 1080 to "FHD · 1080p or better", 2160 to "4K · 2160p or better").forEach { (height, label) -> panel.action(label, selected = sportsFilters.minHeight == height) { saveSportsFilters(sportsFilters.copy(minHeight = height)); panel.refresh(label) } }
+        panel.note("Frame rates · select the rates you want to keep")
+        FrameRateFilter.choices.forEach { (rate, label) -> panel.action(label, selected = rate !in sportsFilters.excludedFps) {
+            val excluded = sportsFilters.excludedFps.toMutableSet(); if (!excluded.add(rate)) excluded.remove(rate)
+            saveSportsFilters(sportsFilters.copy(excludedFps = excluded)); panel.refresh(label)
+        } }
+        panel.action("Reset stream quality") { saveSportsFilters(GuideFilters()); panel.refresh("Reset stream quality") }
     }
     private fun applyTheme() {
         guidePanel.background = GuideTheme.guideBackground()

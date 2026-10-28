@@ -60,7 +60,7 @@ class GuideSearchBar(
                 else -> false
             }
         }
-        message("Speak a channel name, or select the field to type. Guide filters apply.")
+        message("Speak a channel name, or select the field to type.")
     }
     fun query() = input.text.toString().trim().take(128)
     fun setQuery(value: String) { if (input.text.toString() != value) { input.setText(value); input.setSelection(input.length()) } }
