@@ -1,5 +1,7 @@
 # Spare
 
+**macOS preview:** Live TV and Sports on Apple Silicon and Intel. Download the Mac ZIP from [Releases](https://github.com/mot1us/spare/releases); see [Mac setup and controls](macos/README.md).
+
 A minimal, free, open-source IPTV player for Android TV. Native, lightweight, and built for a remote. MIT licensed.
 
 ## Features

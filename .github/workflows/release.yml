@@ -66,6 +66,25 @@ jobs:
         with:
           name: spare-build-reports
           path: app/build/reports/
+  macos:
+    needs: request
+    if: needs.request.outputs.publish == 'true'
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check native Mac core
+        working-directory: macos
+        run: swift test
+      - name: Build universal Mac preview
+        run: python3 scripts/macos-build.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: spare-macos-preview
+          path: |
+            dist/macos/*.zip
+            dist/macos/*.tar.xz
+            dist/macos/MACOS-SHA256SUMS
   device:
     needs: build
     runs-on: ubuntu-latest
@@ -110,7 +129,7 @@ jobs:
           path: app/build/reports/device/
   release:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
-    needs: [build, device]
+    needs: [build, device, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -157,4 +176,5 @@ jobs:
           flags=()
           channel="$(python3 scripts/version.py --channel)"
           if [ "$channel" = prerelease ] || [ "$MANUAL_PRERELEASE" = true ]; then flags+=(--prerelease); fi
-          gh release create "v$version" dist/spare.apk dist/SHA256SUMS dist/update.json --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Spare $version" --notes-file dist/release-notes.md "${flags[@]}"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name spare-macos-preview --dir dist/macos
+          gh release create "v$version" dist/spare.apk dist/SHA256SUMS dist/update.json dist/macos/*.zip dist/macos/*.tar.xz dist/macos/MACOS-SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Spare $version" --notes-file dist/release-notes.md "${flags[@]}"

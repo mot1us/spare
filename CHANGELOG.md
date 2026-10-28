@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.0 — 2026-10-28
+
+- Add a native macOS preview for Apple Silicon and Intel: M3U/Xtream playlist setup, live playback, cached guide, categories, favorites, search, audio/subtitle tracks and previous-channel controls.
+- Add desktop Sports schedules, live/final scores, followed teams, league preferences, score hiding and playlist stream matching ordered by coverage and resolution. Unknown FPS remains playable; no background stream probes.
+- Save Mac credentials in Keychain and encrypt lineup/guide caches. Package the VLC runtime, source/license notices and Mac download alongside the Android APK in GitHub Releases.
+- Preserve Android TV playback and feature behavior. The Mac preview uses manual release downloads and is ad-hoc signed pending Developer ID setup.
+
 ## 0.18.2 — 2026-10-28
 
 - Discover catch-up across completed Sports cards beyond the first eight, progressively check more archive variants, reuse exact-channel histories and retry negative results after guide updates. Keep replay badges for the same lifetime as their discovery cache and separate histories for channels sharing XMLTV IDs.
