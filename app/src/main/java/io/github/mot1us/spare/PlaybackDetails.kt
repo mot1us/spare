@@ -24,6 +24,7 @@ class PlaybackDetails(
     onRecent: (Channel) -> Unit,
     onAddView: (Channel) -> Unit,
     onReconnect: () -> Unit,
+    onGameStreams: () -> Unit,
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color) }
@@ -32,6 +33,7 @@ class PlaybackDetails(
     private val title = label(20f).apply { typeface = AppFont.face(true); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
     private val description = label(12f, Color.LTGRAY).apply { maxLines = 3; ellipsize = TextUtils.TruncateAt.END }
     private val next = label(11f, Color.LTGRAY).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+    val gameStreamsButton = makeButton("Other streams for this game", onGameStreams).apply { tag = "channel-game-streams"; visibility = View.GONE }
     val guideButton = makeButton("Guide", onGuide)
     private val previous = makeButton("Previous", onPrevious).apply { tag = "previous-channel" }
     private val favorite = makeButton("Favorite", onFavorite)
@@ -40,6 +42,7 @@ class PlaybackDetails(
         orientation = VERTICAL; tag = "playback-details"; visibility = View.GONE
         setPadding(dp(22), dp(16), dp(22), dp(16))
         background = GuideTheme.glass(resources.displayMetrics.density); elevation = dp(10).toFloat(); clipToOutline = true
+        addView(gameStreamsButton, LayoutParams(-2, dp(36)).apply { bottomMargin = dp(10) })
         addView(channel); addView(title, LayoutParams(-1, -2).apply { topMargin = dp(4) })
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(recent, LayoutParams(-1, -2))
@@ -50,7 +53,9 @@ class PlaybackDetails(
     fun pauseImages() = recent.pause()
     fun closeImages() = recent.close()
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
-    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false) {
+    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null) {
+        gameStreamsButton.visibility = if (gameTitle == null) View.GONE else View.VISIBLE
+        gameStreamsButton.contentDescription = "Other streams for ${gameTitle.orEmpty()}"
         recent.bind(recentChannels, allowHttp)
         channel.text = "${current.name}  ·  $quality"
         title.text = programme?.title ?: current.name

@@ -25,7 +25,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Where | Control | Action |
 | --- | --- | --- |
 | Watching live | Up / Down | Change channel |
-| Watching live | OK | Programme details and recent channels |
+| Watching live | OK | Details, recent channels, and other streams for the current game |
 | Watching live | Left | Previous watched channel |
 | Watching live | Back | Open guide |
 | Guide | OK | Watch selected channel full screen |

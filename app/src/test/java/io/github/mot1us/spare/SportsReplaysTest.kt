@@ -22,6 +22,15 @@ class SportsReplaysTest {
         assertTrue(item.url.contains("/timeshift/user/pass/120/")); assertFalse(item.url.contains("/live/"))
         assertEquals(correct.start + 2 * 86400000L, replay.expires)
     }
+    @Test fun lowerQualityArchiveIsAvailableEvenWhenTheBestLiveVariantHasNoCatchup() {
+        val liveOnly = channel.copy(id = "4k-live", catchupDays = 0, reportedQuality = VideoInfo(3840, 2160, 60f))
+        val archive = channel.copy(id = "hd-archive", reportedQuality = VideoInfo(1280, 720, 30f))
+        val guide = Guide(listOf(liveOnly, archive), mapOf(archive.id to listOf(listing().copy(channel = archive.id))))
+        val found = SportsReplays.find(game, guide, now)
+        assertEquals(listOf(archive), found.map { it.channel })
+        assertEquals(listOf(archive), SportsReplays.candidates(game, guide, emptySet(), now))
+        assertFalse(GuideFilters(1080, FrameRateFilter.sixtyOrBetter).matches(archive, null))
+    }
     @Test fun retentionUsesEachChannelAndRechecksExpiryAndHttpConsent() {
         val old = game.copy(start = now - 49 * 3600000, end = now - 47 * 3600000)
         val p = listing(old.start, old.end)

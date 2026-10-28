@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1 — 2026-10-27
+
+- Add Other streams for this game to the OK details panel, focused first for recognized games and available during buffering. Reuse discovered matches, preserve game context after manual selection or reconnect, and open selected alternatives full screen.
+- Use persistent green Live pills and blue Catch-up badges on confirmed replay cards, show the replay channel/quality, and distinguish unconfirmed archive support. Replay lookup includes lower-quality archive variants independently of the live pick.
+- Offer game alternatives from the playback error panel for manually selected Sports streams too. Recognize current-guide matchups from EPG or channel titles and find their streams on demand.
+
 ## 0.17.0 — 2026-10-27
 
 - Recover sustained live playback stalls with per-attempt progress monitoring, restore recovery after pause/resume and first frames, and keep reconnects bounded. Add Reconnect to channel details while preserving short-buffer recovery and existing buffer sizes.
