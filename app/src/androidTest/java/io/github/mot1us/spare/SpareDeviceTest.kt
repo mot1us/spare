@@ -888,10 +888,10 @@ class SpareDeviceTest {
                 }
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("multiview-controls")?.isShown == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("multiview-controls")?.isShown == true && retainedPlayer?.isPlaying == true }
                 scenario.onActivity { activity ->
                     val extra = activity.window.decorView.findViewWithTag<PlayerView>("multiview-second")
-                    assertSame(retainedPlayer, extra.player); assertTrue(retainedPlayer!!.isPlaying)
+                    assertSame(retainedPlayer, extra.player); assertTrue("Returning keeps playback requested", retainedPlayer!!.playWhenReady)
                     assertSame(retainedSurface, (extra.videoSurfaceView as android.view.SurfaceView).holder.surface)
                     assertSame("Returning reuses the existing pane controls", retainedTile, activity.window.decorView.findViewWithTag<View>("multiview-tile:1"))
                 }
