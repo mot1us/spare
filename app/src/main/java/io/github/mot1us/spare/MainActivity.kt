@@ -1803,9 +1803,9 @@ class MainActivity : Activity() {
         if (confirm && needsProvider && !locallyConfirmed && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             if (SportsStreams.bestConfirmed(result, choices, quality, System.currentTimeMillis()) == null) {
-                val targets = choices.take(2)
-                val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { XtreamEpg.load(selected, channel, 6, 1200) } }
-                val deadline = System.nanoTime() + 1_500_000_000L
+                val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis())
+                val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { XtreamEpg.load(selected, channel, 6, 1000) } }
+                val deadline = System.nanoTime() + 3_500_000_000L
                 if (requests.isNotEmpty()) progress("Confirming current coverage · ${requests.size} channels", 0, 0)
                 try {
                     requests.forEach { (channel, task) ->
@@ -1829,7 +1829,7 @@ class MainActivity : Activity() {
         val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = sportsStreamFilters(); val quality = videoInfo.toMap(); val sourceEpoch = generation
         val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
-        val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = false)
+        val cached = if (autoWatch) null else sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = false)
         showGameInfo(game); val matchEpoch = ++sportsMatchEpoch
         sportsPanel.matching(game)
         fun present(prepared: SportsStreamCache.Match) {
@@ -1850,7 +1850,7 @@ class MainActivity : Activity() {
             val alternatives = SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
             val channels = (alternatives + SportsStreams.rank(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality) {
                 !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp)
-            }).distinctBy { it.id }
+            }).distinctBy { it.id }.filterNot { SportsStreams.conflictingCoverage(matched, it, guide, now) }
             sportsResults = GameStreams(matched, channels)
             val streamLabel: (Channel) -> String = { (if (it.id == current?.id) "Current · " else "") + gameStreamLabel(matched, it) }
             if (autoWatch) {

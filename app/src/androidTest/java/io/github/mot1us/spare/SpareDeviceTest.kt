@@ -596,7 +596,8 @@ class SpareDeviceTest {
                         val network = Channel("broadcaster", "USA ESPN 4K", "NFL", "${server.base}/channel3.mp4")
                         val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                         val saved = guideField.get(activity) as Guide
-                        guideField.set(activity, saved.copy(channels = saved.channels.filter { it.id !in setOf("provider-game", "broken-game") } + network))
+                        guideField.set(activity, saved.copy(channels = saved.channels.filter { it.id !in setOf("provider-game", "broken-game") } + network,
+                            programmes = saved.programmes + (network.id to listOf(Programme(network.id, game.title, System.currentTimeMillis() - 60000, System.currentTimeMillis() + 3600000)))))
                         @Suppress("UNCHECKED_CAST") val readings = MainActivity::class.java.getDeclaredField("videoInfo").apply { isAccessible = true }.get(activity) as MutableMap<String, VideoInfo>
                         readings[network.id] = VideoInfo(3840, 2160, 59.94f)
                         val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, networks = listOf("ESPN"))
@@ -605,7 +606,7 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel3.mp4" && playing?.isPlaying == true }
                     scenario.onActivity { activity ->
-                        assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").text.contains("unconfirmed"))
+                        assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-match-notice").isShown)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                     }
                     scenario.onActivity { activity ->
@@ -631,17 +632,25 @@ class SpareDeviceTest {
                     scenario.onActivity { activity ->
                         assertSame("Unknown-FPS choices reuse the primary player", playing, find<PlayerView>(activity.window.decorView)!!.player)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
-                        val nba = game.copy(teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2), state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NBA", eventId = "nba-hd-only")
-                        val hd = Channel("hd-only", nba.title + " 720p 30FPS", "NBA", "${server.base}/channel5.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
-                        val scoreboard = LiveSportsSnapshot(listOf(LiveEvent(nba.eventId, nba.teams.map { it.id }.toSet(), nba.start, league = "NBA")), System.currentTimeMillis(), setOf("NBA"))
+                        val hockey = game.copy(teams = listOf("nhl:TOR", "nhl:SEA").map { SportsCatalog.byId.getValue(it) }, state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000, competition = "NHL", eventId = "nhl-hd-only", networks = listOf("ESPN"))
+                        val hd = Channel("hd-only", "NHL 07 HD", "NHL", "${server.base}/channel5.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
+                        val guess = Channel("stale-4k", "ESPN 4K", "Sports", "${server.base}/channel6.mp4", reportedQuality = VideoInfo(3840, 2160, 60f))
+                        val scoreboard = LiveSportsSnapshot(listOf(LiveEvent(hockey.eventId, hockey.teams.map { it.id }.toSet(), hockey.start, league = "NHL")), System.currentTimeMillis(), setOf("NHL"))
                         activity.liveSportsLoader = { scoreboard }
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scoreboard)
-                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(listOf(hd), emptyMap()))
+                        val guide = Guide(listOf(hd, guess), emptyMap())
+                        val cache = MainActivity::class.java.getDeclaredField("sportsStreamCache").apply { isAccessible = true }.get(activity) as SportsStreamCache
+                        val generation = MainActivity::class.java.getDeclaredField("generation").apply { isAccessible = true }.getInt(activity)
+                        @Suppress("UNCHECKED_CAST") val favorites = MainActivity::class.java.getDeclaredField("favorites").apply { isAccessible = true }.get(activity) as Set<String>
+                        val token = cache.use(source.id, generation, guide, favorites)
+                        cache.put(token, SportsStreamCache.Match(hockey.copy(candidates = listOf(guess))), System.currentTimeMillis())
+                        MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, guide.copy(programmes = mapOf(hd.id to listOf(Programme(hd.id, "Maple Leafs at Kraken", hockey.start, hockey.end)))))
                         MainActivity::class.java.getDeclaredField("sportsFilters").apply { isAccessible = true }.set(activity, GuideFilters(1080, FrameRateFilter.sixtyOrBetter))
-                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
-                        MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, nba, true)
+                        MainActivity::class.java.getDeclaredField("reminderGame").apply { isAccessible = true }.set(activity, hockey)
+                        MainActivity::class.java.getDeclaredMethod("watchGameReminder").apply { isAccessible = true }.invoke(activity)
                     }
                     waitFor(scenario) { playing?.currentMediaItem?.localConfiguration?.uri?.path == "/channel5.mp4" && playing?.isPlaying == true }
+                    assertNull("An unconfirmed 4K broadcaster must not displace the reminder's exact 720p game", server.requests["/channel6.mp4"])
                     scenario.onActivity { activity ->
                         assertFalse("Lower measured quality must not interrupt a playable game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                         assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)

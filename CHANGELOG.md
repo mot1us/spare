@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.4 — 2026-10-28
+
+- Refresh local game coverage when Watch Best or a reminder starts playback, rather than reusing a previously inferred broadcaster list. Require current game evidence before automatic broadcaster tuning and exclude known conflicting programmes.
+- Include a bounded, varied selection of league/event channels when current guide data needs confirmation. Preserve 720p, lower FPS and unknown-quality game matches; rank resolution and FPS only after matching the game.
+
 ## 0.19.3 — 2026-10-28
 
 - Preserve historical programmes through each channel's catch-up window when live guide data refreshes, keeping current and upcoming listings available within bounded storage.

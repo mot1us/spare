@@ -89,14 +89,43 @@ object SportsStreams {
         return game.networks.any { broadcasterMatches(it, channel) } &&
                 guide.at(channel, now)?.let { programme ->
                     !SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) &&
-                        SportsGuide.teams(programme, channel.group)?.map { it.id }?.toSet()?.let { it == target } != false
-                } != false
+                    SportsGuide.teams(programme, "${game.teams.first().league} ${channel.group}")?.map { it.id }?.toSet() == target
+                } == true
+    }
+    internal fun conflictingCoverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Boolean {
+        val programme = guide.at(channel, now) ?: return false
+        if (SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title))) return true
+        return SportsGuide.teams(programme, "${game.teams.first().league} ${channel.group}")?.map { it.id }?.toSet()
+            ?.let { it != game.teams.map { team -> team.id }.toSet() } == true
+    }
+    /** A small, varied guide-only lookup; generic broadcaster names never prove a game match. */
+    fun confirmationTargets(game: SportsGame, guide: Guide, candidates: List<Channel>, favorites: Set<String>, quality: Map<String, VideoInfo>, now: Long): List<Channel> {
+        val target = game.teams.map { it.id }.toSet()
+        val league = game.teams.first().league
+        val words = (listOf(game.leagueId, league) + when (league) {
+            "NHL" -> listOf("hockey"); "NFL" -> listOf("football"); "NBA" -> listOf("basketball"); "MLB" -> listOf("baseball"); else -> emptyList()
+        }).map { " ${SportsCatalog.normalize(it)} " }.distinct()
+        fun eligible(channel: Channel): Boolean {
+            if (channel.media || SportsGuide.excludedTitle(channel.sportsKey)) return false
+            val programme = guide.at(channel, now)
+            if (programme != null && (SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) ||
+                SportsGuide.teams(programme, league)?.map { it.id }?.toSet()?.let { it != target } == true)) return false
+            return SportsGuide.teams(Programme(channel.id, channel.name, game.start, game.end), league)?.map { it.id }?.toSet()?.let { it == target } != false
+        }
+        val variants = Regex("\\b(uhd|fhd|hd|sd|4k|8k|hevc|h264|h265|backup|raw|[0-9]+fps)\\b")
+        fun varied(channels: List<Channel>) = channels.filter(::eligible).distinctBy { variants.replace(SportsCatalog.normalize(it.name), " ").trim().replace(Regex(" +"), " ") }
+        val leagueChannels = guide.channels.filter { channel -> words.any { it in channel.sportsKey } }
+            .sortedWith(compareByDescending<Channel> { it.id in favorites }.then(preferenceComparator(GuideFilters(), quality)))
+        val groups = listOf(varied(leagueChannels), varied(candidates))
+        val picked = linkedMapOf<String, Channel>()
+        for (index in 0 until 8) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 8) picked[it.id] = it }
+        return picked.values.toList()
     }
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {
         if (!game.live(now)) return emptyList()
         val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
-        return rank(game, filters, quality, available).filter { it.id in exact || advertisedCoverage(game, it, guide, now) }
+        return rank(game, filters, quality, available).filter { (it.id in exact || advertisedCoverage(game, it, guide, now)) && !conflictingCoverage(game, it, guide, now) }
     }
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {

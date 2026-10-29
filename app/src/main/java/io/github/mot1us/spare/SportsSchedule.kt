@@ -176,7 +176,7 @@ object SportsSchedule {
             if (System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedKeys++
             val programme = guide.programmes[entry.key].orEmpty().firstOrNull { p ->
-                p.start <= at && p.end > at && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && matchesTarget(p)
+                p.start <= at && p.end > at && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && matchesTarget(p, game.teams.first().league)
             }
             if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
             if (index % 512 == 0) progress(channels.size + index, channels.size + byGuideKey.size)

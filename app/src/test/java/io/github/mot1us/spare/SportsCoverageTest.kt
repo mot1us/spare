@@ -13,7 +13,9 @@ class SportsCoverageTest {
         val mascot = channel("mascot", "Seattle Seahawks TV")
         val quality = listOf(espn, other, mascot).associate { it.id to VideoInfo(3840, 2160, 59.94f) }
         val possible = game.copy(candidates = listOf(espn, other, mascot))
-        assertEquals(espn, SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, Guide.EMPTY, now))
+        assertNull("A broadcaster name alone cannot trigger automatic tuning", SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, Guide.EMPTY, now))
+        val confirmedGuide = Guide(listOf(espn), mapOf(espn.id to listOf(Programme(espn.id, game.title, game.start, game.end))))
+        assertEquals(espn, SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, confirmedGuide, now))
         assertNull(SportsStreams.bestBroadcaster(possible, listOf(other, mascot), quality, Guide.EMPTY, now))
         assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn.copy(name = "ESPN+ 4K")), quality, Guide.EMPTY, now))
         assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = listOf("ESPN+")), listOf(espn), quality, Guide.EMPTY, now))
@@ -23,6 +25,32 @@ class SportsCoverageTest {
         assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), emptyMap(), Guide.EMPTY, now))
         assertNull(SportsStreams.bestBroadcaster(possible.copy(state = "pre"), listOf(espn), quality, Guide.EMPTY, now))
         assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = emptyList()), listOf(espn, mascot), quality, Guide.EMPTY, now))
+    }
+    @Test fun krakenGuideMatchBeatsUnconfirmedFourKAndKeepsHdThirtyAndUnknownFpsPlayable() {
+        val hockey = game.copy(teams = listOf("nhl:TOR", "nhl:SEA").map { SportsCatalog.byId.getValue(it) }, competition = "NHL")
+        val correct = channel("nhl7", "NHL 07 HD").copy(group = "NHL", reportedQuality = VideoInfo(1280, 720, 30f))
+        val guess = channel("guess", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 60f))
+        val other = correct.copy(id = "other", name = "NHL 08 4K", reportedQuality = VideoInfo(3840, 2160, 60f))
+        for (title in listOf("Maple Leafs at Kraken", "TOR @ SEA")) {
+            val guide = Guide(listOf(guess, correct, other), mapOf(correct.id to listOf(Programme(correct.id, title, game.start, game.end)),
+                other.id to listOf(Programme(other.id, "NHL: Boston Bruins at Carolina Hurricanes", game.start, game.end))))
+            val found = SportsSchedule.match(hockey, guide, emptySet(), now)
+            assertEquals(listOf(correct), found.broadcasts.map { it.channel })
+            val profile = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
+            assertEquals(listOf(correct), SportsStreams.automaticChoices(found, profile, emptyMap(), guide, now))
+            assertEquals(listOf(correct), SportsStreams.automaticChoices(found, profile, mapOf(correct.id to VideoInfo(1280, 720, 0f)), guide, now))
+            assertTrue(SportsStreams.automaticChoices(hockey.copy(candidates = listOf(guess)), profile, emptyMap(), guide, now).isEmpty())
+        }
+    }
+    @Test fun coverageLookupIncludesLeagueEventChannelsAndDoesNotFillWithBroadcasterVariantsOrKnownOtherGames() {
+        val hockey = game.copy(teams = listOf("nhl:TOR", "nhl:SEA").map { SportsCatalog.byId.getValue(it) }, competition = "NHL")
+        val event = channel("event", "NHL 07 HD").copy(group = "NHL", reportedQuality = VideoInfo(1280, 720, 30f))
+        val networks = (1..20).map { channel("espn$it", "ESPN ${if (it % 2 == 0) "4K" else "FHD"}") }
+        val other = event.copy(id = "wrong", name = "NHL 08")
+        val guide = Guide(networks + event + other, mapOf(other.id to listOf(Programme(other.id, "Bruins at Hurricanes", game.start, game.end))))
+        val targets = SportsStreams.confirmationTargets(hockey, guide, networks, emptySet(), emptyMap(), now)
+        assertTrue(event in targets); assertFalse(other in targets)
+        assertEquals(2, targets.size); assertTrue(targets.size <= 8)
     }
     @Test fun watchBestUsesTheSameProviderQualityAsFiltersAndExplainsMissingEvidence() {
         val reported = channel("reported", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 59.94f))
