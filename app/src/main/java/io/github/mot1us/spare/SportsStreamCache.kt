@@ -6,6 +6,23 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
     data class Match(val game: SportsGame, val warmed: Map<String, List<Programme>> = emptyMap(), val autoReady: Boolean = true) {
         fun current(game: SportsGame) = copy(game = game.copy(broadcasts = this.game.broadcasts,
             candidates = this.game.candidates, titleMatches = this.game.titleMatches, coverageComplete = this.game.coverageComplete))
+        fun needsRefresh(previous: Guide, current: Guide, now: Long): Boolean {
+            if (previous.channels !== current.channels) return true
+            if (previous.programmes === current.programmes) return false
+            if (game.titleMatches.isEmpty() && game.broadcasts.none { now in it.programme.start until it.programme.end }) return true
+            val keys = (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).map { previous.key(it) }.toSet() + warmed.keys
+            return keys.any { current.programmes[it] != previous.programmes[it] && current.programmes[it] != warmed[it] }
+        }
+        fun mergeGuide(guide: Guide, now: Long): Pair<Guide, Match> {
+            if (warmed.isEmpty()) return guide to this
+            val retention = mutableMapOf<String, Int>()
+            guide.channels.forEach { channel ->
+                val key = guide.key(channel)
+                if (key in warmed) retention[key] = maxOf(retention[key] ?: 0, channel.catchupDays)
+            }
+            val merged = warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, retention[key] ?: 0, now) }
+            return guide.copy(programmes = guide.programmes + merged) to copy(warmed = merged)
+        }
     }
     private data class Signature(val key: String, val state: String, val start: Long, val end: Long, val teams: List<String>, val networks: List<String>)
     private data class Entry(val signature: Signature, val match: Match, val expires: Long, val displayUntil: Long, val guideKeys: Set<String>)

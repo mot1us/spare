@@ -8,6 +8,16 @@ class SportsReplayHistoryTest {
     private val channel = Channel("xc:7", "FOX HD", "USA", "https://example.com/live/user/password/7.ts", catchupDays = 2, catchupMode = "xc")
     private val programme = Programme(channel.id, "World Series: Tampa Bay Rays vs Milwaukee Brewers", at - 10800000, at)
     private val replay = SportsReplay(channel, programme)
+    @Test fun aLargeMultibyteReplayCacheRemainsReadableAndPrioritizesRecentGames() {
+        val channels = (1..4).map { channel.copy(id = "xc:$it", url = "https://example.com/live/user/password/$it.ts") }
+        val choices = channels.map { SportsReplay(it, programme.copy(channel = it.id, title = "★".repeat(512))) }
+        val matches = (1..256).associate { "$it:${"★".repeat(500)}" to choices }
+        val bytes = SportsReplayHistory.encode(matches, at)
+        assertTrue(bytes.size <= 2 * 1024 * 1024)
+        val restored = SportsReplayHistory.decode(bytes, Guide(channels, emptyMap()), at + 1000)
+        assertTrue(matches.keys.last() in restored); assertFalse(restored.isEmpty())
+        assertTrue(restored.values.all { it.size <= 4 })
+    }
     @Test fun confirmedReplaySurvivesTheNextDayWithoutHistoricalGuideOrProviderRequests() {
         val bytes = SportsReplayHistory.encode(mapOf("MLB:world-series" to listOf(replay)), at + 1000)
         assertFalse(bytes.toString(Charsets.UTF_8).contains("password"))

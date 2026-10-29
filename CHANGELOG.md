@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.5 — 2026-10-28
+
+- Process Sports guide replies as they arrive and stop pending metadata requests once a game match is confirmed. Preserve completed replies at the timeout boundary while keeping the existing two-request concurrency and eight-channel budget.
+- Keep completed searches through unrelated guide refreshes, preserve historical programmes when merging lookup data, and prevent those merges from invalidating their own cached match.
+- Bound saved replay data to the reader's actual UTF-8 byte limit, prioritize recent games, and reuse channel identity hashes during save/restore.
+
 ## 0.19.4 — 2026-10-28
 
 - Refresh local game coverage when Watch Best or a reminder starts playback, rather than reusing a previously inferred broadcaster list. Require current game evidence before automatic broadcaster tuning and exclude known conflicting programmes.

@@ -1804,15 +1804,13 @@ class MainActivity : Activity() {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             if (SportsStreams.bestConfirmed(result, choices, quality, System.currentTimeMillis()) == null) {
                 val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis())
-                val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { XtreamEpg.load(selected, channel, 6, 1000) } }
-                val deadline = System.nanoTime() + 3_500_000_000L
-                if (requests.isNotEmpty()) progress("Confirming current coverage · ${requests.size} channels", 0, 0)
-                try {
-                    requests.forEach { (channel, task) ->
-                        val remaining = deadline - System.nanoTime()
-                        if (remaining > 0) runCatching { task.get(remaining, java.util.concurrent.TimeUnit.NANOSECONDS) }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { warmed[snapshot.key(channel)] = it }
-                    }
-                } finally { requests.values.forEach { it.cancel(true) } }
+                if (targets.isNotEmpty()) progress("Confirming current coverage · ${targets.size} channels", 0, 0)
+                val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
+                    get = { channel, timeout -> XtreamEpg.load(selected, channel, 6, timeout) },
+                    confirmed = { channel, entries ->
+                        SportsSchedule.match(game, Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), favoritesSnapshot, System.currentTimeMillis()).broadcasts.isNotEmpty()
+                    }, progress = { checked, total -> progress("Confirming current coverage · $checked / $total", checked, total) })
+                replies.forEach { (channel, entries) -> warmed[snapshot.key(channel)] = entries }
                 if (warmed.isNotEmpty()) {
                     val fresh = SportsSchedule.match(game, Guide(targets, warmed), favoritesSnapshot, System.currentTimeMillis())
                     val broadcasts = (result.broadcasts + fresh.broadcasts).distinctBy { it.channel.id }; val ids = broadcasts.map { it.channel.id }.toSet()
@@ -1835,17 +1833,14 @@ class MainActivity : Activity() {
         fun present(prepared: SportsStreamCache.Match) {
             val warmed = prepared.warmed; val matched = prepared.game
             if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !sportsVisible || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return
-            if (guide.channels !== snapshot.channels || guide.programmes !== snapshot.programmes) { selectGame(game, autoWatch); return }
-            sportsStreamCache.put(cacheContext, prepared, System.currentTimeMillis())
-            if (warmed.isNotEmpty()) {
-                val programmes = guide.programmes.toMutableMap()
-                warmed.forEach { (key, entries) ->
-                    val days = guide.channels.asSequence().filter { guide.key(it) == key }.maxOfOrNull { it.catchupDays } ?: 0
-                    programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), entries, days, System.currentTimeMillis())
-                }
-                guide = guide.copy(programmes = programmes); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
-            }
             val now = System.currentTimeMillis()
+            if (prepared.needsRefresh(snapshot, guide, now)) { selectGame(game, autoWatch); return }
+            val (mergedGuide, retained) = prepared.mergeGuide(guide, now)
+            guide = mergedGuide
+            sportsStreamCache.put(cacheContext, retained, now)
+            if (warmed.isNotEmpty()) {
+                handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+            }
             val latestQuality = videoInfo.toMap()
             val alternatives = SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
             val channels = (alternatives + SportsStreams.rank(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality) {

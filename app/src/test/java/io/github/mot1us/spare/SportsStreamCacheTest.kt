@@ -8,6 +8,29 @@ class SportsStreamCacheTest {
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000,
         emptyList(), "cache-game", "in", listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, fps: Float = 60f) = Channel(id, "ESPN $id", "NFL", "https://example.com/$id", reportedQuality = VideoInfo(3840, 2160, fps))
+    @Test fun mergingLiveLookupPreservesArchiveHistoryAndDoesNotInvalidateItsOwnCachedResult() {
+        val c = channel("one").copy(catchupDays = 2)
+        val archived = Programme(c.id, "Yesterday's game", now - 86400000L, now - 80000000L)
+        val current = Programme(c.id, game.title, now - 1000, now + 3600000)
+        val original = Guide(listOf(c), mapOf(c.id to listOf(archived)))
+        val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, current))), mapOf(c.id to listOf(current)))
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, original, emptySet())
+        val (merged, retained) = match.mergeGuide(original, now)
+        assertEquals(listOf(archived, current), merged.programmes[c.id])
+        assertTrue(cache.put(token, retained, now))
+        val updated = cache.use("source", 1, merged, emptySet())
+        assertNotNull("Applying lookup data must not immediately erase the completed match", cache.get(updated, game, now))
+    }
+    @Test fun completedCoverageIgnoresUnrelatedGuideRefreshButRechecksChangedGameDataAndLineups() {
+        val c = channel("one"); val p = Programme(c.id, game.title, now - 1000, now + 3600000)
+        val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
+        val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p))))
+        val news = guide.copy(programmes = guide.programmes + ("news" to listOf(p.copy(title = "Headlines"))))
+        assertFalse(match.needsRefresh(guide, news, now))
+        assertTrue(match.needsRefresh(guide, guide.copy(programmes = mapOf(c.id to listOf(p.copy(title = "Other game")))), now))
+        assertTrue(match.needsRefresh(guide, guide.copy(channels = listOf(c.copy(url = "https://example.com/new"))), now))
+        assertTrue("Unconfirmed results must reconsider newly arrived guide data", SportsStreamCache.Match(game.copy(candidates = listOf(c))).needsRefresh(guide, news, now))
+    }
     @Test fun refreshDueKeepsDiscoveredCardsVisibleWithoutReusingStaleAutoPlayEvidence() {
         val c = channel("one"); val guide = Guide(listOf(c), emptyMap())
         val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
