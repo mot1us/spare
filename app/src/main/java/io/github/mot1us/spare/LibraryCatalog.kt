@@ -31,7 +31,7 @@ class LibraryCatalog(private val store: SecureStore) {
                 Chunk(p.getString("file"), count, List(groups.length()) { groups.getString(it) }, keys?.let { values -> List(values.length()) { values.getString(it) } }.orEmpty())
             }
             val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
-            val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels)
+            val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels, complete = json.optBoolean("complete", true))
             if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
             return snapshot
         }
@@ -69,12 +69,14 @@ class LibraryCatalog(private val store: SecureStore) {
             }
         }
         fun snapshot(labels: Map<String, String>): Snapshot { flush(); return Snapshot(stamp, chunks.toList(), count, labels, complete = false) }
-        fun finish(labels: Map<String, String>): Snapshot {
-            val value = snapshot(labels).copy(complete = true)
+        fun checkpoint(labels: Map<String, String>): Snapshot = save(labels, false)
+        fun finish(labels: Map<String, String>): Snapshot = save(labels, true)
+        private fun save(labels: Map<String, String>, complete: Boolean): Snapshot {
+            val value = snapshot(labels).copy(complete = complete)
             val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("keys", JSONArray(it.keys)) })
             synchronized(publishLock) {
                 if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
-                store.write("${prefix}index.enc", JSONObject().put("schema", 1).put("updated", stamp).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
+                store.write("${prefix}index.enc", JSONObject().put("schema", 1).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
             }
             return value
         }

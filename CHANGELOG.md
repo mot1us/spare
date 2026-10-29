@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.2 — 2026-10-29
+
+- Rebuild Watch from beginning as a dedicated, calm TV overlay. Start a clear movie or episode match directly; show at most four matching release choices, with no mixed live-channel or unrelated-title list. Search only movies or only series, and check remembered titles before catalog pages.
+- Start a clear VOD movie or numbered episode match as soon as it arrives, without waiting for unrelated catalog downloads. Keep cached searches busy until their reader finishes, and let a valid match play even if another catalog fails.
+- Match DV, Dolby Vision, HDR and codec labels as quality variants; tolerate missing provider years while keeping conflicting known releases separate. Selecting a movie from the live-to-VOD results now starts it from the beginning directly.
+- Save encrypted partial catalog indexes during long imports so interrupted searches can reuse titles after an app restart instead of starting empty.
+
 ## 0.20.1 — 2026-10-28
 
 - Keep playlist search focus inside its results and stop delayed guide navigation from taking over the remote. Use cached live-channel search keys instead of repeatedly normalizing the full lineup on the UI thread.

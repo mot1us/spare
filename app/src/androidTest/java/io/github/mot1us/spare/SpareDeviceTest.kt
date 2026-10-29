@@ -85,6 +85,10 @@ class SpareDeviceTest {
                 val catalog = LibraryCatalog(store); val writer = catalog.Writer(source, "movie")
                 val entries = (1..2190).map { OnDemand("movie:$it", "Movie $it", if (it % 2 == 0) "Category 1" else "Category 2", "https://example.com/private/$it.mp4") }
                 entries.chunked(64).forEach(writer::append)
+                val checkpoint = writer.checkpoint(mapOf("1" to "Science fiction", "2" to "Drama"))
+                val partial = LibraryCatalog(store).cached(source, "movie")!!
+                assertFalse(partial.complete); assertEquals(checkpoint.count, partial.count)
+                assertEquals("movie:2188", catalog.query(partial, null, "Movie 2188").entries.single().id)
                 val snapshot = writer.finish(mapOf("1" to "Science fiction", "2" to "Drama"))
                 val first = catalog.query(snapshot, "Science fiction", "", limit = 40)
                 val second = catalog.query(snapshot, "Science fiction", "", first.cursor, 40)
@@ -1569,7 +1573,7 @@ class SpareDeviceTest {
 
     @Test fun liveProgrammeCanStartItsVodMovieOrIdentifiedEpisodeWithoutUsingCatchup() {
         listOf("Fixture movie (2025)" to "/movie/test/test-secret/101.mp4", "Fixture series S01E02" to "/series/test/test-secret/202.mp4").forEach { (title, path) ->
-            FixtureServer(longVideo = true, programmeTitle = title).use { server ->
+            FixtureServer(longVideo = true, programmeTitle = title, slowVod = title.startsWith("Fixture movie")).use { server ->
                 val source = Source(name = "VOD start fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
                 store.saveSources(listOf(source)); store.active = source.id
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -1577,15 +1581,51 @@ class SpareDeviceTest {
                     device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains(title)) }
                     holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                    val lookupStarted = android.os.SystemClock.elapsedRealtime()
                     scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); val player = find<PlayerView>(it.window.decorView)!!.player!!
                         player.volume = 0f; player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true).build()
-                        it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                        it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick()
+                        assertTrue(it.window.decorView.findViewWithTag<View>("vod-start-panel").isShown)
+                        assertFalse(it.window.decorView.findViewWithTag<View>("playlist-search").isShown) }
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == path }
+                    if (title.startsWith("Fixture movie")) {
+                        assertTrue("Autoplay must not wait for the complete catalog", android.os.SystemClock.elapsedRealtime() - lookupStarted < 5000)
+                        assertEquals(1L, server.finishVodCatalog.count)
+                        server.finishVodCatalog.countDown()
+                    }
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.isPlaying && p.currentTracks.isTypeSelected(androidx.media3.common.C.TRACK_TYPE_AUDIO) && p.volume == 1f } == true }
                     assertEquals("VOD start must never query the channel archive", 0, server.archiveRequests.get())
                 }
                 store.saveSources(emptyList()); store.removeCache(source)
             }
+        }
+        FixtureServer(longVideo = true, programmeTitle = "Fixture movie", slowVod = true, ambiguousVod = true).use { server ->
+            val source = Source(name = "VOD release choice", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains("Fixture movie")) }
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-start-choice:movie:102")?.isShown == true }
+                scenario.onActivity {
+                    assertEquals(2, it.window.decorView.findViewWithTag<ViewGroup>("vod-start-options").childCount)
+                    assertFalse(it.window.decorView.findViewWithTag<View>("playlist-search").isShown)
+                }
+                device.pressBack()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("vod-start-panel").isShown }
+                assertFalse(playingPath(scenario).orEmpty().startsWith("/movie/"))
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-start-choice:movie:101")?.hasFocus() == true }
+                device.pressDPadDown(); device.pressDPadCenter()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/102.mp4" }
+                server.finishVodCatalog.countDown()
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
         }
     }
 
@@ -2104,7 +2144,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News") : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -2131,6 +2171,8 @@ class SpareDeviceTest {
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
+        val finishVodCatalog = java.util.concurrent.CountDownLatch(1)
+        private val slowMovies by lazy { (1..16).joinToString(",", "[", "]") { id -> org.json.JSONObject().put("stream_id", 100 + id).put("name", if (id == 1) "EN | Fixture movie (2025) 4K DV" else if (ambiguousVod && id == 2) "Fixture movie (1990) FHD" else "Other movie $id").put("category_id", "1").put("container_extension", "mp4").put("plot", "x".repeat(1024)).toString() }.toByteArray() }
         val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
         val finishActionCatalog = java.util.concurrent.CountDownLatch(1)
         private val actionMovies = (1..400).joinToString(",", "[", "]") { """{"stream_id":${2000+it},"name":"Action title $it","category_id":"2","container_extension":"mp4"}""" }.toByteArray()
@@ -2184,6 +2226,7 @@ class SpareDeviceTest {
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
                             "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
                                 else if (target.contains("get_vod_streams")) when {
+                                    slowVod -> slowMovies
                                     libraryCategories && target.contains("category_id=2") -> actionMovies
                                     libraryCategories && target.contains("category_id=3") -> """[{"stream_id":3001,"name":"Comedy title","category_id":"3","container_extension":"mp4"}]""".toByteArray()
                                     else -> """[{"stream_id":101,"name":"Fixture movie","category_id":"1","container_extension":"mp4","stream_icon":"$base/logo.png","year":"2025"}]""".toByteArray()
@@ -2206,6 +2249,12 @@ class SpareDeviceTest {
                             output.write(body, 0, split); output.flush()
                             resumeStream.await(14, java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, split, body.size - split); output.flush()
+                        } else if (slowVod && target.contains("get_vod_streams")) {
+                            val value = body.toString(Charsets.UTF_8); var cut = 0
+                            repeat(8) { cut = value.indexOf("},{", cut) + 2 }
+                            output.write(body, 0, cut); output.flush()
+                            finishVodCatalog.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            output.write(body, cut, body.size - cut); output.flush()
                         } else if (libraryCategories && target.contains("get_vod_streams") && target.contains("category_id=2")) {
                             val value = body.toString(Charsets.UTF_8); var cut = 0
                             repeat(264) { cut = value.indexOf("},{", cut) + 2 }
@@ -2219,6 +2268,6 @@ class SpareDeviceTest {
                 }
             }
         }
-        override fun close() { finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
+        override fun close() { finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
     }
 }

@@ -18,6 +18,18 @@ class VodStartTest {
         assertEquals("1917", request.query); assertEquals(movie("war", "1917", "2019"), VodStart.best(request, listOf(movie("war", "1917", "2019"))))
         assertNull(VodStart.request(programme("Untitled"))); assertNull(VodStart.request(programme("Movie")))
     }
+    @Test fun formatTagsAndMissingVariantYearsDoNotPreventAnExactMovieFromPlaying() {
+        val request = VodStart.request(programme("Movie: The Film (2025)"))!!
+        val dolby = movie("dv", "EN | The Film (2025) 4K DV")
+        val standard = movie("standard", "The Film [Dolby Vision] FHD", "2025")
+        val undated = movie("undated", "The Film HDR10+ HEVC")
+        assertEquals(dolby, VodStart.best(request, listOf(dolby)))
+        assertEquals(standard, VodStart.best(request, listOf(standard, undated)))
+        assertEquals(undated, VodStart.best(request, listOf(undated)))
+        assertEquals(standard, VodStart.best(VodStart.Request("The Film"), listOf(standard, undated)))
+        assertNull(VodStart.best(VodStart.Request("The Film"), listOf(standard, movie("remake", "The Film", "1990"))))
+        assertNull(VodStart.best(request, listOf(movie("wrong", "The Film", "1990"))))
+    }
     @Test fun episodeNumberingSelectsSeriesAndNeverAnUnrelatedMovie() {
         val request = VodStart.request(programme("Example Show S02E03 - An episode"))!!
         assertEquals("Example Show", request.query); assertEquals(2, request.season); assertEquals(3, request.episode)

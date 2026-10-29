@@ -52,6 +52,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     val opened get() = panel.isVisible
     fun knownEpisodes(selected: Source) = episodeCache.filterKeys { it.startsWith("${selected.id}:") }.values.flatten()
+    fun knownTitles(selected: Source) = details.filterKeys { it.startsWith("${selected.id}:") }.values.toList() + knownEpisodes(selected)
     fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val selected = source() ?: return
         dismiss(); kind = if (item.kind == "movie") "movie" else "series"
@@ -149,8 +150,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     full.chunks.any { "Category $scope" in it.groups }
                 }?.copy(labels = names, scopeGroup = "Category $scope")
             }.getOrNull()
-            if (cached != null) deliver(cached, false)
-            if (!force && cached != null && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
+            if (cached != null) deliver(cached, !cached.complete)
+            if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
             runCatching {
                 val writer = repository.Writer(selected, mode, scope = scope); var publishedAt = 0L
                 VodCatalog.stream(selected, mode, scope) { batch ->
@@ -189,8 +190,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         catalogImports[key] = worker.submit {
             val began = android.os.SystemClock.elapsedRealtime()
             val cached = memory?.takeIf { it.complete } ?: runCatching { repository.cached(selected, mode) }.getOrNull()
-            if (cached != null) deliver(cached, force || System.currentTimeMillis() - cached.updated >= 6 * 3600000L)
-            if (!force && cached != null && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
+            if (cached != null) deliver(cached, force || !cached.complete || System.currentTimeMillis() - cached.updated >= 6 * 3600000L)
+            if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
             val categories = disk.submit<Map<String, String>> { runCatching { VodCatalog.categories(selected, mode) }.getOrDefault(emptyMap()) }
             runCatching {
                 val writer = repository.Writer(selected, mode)
