@@ -444,6 +444,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { SecureStore(context).localLocation == "Seatt" }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("local-location-input").requestFocus() }
                 device.pressDPadDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-add-region")?.hasFocus() == true }
+                device.pressDPadDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA")?.hasFocus() == true }
                 device.pressDPadCenter()
                 waitFor(scenario) { activity ->
@@ -833,14 +835,14 @@ class SpareDeviceTest {
                 val keyboardPackage = android.content.ComponentName.unflattenFromString(android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))!!.packageName
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.pkg(keyboardPackage)), 5000))
-                device.findObject(By.desc("Search channels")).text = "Channel 7"
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 && (channelList(it)!!.adapter as GuideAdapter).channels.single().name == "Test Channel 7" && device.hasObject(By.textStartsWith("Test Channel 7  ·")) }
+                device.findObject(By.desc("Search playlist")).text = "Channel 7"
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 && (channelList(it)!!.adapter as GuideAdapter).channels.single().name == "Test Channel 7" && it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").adapter?.itemCount == 1 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) }
-                waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results")?.hasFocus() == true }
                 assertTrue(device.wait(Until.gone(By.pkg(keyboardPackage)), 5000))
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "search.png"))
-                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }; device.pressDPadCenter()
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").getChildAt(0).requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == false }
                 assertEquals("/channel7.mp4", playingPath(scenario))
             }
@@ -1394,6 +1396,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search").performClick() }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("One") }
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == false }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(1)!!.itemView.requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 && channelList(it)?.hasFocus() == true }
                 scenario.onActivity { activity ->
@@ -1553,6 +1556,34 @@ class SpareDeviceTest {
             }
             store.delete("game-reminders.enc")
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet(); store.sportsFollowedOnly = false
+        }
+    }
+
+    @Test fun guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes() {
+        FixtureServer(libraryCategories = true, longVideo = true).use { server ->
+            val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channel = Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4", catchupDays = 2, catchupMode = "xc")
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity {
+                    assertTrue(channelList(it)!!.getChildAt(0).contentDescription.toString().contains("Catch-up: 2 days"))
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture")
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.isShown == true && it.window.decorView.findViewWithTag<View>("search-result:series:1")?.isShown == true }
+                scenario.onActivity { assertNotNull(it.window.decorView.findViewWithTag<View>("search-result:live:xc:1")); it.window.decorView.findViewWithTag<View>("search-result:series:1").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-search").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Pilot") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:episode:201")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:episode:201").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/201.mp4" }
+                assertEquals(1, server.catalogTargets.count { !it.contains("category_id=") })
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
         }
     }
 
@@ -1873,9 +1904,10 @@ class SpareDeviceTest {
                     assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId)
                 }
                 activateSetting(scenario, "Theme")
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("theme-control:Nostalgia").apply { requestFocus(); performClick() } }
-                waitFor(scenario) { store.themeStyle == "Nostalgia" && store.font == "Monospace" && store.theme == "Phosphor" }
-                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("theme-control:Nostalgia").hasFocus()) }
+                scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("theme-control:Nostalgia")) }
+                setThemeControl(scenario, "Look", "Style", "Nostalgia")
+                waitFor(scenario) { store.themeStyle == "Nostalgia" }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("theme-control:Style").hasFocus()) }
                 leaveSettings(scenario); device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "nostalgia.png"))

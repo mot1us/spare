@@ -113,7 +113,7 @@ class SportsReplayDiscovery internal constructor(
         val local = SportsReplays.find(game, guide, at)
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
         if (local.isNotEmpty() || source.kind != "xtream") return Outcome(local, true)
-        val candidates = SportsReplays.candidates(game, guide, emptySet(), at, limit = 24).filter { it.id.matches(XTREAM_ID) }
+        val candidates = SportsReplays.candidates(game, guide, emptySet(), at, limit = Importers.MAX_CHANNELS).filter { it.id.matches(XTREAM_ID) }
         val listings = linkedMapOf<Channel, List<Programme>>()
         val fresh = linkedMapOf<ArchiveKey, History>()
         val missing = candidates.filter { channel ->
@@ -153,7 +153,7 @@ class SportsReplayDiscovery internal constructor(
             SportsReplays.find(game, Guide(listOf(channel), mapOf(guide.key(channel) to entries)), at)
         }
         return Outcome(SportsReplays.rank(found), complete || found.isNotEmpty(), fresh,
-            found.isEmpty() && missing.size > jobs.size && fresh.size == jobs.size, seen + listings.keys.map { it.id })
+            found.isEmpty() && missing.size > jobs.size && fresh.isNotEmpty(), seen + listings.keys.map { it.id })
     }
     fun remember(selected: Source, sourceGeneration: Int, snapshot: Guide, listings: Map<String, List<Programme>>) {
         if (closed || source != selected || generation != sourceGeneration || lineup !== snapshot.channels) return

@@ -21,6 +21,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var archive: Channel? = null
     private var directCatchup = false
     var catchupClosed: (() -> Unit)? = null
+    var archiveLoaded: ((Source, Channel, List<Programme>) -> Unit)? = null
     private var episodeList = emptyList<OnDemand>()
     private var playingEpisodes = emptyList<OnDemand>()
     private var destroyed = false
@@ -47,6 +48,15 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var detailItem: OnDemand? = null
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     val opened get() = panel.isVisible
+    fun knownEpisodes(selected: Source) = episodeCache.filterKeys { it.startsWith("${selected.id}:") }.values.flatten()
+    fun openSearchResult(item: OnDemand) {
+        val selected = source() ?: return
+        dismiss(); kind = if (item.kind == "movie") "movie" else "series"
+        directCatchup = false; archive = null; detailItem = null; parentSeries = null
+        panel.selectTab(kind); panel.allowArtworkHttp(selected.allowHttp); panel.browse(); panel.resumeImages(); panel.visibility = View.VISIBLE
+        episodeList = knownEpisodes(selected).filter { it.seriesId == item.seriesId }
+        select(item)
+    }
     fun open(mode: String = kind) {
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         panel.selectTab(mode); panel.seriesArtwork(null)
@@ -302,8 +312,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun catchupChannels() {
         task?.cancel(true); ++epoch; parentSeries = null; archive = null
-        val channels = guide().channels.filter { Catchup.supported(it) }
-        panel.page("Catch-up", if (channels.isEmpty()) "This playlist has no advertised archives. Refresh the playlist if archive support was recently added." else "Choose a channel to browse its provider archive. Only completed programmes are listed.", false)
+        val channels = Catchup.channels(guide())
+        panel.page("Catch-up", if (channels.isEmpty()) "This playlist has no advertised archives. Refresh the playlist if archive support was recently added." else "${channels.size} catch-up channels in your playlist · Choose a channel to browse its provider archive.", false)
         panel.submit(channels.map { channel -> BrowserRow(channel.id, channel.name, "${channel.catchupDays} days · ${channel.group}") { openCatchup(channel) } }, channels.associate { it.id to it.group }, posters = false); panel.focusRows()
     }
     fun openCatchup(channel: Channel, direct: Boolean = false) {
@@ -326,7 +336,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val cached = guide().programmes[guide().key(channel)].orEmpty()
         show(cached, if (selected.kind == "xtream") "Loading provider archive…" else "Archive availability depends on the provider and XMLTV history.", selected.kind == "xtream"); panel.focusRows()
         if (selected.kind != "xtream") return
-        request { token -> runCatching { Catchup.load(selected, channel) }.onSuccess { entries -> ui(token) { show(entries, "${channel.catchupDays}-day provider archive · Back returns to channels", false); panel.focusRows() } }
+        request { token -> runCatching { Catchup.load(selected, channel) }.onSuccess { entries -> ui(token) { archiveLoaded?.invoke(selected, channel, entries); show(GuideHistory.merge(cached, entries, channel.catchupDays, System.currentTimeMillis()), "${channel.catchupDays}-day provider archive · Back returns to channels", false); panel.focusRows() } }
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
     fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }

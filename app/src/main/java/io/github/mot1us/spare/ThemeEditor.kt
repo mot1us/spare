@@ -87,10 +87,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 choice("Style", { store.themeStyle }, { step -> store.themeStyle = cycle(GuideTheme.styles, store.themeStyle, step) })
                 choice("Corners", { if (store.cornerRadius < 0) "Style default" else "${store.cornerRadius} dp" }, { step -> store.cornerRadius = cycle(listOf(-1, 0, 3, 6, 8, 12, 16, 20), store.cornerRadius, step) })
                 choice("Borders", { if (store.borderWidth < 0) "Style default" else "${store.borderWidth} dp" }, { step -> store.borderWidth = cycle(listOf(-1, 0, 1, 2, 3), store.borderWidth, step) })
-                val presets = LinearLayout(context).apply { orientation = HORIZONTAL }
-                presets.addView(action("Reset defaults") { reset(false) }, LayoutParams(0, dp(43), 1f).apply { rightMargin = dp(5) })
-                presets.addView(action("Nostalgia") { reset(true) }, LayoutParams(0, dp(43), 1f))
-                rows.addView(presets, LayoutParams(-1, dp(43)))
+                rows.addView(action("Reset defaults") { reset() }, LayoutParams(-1, dp(43)))
             }
             "Colors" -> {
                 choice("Accent", { colorValue(store.customAccent, 0) }, { step -> store.customAccent = cycle(listOf(0) + swatches.map { it or 0xFF000000.toInt() }, store.customAccent, step) }, { accent() })
@@ -202,9 +199,9 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         val next = controls.indexOf(view) + step
         if (next < 0) tabs[page]?.requestFocus() else controls[next.coerceAtMost(controls.lastIndex)].requestFocus()
     }
-    private fun reset(nostalgia: Boolean) {
-        store.theme = if (nostalgia) "Phosphor" else GuideTheme.palettes.first().name
-        store.themeStyle = if (nostalgia) "Nostalgia" else "Glass"; store.font = if (nostalgia) "Monospace" else "Default"
+    private fun reset() {
+        store.theme = GuideTheme.palettes.first().name
+        store.themeStyle = "Glass"; store.font = "Default"
         store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
         store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = true
     }

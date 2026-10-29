@@ -44,6 +44,7 @@ class GuideAdapter(
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val logoBounds = RectF()
         private val star = android.graphics.Path()
+        private val archiveBounds = RectF()
         private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
         private var regularFace: Typeface = AppFont.face()
         private var titleFace: Typeface = AppFont.face(true)
@@ -104,6 +105,7 @@ class GuideAdapter(
             val snapshot = guide()
             val start = windowStart(channel)
             val favorite = channel.id in favorites()
+            val archive = Catchup.supported(channel)
             val leftWidth = CHANNEL_WIDTH_DP * rowDensity
             val base = height / 2f + text.textSize * .35f
             val ink = if (hasFocus()) GuideTheme.focusText else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
@@ -118,7 +120,8 @@ class GuideAdapter(
             }
             val ahead = start > GuideTimeline.live(now)
             text.typeface = titleFace
-            canvas.drawText(TextUtils.ellipsize(channel.name, text, leftWidth - (if (favorite) 58 else 43) * rowDensity, TextUtils.TruncateAt.END).toString(), 36 * rowDensity, if (ahead) height / 2f - 3 * rowDensity else base, text)
+            val badges = (if (favorite) 16 else 0) + (if (archive) 16 else 0)
+            canvas.drawText(TextUtils.ellipsize(channel.name, text, leftWidth - (43 + badges) * rowDensity, TextUtils.TruncateAt.END).toString(), 36 * rowDensity, if (ahead) height / 2f - 3 * rowDensity else base, text)
             if (ahead) {
                 text.textSize = smallTextSizePx
                 canvas.drawText(time(start), 36 * rowDensity, height / 2f + 10 * rowDensity, text)
@@ -126,6 +129,16 @@ class GuideAdapter(
             }
             if (favorite) {
                 paint.color = if (hasFocus()) GuideTheme.focusText else 0xFFFFD28A.toInt(); canvas.drawPath(star, paint)
+            }
+            if (archive) {
+                val x = (CHANNEL_WIDTH_DP - 12 - if (favorite) 16 else 0) * rowDensity
+                val y = height / 2f
+                paint.color = ink; paint.style = Paint.Style.STROKE; paint.strokeWidth = 1.25f * rowDensity
+                archiveBounds.set(x - 4.5f * rowDensity, y - 4.5f * rowDensity, x + 4.5f * rowDensity, y + 4.5f * rowDensity)
+                canvas.drawArc(archiveBounds, -70f, 285f, false, paint)
+                canvas.drawLine(x, y, x, y - 3 * rowDensity, paint)
+                canvas.drawLine(x, y, x + 2.5f * rowDensity, y + rowDensity, paint)
+                paint.style = Paint.Style.FILL
             }
             text.typeface = regularFace
             val duration = 3 * 3600000L
@@ -150,7 +163,7 @@ class GuideAdapter(
                 canvas.drawLine(x, 0f, x, height.toFloat(), paint)
             }
             }
-            val description = "${channel.name}. ${snapshot.at(channel, maxOf(now, start))?.title ?: "No programme information"}${if (favorite) ". Favorite" else ""}"
+            val description = "${channel.name}. ${snapshot.at(channel, maxOf(now, start))?.title ?: "No programme information"}${if (favorite) ". Favorite" else ""}${if (archive) ". Catch-up: ${channel.catchupDays} days" else ""}"
             if (contentDescription != description) contentDescription = description
         }
     }

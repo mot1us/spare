@@ -11,6 +11,8 @@ object Catchup {
     private const val DAY = 86400000L
     fun supported(channel: Channel) = channel.catchupDays > 0 && channel.catchupMode in setOf("xc", "default", "append", "shift") &&
         (channel.catchupMode !in setOf("default", "append") || channel.catchupTemplate.isNotBlank())
+    /** Capabilities come from every playlist entry, independent of guide/category filters. */
+    fun channels(guide: Guide) = guide.channels.filter { !it.media && supported(it) }.distinctBy { it.id }
     fun available(channel: Channel, programme: Programme, now: Long = System.currentTimeMillis()) = supported(channel) &&
         programme.start >= now - channel.catchupDays * DAY && programme.start > 0 && programme.end <= now && programme.end > programme.start && programme.end - programme.start <= DAY
     fun url(channel: Channel, programme: Programme, http: Boolean, now: Long = System.currentTimeMillis()): String? {
@@ -43,8 +45,24 @@ object Catchup {
         return value.takeIf { Network.allowed(it, http) }
     }
     fun load(source: Source, channel: Channel, timeoutMs: Int = 20000): List<Programme> {
+        return load(source, channel, timeoutMs) { url, timeout -> Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeout) }
+    }
+    internal fun load(source: Source, channel: Channel, timeoutMs: Int, get: (String, Int) -> ByteArray): List<Programme> {
         require(source.kind == "xtream" && channel.id.matches(Regex("xc:[0-9]{1,20}")))
-        val url = Importers.endpoint(source, "player_api.php", "get_simple_data_table") + "&stream_id=${channel.id.removePrefix("xc:")}"
-        return XtreamEpg.parse(Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeoutMs).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        fun request(action: String): List<Programme> {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            val left = ((deadline - System.nanoTime()) / 1_000_000L).coerceAtMost(timeoutMs.toLong()).toInt()
+            if (left <= 0) throw java.net.SocketTimeoutException("Archive lookup deadline exceeded")
+            val url = Importers.endpoint(source, "player_api.php", action) + "&stream_id=${channel.id.removePrefix("xc:")}"
+            return XtreamEpg.parse(get(url, left).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
+        }
+        val primary = runCatching { request("get_simple_data_table") }
+        primary.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // Older Xtream panels use this misspelled action. Both share one deadline.
+        return try { request("get_simple_date_table") } catch (failure: Exception) {
+            if (Thread.currentThread().isInterrupted) throw failure
+            primary.getOrNull() ?: throw failure
+        }
     }
 }

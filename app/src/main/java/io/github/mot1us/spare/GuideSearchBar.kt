@@ -29,7 +29,7 @@ class GuideSearchBar(
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private val keyboard get() = context.getSystemService(InputMethodManager::class.java)
     val input = EditText(context).apply {
-        tag = "guide-search-input"; hint = "Search channels"; contentDescription = "Search channels"
+        tag = "guide-search-input"; hint = "Search channels, movies, series and episodes"; contentDescription = "Search playlist"
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         setSingleLine(true); textSize = 14f; filters = arrayOf(InputFilter.LengthFilter(128))
         imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -60,7 +60,7 @@ class GuideSearchBar(
                 else -> false
             }
         }
-        message("Speak a channel name, or select the field to type.")
+        message("Speak a title or channel name, or select the field to type.")
     }
     fun query() = input.text.toString().trim().take(128)
     fun setQuery(value: String) { if (input.text.toString() != value) { input.setText(value); input.setSelection(input.length()) } }

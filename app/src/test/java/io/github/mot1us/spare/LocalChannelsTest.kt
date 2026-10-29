@@ -41,4 +41,11 @@ class LocalChannelsTest {
         assertEquals(20, many.locations("Spring", Int.MAX_VALUE).size)
         assertEquals(many.locations("Spring"), many.locations("SPRING"))
     }
+    @Test fun multipleRegionsCombineDistinctLocalStationsAndPreserveSingleRegionBehavior() {
+        assertEquals(setOf("king", "kiro", "label", "ny"), local.find(channels, "Seattle, WA; New York, NY; seattle, wa"))
+        assertEquals(local.find(channels, "Seattle"), local.find(channels, "Seattle; SEATTLE"))
+        assertEquals(listOf("Seattle, WA", "New York, NY"), LocalRegions.parse("Seattle, WA; New York, NY; seattle, wa"))
+        assertEquals(8, LocalRegions.parse((1..20).joinToString(";") { "City $it" }).size)
+        assertTrue(local.find(channels, "; ; ").isEmpty())
+    }
 }

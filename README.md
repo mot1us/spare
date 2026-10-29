@@ -7,14 +7,14 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 ## Features
 
 - M3U playlists and Xtream Codes accounts; multiple saved playlists.
-- Live TV guide, channel categories, favorites, text and voice search.
-- Local guide tab with city/state suggestions, cached station matches and a loading indicator.
+- Live TV guide, categories, favorites, and shared text/voice search across channels, movies, series and known episodes.
+- Local guide tab combining up to eight cities/states, with suggestions and cached station matches.
 - Live preview or a guide with adjustable opacity and programme artwork from your provider or optional metadata.
 - Switchable frame-rate matching, audio tracks, and per-channel subtitles.
 - Sports stream selection by resolution first, with known FPS as a tie-breaker. FPS is learned during playback without extra stream probes; all qualities remain playable.
 - Sports hub opening on Today, with illustrated game cards, a card grid, featured game artwork, live/final scores, followed teams, saved game reminders, Watch best stream selection, completed-game catch-up and optional hidden final scores. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
 - Provider movies, series, catch-up, and Continue watching.
-- Live theme editor with a guide preview, custom colors, offline fonts, layout styles, density, spacing and opacity; a retro Nostalgia preset, 12/24-hour time, and optional AIO Metadata.
+- Live theme editor with a guide preview, custom colors, offline fonts, layout styles, density, spacing and opacity; a retro Nostalgia style, 12/24-hour time, and optional AIO Metadata.
 - Saved startup, background playlist/EPG refresh schedules, and cached Sports artwork.
 - In-app signed updates. No ads, analytics, or Spare account.
 

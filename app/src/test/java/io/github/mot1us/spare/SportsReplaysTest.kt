@@ -83,4 +83,15 @@ class SportsReplaysTest {
         assertTrue(SportsText.score(game, false).contains("24")); assertTrue(SportsText.status(game, false, now).contains("win"))
         assertTrue(SportsText.score(game.copy(state = "in"), true).contains("24"))
     }
+    @Test fun unnamedBroadcastersAndArchivesBeyondTwentyFourRemainSearchableForYesterday() {
+        val yesterday = game.copy(eventId = "yesterday", start = game.start - 86400000, end = game.end - 86400000)
+        val channels = (1..30).map { channel.copy(id = "xc:$it", name = "Feed $it", group = "Other", url = "https://example.com/live/user/pass/$it.ts") }
+        val guide = Guide(channels, emptyMap())
+        assertEquals(30, SportsReplays.candidates(yesterday, guide, emptySet(), now, limit = Importers.MAX_CHANNELS).size)
+        val last = channels.last()
+        val entries = listOf(listing(yesterday.start, yesterday.end), listing())
+        val replay = SportsReplays.findListings(yesterday, guide, mapOf(last.id to entries), now).single()
+        assertEquals(last, replay.channel); assertEquals(yesterday.start, replay.programme.start)
+        assertTrue(SportsReplays.findListings(yesterday, guide, mapOf(last.id to entries), yesterday.start + 2 * 86400000L + 1).isEmpty())
+    }
 }

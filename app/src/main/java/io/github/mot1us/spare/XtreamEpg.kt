@@ -1,6 +1,7 @@
 package io.github.mot1us.spare
 
 import org.json.JSONObject
+import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.Base64
@@ -13,7 +14,11 @@ object XtreamEpg {
     }
     fun parse(text: String, channel: String, now: Long = System.currentTimeMillis(), pastDays: Int = 0): List<Programme> {
         val root = JSONObject(text.trimStart('\uFEFF'))
-        val entries = root.optJSONArray("epg_listings") ?: throw SourceFailure(SourceProblem.GUIDE_RESPONSE)
+        val entries = when (val raw = root.opt("epg_listings")) {
+            is JSONArray -> raw
+            is JSONObject -> { require(raw.length() <= 2000); JSONArray(raw.keys().asSequence().map { raw.opt(it) }.toList()) }
+            else -> throw SourceFailure(SourceProblem.GUIDE_RESPONSE)
+        }
         require(entries.length() <= 2000)
         return (0 until entries.length()).mapNotNull { index ->
             val entry = entries.optJSONObject(index) ?: return@mapNotNull null

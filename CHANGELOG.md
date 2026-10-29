@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.0 — 2026-10-28
+
+- Mark provider-advertised catch-up channels in the guide and count the full playlist inventory in Library. Search archives beyond the broadcaster shortlist, support keyed EPG responses and the legacy Xtream archive endpoint, and share browsed archive history with Sports and the saved guide.
+- Use one native playlist search from Guide and Library, with live channels, movies, series and known episode results. Show live matches immediately; load encrypted movie/series catalogs on explicit search and reuse them for six hours. No video probes or bulk episode requests.
+- Combine up to eight cities/states in Local, with autocomplete for additional regions and duplicate stations removed.
+- Remove the redundant Nostalgia shortcut from the theme editor; retain Nostalgia in the style picker.
+
 ## 0.19.5 — 2026-10-28
 
 - Process Sports guide replies as they arrive and stop pending metadata requests once a game match is confirmed. Preserve completed replies at the timeout boundary while keeping the existing two-request concurrency and eight-channel budget.

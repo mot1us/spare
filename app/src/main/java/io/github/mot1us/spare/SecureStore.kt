@@ -18,7 +18,7 @@ class SecureStore(private val context: Context) {
     private val preferences = context.getSharedPreferences("view-state", Context.MODE_PRIVATE)
     var localLocation: String
         get() = preferences.getString("local-location", "").orEmpty()
-        set(value) { preferences.edit { putString("local-location", value.trim().take(80)) } }
+        set(value) { preferences.edit { putString("local-location", LocalRegions.saved(value)) } }
     var guideOpacity: Int
         get() = preferences.getInt("guide-opacity", -1).coerceIn(-1, 100)
         set(value) { preferences.edit { putInt("guide-opacity", value.coerceIn(-1, 100)) } }

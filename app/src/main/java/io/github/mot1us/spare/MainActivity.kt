@@ -269,6 +269,11 @@ class MainActivity : Activity() {
     private lateinit var programmeArtwork: ProgrammeArtwork
     private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
+    private lateinit var playlistSearch: PlaylistSearch
+    private lateinit var searchPanel: PlaylistSearchPanel
+    private var searchedDemand = emptyList<OnDemand>()
+    private var searchLoading = false
+    private var searchWarning = ""
     private lateinit var details: PlaybackDetails
     private lateinit var retryPanel: LinearLayout
     private var sources = emptyList<Source>()
@@ -352,7 +357,7 @@ class MainActivity : Activity() {
     private var groupsForChannels: List<Channel>? = null
     private var groupsForOrder: List<String>? = null
     private var voiceSearchPending = false
-    private val filterSearch = Runnable { query = guideSearch.query(); applyFilter() }
+    private val filterSearch = Runnable { query = guideSearch.query(); applyFilter(); updatePlaylistSearch() }
     private val hideDetails = Runnable { closeDetails() }
     private val workingUrls = mutableMapOf<String, String>()
     private val retry = Runnable { if (started && (current != null || onDemand != null)) playAttempt(PlaybackPhase.RECONNECTING) }
@@ -749,6 +754,25 @@ class MainActivity : Activity() {
         library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::returnToLive)
         library.panel.navigation = { ++focusEpoch; libraryButton.requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
+        library.panel.globalSearch = ::searchWithQuery
+        guidePanel.removeView(guideSearch)
+        searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation)
+        root.addView(searchPanel, FrameLayout.LayoutParams(-1, -1))
+        playlistSearch = PlaylistSearch(store) { items, busy, warning ->
+            if (started && searchPanel.isVisible) { searchedDemand = items; searchLoading = busy; searchWarning = warning; renderPlaylistSearch() }
+        }
+        library.archiveLoaded = { selected, channel, entries ->
+            if (source == selected) {
+                replayDiscovery?.remember(selected, generation, guide, mapOf(channel.id to entries))
+                val key = guide.key(channel)
+                // A provider archive belongs to one stream. Do not spread it to shared XMLTV variants.
+                if (key == channel.id || guide.channels.count { guide.key(it) == key } == 1) {
+                    guide = guide.copy(programmes = guide.programmes + (key to GuideHistory.merge(guide.programmes[key].orEmpty(), entries, channel.catchupDays, System.currentTimeMillis())))
+                    handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+                    adapter.refreshRows(); scheduleSports()
+                }
+            }
+        }
         library.panel.setPadding(dp(104), dp(18), dp(24), dp(18))
         root.addView(library.panel, FrameLayout.LayoutParams(-1, -1))
         root.addView(navigationRail, FrameLayout.LayoutParams(dp(76), -1, Gravity.START).apply { marginStart = dp(14); topMargin = dp(18); bottomMargin = dp(14) })
@@ -831,6 +855,8 @@ class MainActivity : Activity() {
         handler.postDelayed(hideFavoriteFeedback, 2200)
     }
     private fun clearGuideSearch() {
+        if (::searchPanel.isInitialized) searchPanel.dismiss()
+        if (::playlistSearch.isInitialized) playlistSearch.pause()
         handler.removeCallbacks(filterSearch); query = ""; guideSearch.setQuery(""); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE
         if (::voiceInput.isInitialized) voiceInput.stop()
         voiceSearchPending = false
@@ -869,6 +895,7 @@ class MainActivity : Activity() {
     private fun enterNavigationContent() {
         // Right returns to the current screen. Only OK activates a highlighted destination.
         when {
+            ::searchPanel.isInitialized && searchPanel.isVisible -> searchPanel.focusResults()
             settingsPanel?.opened == true -> settingsPanel?.focusNavigation()
             library.opened -> library.panel.focusToolbar()
             sportsVisible -> sportsPanel.focusHero()
@@ -890,7 +917,7 @@ class MainActivity : Activity() {
         dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded && !navigationRail.moving
         if (dockHint.isVisible) root.bringChildToFront(dockHint)
     }
-    private fun openNavigation() { ++focusEpoch; pendingFocusList = null; navigationRail.focusCurrent() }
+    private fun openNavigation() { ++focusEpoch; pendingFocusList = null; root.bringChildToFront(navigationRail); navigationRail.focusCurrent() }
     private fun focusSidebar(remember: Boolean = true) {
         if (sportsVisible) { ++focusEpoch; navigationRail.focusCurrent(); return }
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
@@ -931,6 +958,7 @@ class MainActivity : Activity() {
     }
 
     private fun load(selected: Source, force: Boolean = false) {
+        clearGuideSearch()
         if (::multiview.isInitialized) multiview.close()
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
@@ -1302,6 +1330,7 @@ class MainActivity : Activity() {
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
     private fun showGuide(show: Boolean) {
         closeDetails()
+        if (!show && ::searchPanel.isInitialized && searchPanel.isVisible) { searchPanel.dismiss(); playlistSearch.pause() }
         if (!show) { guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
         if (!show || !sportsVisible) stopSportsPrefetch()
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
@@ -1338,20 +1367,43 @@ class MainActivity : Activity() {
         nowPlaying.update(channel, guide.at(channel, System.currentTimeMillis()), videoInfo[channel.id]); nowPlaying.reveal()
         handler.postDelayed(hideNowPlaying, 2800)
     }
-    private fun search() {
+    private fun search() = searchWithQuery(query)
+    private fun searchWithQuery(initial: String) {
         settingsPanel?.visibility = View.GONE
         if (::library.isInitialized && library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
         sportsVisible = false
         showGuide(true); group = null; favoritesOnly = false; localOnly = false; applyFilter()
-        guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true); guideSearch.voice.requestFocus()
+        query = initial.take(128); guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true)
+        searchedDemand = emptyList(); searchLoading = false; searchWarning = ""
+        handler.removeCallbacks(filterSearch); pendingFocusList = null
+        searchPanel.show(query); root.bringChildToFront(searchPanel); updatePlaylistSearch(); guideSearch.voice.requestFocus()
         voiceSearch()
+    }
+    private fun updatePlaylistSearch() {
+        if (!::searchPanel.isInitialized || !searchPanel.isVisible) return
+        searchedDemand = emptyList(); searchLoading = source?.kind == "xtream" && query.isNotBlank(); searchWarning = ""
+        renderPlaylistSearch()
+        source?.let { playlistSearch.search(it, query, library.knownEpisodes(it)) }
+    }
+    private fun renderPlaylistSearch() {
+        val term = ChannelSearch.key(query)
+        val live = if (term.isBlank()) emptyList() else guide.channels.asSequence().filter { !it.media && ChannelSearch.matches(it.name, term) }.take(40).map { channel ->
+            PlaylistSearchRow("live:${channel.id}", channel.name, "Live TV · ${channel.group}", "live") {
+                clearGuideSearch(); if (current?.id != channel.id || !hasPlayedChannel || player.playerError != null) tune(channel); showGuide(false)
+            }
+        }.toList()
+        val media = searchedDemand + if (source?.kind == "m3u" && term.isNotBlank()) guide.channels.filter { it.media && ChannelSearch.matches(it.name, term) }.take(40).map { OnDemand("m3u:${it.id}", it.name, it.group, it.url) } else emptyList()
+        val titles = media.map { item -> PlaylistSearchRow(item.id, item.title, when (item.kind) { "series" -> "Series"; "episode" -> "Episode · Season ${item.season} · Episode ${item.episode}"; else -> "Movie" }, item.kind) {
+            clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
+        } }
+        searchPanel.submit(query, live + titles, searchLoading, searchWarning)
     }
     private fun finishSearch(close: Boolean) {
         voiceInput.stop(); voiceSearchPending = false
         handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
-        if (close) { guideSearch.visibility = View.GONE; showGuide(true) }
-        focusChannel()
+        if (close) { searchPanel.dismiss(); playlistSearch.pause(); showGuide(true); focusChannel() }
+        else { updatePlaylistSearch(); searchPanel.focusResults() }
     }
     private fun voiceSearch() {
         if (!guideSearch.isVisible) return
@@ -1457,7 +1509,7 @@ class MainActivity : Activity() {
                 (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
             }
             val games = SportsPanel.ordered(rawGames.filter { it.leagueId in store.sportsLeagues && (selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed }) }, followed, now)
-            val archiveGuide = snapshot.copy(channels = snapshot.channels.filter { Catchup.supported(it) })
+            val archiveGuide = snapshot.copy(channels = Catchup.channels(snapshot))
             val archiveChannels = archiveGuide.channels.associateBy { it.id }
             val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(256).mapNotNull { game ->
                 val cached = SportsReplays.retained(replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.second.orEmpty(), archiveChannels, now)
@@ -1623,7 +1675,7 @@ class MainActivity : Activity() {
             val listings = savedArchives.toMutableMap()
             var choices = SportsReplays.rank(SportsReplays.find(game, snapshot, System.currentTimeMillis()) + SportsReplays.findListings(game, snapshot, listings, System.currentTimeMillis()))
             if (choices.isEmpty() && selected.kind == "xtream" && !Thread.currentThread().isInterrupted) {
-                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis(), limit = 24).filter { it.id !in listings }.take(8)
+                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis(), limit = Importers.MAX_CHANNELS).filter { it.id !in listings }.take(8)
                 val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { Catchup.load(selected, channel, 1200) } }
                 val deadline = System.nanoTime() + 4_000_000_000L
                 try {
@@ -1951,6 +2003,7 @@ class MainActivity : Activity() {
         updateGroups(); applyFilter(); showGuide(true); status.text = "Add a playlist in Settings to start watching"
     }
     private fun playbackMenu() {
+        clearGuideSearch()
         clearSportsPlayback()
         if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         val existing = settingsPanel
@@ -1993,7 +2046,7 @@ class MainActivity : Activity() {
                 val editor = LocalChannelsEditor(this, store.localLocation, { value ->
                     store.localLocation = value; localLineup = null; requestLocalMatches(); if (localOnly) applyFilter()
                 }, { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) })
-                localEditor = editor; panel.custom(editor, 340); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
+                localEditor = editor; panel.custom(editor, 390); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
             }
             "Playback" -> {
                 panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
@@ -2289,6 +2342,7 @@ class MainActivity : Activity() {
             return super.dispatchKeyEvent(event)
         }
         if (::library.isInitialized && library.opened) {
+            if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) library.back(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
             return super.dispatchKeyEvent(event)
@@ -2342,6 +2396,7 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // The TV activity opts out of predictive back for remote hold detection.
     override fun onBackPressed() = navigateBack()
     private fun navigateBack() {
+        if (::searchPanel.isInitialized && searchPanel.isVisible) { finishSearch(true); searchButton.requestFocus(); return }
         if (sportsCalendar?.opened == true) { closeSportsCalendar(); return }
         if (sportsManager?.opened == true) { sportsManager?.back(); return }
         if (sportsVisible && sportsPanel.watching) { clearSportsPlayback(); sportsMatchTask?.cancel(true); ++sportsMatchEpoch }
@@ -2361,7 +2416,7 @@ class MainActivity : Activity() {
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -2383,8 +2438,8 @@ class MainActivity : Activity() {
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onStop() { if (::playlistSearch.isInitialized) playlistSearch.pause(); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onDestroy() { if (::playlistSearch.isInitialized) playlistSearch.close(); replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }

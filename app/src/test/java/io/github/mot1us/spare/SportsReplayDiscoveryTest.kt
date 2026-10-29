@@ -115,6 +115,18 @@ class SportsReplayDiscoveryTest {
             main.await { results.size == 2 }; assertEquals(channel, results.last().replays.single().channel)
         } finally { discovery.close() }
     }
+    @Test fun archiveInventorySearchContinuesPastTheOldShortlistWithoutOpeningVideoStreams() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
+        val variants = (1..30).map { channel.copy(id = "xc:$it", name = "Feed $it", group = "Other", url = "https://example.com/live/user/pass/$it.ts") }
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, candidate, _ -> calls.incrementAndGet(); if (candidate.id == "xc:30") listOf(listing()) else emptyList() })
+        try {
+            discovery.update(source, 1, Guide(variants, emptyMap()), listOf(game), game, true)
+            main.await { results.any { it.replays.isNotEmpty() } }
+            assertEquals("xc:30", results.last().replays.single().channel.id); assertEquals(30, calls.get())
+            assertTrue(results.last().checked)
+        } finally { discovery.close() }
+    }
 
     @Test fun providerFailuresRetryAfterOneMinuteAndNeverBecomeCheckedEmptyResults() {
         val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger(); var clock = initial

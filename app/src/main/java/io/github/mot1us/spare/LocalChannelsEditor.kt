@@ -29,7 +29,7 @@ class LocalChannelsEditor(
     private val handler = Handler(Looper.getMainLooper())
     private val keyboard get() = context.getSystemService(InputMethodManager::class.java)
     private val directory = LocalChannels(context.assets.open("local-stations.tsv").bufferedReader().use { it.readText() })
-    private var lastPublished = initialLocation.trim().take(80)
+    private var lastPublished = LocalRegions.saved(initialLocation)
     private var choosing = false
     private var matchCount = 0
     private var matching = false
@@ -43,7 +43,7 @@ class LocalChannelsEditor(
         tag = "local-location-input"; hint = "Seattle, WA · Seattle · Washington"; contentDescription = "City or state"
         typeface = AppFont.face(); textSize = 15f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY)
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        setSingleLine(); filters = arrayOf(InputFilter.LengthFilter(80)); setSelectAllOnFocus(true)
+        setSingleLine(); filters = arrayOf(InputFilter.LengthFilter(LocalRegions.MAX_LENGTH)); setSelectAllOnFocus(true)
         imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         showSoftInputOnFocus = false; setText(lastPublished)
         setOnClickListener { keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT) }
@@ -54,7 +54,7 @@ class LocalChannelsEditor(
         }
         setOnKeyListener { _, key, event -> when (key) {
             KeyEvent.KEYCODE_DPAD_CENTER -> { if (event.action == KeyEvent.ACTION_UP) keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT); true }
-            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); (suggestionRows.firstOrNull() ?: openGuide).requestFocus() }; true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); this@LocalChannelsEditor.findViewWithTag<View>("local-add-region").requestFocus() }; true }
             else -> false
         } }
         doAfterTextChanged {
@@ -76,12 +76,26 @@ class LocalChannelsEditor(
         } }
     }
 
-    val location: String get() = input.text.toString().trim().take(80)
+    val location: String get() = LocalRegions.saved(input.text.toString())
 
     init {
         orientation = VERTICAL; tag = "local-channels-editor"
-        addView(label("City or state", 12f), LayoutParams(-1, dp(28)))
+        addView(label("Cities or states · Combine up to 8 regions", 12f), LayoutParams(-1, dp(28)))
         addView(input, LayoutParams(-1, dp(48)))
+        addView(option("Add another region").apply {
+            tag = "local-add-region"
+            setOnKeyListener { _, key, event -> when (key) {
+                KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) input.requestFocus(); true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) (suggestionRows.firstOrNull() ?: openGuide).requestFocus(); true }
+                else -> false
+            } }
+            setOnClickListener {
+                if (LocalRegions.parse(location).size < 8) {
+                    choosing = true; input.setText(location + if (location.isBlank()) "" else "; "); input.setSelection(input.length()); choosing = false
+                    input.setSelectAllOnFocus(false); input.requestFocus(); input.setSelection(input.length()); renderSuggestions(); keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
+            }
+        }, LayoutParams(-1, dp(36)))
         addView(matches, LayoutParams(-1, dp(32)))
         addView(suggestions, LayoutParams(-1, -2))
         addView(openGuide, LayoutParams(-1, dp(42)).apply { topMargin = dp(10) })
@@ -118,13 +132,14 @@ class LocalChannelsEditor(
     private fun choose(value: String) {
         // Move focus before replacing rows so Android cannot select a different settings page.
         input.requestFocus(); choosing = true
-        input.setText(value.take(80)); input.setSelection(input.length())
+        val previous = input.text.toString().substringBeforeLast(';', "").trim()
+        input.setText(LocalRegions.saved(if (previous.isBlank()) value else "$previous; $value")); input.setSelection(input.length())
         choosing = false; renderSuggestions(); publish(); hideKeyboard()
     }
 
     private fun renderSuggestions() {
         suggestions.removeAllViews(); suggestionRows.clear()
-        directory.locations(location, 4).forEach { value ->
+        directory.locations(input.text.toString().substringAfterLast(';').trim(), 3).forEach { value ->
             val row = option(value).apply {
                 tag = "local-location-suggestion:$value"; contentDescription = "Use $value"
                 setOnClickListener { choose(value) }

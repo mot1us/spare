@@ -27,7 +27,9 @@ class LocalChannels(text: String) {
         }.sortedBy { it.first }.take(limit.coerceAtMost(20)).map { it.second }.toList()
     }
     fun find(channels: List<Channel>, location: String): Set<String> {
-        val query = key(location.take(80)); if (query.isBlank()) return emptySet()
+        val regions = LocalRegions.parse(location)
+        if (regions.size > 1) return regions.flatMap { find(channels, it) }.toSet()
+        val query = key(regions.firstOrNull().orEmpty()); if (query.isBlank()) return emptySet()
         val selected = stations.filter { query in setOf(it.city, it.state, it.name, "${it.city} ${it.state}", "${it.city} ${it.name}") }
         val calls = selected.map { it.call.lowercase(java.util.Locale.ROOT) }.distinct()
         val callPattern = calls.takeIf { it.isNotEmpty() }?.joinToString("|", "(?<![a-z])(?:", ")(?=(?:dt|tv|hd)?(?:\\d|\\b))") { Regex.escape(it) }?.let(::Regex)
