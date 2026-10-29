@@ -6,8 +6,8 @@ import java.util.UUID
 
 /** Small encrypted index plus bounded encrypted pages. No catalog URLs reach plaintext storage. */
 class LibraryCatalog(private val store: SecureStore) {
-    data class Chunk(val file: String, val count: Int, val groups: List<String>)
-    data class Snapshot(val updated: Long, val chunks: List<Chunk>, val count: Int, val labels: Map<String, String>, val complete: Boolean = true) {
+    data class Chunk(val file: String, val count: Int, val groups: List<String>, val keys: List<String> = emptyList())
+    data class Snapshot(val updated: Long, val chunks: List<Chunk>, val count: Int, val labels: Map<String, String>, val complete: Boolean = true, val scopeGroup: String? = null) {
         fun label(group: String) = labels[group.removePrefix("Category ")] ?: group
         val categories: Map<String, String> get() = chunks.flatMap { it.groups }.distinct().associateWith(::label)
         val groups: List<String> get() = categories.values.distinct()
@@ -25,7 +25,11 @@ class LibraryCatalog(private val store: SecureStore) {
         if (bytes != null) {
             val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") == 1)
             val pages = json.getJSONArray("pages"); require(pages.length() <= 2000)
-            val chunks = List(pages.length()) { i -> val p = pages.getJSONObject(i); val groups = p.getJSONArray("groups"); Chunk(p.getString("file"), p.getInt("count"), List(groups.length()) { groups.getString(it) }) }
+            val chunks = List(pages.length()) { i ->
+                val p = pages.getJSONObject(i); val groups = p.getJSONArray("groups"); val keys = p.optJSONArray("keys")
+                val count = p.getInt("count"); require(count in 1..512 && (keys == null || keys.length() == count))
+                Chunk(p.getString("file"), count, List(groups.length()) { groups.getString(it) }, keys?.let { values -> List(values.length()) { values.getString(it) } }.orEmpty())
+            }
             val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
             val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels)
             if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
@@ -42,20 +46,32 @@ class LibraryCatalog(private val store: SecureStore) {
         private val prefix = prefix(source, mode, scope)
         private val generation = UUID.randomUUID().toString()
         private val chunks = mutableListOf<Chunk>()
+        private val pending = ArrayList<OnDemand>(512)
+        private var count = 0
         init { synchronized(publishLock) { writers[prefix] = generation } }
         fun append(entries: List<OnDemand>) {
             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog import cancelled")
             if (entries.isEmpty()) return
             require(entries.size <= 64)
-            val file = "$prefix$generation-${chunks.size}.enc"
-            store.write(file, JSONArray(entries.map { it.json() }).toString().toByteArray())
-            synchronized(memory) { memory[file] = entries }
-            chunks.add(Chunk(file, entries.size, entries.map { it.category }.distinct()))
+            pending.addAll(entries)
+            // Show the first handful immediately, then amortize encryption/fsync over larger pages.
+            if (chunks.isEmpty() || pending.size >= 512) flush()
         }
-        fun snapshot(labels: Map<String, String>) = Snapshot(stamp, chunks.toList(), chunks.sumOf { it.count }, labels, complete = false)
+        private fun flush() {
+            if (pending.isEmpty()) return
+            val pages = pending.toList().chunked(512); pending.clear()
+            pages.forEach { entries ->
+                val file = "$prefix$generation-${chunks.size}.enc"
+                store.write(file, JSONArray(entries.map { it.json() }).toString().toByteArray())
+                synchronized(memory) { memory[file] = entries }
+                chunks.add(Chunk(file, entries.size, entries.map { it.category }.distinct(), entries.map { ChannelSearch.key(it.title) }))
+                count += entries.size
+            }
+        }
+        fun snapshot(labels: Map<String, String>): Snapshot { flush(); return Snapshot(stamp, chunks.toList(), count, labels, complete = false) }
         fun finish(labels: Map<String, String>): Snapshot {
             val value = snapshot(labels).copy(complete = true)
-            val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)) })
+            val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("keys", JSONArray(it.keys)) })
             synchronized(publishLock) {
                 if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
                 store.write("${prefix}index.enc", JSONObject().put("schema", 1).put("updated", stamp).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
@@ -66,16 +82,18 @@ class LibraryCatalog(private val store: SecureStore) {
     fun query(snapshot: Snapshot, group: String?, query: String, cursor: Int = 0, limit: Int = 80): Page {
         require(limit in 1..160)
         val key = ChannelSearch.key(query); val result = mutableListOf<OnDemand>(); var offset = 0
+        val selectedGroup = group ?: snapshot.scopeGroup
         for (chunk in snapshot.chunks) {
             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog query cancelled")
-            if (offset + chunk.count <= cursor || (group != null && chunk.groups.none { it == group || snapshot.label(it) == group })) { offset += chunk.count; continue }
+            if (offset + chunk.count <= cursor || (selectedGroup != null && chunk.groups.none { it == selectedGroup || snapshot.label(it) == selectedGroup }) ||
+                (key.isNotEmpty() && chunk.keys.isNotEmpty() && chunk.keys.none { it.contains(key) })) { offset += chunk.count; continue }
             val items = synchronized(memory) { memory[chunk.file] } ?: run {
                 val bytes = store.read(chunk.file) ?: error("Catalog page missing")
-                val array = JSONArray(bytes.toString(Charsets.UTF_8)); require(array.length() <= 64)
+                val array = JSONArray(bytes.toString(Charsets.UTF_8)); require(array.length() <= 512)
                 List(array.length()) { OnDemand.from(array.getJSONObject(it)) }.also { synchronized(memory) { memory[chunk.file] = it } }
             }
             items.forEachIndexed { index, item ->
-                if (offset + index >= cursor && (group == null || item.category == group || snapshot.label(item.category) == group) && (key.isEmpty() || ChannelSearch.matches(item.title, key))) {
+                if (offset + index >= cursor && (selectedGroup == null || item.category == selectedGroup || snapshot.label(item.category) == selectedGroup) && (key.isEmpty() || (chunk.keys.getOrNull(index) ?: ChannelSearch.key(item.title)).contains(key))) {
                     result.add(item.copy(category = snapshot.label(item.category)))
                     if (result.size == limit) { val next = offset + index + 1; return Page(result, next, next < snapshot.count) }
                 }

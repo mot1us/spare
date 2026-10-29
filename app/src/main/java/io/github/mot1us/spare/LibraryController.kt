@@ -31,7 +31,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val positions = Executors.newSingleThreadExecutor()
     private val episodeCache = linkedMapOf<String, List<OnDemand>>()
     private val catalogs = linkedMapOf<String, LibraryCatalog.Snapshot>()
-    private val repository = LibraryCatalog(store)
+    val repository = LibraryCatalog(store)
     private val catalogImports = mutableMapOf<String, java.util.concurrent.Future<*>>()
     private val catalogGenerations = mutableMapOf<String, Int>()
     private var catalogGeneration = 0
@@ -43,6 +43,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var activeSnapshot: LibraryCatalog.Snapshot? = null
     private var activeGroup: String? = null
     private var activeQuery = ""
+    private var activeCatalogTitle = "Library"
     private data class BrowsePage(val version: String, val rows: List<BrowserRow>, val cursor: Int, val more: Boolean, val available: Int)
     private val browsePages = linkedMapOf<String, BrowsePage>()
     private val posterMetadata = PosterMetadata(store)
@@ -121,6 +122,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
         activeCatalog = key; activeGroup = null; activeQuery = query
         val title = names[scope].orEmpty()
+        activeCatalogTitle = title
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
             activeSnapshot = snapshot; catalogImporting = busy
             panel.page(title, "${snapshot.count} titles${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
@@ -142,14 +144,19 @@ class LibraryController(private val activity: Activity, private val store: Secur
             }
         } }
         catalogImports[key] = worker.submit {
-            val cached = memory?.takeIf { it.complete } ?: runCatching { repository.cached(selected, mode, scope) }.getOrNull()
+            val cached = memory?.takeIf { it.complete } ?: runCatching {
+                repository.cached(selected, mode, scope) ?: repository.cached(selected, mode)?.takeIf { full ->
+                    full.chunks.any { "Category $scope" in it.groups }
+                }?.copy(labels = names, scopeGroup = "Category $scope")
+            }.getOrNull()
             if (cached != null) deliver(cached, false)
             if (!force && cached != null && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
             runCatching {
-                val writer = repository.Writer(selected, mode, scope = scope); var batches = 0
+                val writer = repository.Writer(selected, mode, scope = scope); var publishedAt = 0L
                 VodCatalog.stream(selected, mode, scope) { batch ->
-                    writer.append(batch); batches++
-                    if (cached == null && batches % 4 == 1) deliver(writer.snapshot(names), true)
+                    writer.append(batch)
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (cached == null && now - publishedAt >= 750) { publishedAt = now; deliver(writer.snapshot(names), true) }
                 }
                 writer.finish(names)
             }.onSuccess { deliver(it, false) }.onFailure { failure -> handler.post {
@@ -215,6 +222,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun activateCatalog(key: String, snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
         activeCatalog = key; activeSnapshot = snapshot; catalogImporting = busy
+        activeCatalogTitle = if (kind == "movie") "Movies" else "Series"
         panel.page(if (kind == "movie") "Movies" else "Series", "${snapshot.count} titles" + if (busy) " · Loading more in the background…" else "", busy)
         panel.bindCatalog(key, snapshot.categories, { group, query -> loadCatalogPage(group, query, false) }, { loadCatalogPage(activeGroup, activeQuery, true) })
     }
@@ -243,7 +251,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
-                    panel.page(if (kind == "movie") "Movies" else "Series", "${page.rows.size} titles shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+                    panel.page(activeCatalogTitle, "${page.rows.size} titles shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
                 }
             } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
         }
@@ -356,7 +364,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
     fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
-    fun dismiss() { fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
+    fun dismiss() {
+        fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch
+        panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
+        catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
+    }
     fun destroy() { posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

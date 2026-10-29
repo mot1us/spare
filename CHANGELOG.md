@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.1 — 2026-10-28
+
+- Keep playlist search focus inside its results and stop delayed guide navigation from taking over the remote. Use cached live-channel search keys instead of repeatedly normalizing the full lineup on the UI thread.
+- Batch encrypted VOD catalog writes, index title keys to skip unrelated pages, reuse the full catalog when browsing categories, and keep metadata imports through search query changes and dismissal. Publish usable results while imports continue.
+- Restore primary-player audio and audio-track selection when starting a movie or episode, handle audio focus, and honor provider file extensions and permitted direct playback URLs without probing alternate movie formats.
+
 ## 0.20.0 — 2026-10-28
 
 - Add Watch VOD from beginning to live channel details. Play unique movie matches and explicitly identified episodes from zero; offer choices for remakes, ambiguous titles or episodes the guide does not identify. Channel catch-up stays separate.

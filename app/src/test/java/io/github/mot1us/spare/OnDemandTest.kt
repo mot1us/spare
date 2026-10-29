@@ -16,6 +16,15 @@ class OnDemandTest {
         assertEquals("series:8", series.id); assertTrue(series.url.isEmpty())
         assertEquals(movies.single(), OnDemand.from(movies.single().json()))
     }
+    @Test fun eachVodSelectionResolvesOneProviderFileAndHonorsHttpConsent() {
+        val direct = JSONObject("""{"direct_source":"https://cdn.example.com/file.mkv","container_extension":"MP4"}""")
+        assertEquals("https://cdn.example.com/file.mkv", VodCatalog.playbackUrl(source, "movie", "42", direct))
+        direct.put("direct_source", "http://cdn.example.com/file.mkv").put("container_extension", " MKV ")
+        assertTrue(VodCatalog.playbackUrl(source, "movie", "42", direct).endsWith("/42.mkv"))
+        assertEquals("http://cdn.example.com/file.mkv", VodCatalog.playbackUrl(source.copy(allowHttp = true), "movie", "42", direct))
+        assertEquals("https://cdn.example.com/existing.mp4", VodCatalog.playbackUrl(source, "movie", "42", JSONObject(), "https://cdn.example.com/existing.mp4"))
+        assertTrue(VodCatalog.playbackUrl(source, "movie", "42", JSONObject("""{"stream_id":51,"container_extension":"mkv"}""")).endsWith("/51.mkv"))
+    }
     @Test fun seriesEpisodesAreOrderedBySeasonAndEpisodeAndKeepSeriesIdentity() {
         val series = OnDemand("series:8", "A series", "Drama", kind = "series")
         val root = JSONObject("""{"episodes":{"2":[{"id":4,"episode_num":2,"title":"Later","container_extension":"mkv"}],"1":[{"id":3,"episode_num":1,"title":"Pilot","container_extension":"../../bad"},{"id":"no"}]}}""")

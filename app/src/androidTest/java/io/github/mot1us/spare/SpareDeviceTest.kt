@@ -83,16 +83,22 @@ class SpareDeviceTest {
             val source = Source(name = "Page test", kind = "xtream", url = "https://example.com")
             try {
                 val catalog = LibraryCatalog(store); val writer = catalog.Writer(source, "movie")
-                val entries = (1..190).map { OnDemand("movie:$it", "Movie $it", if (it % 2 == 0) "Category 1" else "Category 2", "https://example.com/private/$it.mp4") }
+                val entries = (1..2190).map { OnDemand("movie:$it", "Movie $it", if (it % 2 == 0) "Category 1" else "Category 2", "https://example.com/private/$it.mp4") }
                 entries.chunked(64).forEach(writer::append)
                 val snapshot = writer.finish(mapOf("1" to "Science fiction", "2" to "Drama"))
                 val first = catalog.query(snapshot, "Science fiction", "", limit = 40)
                 val second = catalog.query(snapshot, "Science fiction", "", first.cursor, 40)
                 assertEquals(40, first.entries.size); assertTrue(first.more)
                 assertTrue(first.entries.none { a -> second.entries.any { b -> a.id == b.id } })
-                assertEquals("movie:188", catalog.query(snapshot, null, "Movie 188").entries.single().id)
+                assertEquals("movie:188", catalog.query(snapshot, null, "Movie 188").entries.first().id)
                 val restored = LibraryCatalog(store).cached(source, "movie")!!
-                assertEquals(190, restored.count); assertEquals(snapshot.groups, restored.groups)
+                assertEquals(2190, restored.count); assertEquals(snapshot.groups, restored.groups)
+                assertTrue("Catalog writes are batched", restored.chunks.size < 8)
+                assertTrue(restored.chunks.all { it.keys.size == it.count })
+                assertEquals("movie:2188", LibraryCatalog(store).query(restored, null, "Movie 2188").entries.single().id)
+                assertTrue(catalog.query(restored.copy(scopeGroup = "Category 1"), null, "", limit = 40).entries.all { it.category == "Science fiction" })
+                store.delete(restored.chunks.first().file)
+                assertEquals("Index skips unrelated encrypted pages", "movie:2188", LibraryCatalog(store).query(restored, null, "Movie 2188").entries.single().id)
                 assertTrue(context.filesDir.listFiles()!!.filter { it.name.startsWith("catalog-${source.id}-") }.none { it.readBytes().toString(Charsets.UTF_8).contains("https://example.com/private/") })
             } finally { store.removeCache(source) }
 
@@ -1571,8 +1577,11 @@ class SpareDeviceTest {
                     device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains(title)) }
                     holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
-                    scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                    scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); val player = find<PlayerView>(it.window.decorView)!!.player!!
+                        player.volume = 0f; player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true).build()
+                        it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == path }
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.isPlaying && p.currentTracks.isTypeSelected(androidx.media3.common.C.TRACK_TYPE_AUDIO) && p.volume == 1f } == true }
                     assertEquals("VOD start must never query the channel archive", 0, server.archiveRequests.get())
                 }
                 store.saveSources(emptyList()); store.removeCache(source)
@@ -1594,13 +1603,19 @@ class SpareDeviceTest {
                     it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture")
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.isShown == true && it.window.decorView.findViewWithTag<View>("search-result:series:1")?.isShown == true }
-                scenario.onActivity { assertNotNull(it.window.decorView.findViewWithTag<View>("search-result:live:xc:1")); it.window.decorView.findViewWithTag<View>("search-result:series:1").performClick() }
+                scenario.onActivity { assertNotNull(it.window.decorView.findViewWithTag<View>("search-result:live:xc:1")); it.window.decorView.findViewWithTag<View>("search-kind:series").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:series:1")?.hasFocus() == true }
+                device.pressDPadDown(); device.pressDPadRight()
+                scenario.onActivity { assertTrue("Search owns remote focus at the results boundary", it.window.decorView.findViewWithTag<View>("playlist-search").hasFocus()) }
+                device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-search").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Pilot") }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:episode:201")?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:episode:201").performClick() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:episode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:episode:201")?.hasFocus() == true }
+                device.pressDPadCenter()
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/201.mp4" }
                 assertEquals(1, server.catalogTargets.count { !it.contains("category_id=") })
             }

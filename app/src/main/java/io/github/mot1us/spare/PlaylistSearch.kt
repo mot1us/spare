@@ -6,11 +6,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 /** Explicit, playlist-wide title search. Catalog pages stay encrypted; no video streams are probed. */
-class PlaylistSearch(private val store: SecureStore, private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
+class PlaylistSearch(private val store: SecureStore, private val repository: LibraryCatalog = LibraryCatalog(store), private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(2)
     private val reader = Executors.newSingleThreadExecutor()
-    private val repository = LibraryCatalog(store)
     private val lock = Any()
     private var source: Source? = null
     private var context = 0
@@ -24,15 +23,17 @@ class PlaylistSearch(private val store: SecureStore, private val deliver: (List<
     private val loading = mutableSetOf<String>()
     private val failures = mutableSetOf<String>()
     private var readTask: Future<*>? = null
+    private var publishPending = false
     private val publish = Runnable {
         val value = synchronized(lock) {
+            publishPending = false
             if (!active || closed) return@Runnable
             Triple(listOf("movie", "series", "episode").flatMap { matches[it].orEmpty() }, loading.isNotEmpty(),
                 if (failures.isEmpty()) "" else "Some library titles could not load. Reopen Search to retry.")
         }
         deliver(value.first, value.second, value.third)
     }
-    private fun publish() { handler.removeCallbacks(publish); handler.postDelayed(publish, 100) }
+    private fun publish() { if (!publishPending) { publishPending = true; handler.postDelayed(publish, 100) } }
     fun search(selected: Source, text: String, knownEpisodes: List<OnDemand>) {
         synchronized(lock) {
             if (closed) return
@@ -41,7 +42,7 @@ class PlaylistSearch(private val store: SecureStore, private val deliver: (List<
             matches.clear()
             if (query.isEmpty()) { readTask?.cancel(true); publish(); return }
             read()
-            if (selected.kind == "xtream") listOf("movie", "series").forEach { mode -> if (mode !in loads) load(selected, mode, context) }
+            if (selected.kind == "xtream") listOf("movie", "series").forEach { mode -> if (mode !in loads || (mode in failures && loads[mode]?.isDone == true)) load(selected, mode, context) }
             publish()
         }
     }
@@ -67,15 +68,19 @@ class PlaylistSearch(private val store: SecureStore, private val deliver: (List<
             try {
                 val cached = repository.cached(selected, mode)
                 if (cached != null) synchronized(lock) { if (token == context) { catalogs[mode] = cached; read() } }
-                if (cached == null || System.currentTimeMillis() - cached.updated !in 0 until 6 * 3600000L) {
+                // Upgrade old page-only caches once; subsequent searches read the compact title index.
+                if (cached == null || cached.chunks.any { it.keys.size != it.count } || System.currentTimeMillis() - cached.updated !in 0 until 6 * 3600000L) {
                     val writer = repository.Writer(selected, mode)
+                    var publishedAt = 0L
                     VodCatalog.stream(selected, mode) { batch ->
                         writer.append(batch)
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        val snapshot = if (now - publishedAt >= 750) writer.snapshot(emptyMap()).also { publishedAt = now } else null
                         synchronized(lock) {
                             if (closed || token != context || Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Search cancelled")
-                            catalogs[mode] = writer.snapshot(emptyMap())
+                            if (snapshot != null) catalogs[mode] = snapshot
                             if (query.isNotEmpty()) {
-                                val additions = batch.filter { ChannelSearch.matches(it.title, query) }
+                                val additions = batch.filter { ChannelSearch.key(it.title).contains(query) }
                                 if (additions.isNotEmpty()) { matches[mode] = (matches[mode].orEmpty() + additions).distinctBy { it.id }.take(40); publish() }
                             }
                         }
@@ -88,6 +93,11 @@ class PlaylistSearch(private val store: SecureStore, private val deliver: (List<
         }
     }
     private fun cancelLoads() { loads.values.forEach { it?.cancel(true) }; loads.clear(); loading.clear(); readTask?.cancel(true) }
-    fun pause() { synchronized(lock) { active = false; ++context; cancelLoads(); handler.removeCallbacks(publish) } }
-    fun close() { pause(); closed = true; io.shutdownNow(); reader.shutdownNow() }
+    // Leaving the search surface must not throw away a nearly finished metadata-only import.
+    fun pause(cancel: Boolean = false) { synchronized(lock) {
+        active = false; readTask?.cancel(true)
+        if (cancel) { ++context; cancelLoads() }
+        handler.removeCallbacks(publish); publishPending = false
+    } }
+    fun close() { pause(cancel = true); closed = true; io.shutdownNow(); reader.shutdownNow() }
 }

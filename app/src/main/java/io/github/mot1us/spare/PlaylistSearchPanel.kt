@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
+import android.view.FocusFinder
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -31,6 +32,7 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
     private var kind = ""
     private var text = ""
     private var waitingForResults = false
+    var backgroundContent: ViewGroup? = null
     init {
         orientation = VERTICAL; tag = "playlist-search"; visibility = GONE; setBackgroundColor(0xF20B1018.toInt())
         setPadding(dp(104), dp(18), dp(24), dp(18))
@@ -65,11 +67,14 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
         }
     }
     private class Holder(val label: TextView) : RecyclerView.ViewHolder(label)
-    fun show(query: String) { text = query; kind = ""; waitingForResults = false; visibility = VISIBLE; field.visibility = VISIBLE; display() }
+    // Search is a modal surface; Android's geometric search must not select obscured guide rows.
+    override fun focusSearch(focused: View, direction: Int): View? =
+        FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
+    fun show(query: String) { text = query; kind = ""; waitingForResults = false; backgroundContent?.descendantFocusability = FOCUS_BLOCK_DESCENDANTS; visibility = VISIBLE; field.visibility = VISIBLE; display() }
     fun submit(query: String, values: List<PlaylistSearchRow>, busy: Boolean, warning: String = "") {
         text = query; all = values; progress.visibility = if (busy) VISIBLE else GONE
         message.text = when { query.isBlank() -> "Search your playlist · Episode titles are included after opening a series"
-            else -> "Top matches · ${values.count { it.kind == "live" }} channels · ${values.count { it.kind == "movie" }} movies · ${values.count { it.kind == "series" }} series · ${values.count { it.kind == "episode" }} episodes" + if (busy) " · Loading library…" else if (warning.isNotBlank()) " · $warning" else "" }
+            else -> "${if (busy) "Searching" else "Matches"} · ${values.count { it.kind == "live" }} channels · ${values.count { it.kind == "movie" }} movies · ${values.count { it.kind == "series" }} series · ${values.count { it.kind == "episode" }} episodes" + if (busy) " · Results are ready to select while more titles load…" else if (warning.isNotBlank()) " · $warning" else "" }
         display()
         if (waitingForResults && shown.isNotEmpty()) focusResults()
     }
@@ -84,5 +89,5 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
         diff.dispatchUpdatesTo(rows.adapter!!); tabs.forEach { (key, tab) -> tab.isSelected = key == kind }
     }
     fun focusResults() { waitingForResults = shown.isEmpty(); if (shown.isEmpty()) field.input.requestFocus() else { rows.scrollToPosition(0); rows.post { if (isShown) rows.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus() } } }
-    fun dismiss() { field.hideKeyboard(); field.visibility = GONE; visibility = GONE }
+    fun dismiss() { waitingForResults = false; field.hideKeyboard(); field.visibility = GONE; visibility = GONE; backgroundContent?.descendantFocusability = FOCUS_AFTER_DESCENDANTS }
 }

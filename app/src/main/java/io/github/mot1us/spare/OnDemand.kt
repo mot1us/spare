@@ -26,7 +26,7 @@ object VodCatalog {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
         val action = if (kind == "movie") "get_vod_streams" else "get_series"
         require(category == null || numeric.matches(category))
-        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "plot", "stream_icon", "cover", "cover_big", "poster", "movie_image", "backdrop_path", "year", "releaseDate", "release_date", "genre", "cast", "tmdb_id", "tmdb", "tvdb_id", "imdb_id")
+        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "direct_source", "plot", "stream_icon", "cover", "cover_big", "poster", "movie_image", "backdrop_path", "year", "releaseDate", "release_date", "genre", "cast", "tmdb_id", "tmdb", "tvdb_id", "imdb_id")
         Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
@@ -76,7 +76,7 @@ object VodCatalog {
             val id = j.optString(if (kind == "series") "series_id" else "stream_id")
             if (!numeric.matches(id)) return@mapNotNull null
             OnDemand("$kind:$id", j.optString("name").take(256).ifBlank { "Untitled" }, categories[j.optString("category_id")] ?: j.optString("category_id").take(80).let { if (it.isBlank()) "Other" else "Category $it" },
-                if (kind == "movie") streamUrl(source, "movie", id, j.optString("container_extension")) else "", kind, j.optString("plot").take(2048), poster = listOf(if (kind == "movie") "stream_icon" else "cover", "cover_big", "poster", "movie_image", "stream_icon").map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
+                if (kind == "movie") playbackUrl(source, "movie", id, j) else "", kind, j.optString("plot").take(2048), poster = listOf(if (kind == "movie") "stream_icon" else "cover", "cover_big", "poster", "movie_image", "stream_icon").map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
                 backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { Regex("(?:19|20)[0-9]{2}").find(it)?.value }.firstOrNull().orEmpty(),
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
         }.distinctBy { it.id }
@@ -99,7 +99,7 @@ object VodCatalog {
                 val season = j.optInt("season", key.toIntOrNull() ?: 0).coerceIn(0, 999)
                 val episode = j.optInt("episode_num", index + 1).coerceIn(0, 99999)
                 result.add(OnDemand("episode:$id", j.optString("title").take(256).ifBlank { "${series.title} · Episode $episode" }, "Season $season",
-                    streamUrl(source, "series", id, j.optString("container_extension")), "episode", j.optJSONObject("info")?.optString("plot").orEmpty().take(2048), series.id, season, episode, poster = artwork(j.optJSONObject("info")?.optString("movie_image").orEmpty(), source), runtime = j.optJSONObject("info")?.optString("duration").orEmpty().take(40), externalId = externalId(j.optJSONObject("info") ?: j)))
+                    playbackUrl(source, "series", id, j), "episode", j.optJSONObject("info")?.optString("plot").orEmpty().take(2048), series.id, season, episode, poster = artwork(j.optJSONObject("info")?.optString("movie_image").orEmpty(), source), runtime = j.optJSONObject("info")?.optString("duration").orEmpty().take(40), externalId = externalId(j.optJSONObject("info") ?: j)))
             }
         }
         return result.distinctBy { it.id }.sortedWith(compareBy({ it.season }, { it.episode }))
@@ -108,13 +108,21 @@ object VodCatalog {
         if (source.kind != "xtream" || item.kind != "movie") return item
         val id = item.id.removePrefix("movie:"); require(numeric.matches(id))
         val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_vod_info") + "&vod_id=$id", source.allowHttp, 2 * 1024 * 1024, timeoutMs = 6000).toString(Charsets.UTF_8))
-        val info = root.optJSONObject("info") ?: return item
+        val info = root.optJSONObject("info") ?: JSONObject()
         val data = root.optJSONObject("movie_data")
         return item.copy(description = info.optString("plot").take(4096).ifBlank { item.description }, poster = artwork(info.optString("cover_big").ifBlank { info.optString("movie_image") }, source).ifBlank { item.poster },
             backdrop = artwork(info.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source).ifBlank { item.backdrop },
             year = info.optString("releasedate").take(4).ifBlank { item.year }, genre = info.optString("genre").take(256).ifBlank { item.genre },
             runtime = info.optString("duration").take(40).ifBlank { item.runtime }, cast = info.optString("cast").take(1024).ifBlank { item.cast },
-            externalId = externalId(info).ifBlank { item.externalId }, url = data?.optString("container_extension")?.takeIf { it.isNotBlank() }?.let { streamUrl(source, "movie", id, it) } ?: item.url)
+            externalId = externalId(info).ifBlank { item.externalId }, url = data?.let { playbackUrl(source, "movie", id, it, item.url) } ?: item.url)
+    }
+    /** One provider file per selection; never guess or probe alternate movie formats. */
+    fun playbackUrl(source: Source, folder: String, id: String, data: JSONObject, fallback: String = ""): String {
+        val direct = data.optString("direct_source").trim()
+        if (direct.length in 1..16384 && Network.allowed(direct, source.allowHttp)) return direct
+        val extension = data.optString("container_extension").trim()
+        val resolvedId = data.optString("stream_id").takeIf { numeric.matches(it) } ?: id
+        return if (extension.isNotEmpty() || fallback.isBlank()) streamUrl(source, folder, resolvedId, extension) else fallback
     }
     private fun artwork(value: String, source: Source) = value.take(4096).takeIf { Network.allowed(it, source.allowHttp) }.orEmpty()
     private fun externalId(info: JSONObject): String {
@@ -123,7 +131,7 @@ object VodCatalog {
     }
     fun streamUrl(source: Source, folder: String, id: String, extension: String): String {
         require(folder in setOf("movie", "series") && numeric.matches(id))
-        val ext = extension.lowercase().takeIf { it in setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m3u8", "webm") } ?: "mp4"
+        val ext = extension.trim().lowercase(java.util.Locale.ROOT).takeIf { it in setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m3u8", "webm") } ?: "mp4"
         return "${Importers.serverBase(source.url)}/$folder/${Importers.encoded(source.username)}/${Importers.encoded(source.password)}/$id.$ext"
     }
 }
