@@ -8,7 +8,7 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
             candidates = this.game.candidates, titleMatches = this.game.titleMatches, coverageComplete = this.game.coverageComplete))
     }
     private data class Signature(val key: String, val state: String, val start: Long, val end: Long, val teams: List<String>, val networks: List<String>)
-    private data class Entry(val signature: Signature, val match: Match, val expires: Long, val guideKeys: Set<String>)
+    private data class Entry(val signature: Signature, val match: Match, val expires: Long, val displayUntil: Long, val guideKeys: Set<String>)
     private var context: Context? = null
     private val entries = LinkedHashMap<String, Entry>(16, .75f, true)
     private fun signature(game: SportsGame) = Signature(game.key, game.state, game.start, game.end, game.teams.map { it.id }, game.networks)
@@ -25,10 +25,13 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
         return Context(source, generation, guide, favorites).also { context = it; entries.clear() }
     }
     @Synchronized fun current(token: Context) = context === token
-    @Synchronized fun get(token: Context, game: SportsGame, now: Long, forAuto: Boolean = true): Match? {
+    @Synchronized fun get(token: Context, game: SportsGame, now: Long, forAuto: Boolean = true, allowStale: Boolean = false): Match? {
         if (context !== token || !game.live(now)) return null
         val entry = entries[game.key] ?: return null
-        if (entry.expires <= now || entry.signature != signature(game)) { entries.remove(game.key); return null }
+        if (entry.displayUntil <= now || entry.signature != signature(game)) { entries.remove(game.key); return null }
+        // A refresh becoming due must not erase an already discovered channel from its card.
+        // Automatic playback still requires a fresh match; stale evidence is display-only.
+        if (entry.expires <= now && (!allowStale || forAuto)) return null
         return entry.match.takeIf { !forAuto || it.autoReady }?.current(game)
     }
     @Synchronized fun put(token: Context, match: Match, now: Long): Boolean {
@@ -40,9 +43,11 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
                 (match.warmed[key] == null || active.guide.programmes[key] != match.warmed[key]) })) return false
         val existing = entries[match.game.key]
         if (existing?.match?.autoReady == true && !match.autoReady) return false
-        val boundary = (match.game.broadcasts.asSequence().map { it.programme.end } + match.warmed.values.asSequence().flatten()
+        val boundary = (sequenceOf(match.game.end) + match.game.broadcasts.asSequence().map { it.programme.end } + match.warmed.values.asSequence().flatten()
             .flatMap { sequenceOf(it.start, it.end) }).filter { it > now }.minOrNull() ?: Long.MAX_VALUE
-        entries[match.game.key] = Entry(signature(match.game), match, minOf(now + lifetimeMs, boundary), keys)
+        val expires = minOf(now + lifetimeMs, boundary)
+        val found = match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty() || match.game.candidates.isNotEmpty()
+        entries[match.game.key] = Entry(signature(match.game), match, expires, if (found) boundary else expires, keys)
         while (entries.size > capacity) entries.remove(entries.keys.first())
         return true
     }

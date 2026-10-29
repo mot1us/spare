@@ -8,6 +8,34 @@ class SportsStreamCacheTest {
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000,
         emptyList(), "cache-game", "in", listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, fps: Float = 60f) = Channel(id, "ESPN $id", "NFL", "https://example.com/$id", reportedQuality = VideoInfo(3840, 2160, fps))
+    @Test fun refreshDueKeepsDiscoveredCardsVisibleWithoutReusingStaleAutoPlayEvidence() {
+        val c = channel("one"); val guide = Guide(listOf(c), emptyMap())
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        cache.put(token, SportsStreamCache.Match(game.copy(titleMatches = listOf(c))), now)
+        val later = now + 120001
+        assertNull("A due refresh still blocks stale automatic playback", cache.get(token, game, later))
+        assertNull(cache.get(token, game, later, allowStale = true))
+        val updated = game.copy(scores = mapOf("nfl:SEA" to "14"))
+        val card = cache.get(token, updated, later, forAuto = false, allowStale = true)!!
+        assertEquals(listOf(c), card.game.titleMatches); assertEquals(updated.scores, card.game.scores)
+        assertNull("Finished games cannot retain a live-channel label", cache.get(token, game.copy(state = "post"), later, forAuto = false, allowStale = true))
+        assertNull(cache.get(token, game, game.end, forAuto = false, allowStale = true))
+    }
+    @Test fun staleCardsStillExpireAtProgrammeBoundariesAndInvalidateOnRelevantGuideChanges() {
+        val c = channel("one"); val p = Programme(c.id, game.title, now - 1000, now + 300000)
+        val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p))))
+        cache.put(token, match, now)
+        val unrelated = cache.use("source", 1, guide.copy(programmes = guide.programmes + ("news" to listOf(p))), emptySet())
+        assertNotNull(cache.get(unrelated, game, now + 120001, forAuto = false, allowStale = true))
+        assertNull(cache.get(unrelated, game, p.end, forAuto = false, allowStale = true))
+        cache.put(unrelated, match, now)
+        val changed = cache.use("source", 1, guide.copy(programmes = mapOf(c.id to listOf(p.copy(title = "Other game")))), emptySet())
+        assertNull(cache.get(changed, game, now + 120001, forAuto = false, allowStale = true))
+        cache.put(changed, SportsStreamCache.Match(game), now)
+        assertNull("Empty searches must be allowed to discover new coverage", cache.get(changed, game, now + 120001, forAuto = false, allowStale = true))
+    }
     @Test fun cachedEvidenceRetainsFreshScoresButExpiresAtProgrammeBoundaries() {
         val c = channel("one"); val programme = Programme(c.id, game.title, now - 1000, now + 5000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(programme)))

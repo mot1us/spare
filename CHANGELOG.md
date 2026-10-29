@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.2 — 2026-10-28
+
+- Keep discovered Sports card channels visible when returning to Sports and while refreshing expired match data. Show Finding stream only for cards without a valid saved match; preserve labels when cancelling a quiet refresh.
+- Retain playlist, relevant-guide and game/programme-boundary invalidation. Automatic playback still refreshes expired evidence; background card discovery opens no video connections.
+
 ## 0.19.1 — 2026-10-28
 
 - Give transient provider reads Media3's normal bounded retries instead of escalating after one retry, and allow longer quiet intervals on live HTTP connections before declaring a timeout. Keep account/rate-limit errors and stalled-playback recovery bounded.

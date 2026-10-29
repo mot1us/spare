@@ -1643,7 +1643,10 @@ class MainActivity : Activity() {
     }
     private fun stopSportsPrefetch(clear: Boolean = false) {
         ++sportsWarmEpoch; handler.removeCallbacks(warmSportsStreams); sportsWarmTask?.cancel(true); sportsWarmTask = null
-        sportsWarmActive?.let { key -> sportsWarmAttempted.remove(key); sportsStreamSummaries[key] = "Select to find stream" }
+        sportsWarmActive?.let { key ->
+            sportsWarmAttempted.remove(key)
+            if (sportsStreamSummaries[key]?.startsWith("Finding stream") == true) sportsStreamSummaries[key] = "Select to find stream"
+        }
         sportsWarmActive = null
         if (clear) { sportsStreamCache.clear(); sportsWarmAttempted.clear(); sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsStreamSummaries.clear(); if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(emptyMap()) }
         else if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(sportsStreamSummaries)
@@ -1657,7 +1660,7 @@ class MainActivity : Activity() {
         val selected = source ?: return
         val token = sportsStreamCache.use(selected.id, generation, guide, favorites)
         (listOfNotNull(sportsWarmPriority) + sportsWarmGames).distinctBy { it.key }.forEach { game ->
-            val match = sportsStreamCache.get(token, game, System.currentTimeMillis(), forAuto = false)
+            val match = sportsStreamCache.get(token, game, System.currentTimeMillis(), forAuto = false, allowStale = true)
             sportsStreamSummaries[game.key] = when {
                 match != null -> sportsStreamSummaries[game.key]?.takeUnless { it.startsWith("Finding stream") || it.startsWith("Select to") } ?: sportsStreamSummary(match)
                 sportsWarmActive == game.key -> sportsWarmProgress
@@ -1682,7 +1685,9 @@ class MainActivity : Activity() {
             it.live(now) && sportsStreamCache.get(token, it, now, forAuto = false) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
         } ?: return
         sportsWarmAttempted[game.key] = now
-        sportsWarmActive = game.key; sportsWarmProgress = "Finding stream…"; sportsStreamSummaries[game.key] = sportsWarmProgress; sportsPanel.updateStreamSummaries(sportsStreamSummaries)
+        val showProgress = sportsStreamCache.get(token, game, now, forAuto = false, allowStale = true) == null
+        sportsWarmActive = game.key; sportsWarmProgress = "Finding stream…"
+        if (showProgress) { sportsStreamSummaries[game.key] = sportsWarmProgress; sportsPanel.updateStreamSummaries(sportsStreamSummaries) }
         if (sportsWarmAttempted.size > 64) sportsWarmAttempted.keys.retainAll(sportsWarmGames.map { it.key }.toSet() + game.key)
         val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = sportsStreamFilters(); val quality = videoInfo.toMap()
         sportsWarmTask = sportsWarmWorker.submit {
@@ -1690,7 +1695,7 @@ class MainActivity : Activity() {
             // Background cards use saved data only. Provider requests belong to an explicit selection.
             val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, false, { _, checked, total ->
                 handler.post {
-                    if (!closed && epoch == sportsWarmEpoch && sportsWarmActive == game.key) {
+                    if (showProgress && !closed && epoch == sportsWarmEpoch && sportsWarmActive == game.key) {
                         sportsWarmProgress = "Finding stream · $checked / $total"; sportsStreamSummaries[game.key] = sportsWarmProgress
                         sportsPanel.updateStreamSummaries(sportsStreamSummaries)
                     }
@@ -1703,7 +1708,7 @@ class MainActivity : Activity() {
                 val completedAt = System.currentTimeMillis()
                 val latest = sportsStreamCache.use(selected.id, generation, guide, favorites)
                 val retained = result?.takeIf { sportsStreamCache.put(token, it, completedAt) }
-                    ?: sportsStreamCache.get(latest, game, completedAt, forAuto = false)
+                    ?: sportsStreamCache.get(latest, game, completedAt, forAuto = false, allowStale = true)
                 if (retained != null) {
                     sportsStreamSummaries[game.key] = if (retained === result && summary != null) summary else sportsStreamSummary(retained)
                 } else {

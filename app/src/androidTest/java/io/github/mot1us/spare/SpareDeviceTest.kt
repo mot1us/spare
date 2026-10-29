@@ -549,6 +549,10 @@ class SpareDeviceTest {
                         val record = MainActivity::class.java.getDeclaredMethod("recordVideo", VideoInfo::class.java).apply { isAccessible = true }
                         record.invoke(activity, VideoInfo(3840, 2160, 60f)); record.invoke(activity, VideoInfo(1920, 1080, 30f))
                         assertTrue("Quality changes must retain completed coverage", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}").text.contains("Seattle Seahawks"))
+                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                        MainActivity::class.java.getDeclaredMethod("queueSportsPrefetch", List::class.java).apply { isAccessible = true }.invoke(activity, null)
+                        assertTrue("Returning to Sports retains the discovered channel", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}").text.contains("Seattle Seahawks"))
                     }
                     assertNull("Prefetch never opens the candidate video", server.requests["/live/test/test-secret/2.ts"])
                     assertNull(server.requests["/channel2.mp4"])
