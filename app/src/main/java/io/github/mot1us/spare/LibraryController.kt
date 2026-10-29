@@ -20,6 +20,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var parentSeries: OnDemand? = null
     private var archive: Channel? = null
     private var directCatchup = false
+    private var fromBeginning = false
+    private var startEpisode: Pair<Int, Int>? = null
     var catchupClosed: (() -> Unit)? = null
     var archiveLoaded: ((Source, Channel, List<Programme>) -> Unit)? = null
     private var episodeList = emptyList<OnDemand>()
@@ -49,15 +51,23 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     val opened get() = panel.isVisible
     fun knownEpisodes(selected: Source) = episodeCache.filterKeys { it.startsWith("${selected.id}:") }.values.flatten()
-    fun openSearchResult(item: OnDemand) {
+    fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val selected = source() ?: return
         dismiss(); kind = if (item.kind == "movie") "movie" else "series"
+        fromBeginning = restart; startEpisode = if (restart && season != null && episode != null) season to episode else null
         directCatchup = false; archive = null; detailItem = null; parentSeries = null
         panel.selectTab(kind); panel.allowArtworkHttp(selected.allowHttp); panel.browse(); panel.resumeImages(); panel.visibility = View.VISIBLE
         episodeList = knownEpisodes(selected).filter { it.seriesId == item.seriesId }
         select(item)
     }
+    private fun startRequestedEpisode(entries: List<OnDemand>): Boolean {
+        val target = startEpisode ?: return false
+        startEpisode = null
+        val item = entries.singleOrNull { it.season == target.first && it.episode == target.second } ?: return false
+        episodeList = entries; playSelected(item); return true
+    }
     fun open(mode: String = kind) {
+        fromBeginning = false; startEpisode = null
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         panel.selectTab(mode); panel.seriesArtwork(null)
         directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
@@ -253,7 +263,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val selected = source() ?: return
         task?.cancel(true); val token = ++epoch
         positions.execute {
-            val position = runCatching { store.watchProgress(selected).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
+            val position = if (fromBeginning) 0L else runCatching { store.watchProgress(selected).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
             ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item, position) }
         }
     }
@@ -288,11 +298,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val cacheKey = "${selected.id}:${series.id}"
         val cached = episodeCache[cacheKey]
         if (cached != null) {
+            if (startRequestedEpisode(cached)) return
             episodeList = cached; showItems(cached, series.title, series.description.ifBlank { "${cached.size} episodes · Back returns to Series" }, force); panel.seriesArtwork(posterMetadata.known(series))
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
+            if (startRequestedEpisode(entries)) return@ui
             episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); if (!force) panel.focusRows()
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
@@ -344,7 +356,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
     fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
-    fun dismiss() { pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
+    fun dismiss() { fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch }
     fun destroy() { posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

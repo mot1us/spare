@@ -842,8 +842,10 @@ class SpareDeviceTest {
                 assertTrue(device.wait(Until.gone(By.pkg(keyboardPackage)), 5000))
                 assertEquals("/channel1.mp4", playingPath(scenario))
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "search.png"))
+                var selectedId = ""
+                scenario.onActivity { selectedId = (channelList(it)!!.adapter as GuideAdapter).channels.single().id }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").getChildAt(0).requestFocus() }; device.pressDPadCenter()
-                waitFor(scenario) { store.last(source) == (channelList(it)!!.adapter as GuideAdapter).channels.single().id && channelList(it)?.isShown == false }
+                waitFor(scenario) { store.last(source) == selectedId && channelList(it)?.isShown == false }
                 assertEquals("/channel7.mp4", playingPath(scenario))
             }
             store.saveSources(emptyList()); store.removeCache(source)
@@ -1559,6 +1561,25 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun liveProgrammeCanStartItsVodMovieOrIdentifiedEpisodeWithoutUsingCatchup() {
+        listOf("Fixture movie (2025)" to "/movie/test/test-secret/101.mp4", "Fixture series S01E02" to "/series/test/test-secret/202.mp4").forEach { (title, path) ->
+            FixtureServer(longVideo = true, programmeTitle = title).use { server ->
+                val source = Source(name = "VOD start fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+                store.saveSources(listOf(source)); store.active = source.id
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                    device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains(title)) }
+                    holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                    scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == path }
+                    assertEquals("VOD start must never query the channel archive", 0, server.archiveRequests.get())
+                }
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes() {
         FixtureServer(libraryCategories = true, longVideo = true).use { server ->
             val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -2068,7 +2089,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News") : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -2105,7 +2126,8 @@ class SpareDeviceTest {
         init {
             if (embeddedCaptions != 0) captionTransport // Build fixtures before starting HTTP, so generation errors fail directly.
             val now = System.currentTimeMillis() / 1800000L * 1800000L
-            shortEpg = """{"epg_listings":[{"title":"V29ybGQgTmV3cw==","description":"U3BhcmUgcHJvZ3JhbW1lIGd1aWRlIHRlc3Qu","start_timestamp":"${now / 1000}","stop_timestamp":${(now + 3600000) / 1000}}]}""".toByteArray()
+            val encodedTitle = java.util.Base64.getEncoder().encodeToString(programmeTitle.toByteArray())
+            shortEpg = """{"epg_listings":[{"title":"$encodedTitle","description":"U3BhcmUgcHJvZ3JhbW1lIGd1aWRlIHRlc3Qu","start_timestamp":"${now / 1000}","stop_timestamp":${(now + 3600000) / 1000}}]}""".toByteArray()
             val format = DateTimeFormatter.ofPattern("uuuuMMddHHmmss Z").withZone(ZoneOffset.UTC)
             xml = ("<tv>" + (1..8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
                 "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${listOf("World News", "Live Report", "Evening Update")[slot % 3]}</title><desc>Spare playback and guide test fixture.</desc></programme>"

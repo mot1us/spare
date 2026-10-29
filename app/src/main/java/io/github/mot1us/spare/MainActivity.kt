@@ -274,6 +274,9 @@ class MainActivity : Activity() {
     private var searchedDemand = emptyList<OnDemand>()
     private var searchLoading = false
     private var searchWarning = ""
+    private var vodRequest: VodStart.Request? = null
+    private var vodAutoLookup = false
+    private var vodResultsOnly = false
     private lateinit var details: PlaybackDetails
     private lateinit var retryPanel: LinearLayout
     private var sources = emptyList<Source>()
@@ -745,7 +748,7 @@ class MainActivity : Activity() {
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { closeDetails(); showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, { current?.let(::tune) }, ::showOtherGameStreams)
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, { current?.let(::tune) }, ::showOtherGameStreams, ::watchVodFromBeginning)
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         demandControls = OnDemandControls(this, ::button, { if (player.playbackState == Player.STATE_ENDED) { demandPosition = 0; demandPaused = false; playAttempt() } else { demandPaused = player.playWhenReady; player.playWhenReady = !demandPaused }; showDemandControls() },
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
@@ -759,7 +762,7 @@ class MainActivity : Activity() {
         searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation)
         root.addView(searchPanel, FrameLayout.LayoutParams(-1, -1))
         playlistSearch = PlaylistSearch(store) { items, busy, warning ->
-            if (started && searchPanel.isVisible) { searchedDemand = items; searchLoading = busy; searchWarning = warning; renderPlaylistSearch() }
+            if (started && searchPanel.isVisible) { searchedDemand = items; searchLoading = busy; searchWarning = warning; if (!finishVodLookup()) renderPlaylistSearch() }
         }
         library.archiveLoaded = { selected, channel, entries ->
             if (source == selected) {
@@ -855,6 +858,7 @@ class MainActivity : Activity() {
         handler.postDelayed(hideFavoriteFeedback, 2200)
     }
     private fun clearGuideSearch() {
+        vodRequest = null; vodAutoLookup = false; vodResultsOnly = false
         if (::searchPanel.isInitialized) searchPanel.dismiss()
         if (::playlistSearch.isInitialized) playlistSearch.pause()
         handler.removeCallbacks(filterSearch); query = ""; guideSearch.setQuery(""); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE
@@ -1368,7 +1372,8 @@ class MainActivity : Activity() {
         handler.postDelayed(hideNowPlaying, 2800)
     }
     private fun search() = searchWithQuery(query)
-    private fun searchWithQuery(initial: String) {
+    private fun searchWithQuery(initial: String) { vodRequest = null; vodAutoLookup = false; vodResultsOnly = false; openPlaylistSearch(initial, true) }
+    private fun openPlaylistSearch(initial: String, useVoice: Boolean) {
         settingsPanel?.visibility = View.GONE
         if (::library.isInitialized && library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
@@ -1378,7 +1383,26 @@ class MainActivity : Activity() {
         searchedDemand = emptyList(); searchLoading = false; searchWarning = ""
         handler.removeCallbacks(filterSearch); pendingFocusList = null
         searchPanel.show(query); root.bringChildToFront(searchPanel); updatePlaylistSearch(); guideSearch.voice.requestFocus()
-        voiceSearch()
+        if (useVoice) voiceSearch() else guideSearch.message("Finding this programme in your VOD library…")
+    }
+    private fun watchVodFromBeginning() {
+        val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
+        val request = VodStart.request(programme) ?: return
+        vodRequest = request; vodAutoLookup = true; vodResultsOnly = true
+        openPlaylistSearch(request.query, false)
+    }
+    private fun finishVodLookup(): Boolean {
+        if (!vodAutoLookup) return false
+        val request = vodRequest ?: return false
+        if (ChannelSearch.key(query) != ChannelSearch.key(request.query)) { vodRequest = null; vodAutoLookup = false; return false }
+        if (searchLoading) return false
+        vodAutoLookup = false
+        val item = if (searchWarning.isBlank()) VodStart.best(request, searchedDemand) else null
+        if (item == null) { guideSearch.message("Choose the correct VOD title or refine the search. Channel catch-up is separate."); return false }
+        clearGuideSearch()
+        if (item.kind == "movie") playOnDemand(item, 0L)
+        else { showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item, restart = true, season = request.season, episode = request.episode); showNavigation("library") }
+        return true
     }
     private fun updatePlaylistSearch() {
         if (!::searchPanel.isInitialized || !searchPanel.isVisible) return
@@ -1388,21 +1412,22 @@ class MainActivity : Activity() {
     }
     private fun renderPlaylistSearch() {
         val term = ChannelSearch.key(query)
-        val live = if (term.isBlank()) emptyList() else guide.channels.asSequence().filter { !it.media && ChannelSearch.matches(it.name, term) }.take(40).map { channel ->
+        val live = if (term.isBlank() || vodResultsOnly) emptyList() else guide.channels.asSequence().filter { !it.media && ChannelSearch.matches(it.name, term) }.take(40).map { channel ->
             PlaylistSearchRow("live:${channel.id}", channel.name, "Live TV · ${channel.group}", "live") {
                 clearGuideSearch(); if (current?.id != channel.id || !hasPlayedChannel || player.playerError != null) tune(channel); showGuide(false)
             }
         }.toList()
         val media = searchedDemand + if (source?.kind == "m3u" && term.isNotBlank()) guide.channels.filter { it.media && ChannelSearch.matches(it.name, term) }.take(40).map { OnDemand("m3u:${it.id}", it.name, it.group, it.url) } else emptyList()
         val titles = media.map { item -> PlaylistSearchRow(item.id, item.title, when (item.kind) { "series" -> "Series"; "episode" -> "Episode · Season ${item.season} · Episode ${item.episode}"; else -> "Movie" }, item.kind) {
-            clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
+            val restart = vodResultsOnly; val request = vodRequest
+            clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item, restart, request?.season, request?.episode); showNavigation("library")
         } }
         searchPanel.submit(query, live + titles, searchLoading, searchWarning)
     }
     private fun finishSearch(close: Boolean) {
         voiceInput.stop(); voiceSearchPending = false
         handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
-        if (close) { searchPanel.dismiss(); playlistSearch.pause(); showGuide(true); focusChannel() }
+        if (close) { vodRequest = null; vodAutoLookup = false; vodResultsOnly = false; searchPanel.dismiss(); playlistSearch.pause(); showGuide(true); focusChannel() }
         else { updatePlaylistSearch(); searchPanel.focusResults() }
     }
     private fun voiceSearch() {
@@ -1955,7 +1980,7 @@ class MainActivity : Activity() {
         val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
         if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence + health, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title)
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence + health, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.kind == "xtream" && programme?.let(VodStart::request) != null)
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }

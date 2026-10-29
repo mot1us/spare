@@ -25,6 +25,7 @@ class PlaybackDetails(
     onAddView: (Channel) -> Unit,
     onReconnect: () -> Unit,
     onGameStreams: () -> Unit,
+    onVodStart: () -> Unit,
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color) }
@@ -38,6 +39,7 @@ class PlaybackDetails(
     private val previous = makeButton("Previous", onPrevious).apply { tag = "previous-channel" }
     private val favorite = makeButton("Favorite", onFavorite)
     private val catchup = makeButton("Catch-up", onCatchup).apply { tag = "channel-catchup" }
+    private val vodStart = makeButton("Watch VOD from beginning", onVodStart).apply { tag = "channel-vod-start"; visibility = View.GONE }
     init {
         orientation = VERTICAL; tag = "playback-details"; visibility = View.GONE
         setPadding(dp(22), dp(16), dp(22), dp(16))
@@ -47,13 +49,15 @@ class PlaybackDetails(
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(recent, LayoutParams(-1, -2))
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        addView(vodStart, LayoutParams(-2, dp(36)).apply { topMargin = dp(8) })
         addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }); addView(makeButton("Reconnect", onReconnect).apply { tag = "channel-reconnect" }) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
     }
     fun resumeImages() = recent.resume()
     fun pauseImages() = recent.pause()
     fun closeImages() = recent.close()
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
-    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null) {
+    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false) {
+        vodStart.visibility = if (canVodStart) View.VISIBLE else View.GONE
         gameStreamsButton.visibility = if (gameTitle == null) View.GONE else View.VISIBLE
         gameStreamsButton.contentDescription = "Other streams for ${gameTitle.orEmpty()}"
         recent.bind(recentChannels, allowHttp)
