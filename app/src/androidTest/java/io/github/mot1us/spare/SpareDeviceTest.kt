@@ -1441,7 +1441,7 @@ class SpareDeviceTest {
                     waitFor(scenario) { !MainActivity::class.java.getDeclaredField("sportsComputing").apply { isAccessible = true }.getBoolean(it) }
                     scenario.onActivity { activity ->
                         @Suppress("UNCHECKED_CAST") val cache = MainActivity::class.java.getDeclaredField("replayCache").apply { isAccessible = true }.get(activity) as MutableMap<String, Pair<Long, List<SportsReplay>>>
-                        cache.entries.toList().forEach { entry -> cache[entry.key] = entry.value.first - 90000L to entry.value.second }
+                        cache.entries.toList().forEach { entry -> cache[entry.key] = entry.value.first - SportsReplayDiscovery.HISTORY_MS - 1000L to entry.value.second }
                         MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(activity)
                     }
                     waitFor(scenario) { !MainActivity::class.java.getDeclaredField("sportsComputing").apply { isAccessible = true }.getBoolean(it) && it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
@@ -1479,6 +1479,13 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.contains("24") }
                     scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<View>("sports-reminder").isShown) }
+                    waitFor(scenario) { store.read("sports-replays-${source.id}.enc") != null }
+                    scenario.recreate()
+                    waitFor(scenario) { activity ->
+                        @Suppress("UNCHECKED_CAST") val restored = MainActivity::class.java.getDeclaredField("replayCache").apply { isAccessible = true }.get(activity) as Map<String, Pair<Long, List<SportsReplay>>>
+                        restored.entries.any { it.key.endsWith(":NFL:sports-archive") && it.value.second.singleOrNull()?.channel?.id == channel.id }
+                    }
+                    assertEquals("Restart restores a confirmed replay without searching the provider again", 1, server.archiveRequests.get())
                 }
             } finally { store.hideCompletedScores = false; store.saveSources(emptyList()); store.removeCache(source) }
         }

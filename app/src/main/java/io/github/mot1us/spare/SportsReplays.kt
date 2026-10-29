@@ -47,6 +47,10 @@ object SportsReplays {
             .thenByDescending { it.expires })
     fun best(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): SportsReplay? =
         rank(choices, quality, favorites).firstOrNull()
+    fun retained(choices: List<SportsReplay>, channels: Map<String, Channel>, now: Long): List<SportsReplay> = choices.mapNotNull { replay ->
+        channels[replay.channel.id]?.takeIf { it.url == replay.channel.url && Catchup.available(it, replay.programme, now) }
+            ?.let { SportsReplay(it, replay.programme) }
+    }
     /** Only a few likely broadcaster/team archives are queried when saved EPG is missing. */
     fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, limit: Int = 6): List<Channel> {
         data class Candidate(val channel: Channel, val score: Int, val family: String)

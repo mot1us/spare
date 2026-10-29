@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.3 — 2026-10-28
+
+- Preserve historical programmes through each channel's catch-up window when live guide data refreshes, keeping current and upcoming listings available within bounded storage.
+- Keep confirmed Sports replay matches until their provider archive expires instead of dropping them after ten minutes. Save bounded replay references in encrypted playlist storage and restore them across app restarts, validating current channel identity and retention.
+
 ## 0.19.2 — 2026-10-28
 
 - Keep discovered Sports card channels visible when returning to Sports and while refreshing expired match data. Show Finding stream only for cards without a valid saved match; preserve labels when cancelling a quiet refresh.

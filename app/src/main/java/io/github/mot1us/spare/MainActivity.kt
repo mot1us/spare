@@ -151,7 +151,7 @@ class MainActivity : Activity() {
         if (!active) { replayDiscovery?.pause(); return }
         val discovery = replayDiscovery ?: SportsReplayDiscovery({ sourceId, epoch, game, choices, _ ->
             if (!closed && source?.id == sourceId && generation == epoch) {
-                if (choices.isNotEmpty()) { replayCache["$sourceId:$epoch:${game.key}"] = System.currentTimeMillis() to choices; while (replayCache.size > 256) replayCache.remove(replayCache.keys.first()) }
+                rememberSportsReplays(game, choices)
                 replayDiscovery?.let { sportsPanel.updateReplayDiscovery(it.checkingKey, it.checkedKeys) }
                 scheduleSports()
             }
@@ -953,7 +953,9 @@ class MainActivity : Activity() {
             if (saved != null && saved.channels.isNotEmpty()) {
                 ui(epoch) { cachedStartup = true; loadingPanel.visibility = View.GONE; if (guide.channels.isEmpty()) accept(saved, resume = true); status.text = "Loading saved programme guide…" }
                 val programmes = runCatching { store.cachedProgrammes(selected) }.getOrDefault(emptyMap())
+                val savedReplays = runCatching { SportsReplayHistory.decode(store.read("sports-replays-${selected.id}.enc"), saved, System.currentTimeMillis()) }.getOrDefault(emptyMap())
                 ui(epoch) {
+                    savedReplays.forEach { (game, choices) -> replayCache["${selected.id}:$epoch:$game"] = System.currentTimeMillis() to choices }
                     mergeRefresh(PlaylistRefresh.Result(guide.copy(programmes = programmes)))
                     status.text = store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "Using saved guide · $it" }.orEmpty()
                     autoRefresh(selected, true)
@@ -1190,7 +1192,9 @@ class MainActivity : Activity() {
                         result.onSuccess { entries ->
                             sportsFailures = 0
                             if (entries.isNotEmpty()) {
-                                val programmes = LinkedHashMap(guide.programmes); programmes[guide.key(channel)] = (programmes[guide.key(channel)].orEmpty() + entries).associateBy { it.start }.values.filter { it.end > now - 3600000L }.sortedBy { it.start }.take(72)
+                                val key = guide.key(channel)
+                                val days = guide.channels.asSequence().filter { guide.key(it) == key }.maxOfOrNull { it.catchupDays } ?: 0
+                                val programmes = LinkedHashMap(guide.programmes); programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), entries, days, now)
                                 while (programmes.size > 5000) programmes.remove(programmes.keys.first())
                                 guide = Guide(guide.channels, programmes, guide.categoryOrder); epgErrors.remove(channel.id)
                                 handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
@@ -1454,9 +1458,9 @@ class MainActivity : Activity() {
             }
             val games = SportsPanel.ordered(rawGames.filter { it.leagueId in store.sportsLeagues && (selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed }) }, followed, now)
             val archiveGuide = snapshot.copy(channels = snapshot.channels.filter { Catchup.supported(it) })
+            val archiveChannels = archiveGuide.channels.associateBy { it.id }
             val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(256).mapNotNull { game ->
-                val cached = replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.takeIf { now - it.first < SportsReplayDiscovery.HISTORY_MS }?.second.orEmpty()
-                    .filter { Catchup.available(it.channel, it.programme, now) && archiveGuide.channels.any { channel -> channel.id == it.channel.id && channel.url == it.channel.url } }
+                val cached = SportsReplays.retained(replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.second.orEmpty(), archiveChannels, now)
                 SportsReplays.best(cached.ifEmpty { if (game.key in replayChecked) emptyList() else SportsReplays.find(game, archiveGuide, now) }, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
             }.toMap()
             handler.post {
@@ -1590,6 +1594,20 @@ class MainActivity : Activity() {
         sportsChannels = emptyList()
         if (game.live(System.currentTimeMillis()) && sportsVisible && guideVisible && !sportsPanel.watching) { sportsWarmPriority = game; queueSportsPrefetch() }
     }
+    private fun rememberSportsReplays(game: SportsGame, choices: List<SportsReplay>) {
+        val selected = source ?: return
+        if (choices.isEmpty()) return
+        val key = "${selected.id}:$generation:${game.key}"
+        if (replayCache[key]?.second == choices) return
+        val now = System.currentTimeMillis()
+        replayCache[key] = now to choices
+        while (replayCache.size > 256) replayCache.remove(replayCache.keys.first())
+        val prefix = "${selected.id}:$generation:"
+        val saved = replayCache.filterKeys { it.startsWith(prefix) }.mapKeys { it.key.removePrefix(prefix) }.mapValues { it.value.second }
+        cacheWrites.execute { runCatching {
+            if (store.sources().any { it == selected }) store.write("sports-replays-${selected.id}.enc", SportsReplayHistory.encode(saved, now))
+        } }
+    }
     private fun findSportsReplay(game: SportsGame) {
         stopSportsPrefetch(); clearSportsPlayback()
         val selected = source ?: run { toast("Add a playlist to find replays"); return }
@@ -1598,9 +1616,8 @@ class MainActivity : Activity() {
         showGameInfo(game); sportsPanel.matching(game)
         val key = "${selected.id}:$sourceEpoch:${game.key}"
         val now = System.currentTimeMillis()
-        replayCache[key]?.takeIf { now - it.first < SportsReplayDiscovery.HISTORY_MS && it.second.all { replay -> Catchup.available(replay.channel, replay.programme, now) && snapshot.channels.any { channel -> channel.id == replay.channel.id && channel.url == replay.channel.url } } }?.let {
-            sportsPanel.showReplays(game, it.second); return
-        }
+        val saved = SportsReplays.retained(replayCache[key]?.second.orEmpty(), snapshot.channels.associateBy { it.id }, now)
+        if (saved.isNotEmpty()) { sportsPanel.showReplays(game, saved); return }
         val savedArchives = replayDiscovery?.cachedListings(selected, sourceEpoch).orEmpty()
         sportsMatchTask = sportsMatchWorker.submit {
             val listings = savedArchives.toMutableMap()
@@ -1623,7 +1640,7 @@ class MainActivity : Activity() {
             handler.post {
                 if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || selectedGame?.key != game.key) return@post
                 replayDiscovery?.remember(selected, sourceEpoch, snapshot, listings)
-                if (result.isNotEmpty()) { replayCache[key] = System.currentTimeMillis() to result; while (replayCache.size > 256) replayCache.remove(replayCache.keys.first()) }
+                rememberSportsReplays(game, result)
                 sportsPanel.showReplays(game, result)
                 scheduleSports()
             }
@@ -1820,7 +1837,14 @@ class MainActivity : Activity() {
             if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !sportsVisible || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return
             if (guide.channels !== snapshot.channels || guide.programmes !== snapshot.programmes) { selectGame(game, autoWatch); return }
             sportsStreamCache.put(cacheContext, prepared, System.currentTimeMillis())
-            if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
+            if (warmed.isNotEmpty()) {
+                val programmes = guide.programmes.toMutableMap()
+                warmed.forEach { (key, entries) ->
+                    val days = guide.channels.asSequence().filter { guide.key(it) == key }.maxOfOrNull { it.catchupDays } ?: 0
+                    programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), entries, days, System.currentTimeMillis())
+                }
+                guide = guide.copy(programmes = programmes); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+            }
             val now = System.currentTimeMillis()
             val latestQuality = videoInfo.toMap()
             val alternatives = SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
