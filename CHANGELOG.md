@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.21.0 — 2026-10-29
+
+- Play a fresh confirmed Sports card match immediately instead of discarding it for a second search. Keep a new search for expired, changed or unconfirmed coverage, and preserve playback fallback choices.
+- Recheck in-flight coverage when relevant guide data changes or a new matching programme arrives; unrelated guide updates no longer keep an unresolved search restarting.
+- Keep the active live or on-demand stream when leaving the Library browser. Back or Stop during a movie/episode stops it and returns to Library without automatically tuning an older live channel; series return to their episode list.
+- Add encrypted Library favorites for movies and series, poster/header favorite controls, watched episode history, new/unwatched episode badges and Mark all watched. Check saved series in bounded metadata-only background requests when Favorites opens.
+
 ## 0.20.3 — 2026-10-29
 
 - Restore and build one compact encrypted VOD title index in the background, shared by Library, search and live programme matching. Browse/search cached titles without decrypting individual catalog pages, and show Watch VOD from beginning only for known catalog matches. Suppress files that returned 404 for one hour.

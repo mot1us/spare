@@ -82,9 +82,9 @@ object VodCatalog {
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
         }.distinctBy { it.id }
     }
-    fun episodes(source: Source, series: OnDemand): List<OnDemand> {
+    fun episodes(source: Source, series: OnDemand, timeoutMs: Int = 6000): List<OnDemand> {
         val id = series.id.removePrefix("series:"); require(numeric.matches(id))
-        val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024).toString(Charsets.UTF_8))
+        val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024, timeoutMs = timeoutMs).toString(Charsets.UTF_8))
         return parseEpisodes(root, source, series)
     }
     fun parseEpisodes(root: JSONObject, source: Source, series: OnDemand): List<OnDemand> {

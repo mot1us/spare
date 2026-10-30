@@ -27,6 +27,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var episodeList = emptyList<OnDemand>()
     private var playingEpisodes = emptyList<OnDemand>()
     private var destroyed = false
+    @Volatile private var favoriteState = LibraryFavorites()
+    private var favoriteSource = ""
+    private val favoriteWorker = Executors.newSingleThreadExecutor()
+    private var favoriteTask: java.util.concurrent.Future<*>? = null
+    private var favoriteEpoch = 0
+    private var checkingFavorites = false
     private val disk = Executors.newSingleThreadExecutor()
     private val positions = Executors.newSingleThreadExecutor()
     private val episodeCache = linkedMapOf<String, List<OnDemand>>()
@@ -62,11 +68,81 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val details = linkedMapOf<String, OnDemand>()
     private var detailItem: OnDemand? = null
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
+    init {
+        panel.favoriteAction = { (detailItem ?: parentSeries)?.let(::toggleLibraryFavorite) }
+        panel.markWatchedAction = {
+            val selected = source()
+            if (selected != null && parentSeries != null) { val ids = episodeList.filter { it.seriesId == parentSeries?.id }.map { it.id }
+                val allWatched = ids.isNotEmpty() && ids.all { it in favoriteState.watched }
+                editFavorites(selected) { if (allWatched) it.unwatched(ids) else it.completed(ids) }
+            }
+        }
+    }
     val opened get() = panel.isVisible
+    private fun presentFavorites() {
+        panel.favorites(favoriteState.entries.map { it.item.id }.toSet(), favoriteState.entries.filter { it.item.kind == "series" }.associate { it.item.id to it.label(favoriteState.watched) })
+        val item = detailItem ?: parentSeries
+        panel.favoriteTitle(item, item?.let { favoriteState.contains(it.id) } == true, episodeList.isNotEmpty(), episodeList.isNotEmpty() && episodeList.all { it.id in favoriteState.watched })
+        if (opened && kind == "favorites" && item == null) displayFavorites()
+    }
+    private fun prepareFavorites(selected: Source) {
+        if (favoriteSource != selected.id) { favoriteSource = selected.id; favoriteState = LibraryFavorites(); presentFavorites() }
+        disk.execute {
+            val saved = runCatching { store.libraryFavorites(selected) }.getOrDefault(LibraryFavorites())
+            handler.post { if (!destroyed && source()?.id == selected.id && favoriteSource == selected.id) {
+                favoriteState = saved; presentFavorites(); if (opened && kind == "favorites") checkFavoriteEpisodes(selected)
+            } }
+        }
+    }
+    private fun editFavorites(selected: Source, change: (LibraryFavorites) -> LibraryFavorites) {
+        runCatching { change(favoriteState) }.onSuccess { favoriteState = it; presentFavorites() }.onFailure {
+            android.widget.Toast.makeText(activity, it.message ?: "Could not change favorites", android.widget.Toast.LENGTH_SHORT).show(); return
+        }
+        disk.execute {
+            val result = runCatching { store.editLibraryFavorites(selected, change) }
+            handler.post { if (!destroyed && source()?.id == selected.id) {
+                result.onSuccess { favoriteState = it; presentFavorites() }.onFailure { android.widget.Toast.makeText(activity, "Could not save Library favorites", android.widget.Toast.LENGTH_SHORT).show() }
+            } }
+        }
+    }
+    private fun toggleLibraryFavorite(item: OnDemand) {
+        val selected = source() ?: return
+        val enabled = !favoriteState.contains(item.id)
+        val episodes = episodeList.takeIf { parentSeries?.id == item.id }
+        editFavorites(selected) { state -> state.save(item, enabled).let { if (enabled && episodes != null) it.update(item, episodes, System.currentTimeMillis()) else it } }
+    }
+    private fun displayFavorites(reset: Boolean = false) {
+        val entries = favoriteState.entries
+        panel.page("Favorites", if (checkingFavorites) "Checking saved series for new episodes…" else "${entries.size} saved titles · Hold OK on a movie or series to favorite it", checkingFavorites)
+        panel.submit(entries.map { entry -> browserRow(entry.item).copy(detail = entry.label(favoriteState.watched)) }, entries.associate { it.item.id to if (it.item.kind == "series") "Series" else "Movies" }, reset = reset)
+    }
+    private fun checkFavoriteEpisodes(selected: Source, force: Boolean = false) {
+        if (checkingFavorites || selected.kind != "xtream") return
+        val now = System.currentTimeMillis()
+        val due = favoriteState.entries.filter { it.item.kind == "series" && (force || now - it.checked !in 0 until 15 * 60000L) }.sortedBy { it.checked }.take(24)
+        if (due.isEmpty()) return
+        checkingFavorites = true; if (kind == "favorites" && parentSeries == null && detailItem == null) displayFavorites()
+        val token = ++favoriteEpoch
+        favoriteTask = favoriteWorker.submit {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            val deadline = System.nanoTime() + 20_000_000_000L
+            for (entry in due) {
+                if (Thread.currentThread().isInterrupted || System.nanoTime() >= deadline) break
+                val result = runCatching {
+                    val episodes = VodCatalog.episodes(selected, entry.item, 3000)
+                    store.editLibraryFavorites(selected) { it.update(entry.item, episodes, System.currentTimeMillis()) }
+                }
+                handler.post { if (!destroyed && token == favoriteEpoch && source()?.id == selected.id) result.onSuccess { favoriteState = it; presentFavorites() } }
+            }
+            handler.post { if (!destroyed && token == favoriteEpoch) { checkingFavorites = false; presentFavorites() } }
+        }
+    }
+    fun completed(item: OnDemand) { if (item.kind == "episode" && item.id !in favoriteState.watched) { favoriteState = favoriteState.completed(listOf(item.id)); presentFavorites() } }
     fun knownEpisodes(selected: Source) = episodeCache.filterKeys { it.startsWith("${selected.id}:") }.values.flatten()
     fun knownTitles(selected: Source) = details.filterKeys { it.startsWith("${selected.id}:") }.values.toList() + knownEpisodes(selected)
     fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val selected = source() ?: return
+        prepareFavorites(selected)
         dismiss(); kind = if (item.kind == "movie") "movie" else "series"
         fromBeginning = restart; startEpisode = if (restart && season != null && episode != null) season to episode else null
         directCatchup = false; archive = null; detailItem = null; parentSeries = null
@@ -86,8 +162,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.selectTab(mode); panel.seriesArtwork(null)
         directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = source()
+        panel.favoriteTitle(null, false)
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
         if (selected == null) { panel.submit(emptyList()); panel.page("Library", "Add a playlist in Settings first.", false); panel.focusRows(); return }
+        prepareFavorites(selected)
+        if (mode == "favorites") { displayFavorites(reset = true); checkFavoriteEpisodes(selected); panel.focusRows(); return }
         if (mode == "catchup") { catchupChannels(); return }
         if (mode == "continue") { continueWatching(selected); return }
         if (selected.kind != "xtream") {
@@ -251,7 +330,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
         if (item.kind == "episode") "Episode ${item.episode} · ${item.runtime}" else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
-        poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }) { select(posterMetadata.known(item)) }
+        poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }, longPress = if (item.kind in setOf("movie", "series")) ({ toggleLibraryFavorite(item) }) else null) { select(posterMetadata.known(item)) }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query"
@@ -291,6 +370,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         playSelected(item)
     }
     private fun playSelected(item: OnDemand) {
+        favoriteTask?.cancel(true); ++favoriteEpoch; checkingFavorites = false
         val selected = source() ?: return
         task?.cancel(true); val token = ++epoch
         positions.execute {
@@ -300,7 +380,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun openDetails(selected: Source, item: OnDemand) {
         val key = "${selected.id}:${item.id}"; detailItem = details[key] ?: item
-        fun render(value: OnDemand, busy: Boolean) { detailItem = value; panel.detail(value, button, { playSelected(detailItem ?: value) }, { closeDetails() }, busy) }
+        fun render(value: OnDemand, busy: Boolean) { detailItem = value; panel.detail(value, button, { playSelected(detailItem ?: value) }, { closeDetails() }, busy); presentFavorites() }
         render(detailItem!!, details[key] == null)
         if (details[key] != null) return
         request { token ->
@@ -319,24 +399,28 @@ class LibraryController(private val activity: Activity, private val store: Secur
         task?.cancel(true); ++epoch; detailItem = null; panel.browse()
         val selected = source() ?: return
         when {
+            kind == "favorites" -> { displayFavorites(); panel.favoriteTitle(null, false) }
             kind == "continue" -> continueWatching(selected)
             selected.kind == "xtream" -> catalog(selected, kind, false)
             else -> open(kind)
         }
     }
     private fun episodes(selected: Source, series: OnDemand, force: Boolean = false) {
+        if (parentSeries?.id != series.id) episodeList = emptyList()
         detailItem = null; parentSeries = series
+        presentFavorites()
         val cacheKey = "${selected.id}:${series.id}"
         val cached = episodeCache[cacheKey]
         if (cached != null) {
             if (startRequestedEpisode(cached)) return
-            episodeList = cached; showItems(cached, series.title, series.description.ifBlank { "${cached.size} episodes · Back returns to Series" }, force); panel.seriesArtwork(posterMetadata.known(series))
+            episodeList = cached; showItems(cached, series.title, series.description.ifBlank { "${cached.size} episodes · Back returns to Series" }, force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
-            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); if (!force) panel.focusRows()
+            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
+            if (favoriteState.contains(series.id)) editFavorites(selected) { it.update(series, entries, System.currentTimeMillis()) }
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
                 if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { panel.seriesArtwork(enriched); if (enriched.description.isNotBlank()) panel.page(series.title, enriched.description, false) } }
@@ -383,15 +467,23 @@ class LibraryController(private val activity: Activity, private val store: Secur
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
     fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }
-    fun reopen() { open(kind) }
+    fun reopen(item: OnDemand? = null) { val selected = source()
+        if (item?.kind == "movie") { open("movie"); return }
+        val series = parentSeries?.takeIf { item == null || item.kind == "episode" && it.id == item.seriesId }
+            ?: favoriteState.entries.firstOrNull { it.item.id == item?.seriesId }?.item
+        if (selected != null && series != null) {
+            panel.browse(); panel.selectTab("series"); panel.resumeImages(); panel.visibility = View.VISIBLE; kind = "series"; prepareFavorites(selected); episodes(selected, series)
+        } else open(if (item?.kind == "episode") "series" else kind)
+    }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
-    fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
+    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
+    fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open(if (kind == "favorites") "favorites" else "series"); else -> { dismiss(); closed() } } }
     fun dismiss() {
+        favoriteTask?.cancel(true); ++favoriteEpoch; checkingFavorites = false
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
         catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
     }
-    fun destroy() { posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

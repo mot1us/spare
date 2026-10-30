@@ -22,7 +22,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -31,6 +31,12 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(Color.WHITE); typeface = AppFont.face() }
     var navigation: (() -> Unit)? = null
+    var favoriteAction: (() -> Unit)? = null
+    var markWatchedAction: (() -> Unit)? = null
+    private var favoriteIds = emptySet<String>()
+    private var favoriteLabels = emptyMap<String, String>()
+    private val saveTitle = button("☆ Favorite") { favoriteAction?.invoke() }.apply { tag = "library-favorite"; visibility = GONE }
+    private val markWatched = button("Mark all watched") { markWatchedAction?.invoke() }.apply { tag = "library-mark-watched"; visibility = GONE }
     private var allCategoryTitle = "All"
     private val banner = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = GONE; tag = "library-series-art" }
     private var bannerUrl = ""
@@ -74,7 +80,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var rememberedKey: String? = null
     private val toolbarControls = mutableListOf<Button>()
     private var selectedTab = "movie"
-    private val tabs = listOf("Movies" to "movie", "Series" to "series", "Continue" to "continue", "Catch-up" to "catchup")
+    private val tabs = listOf("Movies" to "movie", "Series" to "series", "Favorites" to "favorites", "Continue" to "continue", "Catch-up" to "catchup")
     init {
         orientation = VERTICAL; tag = "library-panel"; visibility = GONE; setPadding(dp(24), dp(18), dp(24), dp(18)); setBackgroundColor(0xEE0B1018.toInt())
         val toolbar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -84,14 +90,23 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             toolbar.addView(control)
             control.setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { val next = index + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1; if (next < 0) navigation?.invoke() else toolbarControls.getOrNull(next)?.requestFocus() }; true }
-                KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else search.requestFocus() }; true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (saveTitle.isVisible) saveTitle.requestFocus() else if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else search.requestFocus() }; true }
                 KeyEvent.KEYCODE_DPAD_UP -> true
                 else -> false
             } }
         }
         addView(toolbar, LayoutParams(-1, dp(42)))
+        listOf(saveTitle, markWatched).forEach { control -> control.setOnKeyListener { _, key, event -> when (key) {
+            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) focusToolbar(); true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else search.requestFocus() }; true }
+            KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (control === markWatched) saveTitle.requestFocus() else focusToolbar() }; true }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && control === saveTitle && markWatched.isVisible) markWatched.requestFocus(); true }
+            else -> false
+        } } }
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         header.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(heading, LayoutParams(-1, dp(36))); addView(message, LayoutParams(-1, dp(32))) }, LayoutParams(0, -2, 1f))
+        header.addView(saveTitle, LayoutParams(-2, dp(36)).apply { marginStart = dp(8) })
+        header.addView(markWatched, LayoutParams(-2, dp(36)).apply { marginStart = dp(8) })
         header.addView(banner, LayoutParams(dp(48), dp(68)).apply { marginStart = dp(12) }); addView(header, LayoutParams(-1, dp(68))); addView(loading, LayoutParams(-1, dp(3)))
         addView(search, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(10) })
         body.orientation = HORIZONTAL
@@ -142,11 +157,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.orientation = if (grid) VERTICAL else HORIZONTAL
                 holder.image.visibility = if (grid || item.poster.isNotBlank()) VISIBLE else GONE
                 holder.image.layoutParams = if (grid) LayoutParams(-1, 0, 1f) else LayoutParams(dp(70), -1).apply { marginEnd = dp(8) }
-                holder.text.text = item.title + if (item.detail.isBlank()) "" else "\n${item.detail}"
+                val subtitle = favoriteLabels[item.key] ?: item.detail
+                holder.text.text = (if (item.key in favoriteIds) "★ " else "") + item.title + if (subtitle.isBlank()) "" else "\n$subtitle"
                 holder.text.layoutParams = if (grid) LayoutParams(-1, dp(45)) else LayoutParams(0, -1, 1f)
                 holder.text.setTextColor(if (holder.box.hasFocus()) GuideTheme.focusText else Color.WHITE)
                 holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}"
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
+                holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) GuideTheme.focusText else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
                 val posterIdentity = "${item.key}\u0000${item.title}\u0000${item.poster}"
                 if (holder.posterIdentity != posterIdentity) { holder.posterIdentity = posterIdentity; ++holder.generation }
@@ -257,6 +274,16 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
     fun selectTab(key: String) { selectedTab = key; toolbarControls.forEach { it.isSelected = it.tag == "library-tab:$key" } }
+    fun favoriteTitle(item: OnDemand?, saved: Boolean, canMarkWatched: Boolean = false, allWatched: Boolean = false) {
+        saveTitle.isVisible = item != null; saveTitle.text = if (saved) "★ Favorited" else "☆ Favorite"
+        saveTitle.contentDescription = if (saved) "Remove ${item?.title} from favorites" else "Favorite ${item?.title}"
+        markWatched.isVisible = item?.kind == "series" && saved && canMarkWatched
+        markWatched.text = if (allWatched) "Mark unwatched" else "Mark all watched"
+    }
+    fun favorites(ids: Set<String>, labels: Map<String, String>) {
+        if (favoriteIds == ids && favoriteLabels == labels) return
+        favoriteIds = ids; favoriteLabels = labels; rows.adapter?.notifyItemRangeChanged(0, shownRows.size)
+    }
     fun seriesArtwork(item: OnDemand?) {
         bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
         val url = bannerUrl

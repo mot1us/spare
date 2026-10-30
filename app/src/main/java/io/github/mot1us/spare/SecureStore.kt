@@ -137,6 +137,14 @@ class SecureStore(private val context: Context) {
         val entries = runCatching { watchProgress(source) }.getOrDefault(emptyList()).filter { it.item.id != item.id }.toMutableList()
         if (!ended && position >= 10000 && (duration <= 0 || position < duration - 30000)) entries.add(WatchProgress(item, position, duration.coerceAtLeast(0), System.currentTimeMillis()))
         write("watch-${source.id}.enc", JSONArray(entries.takeLast(100).map { it.json() }).toString().toByteArray())
+        if (item.kind == "episode" && (ended || duration > 0 && position >= maxOf(10000L, duration - 30000L)))
+            editLibraryFavorites(source) { it.completed(listOf(item.id)) }
+    }
+    @Synchronized fun libraryFavorites(source: Source): LibraryFavorites = read("library-favorites-${source.id}.enc")?.let { LibraryFavorites.from(JSONObject(it.toString(Charsets.UTF_8))) } ?: LibraryFavorites()
+    @Synchronized fun editLibraryFavorites(source: Source, change: (LibraryFavorites) -> LibraryFavorites): LibraryFavorites {
+        val before = libraryFavorites(source); val next = change(before)
+        if (next != before) write("library-favorites-${source.id}.enc", next.json().toString().toByteArray())
+        return next
     }
     fun providerQualityReady(source: Source) = preferences.getBoolean("provider-quality-${source.id}", false)
     fun markProviderQuality(source: Source) { preferences.edit { putBoolean("provider-quality-${source.id}", true) } }
@@ -146,7 +154,7 @@ class SecureStore(private val context: Context) {
         pruneCatalog("catalog-${source.id}-", emptySet())
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
-        listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { delete(it) }
+        listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc", "library-favorites-${source.id}.enc").forEach { delete(it) }
         preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())

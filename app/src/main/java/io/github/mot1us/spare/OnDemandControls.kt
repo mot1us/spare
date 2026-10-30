@@ -11,7 +11,7 @@ import android.widget.TextView
 
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button, toggle: () -> Unit, seek: (Long) -> Unit,
-    restart: () -> Unit, subtitles: () -> Unit, audio: () -> Unit, next: () -> Unit, library: () -> Unit, live: () -> Unit) : LinearLayout(context) {
+    restart: () -> Unit, subtitles: () -> Unit, audio: () -> Unit, next: () -> Unit, library: () -> Unit, live: () -> Unit, stop: () -> Unit) : LinearLayout(context) {
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private val title = TextView(context).apply { textSize = 19f; setTextColor(Color.WHITE); maxLines = 2; typeface = AppFont.face(true) }
     private val position = TextView(context).apply { textSize = 12f; setTextColor(Color.LTGRAY); typeface = AppFont.face() }
@@ -24,7 +24,7 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
         orientation = VERTICAL; visibility = GONE; tag = "on-demand-controls"; setPadding(dp(22), dp(16), dp(22), dp(16)); background = GuideTheme.glass(resources.displayMetrics.density)
         addView(title); addView(position, LayoutParams(-1, -2).apply { topMargin = dp(8) }); addView(timeline, LayoutParams(-1, dp(32)))
         val actions = LinearLayout(context)
-        listOf(pause, button("Start over", restart).apply { tag = "on-demand-restart" }, button("Subtitles", subtitles), button("Audio", audio), nextButton, button("Library", library).apply { tag = "on-demand-library" }, button("Live TV", live)).forEach(actions::addView)
+        listOf(pause, button("Start over", restart).apply { tag = "on-demand-restart" }, button("Subtitles", subtitles), button("Audio", audio), nextButton, button("Library", library).apply { tag = "on-demand-library" }, button("Stop", stop).apply { tag = "on-demand-stop" }, button("Live TV", live)).forEach(actions::addView)
         addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(actions) }, LayoutParams(-1, dp(36)))
         timeline.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onStartTrackingTouch(bar: SeekBar) { dragging = true }

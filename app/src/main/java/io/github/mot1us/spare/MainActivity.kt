@@ -770,9 +770,9 @@ class MainActivity : Activity() {
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         demandControls = OnDemandControls(this, ::button, { if (player.playbackState == Player.STATE_ENDED) { demandPosition = 0; demandPaused = false; playAttempt() } else { demandPaused = player.playWhenReady; player.playWhenReady = !demandPaused }; showDemandControls() },
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
-            { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive)
+            { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive, ::stopDemandToLibrary)
         root.addView(demandControls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
-        library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::returnToLive)
+        library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::closeLibrary)
         library.panel.navigation = { ++focusEpoch; libraryButton.requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
         library.panel.globalSearch = ::searchWithQuery
@@ -821,7 +821,27 @@ class MainActivity : Activity() {
         showNavigation("library")
     }
     private fun reopenLibrary() {
-        saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(); root.bringChildToFront(library.panel); showNavigation("library")
+        saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(onDemand); root.bringChildToFront(library.panel); showNavigation("library")
+    }
+    private fun closeLibrary() {
+        library.dismiss(); retryPanel.visibility = View.GONE
+        // Browsing must never replace or reopen the stream that is already playing.
+        if (player.currentMediaItem != null && player.playbackState != Player.STATE_IDLE) {
+            if (onDemand != null) player.playWhenReady = !demandPaused
+            showGuide(false); if (onDemand != null) showDemandControls()
+        } else showGuide(true)
+    }
+    private fun stopDemandToLibrary() {
+        if (onDemand?.kind == "catchup") { returnToLiveChannel(); return }
+        val item = onDemand ?: return
+        saveDemandProgress(); cancelPlaybackCallbacks(); clearSportsPlayback()
+        onDemand = null; current = null; hasPlayedChannel = false; firstFrame = false; demandSubtitleMode = null
+        ++playbackToken; expectedMediaId = ""; playbackUrl = ""
+        handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls)
+        player.stop(); player.clearMediaItems(); frameRates.clear()
+        playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; demandControls.visibility = View.GONE
+        sportsVisible = false; applyFilter(); showGuide(false); nowPlaying.hide(immediate = true)
+        library.reopen(item); root.bringChildToFront(library.panel); showNavigation("library")
     }
     private fun playOnDemand(item: OnDemand, position: Long) {
         voiceInput.stop(); if (multiview.active) multiview.close()
@@ -843,6 +863,7 @@ class MainActivity : Activity() {
         if (!::player.isInitialized || player.currentMediaItem?.mediaId?.startsWith("${item.id}:") != true) return
         if (player.currentMediaItem?.mediaId == expectedMediaId && player.playbackState != Player.STATE_IDLE) demandPosition = player.currentPosition.coerceAtLeast(0)
         val duration = player.duration.takeIf { it > 0 } ?: 0L
+        if (ended || duration > 0 && demandPosition >= maxOf(10000L, duration - 30000L)) library.completed(item)
         if (item.kind in setOf("movie", "episode")) { val position = demandPosition; cacheWrites.execute { runCatching { store.saveWatchProgress(selected, item, position, duration, ended) } } }
     }
     private fun seekDemand(position: Long, absolute: Boolean = false) {
@@ -865,7 +886,7 @@ class MainActivity : Activity() {
         sportsReplayGame = null
         sportsVisible = false; applyFilter()
         library.dismiss(); retryPanel.visibility = View.GONE
-        val channel = current ?: adapter.channels.firstOrNull()
+        val channel = current ?: source?.let { selected -> guide.channels.firstOrNull { it.id == store.last(selected) } } ?: adapter.channels.firstOrNull()
         if (channel != null) tune(channel) else { saveDemandProgress(); onDemand = null; player.stop(); demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick) }
         showGuide(true)
     }
@@ -1945,7 +1966,7 @@ class MainActivity : Activity() {
         val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = sportsStreamFilters(); val quality = videoInfo.toMap(); val sourceEpoch = generation
         val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
-        val cached = if (autoWatch) null else sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = false)
+        val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = autoWatch)
         showGameInfo(game); val matchEpoch = ++sportsMatchEpoch
         sportsPanel.matching(game)
         fun present(prepared: SportsStreamCache.Match) {
@@ -2431,6 +2452,7 @@ class MainActivity : Activity() {
             return true
         }
         if (onDemand != null && !guideVisible && retryPanel.visibility != View.VISIBLE) {
+            if (event.keyCode == KeyEvent.KEYCODE_MEDIA_STOP) { if (event.action == KeyEvent.ACTION_UP) stopDemandToLibrary(); return true }
             if (event.keyCode in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)) {
                 if (event.action == KeyEvent.ACTION_UP) { player.playWhenReady = when (event.keyCode) { KeyEvent.KEYCODE_MEDIA_PLAY -> true; KeyEvent.KEYCODE_MEDIA_PAUSE -> false; else -> !player.playWhenReady }; demandPaused = !player.playWhenReady; showDemandControls() }; return true
             }
@@ -2482,7 +2504,7 @@ class MainActivity : Activity() {
         }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
         if (library.opened) { library.back(); return }
-        if (onDemand != null) { if (sportsReplayGame != null) returnToSportsReplay() else if (onDemand?.kind == "catchup") returnToLiveChannel() else returnToLive(); return }
+        if (onDemand != null) { if (sportsReplayGame != null) returnToSportsReplay() else if (onDemand?.kind == "catchup") returnToLiveChannel() else stopDemandToLibrary(); return }
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }

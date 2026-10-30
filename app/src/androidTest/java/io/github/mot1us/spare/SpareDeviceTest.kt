@@ -1078,6 +1078,32 @@ class SpareDeviceTest {
                 var samePlayer: Player? = null; scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:mlb-fixture")?.text?.let { label -> label.startsWith("ESPN") || label.startsWith("YES") } == true }
+                val entered = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity { activity ->
+                    val matcher = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    matcher.submit { entered.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                }
+                assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                try {
+                    scenario.onActivity { activity ->
+                        store.sportsAutoPlay = true
+                        activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
+                        val path = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem?.localConfiguration?.uri?.path
+                        assertTrue("A discovered card starts its cached stream without waiting for the busy search worker: $path", path in setOf("/channel2.mp4", "/channel3.mp4"))
+                    }
+                } finally { release.countDown(); store.sportsAutoPlay = false }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown == false }
+                var gameMediaId = ""
+                scenario.onActivity { activity -> gameMediaId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId; activity.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                device.pressBack()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { assertEquals("Browsing Library must preserve the exact game connection", gameMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-scores")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-scores").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<View>("sports-panel")
                     assertTrue(panel.height > activity.window.decorView.height * .75f); assertTrue(panel.width > activity.window.decorView.width * .8f)
@@ -1698,6 +1724,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown != true }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
+                waitFor(scenario) { store.libraryFavorites(source).contains("movie:101") }
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel")
                     val play = panel.findViewWithTag<View>("library-play")
@@ -1750,6 +1778,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("library-favorite").text.toString().contains("Favorited") && store.libraryFavorites(source).contains("series:1") }
                 val beforeEpisodeRefresh = server.requests["/player_api.php"] ?: 0
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-refresh").apply { requestFocus(); performClick() } }
                 waitFor(scenario) {
@@ -1765,8 +1795,15 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/202.mp4" && samePlayer?.playbackState == Player.STATE_READY }
                 assertEquals("On-demand titles must not replace live channel history", "xc:1", store.last(source))
                 device.pressBack()
-                waitFor(scenario) { channelList(it)?.isShown == true && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/1.mp4" }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick(); it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true && samePlayer?.currentMediaItem == null }
+                scenario.onActivity { activity ->
+                    assertEquals("Stopping an episode leaves the primary player stopped", Player.STATE_IDLE, samePlayer!!.playbackState)
+                    activity.window.decorView.findViewWithTag<View>("library-mark-watched").performClick()
+                    activity.window.decorView.findViewWithTag<View>("library-tab:favorites").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.contentDescription?.toString()?.contains("All caught up") == true && store.libraryFavorites(source).watched == setOf("episode:201", "episode:202") }
+                assertEquals(setOf("episode:201", "episode:202"), store.libraryFavorites(source).watched)
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:xc:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:xc:1").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Archived fixture")) && !it.window.decorView.findViewWithTag<View>("library-loading").isShown }

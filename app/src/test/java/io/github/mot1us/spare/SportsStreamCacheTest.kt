@@ -29,7 +29,9 @@ class SportsStreamCacheTest {
         assertFalse(match.needsRefresh(guide, news, now))
         assertTrue(match.needsRefresh(guide, guide.copy(programmes = mapOf(c.id to listOf(p.copy(title = "Other game")))), now))
         assertTrue(match.needsRefresh(guide, guide.copy(channels = listOf(c.copy(url = "https://example.com/new"))), now))
-        assertTrue("Unconfirmed results must reconsider newly arrived guide data", SportsStreamCache.Match(game.copy(candidates = listOf(c))).needsRefresh(guide, news, now))
+        assertFalse("Unrelated listings must not restart an unresolved search", SportsStreamCache.Match(game.copy(candidates = listOf(c))).needsRefresh(guide, news, now))
+        val missing = guide.copy(programmes = emptyMap())
+        assertTrue("A newly arrived matching programme must still trigger a recheck", SportsStreamCache.Match(game.copy(candidates = listOf(c))).needsRefresh(missing, guide, now))
     }
     @Test fun refreshDueKeepsDiscoveredCardsVisibleWithoutReusingStaleAutoPlayEvidence() {
         val c = channel("one"); val guide = Guide(listOf(c), emptyMap())
