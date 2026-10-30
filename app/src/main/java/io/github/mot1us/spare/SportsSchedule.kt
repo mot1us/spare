@@ -17,7 +17,7 @@ object SportsSchedule {
             val wanted = targets.take(14)
             wanted.forEach { (id, day) -> completion.submit(java.util.concurrent.Callable {
                 val league = SportsLeagues.byId[id] ?: return@Callable emptyList()
-                runCatching { scoreboard(id, "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100", now, get) }.getOrDefault(emptyList())
+                runCatching { scoreboard(id, "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100", now, get, maxCacheMs = 30000) }.getOrDefault(emptyList())
             }) }
             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
             val result = mutableListOf<LiveEvent>()
@@ -91,11 +91,11 @@ object SportsSchedule {
         } finally { pool.shutdownNow() }
         return LiveSportsSnapshot(events.values.toList(), now, leagues)
     }
-    private fun scoreboard(league: String, url: String, now: Long, get: (String) -> String): List<LiveEvent> {
+    private fun scoreboard(league: String, url: String, now: Long, get: (String) -> String, maxCacheMs: Long = Long.MAX_VALUE): List<LiveEvent> {
         val cached = boardCache[url]
         if (cached != null) {
             val busy = cached.second.any { it.state == "in" || it.state == "pre" && it.start < now + 4 * 3600000L }
-            if (now - cached.first in 0 until if (busy) 60000L else 6 * 3600000L) return cached.second
+            if (now - cached.first in 0 until minOf(maxCacheMs, if (busy) 60000L else 6 * 3600000L)) return cached.second
         }
         val text = get(url); var entries = LiveSports.parse(text, league, now, onlyLive = false, includeCompleted = true)
         if (!url.contains("dates=") && SportsLeagues.byId[league]?.path?.startsWith("soccer/") == true && entries.none { it.state == "in" || it.state == "pre" && it.start >= now }) {
@@ -176,7 +176,7 @@ object SportsSchedule {
             if (System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedKeys++
             val programme = guide.programmes[entry.key].orEmpty().firstOrNull { p ->
-                p.start <= at && p.end > at && kotlin.math.abs(p.start - game.start) <= 3 * 3600000L && matchesTarget(p, game.teams.first().league)
+                p.start <= at && p.end > at && (game.state != "pre" || kotlin.math.abs(p.start - game.start) <= 3 * 3600000L) && matchesTarget(p, game.teams.first().league)
             }
             if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
             if (index % 512 == 0) progress(channels.size + index, channels.size + byGuideKey.size)
@@ -187,6 +187,14 @@ object SportsSchedule {
         progress(channels.size + checkedKeys, channels.size + byGuideKey.size)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
             .sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }).take(512), coverageComplete = complete)
+    }
+    internal fun newlyConfirmed(game: SportsGame, before: Guide, after: Guide, now: Long, ignore: Set<String> = emptySet()): Boolean {
+        val target = game.teams.map { it.id }.toSet()
+        val hints = game.teams.map { it.aliases + it.name.split(' ').filter { word -> word.length >= 4 } }
+        return after.programmes.any { (key, entries) -> key !in ignore && entries != before.programmes[key] && entries.any { programme ->
+            now in programme.start until programme.end && hints.all { aliases -> aliases.any { programme.title.contains(it, true) || programme.description.contains(it, true) } } &&
+                SportsGuide.teams(programme, game.teams.first().league)?.map { it.id }?.toSet() == target && after.channels.any { after.key(it) == key }
+        } }
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
         .put("events", JSONArray(snapshot.events.take(500).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league) }))

@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VodStartTest {
+    @org.junit.Test fun compactTitleRetainsPlaybackAndMetadataWithoutRepeatingStandardCredentials() {
+        val source = Source(name = "Fixture", kind = "xtream", url = "https://example.com", username = "user", password = "secret")
+        val item = OnDemand("movie:42", "EN | A Movie (2025) 4K DV", "Category 1", VodCatalog.streamUrl(source, "movie", "42", "mkv"), poster = "https://example.com/poster.jpg", year = "2025", externalId = "tmdb:42")
+        val title = LibraryCatalog.Title.from(item, source)
+        assertFalse(title.json().toString().contains("secret"))
+        val restored = LibraryCatalog.Title.from(title.json()).item(source)
+        assertEquals(item, restored)
+        assertEquals("amovie", title.canonical)
+        assertEquals("https://example.com/asset.mp4", LibraryCatalog.Title.from(item.copy(url = "https://example.com/asset.mp4"), source).item(source).url)
+    }
+
     private fun programme(title: String, description: String = "") = Programme("live", title, 100, 200, description)
     private fun movie(id: String, title: String, year: String = "") = OnDemand(id, title, "Movies", "https://example.com/movie/$id.mp4", year = year)
     @Test fun movieReleaseDisambiguatesRemakesAndQualityVariants() {

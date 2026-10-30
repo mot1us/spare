@@ -114,12 +114,16 @@ object SportsStreams {
         }
         val variants = Regex("\\b(uhd|fhd|hd|sd|4k|8k|hevc|h264|h265|backup|raw|[0-9]+fps)\\b")
         fun varied(channels: List<Channel>) = channels.filter(::eligible).distinctBy { variants.replace(SportsCatalog.normalize(it.name), " ").trim().replace(Regex(" +"), " ") }
-        val leagueChannels = guide.channels.filter { channel -> words.any { it in channel.sportsKey } }
-            .sortedWith(compareByDescending<Channel> { it.id in favorites }.then(preferenceComparator(GuideFilters(), quality)))
-        val groups = listOf(varied(leagueChannels), varied(candidates))
+        val order = preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }
+        // A UHD event feed often has no league/team in its name. Its current EPG is
+        // still authoritative; include these feeds before the generic network guesses.
+        val highResolution = guide.channels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && guide.at(it, now) == null }.sortedWith(order)
+        val leagueChannels = guide.channels.filter { channel -> words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " } }
+            .sortedWith(order)
+        val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
-        for (index in 0 until 8) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 8) picked[it.id] = it }
-        return picked.values.toList()
+        for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && guide.at(it, now) == null) picked[it.id] = it }
+        return picked.values.sortedWith(order)
     }
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {

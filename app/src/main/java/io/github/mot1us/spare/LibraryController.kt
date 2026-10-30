@@ -8,7 +8,7 @@ import android.widget.Button
 import androidx.core.view.isVisible
 import java.util.concurrent.Executors
 
-/** Provider I/O and encrypted catalog reads stay off the UI thread. No catalog fetch at startup. */
+/** Provider I/O stays off the UI thread; share the restored/background title index with search. */
 class LibraryController(private val activity: Activity, private val store: SecureStore, private val button: (String, () -> Unit) -> Button,
     private val source: () -> Source?, private val guide: () -> Guide, private val play: (OnDemand, Long) -> Unit,
     private val closed: () -> Unit) {
@@ -32,6 +32,18 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val episodeCache = linkedMapOf<String, List<OnDemand>>()
     private val catalogs = linkedMapOf<String, LibraryCatalog.Snapshot>()
     val repository = LibraryCatalog(store)
+    var catalogChanged: (() -> Unit)? = null
+    var refreshCatalogs: ((String) -> Unit)? = null
+    private val indexChanged = Runnable {
+        if (!destroyed) {
+            catalogChanged?.invoke()
+            val selected = source()
+            if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null) {
+                repository.memory(selected, kind)?.let { activateCatalog(activeCatalog, it.copy(labels = categoryNames[activeCatalog] ?: it.labels), !it.complete) }
+            }
+        }
+    }
+    init { repository.changed = { handler.removeCallbacks(indexChanged); handler.postDelayed(indexChanged, 250) } }
     private val catalogImports = mutableMapOf<String, java.util.concurrent.Future<*>>()
     private val catalogGenerations = mutableMapOf<String, Int>()
     private var catalogGeneration = 0
@@ -95,6 +107,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.page(title, "Loading categories…", true)
         fun bind(names: Map<String, String>) {
             categoryNames[root] = names
+            repository.memory(selected, mode)?.takeIf { it.chunks.any { chunk -> chunk.titles.isNotEmpty() } }?.let {
+                activateCatalog(root, it.copy(labels = names), !it.complete); return
+            }
             panel.page(title, "Choose a category · Only the selected category is downloaded", false)
             var refreshPending = force
             panel.bindCatalog(root, names, { group, query ->
@@ -104,6 +119,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
         val memory = categoryNames[root]
         if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
+        if (!force) repository.memory(selected, mode)?.let { activateCatalog(root, it, !it.complete) }
         request { token ->
             val file = "library-categories-${selected.id}-$mode.enc"
             val cached = runCatching { store.read(file)?.let { org.json.JSONObject(it.toString(Charsets.UTF_8)) }?.let { j -> j.keys().asSequence().associateWith { j.getString(it) } } }.getOrNull()
@@ -225,7 +241,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
         activeCatalog = key; activeSnapshot = snapshot; catalogImporting = busy
         activeCatalogTitle = if (kind == "movie") "Movies" else "Series"
         panel.page(if (kind == "movie") "Movies" else "Series", "${snapshot.count} titles" + if (busy) " · Loading more in the background…" else "", busy)
-        panel.bindCatalog(key, snapshot.categories, { group, query -> loadCatalogPage(group, query, false) }, { loadCatalogPage(activeGroup, activeQuery, true) })
+        val groups = snapshot.categories + snapshot.labels.mapKeys { "Category ${it.key}" }
+        panel.bindCatalog(key, groups, { group, query ->
+            val selected = source(); val scope = group?.removePrefix("Category ")
+            if (selected != null && scope != null && scope.matches(Regex("[0-9]{1,20}")) && snapshot.chunks.none { group in it.groups })
+                scopedCatalog(selected, kind, key, scope, snapshot.labels, query, false)
+            else { activeCatalog = key; activeSnapshot = snapshot; loadCatalogPage(group, query, false) }
+        }, { loadCatalogPage(activeGroup, activeQuery, true) })
     }
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
         if (item.kind == "episode") "Episode ${item.episode} · ${item.runtime}" else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
@@ -363,7 +385,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }
     fun reopen() { open(kind) }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
+    fun refresh() { val selected = source() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
     fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open("series"); else -> { dismiss(); closed() } } }
     fun dismiss() {
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch

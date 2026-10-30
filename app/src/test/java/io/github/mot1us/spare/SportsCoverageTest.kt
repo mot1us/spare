@@ -52,6 +52,21 @@ class SportsCoverageTest {
         assertTrue(event in targets); assertFalse(other in targets)
         assertEquals(2, targets.size); assertTrue(targets.size <= 8)
     }
+    @Test fun genericFourKFeedIsCheckedEvenWhenAnHdGameIsAlreadyKnown() {
+        val teams = listOf("nfl:CAR", "nfl:GB").map { SportsCatalog.byId.getValue(it) }
+        val football = game.copy(teams = teams, networks = listOf("Prime Video"))
+        val hd = channel("hd", "NFL 01 HD").copy(reportedQuality = VideoInfo(1280, 720, 60f))
+        val uhd = channel("uhd", "USA UHD Event 1").copy(group = "4K", reportedQuality = VideoInfo(3840, 2160, 0f))
+        val programme = Programme(hd.id, "NFL Football: Carolina Panthers at Green Bay Packers", now - 4 * 3600000L, now + 3600000L)
+        val before = Guide(listOf(hd, uhd), mapOf(hd.id to listOf(programme)))
+        val first = SportsSchedule.match(football, before, emptySet(), now)
+        assertEquals(listOf(hd), first.broadcasts.map { it.channel })
+        assertTrue(uhd in SportsStreams.confirmationTargets(first, before, SportsStreams.rank(first, GuideFilters(), emptyMap()), emptySet(), emptyMap(), now))
+        val after = before.copy(programmes = before.programmes + (uhd.id to listOf(programme.copy(channel = uhd.id))))
+        assertTrue("A previously unlisted UHD EPG match must invalidate the HD-only result", SportsStreamCache.Match(first).needsRefresh(before, after, now))
+        val matched = SportsSchedule.match(football, after, emptySet(), now)
+        assertEquals(listOf(uhd, hd), SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), after, now))
+    }
     @Test fun watchBestUsesTheSameProviderQualityAsFiltersAndExplainsMissingEvidence() {
         val reported = channel("reported", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 59.94f))
         val listing = Programme(reported.id, game.title, now - 60000, now + 3600000)

@@ -121,7 +121,7 @@ object Importers {
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
                 j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" },
-                if (j.optInt("tv_archive") == 1) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc", reportedQuality = ProviderQuality.parse(j, j.optString("name")))
+                if (j.optString("tv_archive").lowercase(Locale.ROOT) in setOf("1", "true")) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc", reportedQuality = ProviderQuality.parse(j, j.optString("name")))
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }

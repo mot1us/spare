@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.3 — 2026-10-29
+
+- Restore and build one compact encrypted VOD title index in the background, shared by Library, search and live programme matching. Browse/search cached titles without decrypting individual catalog pages, and show Watch VOD from beginning only for known catalog matches. Suppress files that returned 404 for one hour.
+- Refresh legacy catch-up capabilities from per-channel provider flags. A retention duration alone cannot enable catch-up; suppress stale capability badges until current metadata is available.
+- Check higher-resolution event feeds even after finding a lower-resolution game, include generic UHD channels in bounded coverage checks, and invalidate cached results when another channel gains matching EPG data. Keep pending higher-resolution lookups when a lower-quality reply arrives.
+- Poll due reminders independently of Sports page loading, with a 30-second scoreboard cache/check interval. Reminder playback uses the same refreshed coverage search.
+
 ## 0.20.2 — 2026-10-29
 
 - Rebuild Watch from beginning as a dedicated, calm TV overlay. Start a clear movie or episode match directly; show at most four matching release choices, with no mixed live-channel or unrelated-title list. Search only movies or only series, and check remembered titles before catalog pages.

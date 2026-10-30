@@ -5,13 +5,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
-/** Consume guide replies in arrival order and stop once current game coverage is confirmed. */
+/** Consume replies in arrival order; a lower-quality match must not cancel a better feed. */
 object SportsCoverageLookup {
     private data class Reply(val channel: Channel, val entries: List<Programme>?)
     fun load(channels: List<Channel>, executor: ExecutorService, budgetMs: Long = 3500,
         get: (Channel, Int) -> List<Programme>, confirmed: (Channel, List<Programme>) -> Boolean,
         progress: (Int, Int) -> Unit = { _, _ -> }): Map<Channel, List<Programme>> {
-        val targets = channels.distinctBy { it.id }.take(8)
+        val targets = channels.distinctBy { it.id }.take(12)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
         val completion = ExecutorCompletionService<Reply>(executor)
         val jobs = mutableListOf<Future<Reply>>()
@@ -33,7 +33,11 @@ object SportsCoverageLookup {
                 val left = deadline - System.nanoTime()
                 val ready = completion.poll() ?: if (left > 0) completion.poll(left, TimeUnit.NANOSECONDS) else null
                 if (ready == null) break
-                if (receive(ready.get())) break
+                if (receive(ready.get())) {
+                    // Targets are quality ordered. The caller marks a match terminal only
+                    // when no outstanding target could improve the discovered resolution.
+                    break
+                }
             }
             // Preserve other replies already received before the deadline or the first match.
             while (true) receive((completion.poll() ?: break).get())

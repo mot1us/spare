@@ -98,7 +98,9 @@ class SpareDeviceTest {
                 val restored = LibraryCatalog(store).cached(source, "movie")!!
                 assertEquals(2190, restored.count); assertEquals(snapshot.groups, restored.groups)
                 assertTrue("Catalog writes are batched", restored.chunks.size < 8)
-                assertTrue(restored.chunks.all { it.keys.size == it.count })
+                assertTrue(restored.chunks.all { it.keys.size == it.count && it.titles.size == it.count })
+                val cold = LibraryCatalog(store); cold.cached(source, "movie")
+                assertEquals("movie:2188", cold.matches(source, VodStart.Request("Movie 2188")).single().id)
                 assertEquals("movie:2188", LibraryCatalog(store).query(restored, null, "Movie 2188").entries.single().id)
                 assertTrue(catalog.query(restored.copy(scopeGroup = "Category 1"), null, "", limit = 40).entries.all { it.category == "Science fiction" })
                 store.delete(restored.chunks.first().file)
@@ -1585,7 +1587,7 @@ class SpareDeviceTest {
                     scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); val player = find<PlayerView>(it.window.decorView)!!.player!!
                         player.volume = 0f; player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true).build()
                         it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick()
-                        assertTrue(it.window.decorView.findViewWithTag<View>("vod-start-panel").isShown)
+                        // A cached, unique movie may already be playing synchronously.
                         assertFalse(it.window.decorView.findViewWithTag<View>("playlist-search").isShown) }
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == path }
                     if (title.startsWith("Fixture movie")) {

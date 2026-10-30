@@ -11,7 +11,8 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
             if (previous.programmes === current.programmes) return false
             if (game.titleMatches.isEmpty() && game.broadcasts.none { now in it.programme.start until it.programme.end }) return true
             val keys = (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).map { previous.key(it) }.toSet() + warmed.keys
-            return keys.any { current.programmes[it] != previous.programmes[it] && current.programmes[it] != warmed[it] }
+            return keys.any { current.programmes[it] != previous.programmes[it] && current.programmes[it] != warmed[it] } ||
+                SportsSchedule.newlyConfirmed(game, previous, current, now, warmed.keys)
         }
         fun mergeGuide(guide: Guide, now: Long): Pair<Guide, Match> {
             if (warmed.isEmpty()) return guide to this
@@ -36,7 +37,7 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
             entries.entries.removeAll { (_, entry) -> entry.guideKeys.isEmpty() || entry.guideKeys.any { key ->
                 guide.programmes[key] != previous.guide.programmes[key] &&
                     (entry.match.warmed[key] == null || guide.programmes[key] != entry.match.warmed[key])
-            } }
+            } || SportsSchedule.newlyConfirmed(entry.match.game, previous.guide, guide, System.currentTimeMillis(), entry.match.warmed.keys) }
             return Context(source, generation, guide, favorites).also { context = it }
         }
         return Context(source, generation, guide, favorites).also { context = it; entries.clear() }

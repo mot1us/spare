@@ -11,6 +11,14 @@ class CatchupTest {
         val restored = Guide.from(Guide(channels, emptyMap()).json())
         assertEquals(listOf("xc:1", "xc:2"), Catchup.channels(restored).map { it.id })
     }
+    @Test fun durationAloneAndLegacyCachedFlagsCannotAdvertiseEveryChannel() {
+        val entries = org.json.JSONArray("""[{"stream_id":1,"tv_archive":1,"tv_archive_duration":2},{"stream_id":2,"tv_archive":0,"tv_archive_duration":2},{"stream_id":3,"tv_archive_duration":2},{"stream_id":4,"tv_archive":true,"tv_archive_duration":2}]""")
+        val parsed = Importers.xtreamChannels(entries, source, emptyMap())
+        assertEquals(listOf("xc:1", "xc:4"), Catchup.channels(Guide(parsed, emptyMap())).map { it.id })
+        val old = channel.json().apply { remove("archiveMetadataKnown") }
+        assertFalse(Catchup.supported(Channel.from(old)))
+        assertTrue(Catchup.supported(Channel.from(channel.json())))
+    }
     @Test fun emptyModernArchiveFallsBackToTheLegacyEndpointWithinOneDeadline() {
         val now = System.currentTimeMillis(); val actions = mutableListOf<String>()
         val entries = """{"epg_listings":{"123":{"title":"Yesterday","start_timestamp":${(now - 86400000) / 1000},"stop_timestamp":${(now - 82800000) / 1000},"has_archive":1}}}"""

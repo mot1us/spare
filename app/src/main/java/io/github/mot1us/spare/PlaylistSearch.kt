@@ -27,6 +27,35 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
     private var readEpoch = 0
     private var reading = false
     private var publishPending = false
+    private var warming = false
+    fun prepare(selected: Source) {
+        synchronized(lock) {
+            if (closed || source == selected) return
+            cancelLoads(); warming = false; catalogs.clear(); failures.clear(); source = selected; ++context
+            val token = context
+            io.submit {
+                listOf("movie", "series").forEach { mode ->
+                    val saved = runCatching { repository.cached(selected, mode) }.getOrNull()
+                    synchronized(lock) { if (token == context && saved != null) { catalogs[mode] = saved; if (active) read() } }
+                }
+            }
+        }
+    }
+    /** One metadata import at a time while idle. Does not open any playback connection. */
+    fun prefetch(selected: Source) {
+        prepare(selected)
+        synchronized(lock) {
+            if (closed || active || selected.kind != "xtream") return
+            warming = true; query = ""
+            val next = listOf("movie", "series").firstOrNull { it !in loads && it !in failures } ?: return
+            load(selected, next, context)
+        }
+    }
+    fun pausePrefetch() { synchronized(lock) { if (warming && !active) { warming = false; ++context; cancelLoads() } } }
+    fun refresh(selected: Source, mode: String) {
+        prepare(selected)
+        synchronized(lock) { if (!closed) { ++context; cancelLoads(); failures.clear(); load(selected, mode, context, force = true) } }
+    }
     private val publish = Runnable {
         val value = synchronized(lock) {
             publishPending = false
@@ -41,6 +70,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         require(kinds.isNotEmpty() && kinds.all { it in setOf("movie", "series") })
         synchronized(lock) {
             if (closed) return
+            warming = false
             if (source != selected) { cancelLoads(); catalogs.clear(); failures.clear(); source = selected; ++context }
             if (modes != kinds) { cancelLoads(); failures.clear(); modes = kinds.toSet(); ++context }
             active = true; query = ChannelSearch.key(text); extras = knownEpisodes
@@ -77,18 +107,19 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
             }
         }
     }
-    private fun load(selected: Source, mode: String, token: Int) {
+    private fun load(selected: Source, mode: String, token: Int, force: Boolean = false) {
         failures.remove(mode)
         loading.add(mode)
         loads[mode] = io.submit {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
                 val cached = runCatching { repository.cached(selected, mode) }.getOrNull()
-                if (cached != null) synchronized(lock) { if (token == context) { catalogs[mode] = cached; read() } }
+                if (cached != null) synchronized(lock) { if (token == context) { catalogs[mode] = cached; if (active) read() } }
                 // Upgrade old page-only caches once; subsequent searches read the compact title index.
-                if (cached == null || !cached.complete || cached.chunks.any { it.keys.size != it.count } || System.currentTimeMillis() - cached.updated !in 0 until 6 * 3600000L) {
-                    val writer = repository.Writer(selected, mode)
+                if (force || cached == null || !cached.complete || cached.chunks.any { it.titles.size != it.count } || System.currentTimeMillis() - cached.updated !in 0 until 6 * 3600000L) {
+                    val writer = repository.Writer(selected, mode, indexOnly = true)
                     var publishedAt = 0L; var savedAt = 0L
-                    VodCatalog.stream(selected, mode) { batch ->
+                    VodCatalog.stream(selected, mode, lean = true) { batch ->
                         synchronized(lock) {
                             if (closed || token != context || Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Search cancelled")
                             if (query.isNotEmpty()) {
@@ -107,17 +138,22 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
                         }
                     }
                     val complete = writer.finish(emptyMap())
-                    synchronized(lock) { if (token == context) { catalogs[mode] = complete; read() } }
+                    synchronized(lock) { if (token == context) { catalogs[mode] = complete; if (active) read() } }
                 }
             } catch (_: Exception) { synchronized(lock) { if (token == context && !Thread.currentThread().isInterrupted) failures.add(mode) } }
-            finally { synchronized(lock) { if (token == context) { loading.remove(mode); publish() } } }
+            finally { synchronized(lock) {
+                if (token == context) {
+                    loading.remove(mode); publish()
+                    if (warming && !active && mode == "movie" && "series" !in loads && "series" !in failures) load(selected, "series", token)
+                }
+            } }
         }
     }
     private fun cancelLoads() { loads.values.forEach { it?.cancel(true) }; loads.clear(); loading.clear(); ++readEpoch; reading = false; readTask?.cancel(true) }
     // Leaving the search surface must not throw away a nearly finished metadata-only import.
     fun pause(cancel: Boolean = false) { synchronized(lock) {
         active = false; ++readEpoch; reading = false; readTask?.cancel(true)
-        if (cancel) { ++context; cancelLoads() }
+        if (cancel) { warming = false; ++context; cancelLoads() }
         handler.removeCallbacks(publish); publishPending = false
     } }
     fun close() { pause(cancel = true); closed = true; io.shutdownNow(); reader.shutdownNow() }

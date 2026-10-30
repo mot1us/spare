@@ -28,6 +28,19 @@ class SportsCoverageLookupTest {
             assertTrue("Pending lookups must be cancelled after a match", cancelled.await(1, TimeUnit.SECONDS))
         } finally { pool.shutdownNow() }
     }
+    @Test fun lowerResolutionReplyCannotCancelThePendingFourKGame() {
+        val pool = Executors.newFixedThreadPool(2)
+        val uhd = channel("uhd"); val hd = channel("hd")
+        val first = CountDownLatch(1)
+        val programme = Programme(hd.id, "Carolina Panthers at Green Bay Packers", 1000, 2000)
+        try {
+            val found = SportsCoverageLookup.load(listOf(uhd, hd), pool, get = { channel, _ ->
+                if (channel == uhd) { assertTrue(first.await(1, TimeUnit.SECONDS)); Thread.sleep(30) } else first.countDown()
+                listOf(programme.copy(channel = channel.id))
+            }, confirmed = { channel, _ -> channel == uhd })
+            assertEquals(setOf(hd, uhd), found.keys)
+        } finally { pool.shutdownNow() }
+    }
     @Test fun failedOrTimedOutRepliesCannotEscapeTheLookupBudgetOrConcurrencyBound() {
         val pool = Executors.newFixedThreadPool(2); val active = AtomicInteger(); val maximum = AtomicInteger(); val calls = AtomicInteger()
         try {
@@ -36,7 +49,7 @@ class SportsCoverageLookupTest {
                 assertTrue(timeout in 1..100); calls.incrementAndGet(); maximum.accumulateAndGet(active.incrementAndGet(), ::maxOf)
                 try { Thread.sleep(5000); emptyList() } finally { active.decrementAndGet() }
             }, confirmed = { _, _ -> false })
-            assertTrue(result.isEmpty()); assertTrue(calls.get() in 1..8); assertTrue(maximum.get() in 1..2)
+            assertTrue(result.isEmpty()); assertTrue(calls.get() in 1..12); assertTrue(maximum.get() in 1..2)
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) < 2000)
         } finally { pool.shutdownNow() }
     }

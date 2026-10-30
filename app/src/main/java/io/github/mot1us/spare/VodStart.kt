@@ -9,7 +9,7 @@ object VodStart {
     private val quality = Regex("\\b(?:Dolby\\s*Vision|HDR10\\+?|HDR|SDR|DV|FHD|UHD|HD|SD|4K|1080[pi]|720p|2160p|HEVC|AVC|AV1|[HX]264|[HX]265)\\b", RegexOption.IGNORE_CASE)
     private fun clean(value: String) = quality.replace(year.replace(prefix.replace(value, ""), ""), "").trim(' ', '-', ':', '|', '(', ')', '[', ']')
     private fun release(item: OnDemand) = Regex("(?:19|20)[0-9]{2}").find(item.year)?.value ?: year.find(item.title)?.groupValues?.get(1).orEmpty()
-    private fun title(item: OnDemand): String {
+    fun titleKey(item: OnDemand): String {
         val stamp = release(item)
         val value = clean(item.title)
         return ChannelSearch.key(if (stamp.isNotBlank()) value.removeSuffix(" $stamp").trimEnd(' ', '-') else value)
@@ -24,7 +24,7 @@ object VodStart {
             numbers?.let { it[1].ifBlank { it[3] }.toIntOrNull() }, numbers?.let { it[2].ifBlank { it[4] }.toIntOrNull() })
     }
     fun matches(request: Request, items: List<OnDemand>) = items.filter { item ->
-        item.kind in setOf("movie", "series") && title(item) == ChannelSearch.key(request.query) &&
+        item.kind in setOf("movie", "series") && titleKey(item) == ChannelSearch.key(request.query) &&
             (request.year.isBlank() || release(item).isBlank() || release(item) == request.year) && (request.episode == null || item.kind == "series")
     }
     fun choices(request: Request, items: List<OnDemand>): List<OnDemand> = matches(request, items)

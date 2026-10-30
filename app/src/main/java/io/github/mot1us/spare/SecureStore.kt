@@ -82,8 +82,10 @@ class SecureStore(private val context: Context) {
     fun cache(source: Source, guide: Guide) { saveLineup(source, guide); cacheProgrammes(source, guide.programmes, System.currentTimeMillis()) }
     fun saveLineup(source: Source, guide: Guide, url: String = guideUrl(source)) {
         write("lineup-${source.id}.enc", guide.copy(programmes = emptyMap()).json().toString().toByteArray())
+        if (guide.channels.isNotEmpty() && guide.channels.all { it.archiveMetadataKnown }) preferences.edit { putBoolean("archive-metadata-${source.id}", true) }
         if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
     }
+    fun archiveMetadataReady(source: Source) = preferences.getBoolean("archive-metadata-${source.id}", false)
     fun guideUrl(source: Source) = runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
     fun cachedLineup(source: Source): Guide? = read("lineup-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
         ?: read("cache-${source.id}.enc")?.let { GuideDisk.lineup(it).also { guide -> saveLineup(source, guide) } }
@@ -145,7 +147,7 @@ class SecureStore(private val context: Context) {
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
         listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc").forEach { delete(it) }
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit { putStringSet("groups-${source.id}", value.groups) } }
