@@ -34,6 +34,12 @@ class LocalChannels(text: String) {
         val calls = selected.map { it.call.lowercase(java.util.Locale.ROOT) }.distinct()
         val callPattern = calls.takeIf { it.isNotEmpty() }?.joinToString("|", "(?<![a-z])(?:", ")(?=(?:dt|tv|hd)?(?:\\d|\\b))") { Regex.escape(it) }?.let(::Regex)
         val statewide = selected.any { query == it.state || query == it.name }
+        val qualifiedCity = !statewide && selected.any { query == "${it.city} ${it.state}" || query == "${it.city} ${it.name}" }
+        val cities = selected.map { it.city }.toSet(); val states = selected.map { it.state }.toSet()
+        val otherCities = stations.filter { it.city in cities && it.state !in states }
+        val ambiguous = otherCities.isNotEmpty()
+        val stateWords = selected.flatMap { listOf(it.state, it.name) }.distinct()
+        val otherStateWords = otherCities.flatMap { listOf(it.state, it.name) }.distinct()
         val places = (selected.flatMap { if (statewide) listOf(it.city, it.name) else listOf(it.city) } + query.takeIf { it.length > 2 }).filterNotNull().filter { it.length > 2 }.distinct()
         val sports = Regex("\\b(nfl|nba|mlb|nhl|ppv)\\b")
         val affiliate = Regex("\\b(local|locals|abc|nbc|cbs|fox|pbs|cw|telemundo|univision)\\b")
@@ -46,12 +52,16 @@ class LocalChannels(text: String) {
             if (continuous.containsMatchIn(channel.name + " " + channel.group)) continue
             val name = key(channel.name); val group = key(channel.group); val guide = key(channel.guideId.substringBefore('.'))
             val located = places.any { " $it " in " $name $group " }
+            val context = " $name $group "
+            val rightState = stateWords.any { " $it " in context }
+            val wrongState = otherStateWords.any { " $it " in context } && !rightState
+            val locatedInRegion = located && (!qualifiedCity || !ambiguous || rightState) && !wrongState
             val stationName = callPattern?.findAll(name)?.any { match ->
                 val tail = name.substring(match.range.last + 1).trim()
                 tail.isEmpty() || stationSuffix.containsMatchIn(tail) || located || affiliate.containsMatchIn(name)
             } == true
             val stationGuide = callPattern?.matchAt(guide, 0) != null
-            if (stationGuide || stationName || affiliate.containsMatchIn(name) && !sports.containsMatchIn(group) && located) result.add(channel.id)
+            if (stationGuide || stationName || affiliate.containsMatchIn(name) && !sports.containsMatchIn(group) && locatedInRegion) result.add(channel.id)
         }
         return result
     }

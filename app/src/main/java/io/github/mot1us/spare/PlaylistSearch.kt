@@ -28,16 +28,25 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
     private var reading = false
     private var publishPending = false
     private var warming = false
+    private var restoring = false
+    var stateChanged: (() -> Unit)? = null
+    data class CatalogStatus(val checking: Boolean, val complete: Boolean, val failed: Boolean)
+    fun catalogStatus(selected: Source, kinds: Set<String>): CatalogStatus = synchronized(lock) {
+        if (source != selected) return@synchronized CatalogStatus(false, false, false)
+        val complete = kinds.all { mode -> repository.memory(selected, mode)?.let { it.complete && it.chunks.all { chunk -> chunk.titles.size == chunk.count } } == true }
+        CatalogStatus(restoring || kinds.any { it in loading } || warming, complete, kinds.any { it in failures })
+    }
     fun prepare(selected: Source) {
         synchronized(lock) {
             if (closed || source == selected) return
             cancelLoads(); warming = false; catalogs.clear(); failures.clear(); source = selected; ++context
             val token = context
+            restoring = true; publish()
             io.submit {
-                listOf("movie", "series").forEach { mode ->
+                try { listOf("movie", "series").forEach { mode ->
                     val saved = runCatching { repository.cached(selected, mode) }.getOrNull()
                     synchronized(lock) { if (token == context && saved != null) { catalogs[mode] = saved; if (active) read() } }
-                }
+                } } finally { synchronized(lock) { if (token == context) { restoring = false; publish() } } }
             }
         }
     }
@@ -46,12 +55,12 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         prepare(selected)
         synchronized(lock) {
             if (closed || active || selected.kind != "xtream") return
-            warming = true; query = ""
             val next = listOf("movie", "series").firstOrNull { it !in loads && it !in failures } ?: return
+            warming = true; query = ""
             load(selected, next, context)
         }
     }
-    fun pausePrefetch() { synchronized(lock) { if (warming && !active) { warming = false; ++context; cancelLoads() } } }
+    fun pausePrefetch() { synchronized(lock) { if (warming && !active) { warming = false; ++context; cancelLoads(); publish() } } }
     fun refresh(selected: Source, mode: String) {
         prepare(selected)
         synchronized(lock) { if (!closed) { ++context; cancelLoads(); failures.clear(); load(selected, mode, context, force = true) } }
@@ -59,11 +68,12 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
     private val publish = Runnable {
         val value = synchronized(lock) {
             publishPending = false
-            if (!active || closed) return@Runnable
-            Triple(listOf("movie", "series", "episode").flatMap { matches[it].orEmpty() }, loading.isNotEmpty() || reading,
-                if (failures.isEmpty()) "" else "Some library titles could not load. Reopen Search to retry.")
+            if (closed) return@Runnable
+            if (active) Triple(listOf("movie", "series", "episode").flatMap { matches[it].orEmpty() }, loading.isNotEmpty() || reading,
+                if (failures.isEmpty()) "" else "Some library titles could not load. Reopen Search to retry.") else null
         }
-        deliver(value.first, value.second, value.third)
+        stateChanged?.invoke()
+        if (value != null) deliver(value.first, value.second, value.third)
     }
     private fun publish() { if (!publishPending) { publishPending = true; handler.postDelayed(publish, 100) } }
     fun search(selected: Source, text: String, knownEpisodes: List<OnDemand>, kinds: Set<String> = setOf("movie", "series")) {
@@ -110,6 +120,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
     private fun load(selected: Source, mode: String, token: Int, force: Boolean = false) {
         failures.remove(mode)
         loading.add(mode)
+        publish()
         loads[mode] = io.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
@@ -145,11 +156,12 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
                 if (token == context) {
                     loading.remove(mode); publish()
                     if (warming && !active && mode == "movie" && "series" !in loads && "series" !in failures) load(selected, "series", token)
+                    if (loading.isEmpty()) warming = false
                 }
             } }
         }
     }
-    private fun cancelLoads() { loads.values.forEach { it?.cancel(true) }; loads.clear(); loading.clear(); ++readEpoch; reading = false; readTask?.cancel(true) }
+    private fun cancelLoads() { loads.values.forEach { it?.cancel(true) }; loads.clear(); loading.clear(); restoring = false; ++readEpoch; reading = false; readTask?.cancel(true) }
     // Leaving the search surface must not throw away a nearly finished metadata-only import.
     fun pause(cancel: Boolean = false) { synchronized(lock) {
         active = false; ++readEpoch; reading = false; readTask?.cancel(true)

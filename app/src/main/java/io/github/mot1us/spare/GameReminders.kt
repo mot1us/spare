@@ -93,13 +93,15 @@ object SportsStreams {
                 } == true
     }
     internal fun conflictingCoverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Boolean {
-        val programme = guide.at(channel, now) ?: return false
+        val programme = if (game.state == "pre") game.broadcasts.firstOrNull { it.channel.id == channel.id }?.programme ?: guide.at(channel, game.start) ?: return false
+            else guide.at(channel, now) ?: return false
         if (SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title))) return true
         return SportsGuide.teams(programme, "${game.teams.first().league} ${channel.group}")?.map { it.id }?.toSet()
             ?.let { it != game.teams.map { team -> team.id }.toSet() } == true
     }
     /** A small, varied guide-only lookup; generic broadcaster names never prove a game match. */
     fun confirmationTargets(game: SportsGame, guide: Guide, candidates: List<Channel>, favorites: Set<String>, quality: Map<String, VideoInfo>, now: Long): List<Channel> {
+        val at = if (game.state == "pre") game.start else now
         val target = game.teams.map { it.id }.toSet()
         val league = game.teams.first().league
         val words = (listOf(game.leagueId, league) + when (league) {
@@ -107,8 +109,8 @@ object SportsStreams {
         }).map { " ${SportsCatalog.normalize(it)} " }.distinct()
         fun eligible(channel: Channel): Boolean {
             if (channel.media || SportsGuide.excludedTitle(channel.sportsKey)) return false
-            val programme = guide.at(channel, now)
-            if (programme != null && (SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) ||
+            val programme = guide.at(channel, at)
+            if (programme != null && (game.state != "pre" && SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) ||
                 SportsGuide.teams(programme, league)?.map { it.id }?.toSet()?.let { it != target } == true)) return false
             return SportsGuide.teams(Programme(channel.id, channel.name, game.start, game.end), league)?.map { it.id }?.toSet()?.let { it == target } != false
         }
@@ -117,12 +119,12 @@ object SportsStreams {
         val order = preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }
         // A UHD event feed often has no league/team in its name. Its current EPG is
         // still authoritative; include these feeds before the generic network guesses.
-        val highResolution = guide.channels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && guide.at(it, now) == null }.sortedWith(order)
+        val highResolution = guide.channels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && (game.state == "pre" || guide.at(it, at) == null) }.sortedWith(order)
         val leagueChannels = guide.channels.filter { channel -> words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " } }
             .sortedWith(order)
         val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
-        for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && guide.at(it, now) == null) picked[it.id] = it }
+        for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && (game.state == "pre" || guide.at(it, at) == null)) picked[it.id] = it }
         return picked.values.sortedWith(order)
     }
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
@@ -133,6 +135,12 @@ object SportsStreams {
     }
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {
+        if (game.state == "pre") {
+            val ids = game.broadcasts.map { it.channel.id }.toSet()
+            val scheduled = rank(game, filters, quality, available).firstOrNull { it.id in ids }
+            return scheduled?.let { "Scheduled · ${it.name}\n${it.qualityLabel(quality[it.id])}" }
+                ?: if (game.start >= now + 3 * 86400000L) "Guide not available this far ahead" else "No scheduled EPG match yet"
+        }
         val channel = automaticChoices(game, filters, quality, guide, now, available).firstOrNull()
         if (channel != null) {
             return channel.name + "\n" + channel.qualityLabel(quality[channel.id])

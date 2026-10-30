@@ -6,7 +6,7 @@ import java.security.MessageDigest
 
 /** Content-addressed results; playlist or location edits invalidate the encrypted disk cache. */
 object LocalMatchCache {
-    private const val SCHEMA = 1
+    private const val SCHEMA = 2
     fun fingerprint(channels: List<Channel>, location: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         fun add(value: String) { val bytes = value.toByteArray(Charsets.UTF_8); digest.update((bytes.size.toString() + ":").toByteArray()); digest.update(bytes) }

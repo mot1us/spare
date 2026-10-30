@@ -10,6 +10,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.ProgressBar
 
 @SuppressLint("ViewConstructor") // Constructed with callbacks in code; never inflated from XML.
 class PlaybackDetails(
@@ -40,6 +41,9 @@ class PlaybackDetails(
     private val favorite = makeButton("Favorite channel", onFavorite)
     private val catchup = makeButton("Channel catch-up", onCatchup).apply { tag = "channel-catchup" }
     private val vodStart = makeButton("Watch from beginning · VOD", onVodStart).apply { tag = "channel-vod-start"; visibility = View.GONE }
+    private val vodStatus = label(12f, Color.LTGRAY).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+    private val vodProgress = ProgressBar(context).apply { isIndeterminate = true; tag = "vod-match-progress"; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+    private val vodChecking = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL; tag = "vod-match-status"; visibility = View.GONE }
     init {
         orientation = VERTICAL; tag = "playback-details"; visibility = View.GONE
         setPadding(dp(22), dp(16), dp(22), dp(16))
@@ -49,15 +53,21 @@ class PlaybackDetails(
         addView(description, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(recent, LayoutParams(-1, -2))
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        vodChecking.addView(vodProgress, LayoutParams(dp(16), dp(16)).apply { marginEnd = dp(10) })
+        vodChecking.addView(vodStatus, LayoutParams(0, -1, 1f))
+        addView(vodChecking, LayoutParams(-1, dp(36)).apply { topMargin = dp(8) })
         addView(vodStart, LayoutParams(-2, dp(36)).apply { topMargin = dp(8) })
         addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }); addView(makeButton("Reconnect", onReconnect).apply { tag = "channel-reconnect" }) }) }, LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
     }
     fun resumeImages() = recent.resume()
     fun pauseImages() = recent.pause()
     fun closeImages() = recent.close()
-    fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); recent.appearance(); AppFont.apply(this) }
+    fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); vodProgress.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent); recent.appearance(); AppFont.apply(this) }
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
-    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false, vodTarget: String = "") {
+    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false, vodTarget: String = "", checkingVod: Boolean = false, vodMessage: String = "") {
+        vodChecking.visibility = if (!canVodStart && vodMessage.isNotBlank()) View.VISIBLE else View.GONE
+        vodProgress.visibility = if (checkingVod) View.VISIBLE else View.GONE
+        vodStatus.text = vodMessage; vodChecking.contentDescription = vodMessage
         vodStart.visibility = if (canVodStart) View.VISIBLE else View.GONE
         vodStart.text = if (vodTarget.isBlank()) "Watch from beginning · VOD" else "Watch from beginning · $vodTarget"
         vodStart.contentDescription = "Watch ${vodTarget.ifBlank { "this programme" }} from the beginning on demand"

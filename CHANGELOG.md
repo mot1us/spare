@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.23.0 — 2026-10-30
+
+- Show a themed Checking for VOD animation while the catalog index is restoring or loading. Replace it with the matched movie/episode action, or an explicit no-match, paused or unavailable state; do not leave a spinner running after a failed or paused check.
+- Match upcoming Sports games against future EPG listings, show scheduled channels on cards and in coverage results, and cache them until kickoff. Keep automatic tuning restricted to live games. Explicit upcoming coverage checks request up to 72 future listings per bounded channel lookup; background cards use saved guide data only.
+- Settle the hidden navigation dock before returning from full-screen playback to Guide, and exclude the collapsed dock from automatic focus search to avoid a closing flash.
+- Preserve saved Local regions when adding a new one, even if the TV/phone keyboard replaces the draft text. Show saved regions, constrain ambiguous city matches by state, and invalidate old local-match caches.
+
 ## 0.22.1 — 2026-10-30
 
 - Name the Watch from beginning target in channel details and its loading overlay: a movie title/year or series title with its exact season/episode. Include the resolved episode title and season/episode in VOD playback controls.

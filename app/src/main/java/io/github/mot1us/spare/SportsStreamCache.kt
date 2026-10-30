@@ -43,7 +43,7 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
     }
     @Synchronized fun current(token: Context) = context === token
     @Synchronized fun get(token: Context, game: SportsGame, now: Long, forAuto: Boolean = true, allowStale: Boolean = false): Match? {
-        if (context !== token || !game.live(now)) return null
+        if (context !== token || !game.live(now) && !(game.upcoming(now) && !forAuto)) return null
         val entry = entries[game.key] ?: return null
         if (entry.displayUntil <= now || entry.signature != signature(game)) { entries.remove(game.key); return null }
         // A refresh becoming due must not erase an already discovered channel from its card.
@@ -53,14 +53,14 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
     }
     @Synchronized fun put(token: Context, match: Match, now: Long): Boolean {
         val active = context ?: return false
-        if (Thread.currentThread().isInterrupted || !match.game.live(now) || !match.game.coverageComplete) return false
+        if (Thread.currentThread().isInterrupted || !(match.game.live(now) || match.game.upcoming(now)) || !match.game.coverageComplete) return false
         val keys = (match.game.broadcasts.map { it.channel } + match.game.titleMatches + match.game.candidates).map { token.guide.key(it) }.toSet()
         if (active !== token && (active.source != token.source || active.generation != token.generation || active.guide.channels !== token.guide.channels || active.favorites != token.favorites ||
             keys.isEmpty() && active.guide.programmes != token.guide.programmes || keys.any { key -> active.guide.programmes[key] != token.guide.programmes[key] &&
                 (match.warmed[key] == null || active.guide.programmes[key] != match.warmed[key]) })) return false
         val existing = entries[match.game.key]
         if (existing?.match?.autoReady == true && !match.autoReady) return false
-        val boundary = (sequenceOf(match.game.end) + match.game.broadcasts.asSequence().map { it.programme.end } + match.warmed.values.asSequence().flatten()
+        val boundary = (sequenceOf(match.game.end, if (match.game.upcoming(now)) match.game.start else Long.MAX_VALUE) + match.game.broadcasts.asSequence().map { it.programme.end } + match.warmed.values.asSequence().flatten()
             .flatMap { sequenceOf(it.start, it.end) }).filter { it > now }.minOrNull() ?: Long.MAX_VALUE
         val expires = minOf(now + lifetimeMs, boundary)
         val found = match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty() || match.game.candidates.isNotEmpty()

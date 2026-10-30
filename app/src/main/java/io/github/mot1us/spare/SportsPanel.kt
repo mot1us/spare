@@ -436,8 +436,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         matchNotice.isVisible = message != null; matchNotice.text = message.orEmpty()
         val same = streamsList == channels; val hadFocus = streams.hasFocus(); streamsList = channels; streamLabels = label
         if (!same) streamAdapter.notifyDataSetChanged() else refreshStreamLabels()
-        progress.visibility = INVISIBLE; status.text = message ?: "${channels.size} streams${if (game.coverageComplete) "" else " · More coverage may be available"} · OK to watch · ＋ Multiview"
-        empty.text = if (game.state == "post") "This game has ended." else "No matching streams. Try Stream quality."
+        progress.visibility = INVISIBLE; status.text = message ?: if (game.state == "pre") "${channels.size} scheduled EPG matches · OK previews the channel · Starts ${GuideClock.sportsDate(game.start)}" else "${channels.size} streams${if (game.coverageComplete) "" else " · More coverage may be available"} · OK to watch · ＋ Multiview"
+        empty.text = when (game.state) { "post" -> "This game has ended."; "pre" -> "No scheduled EPG match yet. The provider may not have listings this far ahead."; else -> "No matching streams. Try Stream quality." }
         empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE; val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }
     @SuppressLint("NotifyDataSetChanged")

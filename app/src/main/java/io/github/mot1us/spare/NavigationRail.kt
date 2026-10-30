@@ -57,6 +57,7 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         if (!inside) deliberateFocus = false
         setExpanded(inside)
     }
+    fun prepareForContent() { deliberateFocus = false; clearFocus(); setExpanded(false, animated = false) }
 
     private fun item(label: String, key: String, icon: Int, click: () -> Unit): Button {
         val control = object : Button(context) {
@@ -105,9 +106,11 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     // Unlike BLOCK_DESCENDANTS, this never rejects an explicit remote requestFocus.
     var contentHasFocus = false
     override fun addFocusables(views: ArrayList<View>, direction: Int, focusableMode: Int) {
+        if (hiddenDock && !expanded && !deliberateFocus) return
         if (!contentHasFocus || hasFocus()) super.addFocusables(views, direction, focusableMode)
     }
     override fun onRequestFocusInDescendants(direction: Int, previouslyFocusedRect: Rect?): Boolean {
+        if (hiddenDock && !expanded && !deliberateFocus) return false
         if (contentHasFocus && !hasFocus() && !deliberateFocus) return false
         return super.onRequestFocusInDescendants(direction, previouslyFocusedRect)
     }

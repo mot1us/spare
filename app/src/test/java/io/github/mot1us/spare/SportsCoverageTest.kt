@@ -114,4 +114,22 @@ class SportsCoverageTest {
         val partial = SportsSchedule.match(game, Guide(channels, programmes), emptySet(), now, deadlineNanos = 0)
         assertFalse(partial.coverageComplete)
     }
+    @Test fun upcomingCoverageUsesFutureEpgAndAllowsListingsThatStartJustAfterKickoff() {
+        val future = game.copy(state = "pre", start = now + 4 * 3600000L, end = now + 7 * 3600000L)
+        val right = channel("scheduled", "ESPN 4K"); val wrong = channel("other", "NFL 02")
+        val current = Programme(right.id, "NFL Highlights", now - 60000, now + 3600000)
+        val scheduled = Programme(right.id, "NFL: Seahawks vs 49ers", future.start + 5 * 60000L, future.end)
+        val guide = Guide(listOf(right, wrong), mapOf(right.id to listOf(current, scheduled), wrong.id to listOf(
+            scheduled.copy(channel = wrong.id, title = "Buffalo Bills at Kansas City Chiefs"),
+            scheduled.copy(channel = wrong.id, start = scheduled.start + 86400000L, end = scheduled.end + 86400000L))))
+        val found = SportsSchedule.match(future, guide, emptySet(), now)
+        assertEquals(listOf(right), found.broadcasts.map { it.channel })
+        assertTrue(SportsStreams.cardSummary(found, GuideFilters(), emptyMap(), guide, now).startsWith("Scheduled · ${right.name}"))
+        assertTrue(SportsStreams.automaticChoices(found, GuideFilters(), emptyMap(), guide, now).isEmpty())
+        assertFalse(SportsStreams.conflictingCoverage(found, right, guide, now))
+        val before = guide.copy(programmes = mapOf(right.id to listOf(current)))
+        assertTrue(SportsSchedule.newlyConfirmed(future, before, guide, now))
+        assertTrue(right in SportsStreams.confirmationTargets(future, before, listOf(right), emptySet(), emptyMap(), now))
+    }
+
 }

@@ -441,7 +441,9 @@ class SpareDeviceTest {
                     val channels = listOf(Channel("local:king", "KING5 FHD", "News", "${server.base}/channel1.ts"),
                         Channel("local:kiro", "KIRO HD", "News", "${server.base}/channel2.ts"), Channel("other:abc", "WABC New York", "News", "${server.base}/channel3.ts"),
                         Channel("show:king", "King of Queens", "News", "${server.base}/channel4.ts"), Channel("show:24", "24/7 KING TV", "News", "${server.base}/channel5.ts"),
-                        Channel("show:fox", "FOX Seattle 24x7 Shows", "News", "${server.base}/channel6.ts"))
+                        Channel("show:fox", "FOX Seattle 24x7 Shows", "News", "${server.base}/channel6.ts"),
+                        Channel("local:kgw", "KGW Portland OR", "News", "${server.base}/channel7.ts"),
+                        Channel("other:wgme", "WGME Portland ME", "News", "${server.base}/channel8.ts"))
                     val localGuide = Guide(channels, emptyMap()); store.cache(source, localGuide); store.markPlaylistRefreshed(source)
                     MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, localGuide)
                     activity.window.decorView.findViewWithTag<View>("settings").performClick()
@@ -465,6 +467,15 @@ class SpareDeviceTest {
                         activity.window.decorView.findViewWithTag<EditText>("local-location-input").hasFocus() &&
                         activity.window.decorView.findViewWithTag<TextView>("local-location-matches").text.toString() == "2 local channels matched"
                 }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("local-add-region").performClick()
+                    val input = activity.window.decorView.findViewWithTag<EditText>("local-location-input")
+                    input.setText("Portland Oregon") // TV/phone IMEs may replace the entire draft.
+                    activity.window.decorView.findViewWithTag<View>("local-location-suggestion:Portland, OR").performClick()
+                    assertEquals("Seattle, WA; Portland, OR", SecureStore(context).localLocation)
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("local-saved-regions").text.contains("Seattle, WA"))
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("local-location-matches").text.toString() == "3 local channels matched" }
                 setThemeControl(scenario, "Guide", "Opacity", "80%")
                 assertEquals(80, SecureStore(context).guideOpacity)
                 leaveSettings(scenario)
@@ -477,24 +488,24 @@ class SpareDeviceTest {
                     assertTrue("Local matching has an animated loading indicator", activity.window.decorView.findViewWithTag<View>("local-matching-progress").isShown)
                 }
                 releaseLocal.countDown()
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 && !it.window.decorView.findViewWithTag<View>("local-matching-progress").isShown }
-                assertEquals("Seattle, WA", SecureStore(context).localLocation)
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 3 && !it.window.decorView.findViewWithTag<View>("local-matching-progress").isShown }
+                assertEquals("Seattle, WA; Portland, OR", SecureStore(context).localLocation)
                 scenario.onActivity { activity ->
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
                     val fingerprint = LocalMatchCache.fingerprint(guide.channels, store.localLocation)
-                    assertEquals(setOf("local:king", "local:kiro"), LocalMatchCache.decode(store.read("local-matches-${source.id}.enc"), fingerprint))
+                    assertEquals(setOf("local:king", "local:kiro", "local:kgw"), LocalMatchCache.decode(store.read("local-matches-${source.id}.enc"), fingerprint))
                     activity.window.decorView.findViewWithTag<View>("guide-all").performClick()
                 }
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 6 }
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
                 scenario.recreate()
                 waitFor(scenario) { activity ->
                     @Suppress("UNCHECKED_CAST") val ids = MainActivity::class.java.getDeclaredField("localIds").apply { isAccessible = true }.get(activity) as Set<String>
-                    ids == setOf("local:king", "local:kiro") && !MainActivity::class.java.getDeclaredField("localLoading").apply { isAccessible = true }.getBoolean(activity)
+                    ids == setOf("local:king", "local:kiro", "local:kgw") && !MainActivity::class.java.getDeclaredField("localLoading").apply { isAccessible = true }.getBoolean(activity)
                 }
                 scenario.onActivity { activity ->
                     assertFalse("Local is warmed before opening its tab", activity.window.decorView.findViewWithTag<View>("guide-local").isSelected)
                     activity.window.decorView.findViewWithTag<View>("guide-local").performClick()
-                    assertEquals(2, channelList(activity)!!.adapter!!.itemCount)
+                    assertEquals(3, channelList(activity)!!.adapter!!.itemCount)
                     assertFalse(activity.window.decorView.findViewWithTag<View>("local-matching-progress").isShown)
                 }
             }
@@ -1017,6 +1028,24 @@ class SpareDeviceTest {
                 assertTrue(device.wait(Until.hasObject(By.text("Playlists")), 5000))
                 activateSetting(scenario, "Navigation dock"); activateSetting(scenario, "Hidden dock"); leaveSettings(scenario)
                 waitFor(scenario) { channelList(it)?.hasFocus() == true && it.window.decorView.findViewWithTag<View>("navigation-handle").isShown && it.window.decorView.findViewWithTag<View>("app-navigation").alpha < .01f }
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                val dockFlashed = AtomicBoolean(false)
+                lateinit var dockDraw: android.view.ViewTreeObserver.OnPreDrawListener
+                scenario.onActivity { activity ->
+                    val dock = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                    dockDraw = android.view.ViewTreeObserver.OnPreDrawListener {
+                        if (dock.isShown && (dock.expanded || dock.moving || dock.alpha > .01f)) dockFlashed.set(true)
+                        true
+                    }
+                    dock.viewTreeObserver.addOnPreDrawListener(dockDraw)
+                }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation").viewTreeObserver.removeOnPreDrawListener(dockDraw)
+                    assertFalse("Returning from fullscreen must never draw an expanded/closing hidden dock", dockFlashed.get())
+                    assertEquals(attempt, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                }
                 device.pressDPadLeft(); device.pressDPadLeft(); repeat(3) { device.pressDPadDown() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings").hasFocus() && it.window.decorView.findViewWithTag<View>("app-navigation").alpha > .99f }
                 scenario.onActivity { activity ->
@@ -1554,7 +1583,9 @@ class SpareDeviceTest {
             val cachedAt = System.currentTimeMillis()
             val midnight = java.time.Instant.ofEpochMilli(cachedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
             val upcomingAt = cachedAt + minOf(3600000L, (midnight - cachedAt) / 2)
-            val programmes = channels.associate { it.guideId to listOf(Programme(it.guideId, "Cached guide", cachedAt - 60000, cachedAt + 3 * 3600000)) }
+            val programmes = channels.associate { it.guideId to listOf(Programme(it.guideId, "Cached guide", cachedAt - 60000, cachedAt + 3 * 3600000)) } + mapOf(channels.first().guideId to listOf(
+                Programme(channels.first().guideId, "Cached guide", cachedAt - 60000, upcomingAt),
+                Programme(channels.first().guideId, "NFL: Seahawks vs 49ers", upcomingAt, upcomingAt + 3 * 3600000)))
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             store.setSportsFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             val scoreboard = LiveSportsSnapshot(listOf(LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), cachedAt - 300000),
@@ -1563,6 +1594,10 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
                 scenario.onActivity { activity -> activity.liveSportsLoader = { scoreboard.copy(checked = System.currentTimeMillis()) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                waitFor(scenario) { activity ->
+                    @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
+                    summaries.values.any { it.startsWith("Scheduled · ESPN 1") }
+                }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
                 scenario.onActivity { activity ->
                     assertTrue("Hero: ${activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text}; focus ${activity.currentFocus?.tag}", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle"))
@@ -1654,6 +1689,28 @@ class SpareDeviceTest {
                 }
                 store.saveSources(emptyList()); store.removeCache(source)
             }
+        }
+        FixtureServer(longVideo = true, programmeTitle = "Other movie 16", slowVod = true, parallelClients = true).use { server ->
+            val source = Source(name = "Late VOD match", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains("Other movie 16")) }
+                holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-progress")?.isShown == true }
+                var liveId = ""
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
+                    liveId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                }
+                server.finishVodCatalog.countDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-status").isShown)
+                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
         }
         FixtureServer(longVideo = true, programmeTitle = "Fixture movie", slowVod = true, ambiguousVod = true).use { server ->
             val source = Source(name = "VOD release choice", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

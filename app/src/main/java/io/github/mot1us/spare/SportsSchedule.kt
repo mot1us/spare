@@ -169,15 +169,14 @@ object SportsSchedule {
         }
         val byGuideKey = channels.groupBy { guide.key(it) }
         val matches = mutableListOf<SportsBroadcast>()
-        val at = if (game.state == "pre") game.start else now
         var checkedKeys = 0
         for ((index, entry) in byGuideKey.entries.withIndex()) {
             if (Thread.currentThread().isInterrupted) return game
             if (System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedKeys++
-            val programme = guide.programmes[entry.key].orEmpty().firstOrNull { p ->
-                p.start <= at && p.end > at && (game.state != "pre" || kotlin.math.abs(p.start - game.start) <= 3 * 3600000L) && matchesTarget(p, game.teams.first().league)
-            }
+            val programme = guide.programmes[entry.key].orEmpty().asSequence().filter { p ->
+                broadcastWindow(game, p, now) && matchesTarget(p, game.teams.first().league)
+            }.minByOrNull { kotlin.math.abs(it.start - game.start) }
             if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
             if (index % 512 == 0) progress(channels.size + index, channels.size + byGuideKey.size)
         }
@@ -188,11 +187,14 @@ object SportsSchedule {
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
             .sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }).take(512), coverageComplete = complete)
     }
+    internal fun broadcastWindow(game: SportsGame, programme: Programme, now: Long): Boolean =
+        if (game.state == "pre") programme.end > game.start && programme.start in (game.start - 90 * 60000L)..(game.start + 45 * 60000L)
+        else now in programme.start until programme.end
     internal fun newlyConfirmed(game: SportsGame, before: Guide, after: Guide, now: Long, ignore: Set<String> = emptySet()): Boolean {
         val target = game.teams.map { it.id }.toSet()
         val hints = game.teams.map { it.aliases + it.name.split(' ').filter { word -> word.length >= 4 } }
         return after.programmes.any { (key, entries) -> key !in ignore && entries != before.programmes[key] && entries.any { programme ->
-            now in programme.start until programme.end && hints.all { aliases -> aliases.any { programme.title.contains(it, true) || programme.description.contains(it, true) } } &&
+            broadcastWindow(game, programme, now) && hints.all { aliases -> aliases.any { programme.title.contains(it, true) || programme.description.contains(it, true) } } &&
                 SportsGuide.teams(programme, game.teams.first().league)?.map { it.id }?.toSet() == target && after.channels.any { after.key(it) == key }
         } }
     }

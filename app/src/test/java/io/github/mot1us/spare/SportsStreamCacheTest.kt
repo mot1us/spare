@@ -147,4 +147,15 @@ class SportsStreamCacheTest {
         val verified = mapOf(unknown.id to VideoInfo(3840, 2160, 59.94f))
         assertTrue(SportsStreams.cardSummary(unverified, filters, verified, guide, now).contains("59.94"))
     }
+    @Test fun scheduledMatchesAreDisplayOnlyAndExpireAtKickoff() {
+        val future = game.copy(state = "pre", start = now + 3600000L, end = now + 4 * 3600000L)
+        val c = channel("scheduled"); val p = Programme(c.id, future.title, future.start, future.end)
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, Guide(listOf(c), mapOf(c.id to listOf(p))), emptySet())
+        assertTrue(cache.put(token, SportsStreamCache.Match(future.copy(broadcasts = listOf(SportsBroadcast(c, p)))), now))
+        assertNotNull(cache.get(token, future, now, forAuto = false))
+        assertNull("An upcoming match must not tune automatically", cache.get(token, future, now))
+        assertNull(cache.get(token, future.copy(state = "in"), now, forAuto = false))
+        assertNull(cache.get(token, future, future.start, forAuto = false, allowStale = true))
+    }
+
 }

@@ -48,4 +48,15 @@ class LocalChannelsTest {
         assertEquals(8, LocalRegions.parse((1..20).joinToString(";") { "City $it" }).size)
         assertTrue(local.find(channels, "; ; ").isEmpty())
     }
+    @Test fun qualifiedPortlandKeepsOregonStationsAndCombinesWithSeattleWithoutOtherStates() {
+        val directory = LocalChannels("KING\tSeattle\tWA\tWashington\nKGW\tPortland\tOR\tOregon\nWGME\tPortland\tME\tMaine\n")
+        val lineup = listOf(channel("seattle", "KING FHD"), channel("call", "KGW HD"),
+            channel("or", "FOX Portland Oregon"), channel("or-code", "NBC Portland OR"),
+            channel("me", "CBS Portland Maine"), channel("me-call", "WGME HD"), channel("ambiguous", "FOX Portland"))
+        assertEquals(setOf("call", "or", "or-code"), directory.find(lineup, "Portland Oregon"))
+        assertEquals(setOf("seattle", "call", "or", "or-code"), directory.find(lineup, "Seattle, WA; Portland, OR"))
+        assertEquals(setOf("me", "me-call"), directory.find(lineup, "Portland ME"))
+        assertEquals(listOf("Portland, OR"), directory.locations("Portland Oregon"))
+    }
+
 }

@@ -276,7 +276,7 @@ class MainActivity : Activity() {
         if (!closed && started && onDemand == null && !multiview.active) source?.let(playlistSearch::prefetch)
     }
     private fun scheduleVodIndex() {
-        if (!vodWarmScheduled && started && source?.kind == "xtream") { vodWarmScheduled = true; handler.postDelayed(warmVodIndex, 2000) }
+        if (!vodWarmScheduled && started && source?.kind == "xtream") { vodWarmScheduled = true; handler.postDelayed(warmVodIndex, 2000); if (::details.isInitialized && details.isVisible) refreshDetails() }
     }
     private lateinit var playlistSearch: PlaylistSearch
     private lateinit var searchPanel: PlaylistSearchPanel
@@ -791,6 +791,7 @@ class MainActivity : Activity() {
             if (started && vodRequest != null && vodStartPanel.isVisible) renderVodStart(items, busy, warning)
             else if (started && searchPanel.isVisible) { searchedDemand = items; searchLoading = busy; searchWarning = warning; renderPlaylistSearch() }
         }
+        playlistSearch.stateChanged = { if (details.isVisible) refreshDetails() }
         library.archiveLoaded = { selected, channel, entries ->
             if (source == selected) {
                 replayDiscovery?.remember(selected, generation, guide, mapOf(channel.id to entries))
@@ -1386,6 +1387,8 @@ class MainActivity : Activity() {
     }
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
     private fun showGuide(show: Boolean) {
+        val returningToGuide = show && !guideVisible
+        if (returningToGuide) navigationRail.prepareForContent()
         closeDetails()
         if (!show && ::searchPanel.isInitialized && searchPanel.isVisible) { searchPanel.dismiss(); playlistSearch.pause() }
         if (!show) { guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
@@ -1394,8 +1397,8 @@ class MainActivity : Activity() {
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
         layoutGuideSurface()
-        if (show) { showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); focusChannel(); if (sportsVisible) scheduleSports() }
-        else { navigationRail.visibility = View.GONE; updateDockHint(); ++focusEpoch; showNowPlaying() }
+        if (show) { if (returningToGuide) focusChannel(); showNavigation(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode"); if (!returningToGuide) focusChannel(); if (sportsVisible) scheduleSports() }
+        else { navigationRail.visibility = View.GONE; navigationRail.prepareForContent(); updateDockHint(); ++focusEpoch; showNowPlaying() }
         scheduleEpg(); syncReplayDiscovery()
         if (show && sportsQualityChanged) {
             sportsQualityChanged = false
@@ -1744,7 +1747,7 @@ class MainActivity : Activity() {
             (game.networks.joinToString(" · ").ifBlank { "Broadcaster to be announced" }) + "\n" +
             (if (game.broadcasts.isNotEmpty() || game.titleMatches.isNotEmpty()) "${game.broadcasts.size + game.titleMatches.size} EPG/title matches · OK Choose channel" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible network channels · OK Review" else "Channel not matched yet")
         sportsChannels = emptyList()
-        if (game.live(System.currentTimeMillis()) && sportsVisible && guideVisible && !sportsPanel.watching) { sportsWarmPriority = game; queueSportsPrefetch() }
+        if ((game.live(System.currentTimeMillis()) || game.upcoming(System.currentTimeMillis())) && sportsVisible && guideVisible && !sportsPanel.watching) { sportsWarmPriority = game; queueSportsPrefetch() }
     }
     private fun rememberSportsReplays(game: SportsGame, choices: List<SportsReplay>) {
         val selected = source ?: return
@@ -1822,7 +1825,8 @@ class MainActivity : Activity() {
     }
     private fun queueSportsPrefetch(games: List<SportsGame>? = null) {
         if (games != null) {
-            sportsWarmGames = games.filter { it.live(System.currentTimeMillis()) }.take(12)
+            val now = System.currentTimeMillis()
+            sportsWarmGames = games.filter { it.live(now) || it.upcoming(now) && it.start < now + 3 * 86400000L }.take(12)
             sportsStreamSummaries.keys.retainAll(sportsWarmGames.map { it.key }.toSet() + listOfNotNull(sportsWarmPriority?.key))
         }
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching) return
@@ -1843,7 +1847,7 @@ class MainActivity : Activity() {
     private fun sportsStreamSummary(match: SportsStreamCache.Match): String {
         val evidence = guide.copy(programmes = guide.programmes + match.warmed)
         val now = System.currentTimeMillis()
-        return SportsStreams.cardSummary(match.game, sportsStreamFilters(), videoInfo, evidence, now) { !unavailable.contains(it.id, now) }
+        return SportsStreams.cardSummary(match.game, sportsStreamFilters(), videoInfo, evidence, now) { match.game.state == "pre" || !unavailable.contains(it.id, now) }
     }
     private fun prefetchSportsStream() {
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive != null) return
@@ -1851,7 +1855,7 @@ class MainActivity : Activity() {
         val selected = source ?: return
         val now = System.currentTimeMillis(); val snapshot = guide; val token = sportsStreamCache.use(selected.id, generation, snapshot, favorites)
         val game = (listOfNotNull(sportsWarmPriority) + sportsWarmGames).distinctBy { it.key }.firstOrNull {
-            it.live(now) && sportsStreamCache.get(token, it, now, forAuto = false) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
+            (it.live(now) || it.upcoming(now)) && sportsStreamCache.get(token, it, now, forAuto = false) == null && now - (sportsWarmAttempted[it.key] ?: 0L) >= 30000
         } ?: return
         sportsWarmAttempted[game.key] = now
         val showProgress = sportsStreamCache.get(token, game, now, forAuto = false, allowStale = true) == null
@@ -1937,7 +1941,7 @@ class MainActivity : Activity() {
     }
     private fun gameStreamLabel(game: SportsGame, channel: Channel): String =
         (if (channel.id in favorites) "★ " else "") + channel.name + " · " + channel.qualityLabel(videoInfo[channel.id]) +
-            if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
+            if (game.state == "pre" && game.broadcasts.any { it.channel.id == channel.id }) " · Scheduled ${GuideClock.time(game.broadcasts.first { it.channel.id == channel.id }.programme.start)}" else if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
         profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null, background: Boolean = false): SportsStreamCache.Match {
         var lastProgress = 0L
@@ -1951,21 +1955,22 @@ class MainActivity : Activity() {
         val warmed = cached?.warmed.orEmpty().toMutableMap()
         val needsProvider = selected.kind == "xtream" && selected.epgUrl.isBlank()
         val coverageNow = System.currentTimeMillis()
-        val locallyConfirmed = result.broadcasts.any { coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
-        if (confirm && needsProvider && !Thread.currentThread().isInterrupted) {
+        val locallyConfirmed = result.broadcasts.any { game.state == "pre" || coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
+        if (confirm && needsProvider && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             val bestHeight = (result.broadcasts.map { it.channel } + result.titleMatches).maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
             val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis())
                 .filter { !locallyConfirmed || (it.quality(quality[it.id])?.height ?: 0) > bestHeight }
             if (targets.isNotEmpty()) {
                 val highestTarget = targets.maxOf { it.quality(quality[it.id])?.height ?: 0 }
-                progress("Confirming current coverage · ${targets.size} channels", 0, 0)
+                val label = if (game.state == "pre") "Checking scheduled coverage" else "Confirming current coverage"
+                progress("$label · ${targets.size} channels", 0, 0)
                 val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
-                    get = { channel, timeout -> XtreamEpg.load(selected, channel, 6, timeout) },
+                    get = { channel, timeout -> XtreamEpg.load(selected, channel, if (game.state == "pre") 72 else 6, timeout) },
                     confirmed = { channel, entries ->
                         (channel.quality(quality[channel.id])?.height ?: 0) >= highestTarget &&
                             SportsSchedule.match(game, Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), favoritesSnapshot, System.currentTimeMillis()).broadcasts.isNotEmpty()
-                    }, progress = { checked, total -> progress("Confirming current coverage · $checked / $total", checked, total) })
+                    }, progress = { checked, total -> progress("$label · $checked / $total", checked, total) })
                 replies.forEach { (channel, entries) -> warmed[snapshot.key(channel)] = entries }
                 if (warmed.isNotEmpty()) {
                     val fresh = SportsSchedule.match(game, Guide(targets, warmed), favoritesSnapshot, System.currentTimeMillis())
@@ -2000,8 +2005,9 @@ class MainActivity : Activity() {
             val latestQuality = videoInfo.toMap()
             val alternatives = SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
             val channels = (alternatives + SportsStreams.rank(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality) {
-                !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp)
-            }).distinctBy { it.id }.filterNot { SportsStreams.conflictingCoverage(matched, it, guide, now) }
+                (game.state == "pre" || !unavailable.contains(it.id, now)) && Network.allowed(it.url, selected.allowHttp)
+            }).distinctBy { it.id }.filter { game.state != "pre" || matched.broadcasts.any { broadcast -> broadcast.channel.id == it.id } }
+                .filterNot { SportsStreams.conflictingCoverage(matched, it, guide, now) }
             sportsResults = GameStreams(matched, channels)
             val streamLabel: (Channel) -> String = { (if (it.id == current?.id) "Current · " else "") + gameStreamLabel(matched, it) }
             if (autoWatch) {
@@ -2054,7 +2060,18 @@ class MainActivity : Activity() {
         val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
         if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified"), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.let { selected -> programme?.let(VodStart::request)?.let { library.repository.matches(selected, it).isNotEmpty() } } == true, programme?.let(VodStart::request)?.let(VodStart::targetLabel).orEmpty())
+        val target = programme?.let(VodStart::request)
+        val selected = source
+        val canVod = selected != null && target != null && library.repository.matches(selected, target).isNotEmpty()
+        val status = if (selected?.kind == "xtream" && target != null) playlistSearch.catalogStatus(selected, if (target.episode == null) setOf("movie", "series") else setOf("series")) else null
+        val checking = !canVod && status != null && (status.checking || vodWarmScheduled && !status.complete)
+        val message = if (canVod || status == null) "" else when {
+            checking -> "Checking for VOD…"
+            status.complete -> "No VOD match found"
+            status.failed -> "Could not check for VOD"
+            else -> "VOD check paused"
+        }
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified"), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), selected?.allowHttp == true, playbackGame()?.game?.title, canVod, target?.let(VodStart::targetLabel).orEmpty(), checking, message)
     }
     private fun playbackDiagnostics(): String {
         val format = player.videoFormat

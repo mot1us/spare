@@ -31,6 +31,7 @@ class LocalChannelsEditor(
     private val directory = LocalChannels(context.assets.open("local-stations.tsv").bufferedReader().use { it.readText() })
     private var lastPublished = LocalRegions.saved(initialLocation)
     private var choosing = false
+    private var appendRegions: List<String>? = null
     private var matchCount = 0
     private var matching = false
     private val publishLater = Runnable { publish() }
@@ -39,6 +40,7 @@ class LocalChannelsEditor(
     private val matches = label("Enter a city or state to see local matches.", 12f).apply {
         tag = "local-location-matches"; setTextColor(Color.LTGRAY)
     }
+    private val savedRegions = label("Saved regions · $lastPublished", 12f).apply { tag = "local-saved-regions"; maxLines = 3; visibility = if (lastPublished.isBlank()) GONE else VISIBLE }
     private val input: EditText = EditText(context).apply {
         tag = "local-location-input"; hint = "Seattle, WA · Seattle · Washington"; contentDescription = "City or state"
         typeface = AppFont.face(); textSize = 15f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY)
@@ -76,11 +78,12 @@ class LocalChannelsEditor(
         } }
     }
 
-    val location: String get() = LocalRegions.saved(input.text.toString())
+    val location: String get() = LocalRegions.saved((appendRegions.orEmpty() + LocalRegions.parse(input.text.toString())).joinToString("; "))
 
     init {
         orientation = VERTICAL; tag = "local-channels-editor"
         addView(label("Cities or states · Combine up to 8 regions", 12f), LayoutParams(-1, dp(28)))
+        addView(savedRegions, LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         addView(input, LayoutParams(-1, dp(48)))
         addView(option("Add another region").apply {
             tag = "local-add-region"
@@ -91,8 +94,9 @@ class LocalChannelsEditor(
             } }
             setOnClickListener {
                 if (LocalRegions.parse(location).size < 8) {
-                    choosing = true; input.setText(location + if (location.isBlank()) "" else "; "); input.setSelection(input.length()); choosing = false
-                    input.setSelectAllOnFocus(false); input.requestFocus(); input.setSelection(input.length()); renderSuggestions(); keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                    appendRegions = LocalRegions.parse(location)
+                    choosing = true; input.setSelectAllOnFocus(false); input.setText(""); input.hint = "Add another city or state"; choosing = false
+                    input.requestFocus(); input.setSelection(input.length()); renderSuggestions(); keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
                 }
             }
         }, LayoutParams(-1, dp(36)))
@@ -126,13 +130,14 @@ class LocalChannelsEditor(
         val value = location
         if (value != lastPublished) {
             lastPublished = value; matching = value.isNotBlank(); matchCount = 0; renderMatches(); onChanged(value)
+            savedRegions.text = "Saved regions · $value"; savedRegions.visibility = if (value.isBlank()) GONE else VISIBLE
         } else renderMatches()
     }
 
     private fun choose(value: String) {
         // Move focus before replacing rows so Android cannot select a different settings page.
         input.requestFocus(); choosing = true
-        val previous = input.text.toString().substringBeforeLast(';', "").trim()
+        val previous = if (appendRegions != null) "" else input.text.toString().substringBeforeLast(';', "").trim()
         input.setText(LocalRegions.saved(if (previous.isBlank()) value else "$previous; $value")); input.setSelection(input.length())
         choosing = false; renderSuggestions(); publish(); hideKeyboard()
     }

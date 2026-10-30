@@ -10,6 +10,7 @@ data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Lon
     val scoreLine: String get() = if (scores.isEmpty() || state == "pre") title else teams.joinToString("   —   ") { it.name + (scores[it.id]?.let { score -> "  $score" } ?: "") }
     fun statusLine(now: Long): String = when { state == "post" -> status.ifBlank { "Final" }; live(now) -> "LIVE · ${status.ifBlank { "In progress" }}"; state == "pre" -> "${GuideClock.sportsDate(start, now)}"; else -> status.ifBlank { "Status unavailable" } }
     fun live(now: Long) = state == "in" && if (eventId.isNotBlank()) start <= now + 60000 else start <= now && end > now
+    fun upcoming(now: Long) = state == "pre" && start > now
 }
 
 /** Conservative EPG matching. A listing is evidence of a broadcast, not a guarantee that a stream is online. */
