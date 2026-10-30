@@ -18,7 +18,7 @@ class VodStartPanel(context: Context, private val button: (String, () -> Unit) -
     cancel: () -> Unit, browse: () -> Unit, series: () -> Unit, retry: () -> Unit) : LinearLayout(context) {
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; setTextColor(GuideTheme.ink()); typeface = AppFont.face() }
-    private val title = label(22f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private val title = label(22f).apply { tag = "vod-start-title"; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
     private val status = label(13f).apply { setTextColor(Color.LTGRAY); maxLines = 3 }
     private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true }
     private val choices = LinearLayout(context).apply { orientation = VERTICAL; tag = "vod-start-options" }
@@ -46,7 +46,7 @@ class VodStartPanel(context: Context, private val button: (String, () -> Unit) -
     }
     override fun focusSearch(focused: View, direction: Int): View? = FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
     fun open(request: VodStart.Request) {
-        title.text = request.query + request.year.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+        title.text = VodStart.targetLabel(request)
         identity = emptyList(); choices.removeAllViews(); status.text = "Finding your on-demand version…"
         findSeries.visibility = GONE; retryButton.visibility = GONE; browseButton.visibility = GONE; progress.visibility = VISIBLE
         backgroundContent?.descendantFocusability = FOCUS_BLOCK_DESCENDANTS

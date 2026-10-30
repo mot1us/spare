@@ -57,8 +57,11 @@ class PlaybackDetails(
     fun closeImages() = recent.close()
     fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); recent.appearance(); AppFont.apply(this) }
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
-    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false) {
+    fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false, vodTarget: String = "") {
         vodStart.visibility = if (canVodStart) View.VISIBLE else View.GONE
+        vodStart.text = if (vodTarget.isBlank()) "Watch from beginning · VOD" else "Watch from beginning · $vodTarget"
+        vodStart.contentDescription = "Watch ${vodTarget.ifBlank { "this programme" }} from the beginning on demand"
+        vodStart.maxLines = 2; vodStart.ellipsize = TextUtils.TruncateAt.END
         gameStreamsButton.visibility = if (gameTitle == null) View.GONE else View.VISIBLE
         gameStreamsButton.contentDescription = "Other streams for ${gameTitle.orEmpty()}"
         recent.bind(recentChannels, allowHttp)

@@ -33,7 +33,8 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
         })
     }
     fun update(item: OnDemand, current: Long, total: Long, playing: Boolean, seekable: Boolean, hasNext: Boolean, ended: Boolean) {
-        title.text = item.title + if (item.kind == "catchup") " · Catch-up" else ""
+        val episode = if (item.kind == "episode" && item.episode > 0) " · S${item.season.toString().padStart(2, '0')}E${item.episode.toString().padStart(2, '0')}" else ""
+        title.text = item.title + episode.takeUnless { it.isNotBlank() && item.title.contains(it.removePrefix(" · "), ignoreCase = true) }.orEmpty() + if (item.kind == "catchup") " · Catch-up" else ""
         duration = total.coerceAtLeast(0)
         position.text = (if (ended) "Finished · " else "") + LibraryController.duration(current) + if (duration > 0) " / ${LibraryController.duration(duration)}" else " · Duration unavailable"
         if (!dragging) timeline.progress = if (duration > 0) (current.coerceAtLeast(0) * 1000 / duration).toInt().coerceIn(0, 1000) else 0

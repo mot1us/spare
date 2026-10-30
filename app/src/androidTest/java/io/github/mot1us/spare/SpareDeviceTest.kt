@@ -1616,6 +1616,10 @@ class SpareDeviceTest {
                     holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
                     val lookupStarted = android.os.SystemClock.elapsedRealtime()
+                    scenario.onActivity { activity ->
+                        val label = activity.window.decorView.findViewWithTag<android.widget.Button>("channel-vod-start").text.toString()
+                        assertTrue(label.contains(if (title.startsWith("Fixture series")) "Fixture series · S01E02" else "Fixture movie (2025)"))
+                    }
                     scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); val player = find<PlayerView>(it.window.decorView)!!.player!!
                         player.volume = 0f; player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, true).build()
                         it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick()
@@ -1627,6 +1631,7 @@ class SpareDeviceTest {
                             assertFalse("Episode lookup must never open the Library", activity.window.decorView.findViewWithTag<View>("library-panel").isShown)
                             assertFalse(activity.window.decorView.findViewWithTag<View>("playlist-search").isShown)
                             assertTrue(activity.window.decorView.findViewWithTag<View>("vod-start-panel").hasFocus())
+                            assertEquals("Fixture series · S01E02", activity.window.decorView.findViewWithTag<TextView>("vod-start-title").text.toString())
                         }
                         device.takeScreenshot(File(context.getExternalFilesDir(null), "vod-opening.png"))
                         device.pressBack()

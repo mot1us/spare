@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.22.1 — 2026-10-30
+
+- Name the Watch from beginning target in channel details and its loading overlay: a movie title/year or series title with its exact season/episode. Include the resolved episode title and season/episode in VOD playback controls.
+
 ## 0.22.0 — 2026-10-30
 
 - Keep Watch from beginning on its own compact loading overlay while resolving a series episode; start the matching episode without opening Library or moving focus through its search/catalog pages. Cancellation and failed/missing episode choices stay on the overlay.

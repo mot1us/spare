@@ -3,6 +3,14 @@ package io.github.mot1us.spare
 /** Match a live programme to provider VOD. Channel archives and timeshift URLs are never used. */
 object VodStart {
     data class Request(val query: String, val year: String = "", val season: Int? = null, val episode: Int? = null)
+    fun targetLabel(request: Request): String {
+        val number = when {
+            request.season != null && request.episode != null -> "S${request.season.toString().padStart(2, '0')}E${request.episode.toString().padStart(2, '0')}"
+            request.episode != null -> "Episode ${request.episode}"
+            else -> ""
+        }
+        return request.query + if (number.isNotEmpty()) " · $number" else request.year.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+    }
     private val year = Regex("[\\[(]((?:19|20)[0-9]{2})[\\])]")
     private val episode = Regex("\\b(?:S([0-9]{1,3})\\s*E([0-9]{1,4})|([0-9]{1,3})x([0-9]{1,4}))\\b", RegexOption.IGNORE_CASE)
     private val prefix = Regex("^(?:(?:US|USA|UK|EN|ENG|CA|AU|Movie|Film|Cinema)\\s*[|:]\\s*)+", RegexOption.IGNORE_CASE)

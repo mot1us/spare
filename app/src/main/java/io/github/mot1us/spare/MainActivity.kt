@@ -2054,7 +2054,7 @@ class MainActivity : Activity() {
         val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
         if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified"), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.let { selected -> programme?.let(VodStart::request)?.let { library.repository.matches(selected, it).isNotEmpty() } } == true)
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified"), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.let { selected -> programme?.let(VodStart::request)?.let { library.repository.matches(selected, it).isNotEmpty() } } == true, programme?.let(VodStart::request)?.let(VodStart::targetLabel).orEmpty())
     }
     private fun playbackDiagnostics(): String {
         val format = player.videoFormat
