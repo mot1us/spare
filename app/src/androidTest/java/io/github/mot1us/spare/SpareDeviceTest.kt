@@ -1591,9 +1591,12 @@ class SpareDeviceTest {
                     assertTrue(rail.contentHasFocus); assertEquals(ViewGroup.FOCUS_AFTER_DESCENDANTS, rail.descendantFocusability)
                     activity.window.decorView.findViewWithTag<View>("sports-today").requestFocus()
                 }
+                var liveMediaId = ""
+                scenario.onActivity { liveMediaId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
                 device.pressDPadLeft(); device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
-                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                device.pressBack(); waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && channelList(it)?.isShown == false }
+                scenario.onActivity { assertEquals("Back from Library preserves the playing stream without retuning", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
             }
             store.delete("game-reminders.enc")
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet(); store.sportsFollowedOnly = false
