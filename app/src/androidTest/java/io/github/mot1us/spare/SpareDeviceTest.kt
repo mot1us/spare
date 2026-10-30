@@ -869,7 +869,8 @@ class SpareDeviceTest {
     }
 
     @Test fun okShowsDetailsAndLeftTogglesWatchedChannelsAcrossFailuresAndRestart() {
-        FixtureServer(channelCount = 3, missingStatus = 404).use { server ->
+        // Observe two continuing streams, with independent provider connections.
+        FixtureServer(channelCount = 3, missingStatus = 404, longVideo = true, liveCycles = 4, parallelClients = true).use { server ->
             val source = Source(name = "History Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -2146,17 +2147,19 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
+        private val connections = if (parallelClients) Executors.newFixedThreadPool(4) else null
+        private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<java.net.Socket>()
         val requests = java.util.concurrent.ConcurrentHashMap<String, Int>()
         val resumeStream = java.util.concurrent.CountDownLatch(1)
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
         private val transport = instrumentation.context.assets.open("no-aud.ts").use { it.readBytes() }
         private val avTransport by lazy { instrumentation.context.assets.open("stall-av.ts").use { it.readBytes() } }
         private val captionTransport by lazy { EmbeddedCaptionFixture.add(repeatTransport(avTransport, 8), embeddedCaptions == 708) }
-        private val longTransport by lazy { repeatTransport(avTransport, 16) }
+        private val longTransport by lazy { repeatTransport(avTransport, liveCycles) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
             """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1","tv_archive":1,"tv_archive_duration":7}"""
         }.toByteArray()
@@ -2191,9 +2194,10 @@ class SpareDeviceTest {
             xml = ("<tv>" + (1..8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
                 "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${listOf("World News", "Live Report", "Evening Update")[slot % 3]}</title><desc>Spare playback and guide test fixture.</desc></programme>"
             } } + "</tv>").toByteArray()
-            worker.execute {
-                while (!socket.isClosed) runCatching {
-                    socket.accept().use { connection ->
+            fun serve(client: java.net.Socket) {
+                clients.add(client)
+                runCatching {
+                    client.use { connection ->
                         connection.soTimeout = 5000
                         val reader = connection.getInputStream().bufferedReader()
                         val request = reader.readLine().orEmpty()
@@ -2268,8 +2272,15 @@ class SpareDeviceTest {
                         } else { output.write(body); output.flush() }
                     }
                 }
+                clients.remove(client)
+            }
+            worker.execute {
+                while (!socket.isClosed) runCatching {
+                    val client = socket.accept()
+                    if (connections != null) connections.execute { serve(client) } else serve(client)
+                }
             }
         }
-        override fun close() { finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); worker.shutdownNow() }
+        override fun close() { finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); clients.forEach { runCatching { it.close() } }; connections?.shutdownNow(); worker.shutdownNow() }
     }
 }
