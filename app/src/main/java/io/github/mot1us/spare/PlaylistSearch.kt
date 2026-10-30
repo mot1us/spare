@@ -8,8 +8,9 @@ import java.util.concurrent.Future
 /** Explicit, playlist-wide title search. Catalog pages stay encrypted; no video streams are probed. */
 class PlaylistSearch(private val store: SecureStore, private val repository: LibraryCatalog = LibraryCatalog(store), private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
-    private val io = Executors.newFixedThreadPool(2)
-    private val reader = Executors.newSingleThreadExecutor()
+    private val background = java.util.concurrent.ThreadFactory { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog") }
+    private val io = Executors.newFixedThreadPool(2, background)
+    private val reader = Executors.newSingleThreadExecutor(background)
     private val lock = Any()
     private var source: Source? = null
     private var context = 0

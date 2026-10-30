@@ -176,6 +176,32 @@ class SpareDeviceTest {
             }
             store.saveSources(emptyList()); RefreshJobs.configure(context, emptyList()); store.removeCache(source)
         }
+        FixtureServer(channelCount = 48, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Quiet cached launch", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channels = (1..48).map { Channel("xc:$it", "Channel $it", "News", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it") }
+            val stamp = System.currentTimeMillis()
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, mapOf("xc:1" to listOf(Programme("xc:1", "Saved programme", stamp - 60000, stamp + 3600000)))))
+            store.setLast(source, channels.first()); store.markPlaylistRefreshed(source)
+            store.setRefreshPolicy(source, RefreshPolicy(playlistOnLaunch = true, epgOnLaunch = true))
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var item = ""
+                scenario.onActivity { item = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                val playingAt = android.os.SystemClock.elapsedRealtime()
+                waitFor(scenario) { android.os.SystemClock.elapsedRealtime() - playingAt >= 2500 }
+                assertEquals("Cached startup must not immediately redownload catalogs or launch-refresh metadata", 0, server.requests["/player_api.php"] ?: 0)
+                assertTrue("Fullscreen playback must not query neighboring or favorite channel guides", server.epgTargets.isEmpty())
+                waitFor(scenario) { server.catalogTargets.isNotEmpty() && store.playlistRefreshed(source) > stamp }
+                scenario.onActivity { activity ->
+                    val player = find<PlayerView>(activity.window.decorView)!!.player!!
+                    assertEquals("Background refresh must not replace the resumed stream", item, player.currentMediaItem!!.mediaId)
+                    assertTrue(player.isPlaying)
+                }
+            }
+            store.setRefreshPolicy(source, RefreshPolicy()); store.saveSources(emptyList()); store.removeCache(source)
+        }
+
     }
 
     @Test fun networkImportPreviewRemoteFavoritesAndResume() {
@@ -1694,7 +1720,7 @@ class SpareDeviceTest {
             val source = Source(name = "Late VOD match", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains("Other movie 16")) }
                 holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-progress")?.isShown == true }

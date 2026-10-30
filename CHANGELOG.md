@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.1 — 2026-10-30
+
+- Give resumed playback a quiet startup window before optional VOD indexing and automatic playlist/EPG refreshes. Keep explicit search/details and manual refresh available, retain launch refresh requests until playback settles, and leave live/VOD buffer settings unchanged.
+- Restore the last measured channel frame rate before preparing playback; settle fresh frame-rate changes and ignore weak half-rate decoder/render hints over a saved rate. Keep source FPS measurement unchanged.
+- Limit full-screen guide requests to the current channel, defer off-screen guide prefetch during startup, and run cached catalog/local-channel/index writes at background thread priority.
+
 ## 0.23.0 — 2026-10-30
 
 - Show a themed Checking for VOD animation while the catalog index is restoring or loading. Replace it with the matched movie/episode action, or an explicit no-match, paused or unavailable state; do not leave a spinner running after a failed or paused check.

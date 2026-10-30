@@ -58,7 +58,7 @@ import java.util.concurrent.Executors
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val imports = Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-import") }
-    private val cacheWrites = Executors.newSingleThreadExecutor()
+    private val cacheWrites = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-cache") }
     private val cadence = FrameCadence()
     private lateinit var sourceVideoFrames: SourceVideoFrames
     private lateinit var reminders: GameReminders
@@ -86,6 +86,11 @@ class MainActivity : Activity() {
     }
     private lateinit var refreshBar: ProgressBar
     private var refreshRetryAt = 0L
+    private var launchRefreshPending = false
+    private val playbackWarmup = PlaybackWarmup()
+    private fun backgroundPlaybackReady(): Boolean = (current == null && onDemand == null) || playbackWarmup.ready(
+        playbackToken, android.os.SystemClock.elapsedRealtime(), started && firstFrame && player.isPlaying, player.totalBufferedDuration)
+
     private val ownRefreshes = mutableSetOf<String>()
     private var mergeEpoch = 0
     private var deferredRefresh: PlaylistRefresh.Result? = null
@@ -271,9 +276,13 @@ class MainActivity : Activity() {
     private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
     private var vodWarmScheduled = false
-    private val warmVodIndex = Runnable {
-        vodWarmScheduled = false
-        if (!closed && started && onDemand == null && !multiview.active) source?.let(playlistSearch::prefetch)
+    private val warmVodIndex = object : Runnable {
+        override fun run() {
+            if (closed || !started || onDemand != null || multiview.active) { vodWarmScheduled = false; return }
+            if (!details.isVisible && !backgroundPlaybackReady()) { handler.postDelayed(this, 1000); return }
+            vodWarmScheduled = false
+            source?.let(playlistSearch::prefetch)
+        }
     }
     private fun scheduleVodIndex() {
         if (!vodWarmScheduled && started && source?.kind == "xtream") { vodWarmScheduled = true; handler.postDelayed(warmVodIndex, 2000); if (::details.isInitialized && details.isVisible) refreshDetails() }
@@ -305,7 +314,7 @@ class MainActivity : Activity() {
     private var localLoading = false
     private var localSourceId = ""
     private lateinit var localProgress: ProgressBar
-    private val localWorker = Executors.newSingleThreadExecutor()
+    private val localWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-local") }
     private var localTask: java.util.concurrent.Future<*>? = null
     private val localStations by lazy { LocalChannels(assets.open("local-stations.tsv").bufferedReader().use { it.readText() }) }
     private lateinit var guideTabs: LinearLayout
@@ -458,7 +467,7 @@ class MainActivity : Activity() {
             }
             decoderFrameRate = qualityCodecRate
             val info = VideoRate.observation(format, measured, qualityCodecRate, qualityHeader, sourceVideoFrames.rate(token))
-            if (!multiview.active) frameRates.request(info.fps)
+            if (!multiview.active) frameRates.observe(info.fps, info.evidence in setOf("input timestamps", "SPS timing"))
             if (now - qualityPostedAt >= 500) {
                 qualityPostedAt = now
                 // Player callbacks and persisted UI state have different threads.
@@ -507,6 +516,7 @@ class MainActivity : Activity() {
                 if (state != player.playbackState) return
                 if (state == Player.STATE_BUFFERING && hasPlayedChannel && player.playWhenReady) playbackRebuffers++
                 if (state == Player.STATE_BUFFERING) {
+                    playbackWarmup.reset()
                     stopSportsPrefetch()
                     playlistSearch.pausePrefetch()
                 }
@@ -523,7 +533,7 @@ class MainActivity : Activity() {
             }
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
-                firstFrame = true; hasPlayedChannel = true
+                firstFrame = true; hasPlayedChannel = true; backgroundPlaybackReady()
                 sportsPlaybackPlan?.takeIf { it.channel?.id == current?.id }?.let { plan ->
                     // A working stream is accepted immediately; quality never triggers another connection.
                     plan.accepted = true
@@ -1020,7 +1030,7 @@ class MainActivity : Activity() {
         if (::multiview.isInitialized) multiview.close()
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
-        flushVideoReadings(); cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L
+        flushVideoReadings(); cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L; launchRefreshPending = false
         stopSportsPrefetch(clear = true); clearSportsPlayback()
         val epoch = ++generation; guideTimeline.clear()
         sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; replayDiscovery?.pause(); replayGames = emptyList(); sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
@@ -1030,7 +1040,8 @@ class MainActivity : Activity() {
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
         cancelPlaybackCallbacks(); playbackToken++; player.stop(); frameRates.clear(); current = null; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE
-        source = selected; playlistSearch.prepare(selected); focused = null; store.active = selected.id; favorites = store.favorites(selected)
+        handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; playlistSearch.pause(cancel = true)
+        source = selected; focused = null; store.active = selected.id; favorites = store.favorites(selected)
         filters = store.filters(selected); sportsFilters = store.sportsFilters(selected).copy(minHeight = 0); videoInfo = store.videoInfo(selected); unavailable = store.unavailable(selected); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
@@ -1054,9 +1065,12 @@ class MainActivity : Activity() {
         }
     }
     private fun autoRefresh(selected: Source, launch: Boolean) {
+        launchRefreshPending = launchRefreshPending || launch
+        if (!started || guide.channels.isEmpty() || !backgroundPlaybackReady()) return
+        val refreshLaunch = launchRefreshPending; launchRefreshPending = false
         val policy = store.refreshPolicy(selected); val now = System.currentTimeMillis()
-        val playlist = !store.archiveMetadataReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, launch)
-        val epg = policy.epgDue(store.epgRefreshed(selected), now, launch)
+        val playlist = !store.archiveMetadataReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, refreshLaunch)
+        val epg = policy.epgDue(store.epgRefreshed(selected), now, refreshLaunch)
         if ((playlist || epg) && !PlaylistRefresh.running(selected.id)) refreshCurrent(selected, playlist, epg)
     }
     private fun refreshCurrent(selected: Source, playlist: Boolean = true, epg: Boolean = true, after: (() -> Unit)? = null) {
@@ -1148,6 +1162,7 @@ class MainActivity : Activity() {
             HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
+        if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
         handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
     }
@@ -1241,6 +1256,7 @@ class MainActivity : Activity() {
     private fun collectVisibleEpg() {
         val selected = source ?: return
         if (selected.kind != "xtream" || selected.epgUrl.isNotBlank() || !started) return
+        if (!guideVisible) { epgWanted = listOfNotNull(current); pumpEpg(); return }
         if (sportsVisible && guideVisible) {
             epgWanted = (listOfNotNull(current) + sportsChannels).distinctBy { guide.key(it) }.take(5)
             pumpEpg(); return
@@ -1250,8 +1266,9 @@ class MainActivity : Activity() {
         val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
         val last = if (guideVisible) layout.findLastVisibleItemPosition().coerceAtLeast(first) else first
         val visible = channels.subList(first.coerceAtMost(channels.size), minOf(last + 1, first + 20, channels.size))
-        val nearby = channels.subList((first - 12).coerceIn(0, channels.size), minOf(last + 33, channels.size))
-        val favoritesToWarm = guide.channels.asSequence().filter { it.id in favorites }.take(24).toList()
+        val canWarm = backgroundPlaybackReady()
+        val nearby = if (canWarm) channels.subList((first - 12).coerceIn(0, channels.size), minOf(last + 33, channels.size)) else emptyList()
+        val favoritesToWarm = if (canWarm) guide.channels.asSequence().filter { it.id in favorites }.take(24).toList() else emptyList()
         epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible + nearby + favoritesToWarm).distinctBy { it.id }.take(80)
         pumpEpg()
     }

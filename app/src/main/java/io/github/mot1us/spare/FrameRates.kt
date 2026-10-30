@@ -12,13 +12,25 @@ import kotlin.math.round
 
 class FrameRates(private val activity: Activity, private val view: SurfaceView) : SurfaceHolder.Callback {
     private val handler = Handler(Looper.getMainLooper())
+    private val target = FrameRateTarget()
     @Volatile private var rate = 0f
     @Volatile var enabled = true
         set(value) { field = value; if (!value) clear() }
     init { view.holder.addCallback(this) }
+    /** Apply a known rate before prepare, while the opening overlay is still visible. */
+    fun begin(value: Float) {
+        target.reset(value)
+        if (value.isFinite() && value in 10f..120f) request(value)
+    }
+    fun observe(value: Float, reliable: Boolean) {
+        if (!enabled) return
+        val settled = target.observe(value, android.os.SystemClock.elapsedRealtime(), reliable) ?: return
+        if (abs(settled - rate) < .1f) return
+        rate = settled; handler.post { apply() }
+    }
     fun request(value: Float) {
         if (!enabled || !value.isFinite() || value !in 10f..120f || abs(value - rate) < .1f) return
-        rate = value
+        target.reset(value); rate = value
         handler.post { apply() }
     }
     private fun apply() {
@@ -40,7 +52,7 @@ class FrameRates(private val activity: Activity, private val view: SurfaceView) 
         }
     }
     fun clear() {
-        rate = 0f
+        target.reset(); rate = 0f
         handler.removeCallbacksAndMessages(null)
         runCatching {
             if (Build.VERSION.SDK_INT >= 30 && view.holder.surface.isValid)
