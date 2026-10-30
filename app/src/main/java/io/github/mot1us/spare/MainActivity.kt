@@ -41,7 +41,6 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -354,13 +353,13 @@ class MainActivity : Activity() {
     private val monitorPlayback = object : Runnable {
         override fun run() {
             monitoringPlayback = false
-            if (!ownsLivePlayback()) { playbackProgress.reset(); return }
+            if (!ownsPlayback()) { playbackProgress.reset(); return }
             val state = player.playbackState
             val active = firstFrame && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
                 player.playerError == null && !retryPanel.isVisible && (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
             val frame = if (!multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
             if (playbackProgress.stalled(playbackToken, android.os.SystemClock.elapsedRealtime(), player.currentPosition, frame, state == Player.STATE_BUFFERING, active)) {
-                reconnectOrFail("Playback stopped advancing. Choose Retry to reconnect this channel. (STREAM_STALLED)")
+                reconnectOrFail(if (onDemand != null) "Playback stopped advancing. Retry resumes this title from your saved position. (STREAM_STALLED)" else "Playback stopped advancing. Choose Retry to reconnect this channel. (STREAM_STALLED)")
                 return
             }
             if (state == Player.STATE_READY || state == Player.STATE_BUFFERING) { monitoringPlayback = true; handler.postDelayed(this, 1000) }
@@ -376,11 +375,9 @@ class MainActivity : Activity() {
     private val workingUrls = mutableMapOf<String, String>()
     private val retry = Runnable { if (started && (current != null || onDemand != null)) playAttempt(PlaybackPhase.RECONNECTING) }
     private val revealBuffering = Runnable { if (started && (current != null || onDemand != null) && player.playbackState == Player.STATE_BUFFERING) showPlaybackLoading(PlaybackPhase.BUFFERING) }
-    private val bufferingTimeout = Runnable {
-        if (started && (current != null || onDemand != null) && hasPlayedChannel && player.playbackState == Player.STATE_BUFFERING) reconnectOrFail("The provider stopped sending video. Try another channel or Retry. (STREAM_STALLED)")
-    }
     private val startupTimeout = Runnable {
         if (started && (current != null || onDemand != null) && !firstFrame) {
+            if (onDemand != null) { reconnectOrFail("This title did not resume. Retry continues from your saved position. (STREAM_TIMEOUT)"); return@Runnable }
             if (!hasPlayedChannel && tryAlternate()) return@Runnable
             if (onDemand == null && hasPlayedChannel) { reconnectOrFail("The channel did not resume. Choose Retry to reconnect. (STREAM_TIMEOUT)"); return@Runnable }
             showPlaybackFailure("No video arrived within 15 seconds. Try another channel or choose a stream format in Settings. (STREAM_TIMEOUT)")
@@ -407,8 +404,7 @@ class MainActivity : Activity() {
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { source?.allowHttp == true } else ProviderDataSource { source?.allowHttp == true } }
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
-        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(60000, 90000, 1500, 10000)
-            .setTargetBufferBytes(96 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(true).build()
+        val loadControl = PlaybackLoadControl()
         sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
         val renderers = object : DefaultRenderersFactory(this) {
             override fun getCodecAdapterFactory() = sourceVideoFrames
@@ -509,7 +505,7 @@ class MainActivity : Activity() {
                 if (state == Player.STATE_BUFFERING && hasPlayedChannel && player.playWhenReady) playbackRebuffers++
                 if (state == Player.STATE_BUFFERING) {
                     stopSportsPrefetch()
-                    if (hasPlayedChannel && onDemand == null) playlistSearch.pausePrefetch()
+                    playlistSearch.pausePrefetch()
                 }
                 if (state == Player.STATE_READY && onDemand == null) scheduleVodIndex()
                 if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
@@ -849,6 +845,7 @@ class MainActivity : Activity() {
         sportsReplayGame = null
         val selected = source ?: return
         if (!Network.allowed(item.url, selected.allowHttp)) { toast("This title needs an allowed HTTP or HTTPS address"); return }
+        handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; playlistSearch.pause(cancel = true)
         saveDemandProgress(); closeDetails(); cancelPlaybackCallbacks()
         onDemand = item; demandPosition = position; demandPaused = false; demandSubtitleMode = null
         hasPlayedChannel = false; firstFrame = false; lastVideoInfo = null; alternateUsed = false; reconnects = ReconnectBudget()
@@ -1135,6 +1132,7 @@ class MainActivity : Activity() {
         playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
+        if (onDemand?.kind in setOf("movie", "episode")) itemBuilder.setTag(PlaybackLoadControl.VOD)
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
         val media = if (playbackUrl.substringBefore('?').endsWith(".m3u8", true)) {
@@ -1142,7 +1140,7 @@ class MainActivity : Activity() {
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
-        handler.postDelayed(startupTimeout, 15000)
+        handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
     }
     private fun tryAlternate(): Boolean {
         val selected = source ?: return false
@@ -1164,20 +1162,19 @@ class MainActivity : Activity() {
         if (!library.opened) (retryPanel.getChildAt(1) as ViewGroup).getChildAt(0).requestFocus()
     }
     private fun cancelPlaybackCallbacks() {
-        handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); handler.removeCallbacks(revealBuffering); handler.removeCallbacks(bufferingTimeout)
+        handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); handler.removeCallbacks(revealBuffering)
         handler.removeCallbacks(monitorPlayback); monitoringPlayback = false; playbackProgress.reset()
     }
-    private fun ownsLivePlayback() = !closed && started && pausedPlayback == null && current != null && onDemand == null &&
+    private fun ownsPlayback() = !closed && started && pausedPlayback == null && (current != null || onDemand != null) &&
         player.currentMediaItem?.mediaId == expectedMediaId
     private fun syncPlaybackMonitoring() {
         if (!::player.isInitialized) return
-        handler.removeCallbacks(revealBuffering); handler.removeCallbacks(bufferingTimeout)
+        handler.removeCallbacks(revealBuffering)
         val active = started && pausedPlayback == null && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE
         if (active && firstFrame && hasPlayedChannel && player.playbackState == Player.STATE_BUFFERING) {
             handler.postDelayed(revealBuffering, 750)
-            if (onDemand != null) handler.postDelayed(bufferingTimeout, 45000)
         } else if (player.playbackState == Player.STATE_READY && firstFrame) playbackLoading.visibility = View.GONE
-        if (ownsLivePlayback()) {
+        if (ownsPlayback()) {
             if (!monitoringPlayback) { monitoringPlayback = true; handler.post(monitorPlayback) }
         } else { handler.removeCallbacks(monitorPlayback); monitoringPlayback = false; playbackProgress.reset() }
     }
@@ -2521,7 +2518,7 @@ class MainActivity : Activity() {
         val resume = pausedPlayback; pausedPlayback = null
         if (resume != null && ::player.isInitialized) {
             if (resume && player.playbackState == Player.STATE_IDLE) playAttempt(PlaybackPhase.RECONNECTING) else player.playWhenReady = resume
-            if (resume && !firstFrame && player.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY)) { handler.removeCallbacks(startupTimeout); handler.postDelayed(startupTimeout, 15000) }
+            if (resume && !firstFrame && player.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY)) { handler.removeCallbacks(startupTimeout); handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000) }
         }
         syncPlaybackMonitoring()
         if (::sportsPanel.isInitialized && guideVisible && sportsVisible) sportsPanel.resumeImages()
@@ -2530,7 +2527,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         // Stop audio before any cache, image or lifecycle cleanup. A paused TV app
         // must never continue playing over the launcher or another app.
-        if (::player.isInitialized) { pausedPlayback = player.playWhenReady; if (onDemand != null) demandPaused = !player.playWhenReady; player.pause() }
+        if (::player.isInitialized) { pausedPlayback = player.playWhenReady; if (onDemand != null) demandPaused = !player.playWhenReady; player.pause(); saveDemandProgress() }
         cancelPlaybackCallbacks(); stopSportsPrefetch(); clearSportsPlayback(); replayDiscovery?.pause()
         if (::multiview.isInitialized) multiview.close()
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()

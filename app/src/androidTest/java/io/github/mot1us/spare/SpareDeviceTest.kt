@@ -1740,7 +1740,50 @@ class SpareDeviceTest {
                     assertTrue("Provider metadata must preserve the focused Back action", panel.findViewWithTag<View>("library-back").hasFocus())
                 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
-                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.playbackState == Player.STATE_READY }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.isPlaying == true }
+                var beforeRecovery = ""; var resumePosition = 0L
+                scenario.onActivity { activity ->
+                    val control = PlaybackLoadControl(); val id = androidx.media3.exoplayer.analytics.PlayerId.UNSET
+                    control.onPrepared(id)
+                    fun parameters(bufferedUs: Long, rebuffering: Boolean, vod: Boolean): androidx.media3.exoplayer.LoadControl.Parameters {
+                        val item = androidx.media3.common.MediaItem.Builder().setUri("https://example.test/movie.mp4").apply { if (vod) setTag(PlaybackLoadControl.VOD) }.build()
+                        val timeline = androidx.media3.exoplayer.source.SinglePeriodTimeline(60000000, true, false, false, null, item)
+                        return androidx.media3.exoplayer.LoadControl.Parameters(id, timeline, androidx.media3.exoplayer.source.MediaSource.MediaPeriodId(timeline.getUidOfPeriod(0)), 0, bufferedUs, 1f, true, rebuffering, androidx.media3.common.C.TIME_UNSET, androidx.media3.common.C.TIME_UNSET)
+                    }
+                    try {
+                        assertTrue("Live channel startup stays fast", control.shouldStartPlayback(parameters(1500000, false, false)))
+                        assertFalse("VOD must build its startup cushion", control.shouldStartPlayback(parameters(1500000, false, true)))
+                        assertTrue(control.shouldStartPlayback(parameters(5000000, false, true)))
+                        assertFalse("VOD rebuffering builds a larger cushion", control.shouldStartPlayback(parameters(10000000, true, true)))
+                        assertTrue(control.shouldStartPlayback(parameters(12000000, true, true)))
+                    } finally { control.onReleased(id) }
+                    samePlayer!!.pause(); samePlayer!!.seekTo(samePlayer!!.duration / 3)
+                }
+                waitFor(scenario) { samePlayer?.playbackState == Player.STATE_READY && (samePlayer?.currentPosition ?: 0) > 0 }
+                scenario.onActivity { activity ->
+                    val progress = MainActivity::class.java.getDeclaredField("playbackProgress").apply { isAccessible = true }.get(activity) as PlaybackProgress
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    beforeRecovery = samePlayer!!.currentMediaItem!!.mediaId
+                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, samePlayer!!.currentPosition, null, true, true)
+                    (MainActivity::class.java.getDeclaredField("monitorPlayback").apply { isAccessible = true }.get(activity) as Runnable).run()
+                    assertEquals("A paused episode must never reconnect", beforeRecovery, samePlayer!!.currentMediaItem!!.mediaId)
+                    samePlayer!!.play()
+                }
+                waitFor(scenario) { samePlayer?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    val progress = MainActivity::class.java.getDeclaredField("playbackProgress").apply { isAccessible = true }.get(activity) as PlaybackProgress
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    resumePosition = samePlayer!!.currentPosition
+                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, resumePosition, null, true, true)
+                    (MainActivity::class.java.getDeclaredField("monitorPlayback").apply { isAccessible = true }.get(activity) as Runnable).run()
+                    assertEquals("Recovery must save the exact VOD position before stopping", resumePosition, MainActivity::class.java.getDeclaredField("demandPosition").apply { isAccessible = true }.getLong(activity))
+                }
+                waitFor(scenario) { samePlayer?.currentMediaItem?.mediaId != beforeRecovery && samePlayer?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player)
+                    assertEquals("VOD recovery must never tune a live channel", "/movie/test/test-secret/101.mp4", samePlayer!!.currentMediaItem!!.localConfiguration!!.uri.path)
+                    assertEquals(resumePosition, MainActivity::class.java.getDeclaredField("demandPosition").apply { isAccessible = true }.getLong(activity))
+                }
                 scenario.onActivity {
                     assertTrue(it.window.decorView.findViewWithTag<View>("on-demand-controls").isShown)
                     it.window.decorView.findViewWithTag<View>("on-demand-pause").performClick()

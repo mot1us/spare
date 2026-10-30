@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.21.1 — 2026-10-29
+
+- Give movies and episodes a five-second startup cushion and twelve-second rebuffer cushion while preserving live TV buffering and the existing read-ahead limits. Stop background catalog imports during on-demand playback.
+- Monitor on-demand playback for stuck buffering or frozen video, reconnect from the saved episode/movie position with bounded retries, and preserve that position when leaving the app. Allow extra startup time for on-demand files; deliberate pauses and Library browsing never trigger recovery.
+
 ## 0.21.0 — 2026-10-29
 
 - Play a fresh confirmed Sports card match immediately instead of discarding it for a second search. Keep a new search for expired, changed or unconfirmed coverage, and preserve playback fallback choices.
