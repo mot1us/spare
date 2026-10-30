@@ -30,7 +30,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     val opened get() = isVisible
     init {
         orientation = HORIZONTAL; visibility = GONE; tag = "settings-panel"; setPadding(dp(28), dp(24), dp(24), dp(24))
-        background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF00B1018.toInt(), 0xD90B1018.toInt()))
+        background = GuideTheme.guideBackground()
         val left = LinearLayout(context).apply { orientation = VERTICAL; setPadding(0, 0, dp(18), 0) }
         left.addView(label(heading, 23f), LayoutParams(-1, dp(48)))
         left.addView(ScrollView(context).apply { overScrollMode = OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false; addView(navigation) }, LayoutParams(-1, 0, 1f))

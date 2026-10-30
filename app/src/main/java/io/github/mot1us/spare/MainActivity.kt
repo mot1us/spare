@@ -287,6 +287,8 @@ class MainActivity : Activity() {
     private lateinit var vodStartPanel: VodStartPanel
     private var vodMode = "movie"
     private var vodReturnGuide = false
+    private var vodEpisodeResolving = false
+    private var vodSeriesChoice: OnDemand? = null
     private lateinit var details: PlaybackDetails
     private lateinit var retryPanel: LinearLayout
     private var sources = emptyList<Source>()
@@ -309,6 +311,7 @@ class MainActivity : Activity() {
     private lateinit var guideTabs: LinearLayout
     private lateinit var allChannelsTab: Button
     private lateinit var localTab: Button
+    private lateinit var catchupTab: Button
     private var filters = GuideFilters()
     private var sportsFilters = GuideFilters()
     private var sportsQualityChanged = false
@@ -616,10 +619,11 @@ class MainActivity : Activity() {
             if (store.localLocation.isBlank()) { playbackMenu(); settingsPanel?.selectSetting("Local channels") }
             else { localOnly = true; group = null; favoritesOnly = false; applyFilter(); if (localLoading && adapter.itemCount == 0) localTab.requestFocus() else focusChannelAt(0) }
         }.apply { tag = "guide-local" }
-        guideTabs.addView(allChannelsTab); guideTabs.addView(localTab)
+        catchupTab = button("Catch-up") { openCatchup() }.apply { tag = "guide-catchup"; contentDescription = "Browse past programmes on catch-up channels"; visibility = View.GONE }
+        guideTabs.addView(allChannelsTab); guideTabs.addView(localTab); guideTabs.addView(catchupTab)
         localProgress = ProgressBar(this).apply { tag = "local-matching-progress"; isIndeterminate = true; visibility = View.GONE; contentDescription = "Finding local channels" }
         guideTabs.addView(localProgress, LinearLayout.LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER_VERTICAL; marginStart = dp(8) })
-        listOf(allChannelsTab, localTab).forEach { tab -> tab.setOnKeyListener { _, key, event -> when (key) {
+        listOf(allChannelsTab, localTab, catchupTab).forEach { tab -> tab.setOnKeyListener { _, key, event -> when (key) {
             KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusChannel(); true }
             KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) openNavigation(); true }
             else -> false
@@ -762,14 +766,14 @@ class MainActivity : Activity() {
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { closeDetails(); showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openLibrary(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, { current?.let(::tune) }, ::showOtherGameStreams, ::watchVodFromBeginning)
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openCatchup(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, { current?.let(::tune) }, ::showOtherGameStreams, ::watchVodFromBeginning)
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         demandControls = OnDemandControls(this, ::button, { if (player.playbackState == Player.STATE_ENDED) { demandPosition = 0; demandPaused = false; playAttempt() } else { demandPaused = player.playWhenReady; player.playWhenReady = !demandPaused }; showDemandControls() },
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
             { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive, ::stopDemandToLibrary)
         root.addView(demandControls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         library = LibraryController(this, store, ::button, { source }, { guide }, ::playOnDemand, ::closeLibrary)
-        library.panel.navigation = { ++focusEpoch; libraryButton.requestFocus() }
+        library.panel.navigation = { ++focusEpoch; (if (library.browsingCatchup) guideMode else libraryButton).requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
         library.panel.globalSearch = ::searchWithQuery
         library.catalogChanged = { if (details.isVisible) refreshDetails() }
@@ -778,7 +782,9 @@ class MainActivity : Activity() {
         searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation).apply { backgroundContent = guidePanel }
         root.addView(searchPanel, FrameLayout.LayoutParams(-1, -1))
         vodStartPanel = VodStartPanel(this, ::button, { closeVodStart() }, {
-            closeVodStart(restore = false); openLibrary()
+            val series = vodSeriesChoice
+            closeVodStart(restore = false)
+            if (series == null) openLibrary() else { library.openSearchResult(series); root.bringChildToFront(library.panel); showNavigation("library") }
         }, { vodMode = "series"; requestVodStart() }, { requestVodStart() }).apply { backgroundContent = guidePanel }
         root.addView(vodStartPanel, FrameLayout.LayoutParams(-1, -1))
         playlistSearch = PlaylistSearch(store, library.repository) { items, busy, warning ->
@@ -809,12 +815,14 @@ class MainActivity : Activity() {
         navigationRail.expansionChanged = ::updateDockHint
         applyDockPreference(); applyTheme(); updateTimes(); showGuide(true)
     }
-    private fun openLibrary(channel: Channel? = null) {
+    private fun openLibrary() = openBrowser(false)
+    private fun openCatchup(channel: Channel? = null) = openBrowser(true, channel)
+    private fun openBrowser(archive: Boolean, channel: Channel? = null) {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
         root.bringChildToFront(library.panel)
         if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
-        if (channel != null) library.openCatchup(channel, direct = true) else library.open()
-        showNavigation("library")
+        if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else library.open()
+        showNavigation(if (archive) "guide-mode" else "library")
     }
     private fun reopenLibrary() {
         saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(onDemand); root.bringChildToFront(library.panel); showNavigation("library")
@@ -1326,7 +1334,7 @@ class MainActivity : Activity() {
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty()) View.VISIBLE else View.GONE
         emptyInfo.text = if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or choose Categories in Settings."
         if (localOnly) emptyInfo.text = if (localLoading) "Finding local channels…" else "No local stations matched. Check your city/state in Settings → Local channels and visible categories. Matches use your existing playlist."
-        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; localProgress.isVisible = localOnly && localLoading }
+        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; catchupTab.isVisible = guide.channels.any(Catchup::supported); localProgress.isVisible = localOnly && localLoading }
         if (localOnly && localLoading) filterInfo.text = "Finding local channels… · ${store.localLocation}"
         updateGroups()
         if (::sportsPanel.isInitialized) {
@@ -1434,6 +1442,7 @@ class MainActivity : Activity() {
         val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
         val request = VodStart.request(programme) ?: return
         vodReturnGuide = guideVisible
+        library.dismiss(); vodEpisodeResolving = false; vodSeriesChoice = null
         clearGuideSearch(); closeDetails(); showGuide(false); ++focusEpoch; pendingFocusList = null
         vodRequest = request; vodMode = if (request.episode == null) "movie" else "series"
         val matches = source?.let { library.repository.matches(it, request) }.orEmpty()
@@ -1445,20 +1454,29 @@ class MainActivity : Activity() {
         renderVodStart(library.repository.matches(selected, request), false, "")
     }
     private fun renderVodStart(items: List<OnDemand>, busy: Boolean, warning: String) {
+        if (vodEpisodeResolving) return
         val request = vodRequest ?: return
         val found = VodStart.best(request, items)
         if (found != null) { playVodStart(found); return }
         vodStartPanel.results(VodStart.choices(request, items), busy, warning, vodMode, ::playVodStart)
     }
     private fun closeVodStart(restore: Boolean = true) {
+        library.cancelStart(); vodEpisodeResolving = false; vodSeriesChoice = null
         vodRequest = null; vodStartPanel.dismiss(); playlistSearch.pause()
         if (restore) showGuide(vodReturnGuide)
     }
     private fun playVodStart(item: OnDemand) {
         val request = vodRequest ?: return
-        closeVodStart(restore = false)
-        if (item.kind == "movie") playOnDemand(item, 0L)
-        else { showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item, restart = true, season = request.season, episode = request.episode); showNavigation("library") }
+        if (item.kind != "series") { closeVodStart(restore = false); playOnDemand(item, 0L); return }
+        if (vodEpisodeResolving) return
+        vodEpisodeResolving = true; vodSeriesChoice = item
+        vodStartPanel.openingEpisode(request.season, request.episode)
+        library.resolveEpisode(item, request.season, request.episode) { result ->
+            if (!started || vodRequest !== request) return@resolveEpisode
+            vodEpisodeResolving = false
+            result.onSuccess { episode -> closeVodStart(restore = false); playOnDemand(episode, 0L) }
+                .onFailure { failure -> vodStartPanel.results(emptyList(), false, failure.message.orEmpty().ifBlank { "This episode could not be opened. Retry or browse Library." }, "series", ::playVodStart) }
+        }
     }
     private fun updatePlaylistSearch() {
         if (!::searchPanel.isInitialized || !searchPanel.isVisible) return
@@ -1631,6 +1649,7 @@ class MainActivity : Activity() {
                 sportsCalendar?.submit(day, calendarGames(snapshot, day), loading, failed, store.hideCompletedScores)
             }
         }
+        panel.background = GuideTheme.guideBackground(store.guideOpacity)
         root.bringChildToFront(panel); panel.open(SportsSchedule.selectedDate(sportsTeam) ?: java.time.LocalDate.now())
     }
     private fun calendarGames(snapshot: LiveSportsSnapshot, day: java.time.LocalDate) = SportsSchedule.games(snapshot, Guide.EMPTY, "date:$day", emptySet(), System.currentTimeMillis(), matchChannels = false)
@@ -1656,6 +1675,7 @@ class MainActivity : Activity() {
             sportsManager = it; it.tag = "sports-manager"; it.leaveNavigation = ::closeSportsManager
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
+        panel.background = GuideTheme.guideBackground(store.guideOpacity)
         root.bringChildToFront(panel); panel.open(listOf("Preferences", "Stream quality", "Leagues") + SportsLeagues.all.map { it.name })
     }
     private fun openSportsQuality() {
@@ -2032,14 +2052,20 @@ class MainActivity : Activity() {
         val channel = current ?: return
         val now = System.currentTimeMillis(); val programme = guide.at(channel, now)
         val next = guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= (programme?.end ?: now) }
-        val format = player.videoFormat
-        fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
-        val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${videoInfo[channel.id]?.evidence.orEmpty()}"
-        val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
-        val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
         val recentIds = source?.let(store::recent).orEmpty().filter { it != channel.id }
         if (recentLookupChannels !== guide.channels) { recentLookupChannels = guide.channels; recentLookup = guide.channels.associateBy { it.id } }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + evidence + health, channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.let { selected -> programme?.let(VodStart::request)?.let { library.repository.matches(selected, it).isNotEmpty() } } == true)
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified"), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), source?.allowHttp == true, playbackGame()?.game?.title, source?.let { selected -> programme?.let(VodStart::request)?.let { library.repository.matches(selected, it).isNotEmpty() } } == true)
+    }
+    private fun playbackDiagnostics(): String {
+        val format = player.videoFormat
+        fun rate(value: Float) = if (value.isFinite() && value > 0) "%.2f".format(java.util.Locale.US, value) else "unknown"
+        val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${current?.let { videoInfo[it.id]?.evidence }.orEmpty()}"
+        val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
+        val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
+        val audio = player.audioFormat
+        return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(),
+            audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())
+            .filter { it.isNotBlank() }.joinToString("\n\n")
     }
     private fun showDetails() {
         if (onDemand != null) { showDemandControls(); return }
@@ -2097,11 +2123,12 @@ class MainActivity : Activity() {
         val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
+        panel.background = GuideTheme.guideBackground(store.guideOpacity)
         panel.open(listOf("Playlists", "Local channels", "Playback", "Theme", "Guide", "Categories", "Sports", "Metadata", "Updates", "About Spare", "Open-source licenses", "Exit Spare"))
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
-        if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation("library"); library.panel.focusCategories() } else showGuide(settingsReturnGuide)
+        if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation(if (library.browsingCatchup) "guide-mode" else "library"); library.panel.focusCategories() } else showGuide(settingsReturnGuide)
         if (settingsReturnGuide) { ++focusEpoch; if (store.hiddenDock) focusChannel() else settingsButton.requestFocus() }
     }
     private fun renderSettingsPage(page: String) {
@@ -2109,7 +2136,7 @@ class MainActivity : Activity() {
         if (page != "Theme") themeEditor = null
         if (page != "Local channels") localEditor = null
         val parent = when (page) {
-            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels" -> "Playback"
+            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
             else -> null
@@ -2134,10 +2161,15 @@ class MainActivity : Activity() {
             }
             "Playback" -> {
                 panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
-                listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels").forEach { label ->
+                listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels").forEach { label ->
                     panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> source?.let(store::streamFormat).orEmpty(); else -> "" }) { renderSettingsPage(label); panel.focusContent() }
                 }
                 panel.note("Live buffering adapts to available data. Sustained stalls reconnect automatically; OK offers other streams for recognized games.")
+            }
+            "Playback diagnostics" -> {
+                panel.page(page, "Current stream information · Provider addresses and credentials are never shown.")
+                panel.note(playbackDiagnostics())
+                panel.action("Refresh diagnostics") { refresh("Refresh diagnostics") }
             }
             "Guide" -> {
                 panel.page(page, "Guide navigation and clock. Appearance, fonts, spacing, opacity and preview mode are in Theme.")
@@ -2360,7 +2392,15 @@ class MainActivity : Activity() {
             else if (view.tag?.toString()?.startsWith("settings-option:") == true) view.background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B)
             if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
-        visit(root); navigationRail.appearance(); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        visit(root); navigationRail.appearance(); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(store.guideOpacity); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        settingsPanel?.background = GuideTheme.guideBackground(store.guideOpacity)
+        sportsManager?.background = GuideTheme.guideBackground(store.guideOpacity)
+        sportsCalendar?.background = GuideTheme.guideBackground(store.guideOpacity)
+        if (::searchPanel.isInitialized) searchPanel.appearance(store.guideOpacity)
+        if (::vodStartPanel.isInitialized) vodStartPanel.appearance()
+        if (::details.isInitialized) details.appearance()
+        if (::demandControls.isInitialized) demandControls.appearance()
+        loadingPanel.background = GuideTheme.glass(resources.displayMetrics.density); retryPanel.background = GuideTheme.glass(resources.displayMetrics.density)
         if (::sportsPanel.isInitialized) sportsPanel.refreshTheme()
         sidebarAdapter.notifyItemRangeChanged(0, sidebarAdapter.itemCount); adapter.refreshTheme()
     }

@@ -9,7 +9,7 @@ collect_reports() {
   if [ "$result" != 0 ]; then
     "$adb" -s "$serial" logcat -d -t 1500 > app/build/reports/device/logcat.txt 2>&1 || true
   fi
-  for file in multiview.png library.png guide.png guide-all.png guide-preview.png search.png details.png source-save.png source-cancel.png sports.png sports-loading.png sports-manager.png settings.png launcher-banner.png held-categories.png favorite-feedback.png icon.png failure.png failure.xml; do
+  for file in vod-opening.png details-multiview.png multiview.png library.png guide.png guide-all.png guide-preview.png search.png details.png source-save.png source-cancel.png sports.png sports-loading.png sports-manager.png settings.png launcher-banner.png held-categories.png favorite-feedback.png icon.png failure.png failure.xml; do
     "$adb" -s "$serial" pull "/sdcard/Android/data/io.github.mot1us.spare.debug/files/$file" "app/build/reports/device/$file" >/dev/null 2>&1 || true
   done
   if [ -n "${RUNNER_TEMP:-}" ] && [ -f "$RUNNER_TEMP/emulator.log" ]; then

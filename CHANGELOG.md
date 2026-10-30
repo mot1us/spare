@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.0 — 2026-10-30
+
+- Keep Watch from beginning on its own compact loading overlay while resolving a series episode; start the matching episode without opening Library or moving focus through its search/catalog pages. Cancellation and failed/missing episode choices stay on the overlay.
+- Distinguish favorite live channels from a movie/series Watchlist, with explicit save/remove labels and confirmation. Existing saved titles and episode history carry over.
+- Move catch-up out of Library into the Guide and channel details, with a dedicated archive browser and no movie/series tabs. Return to the active stream without reconnecting.
+- Match Library, search, settings, Sports settings/calendar and playback surfaces to the Guide palette, opacity and layout style. Refresh fonts, focus colors, category/card backgrounds and progress accents when themes change.
+- Replace the unfinished recent-channel + View control with a consistent Add screen action and multiview icon. Separate recent-card actions, keep channel details controls scrollable, improve catalog button/card spacing, and move verbose codec/buffer diagnostics into Playback settings.
+
 ## 0.21.1 — 2026-10-29
 
 - Give movies and episodes a five-second startup cushion and twelve-second rebuffer cushion while preserving live TV buffering and the existing read-ahead limits. Stop background catalog imports during on-demand playback.

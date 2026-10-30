@@ -93,7 +93,7 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
     val opened get() = isVisible
     init {
         tag = "sports-calendar"; visibility = GONE
-        background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF00B1018.toInt(), 0xD90B1018.toInt()))
+        background = GuideTheme.guideBackground()
         val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(28), dp(24), dp(28), dp(20)) }
         content.addView(label(15f).apply { text = "SPORTS CALENDAR"; setTextColor(Color.LTGRAY) }, LinearLayout.LayoutParams(-1, dp(30)))
         val controls = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }

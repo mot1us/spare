@@ -34,7 +34,7 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
     private var waitingForResults = false
     var backgroundContent: ViewGroup? = null
     init {
-        orientation = VERTICAL; tag = "playlist-search"; visibility = GONE; setBackgroundColor(0xF20B1018.toInt())
+        orientation = VERTICAL; tag = "playlist-search"; visibility = GONE; background = GuideTheme.guideBackground()
         setPadding(dp(104), dp(18), dp(24), dp(18))
         field.setPadding(0, 0, 0, dp(8)); addView(field, LayoutParams(-1, -2))
         listOf("All" to "", "Live TV" to "live", "Movies" to "movie", "Series" to "series", "Episodes" to "episode").forEach { (title, key) ->
@@ -54,6 +54,8 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
                 layoutParams = RecyclerView.LayoutParams(-1, dp(56)).apply { bottomMargin = dp(6) }
             })
             override fun onBindViewHolder(holder: Holder, position: Int) {
+                holder.label.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000)
+                holder.label.setTextColor(GuideTheme.ink()); holder.label.typeface = AppFont.face(); holder.label.textSize = 14f * GuideTheme.textScale
                 val row = shown[position]; holder.label.text = "${row.title}\n${row.detail}"; holder.label.tag = "search-result:${row.key}"
                 holder.label.setOnClickListener { field.hideKeyboard(); row.select() }
                 holder.label.setOnKeyListener { _, code, event ->
@@ -90,4 +92,5 @@ class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, b
     }
     fun focusResults() { waitingForResults = shown.isEmpty(); if (shown.isEmpty()) field.input.requestFocus() else { rows.scrollToPosition(0); rows.post { if (isShown) rows.findViewHolderForAdapterPosition(0)?.itemView?.requestFocus() } } }
     fun dismiss() { waitingForResults = false; field.hideKeyboard(); field.visibility = GONE; visibility = GONE; backgroundContent?.descendantFocusability = FOCUS_AFTER_DESCENDANTS }
+    fun appearance(opacity: Int = -1) { background = GuideTheme.guideBackground(opacity); AppFont.apply(this); progress.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent); rows.adapter?.notifyItemRangeChanged(0, shown.size) }
 }

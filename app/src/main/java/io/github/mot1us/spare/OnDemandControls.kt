@@ -39,4 +39,5 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
         if (!dragging) timeline.progress = if (duration > 0) (current.coerceAtLeast(0) * 1000 / duration).toInt().coerceIn(0, 1000) else 0
         timeline.isEnabled = seekable && duration > 0; pause.text = if (playing) "Pause" else "Play"; nextButton.visibility = if (hasNext) VISIBLE else GONE
     }
+    fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); AppFont.apply(this) }
 }

@@ -905,6 +905,8 @@ class SpareDeviceTest {
                 assertEquals("xc:1", store.previous(source))
                 device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("recent-add:xc:1")?.isShown == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "details-multiview.png"))
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("recent-watch:xc:1").isFocusable)
                     activity.window.decorView.findViewWithTag<View>("recent-add:xc:1").performClick()
@@ -1605,7 +1607,7 @@ class SpareDeviceTest {
 
     @Test fun liveProgrammeCanStartItsVodMovieOrIdentifiedEpisodeWithoutUsingCatchup() {
         listOf("Fixture movie (2025)" to "/movie/test/test-secret/101.mp4", "Fixture series S01E02" to "/series/test/test-secret/202.mp4").forEach { (title, path) ->
-            FixtureServer(longVideo = true, programmeTitle = title, slowVod = title.startsWith("Fixture movie")).use { server ->
+            FixtureServer(longVideo = true, programmeTitle = title, slowVod = title.startsWith("Fixture movie"), slowEpisodes = title.startsWith("Fixture series"), parallelClients = true).use { server ->
                 val source = Source(name = "VOD start fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
                 store.saveSources(listOf(source)); store.active = source.id
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -1619,7 +1621,24 @@ class SpareDeviceTest {
                         it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick()
                         // A cached, unique movie may already be playing synchronously.
                         assertFalse(it.window.decorView.findViewWithTag<View>("playlist-search").isShown) }
+                    if (title.startsWith("Fixture series")) {
+                        waitFor(scenario) { server.episodesRequested.count == 0L && it.window.decorView.findViewWithTag<View>("vod-start-panel").isShown }
+                        scenario.onActivity { activity ->
+                            assertFalse("Episode lookup must never open the Library", activity.window.decorView.findViewWithTag<View>("library-panel").isShown)
+                            assertFalse(activity.window.decorView.findViewWithTag<View>("playlist-search").isShown)
+                            assertTrue(activity.window.decorView.findViewWithTag<View>("vod-start-panel").hasFocus())
+                        }
+                        device.takeScreenshot(File(context.getExternalFilesDir(null), "vod-opening.png"))
+                        device.pressBack()
+                        waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("vod-start-panel").isShown }
+                        assertFalse(playingPath(scenario).orEmpty().startsWith("/series/"))
+                        server.finishEpisodes.countDown()
+                        device.pressDPadCenter()
+                        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
+                        scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-vod-start").performClick() }
+                    }
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == path }
+                    scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("library-panel").isShown) }
                     if (title.startsWith("Fixture movie")) {
                         assertTrue("Autoplay must not wait for the complete catalog", android.os.SystemClock.elapsedRealtime() - lookupStarted < 5000)
                         assertEquals(1L, server.finishVodCatalog.count)
@@ -1706,6 +1725,20 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertNull(activity.window.decorView.findViewWithTag<View>("library-tab:catchup"))
+                    assertEquals("Watchlist", activity.window.decorView.findViewWithTag<android.widget.Button>("library-tab:favorites").text.toString())
+                    store.theme = "Ocean"; store.themeStyle = "Flat"; store.guideOpacity = 85
+                    MainActivity::class.java.getDeclaredMethod("applyTheme").apply { isAccessible = true }.invoke(activity)
+                    fun colors(view: View): List<Int> {
+                        val background = view.background.constantState!!.newDrawable()
+                        val bitmap = Bitmap.createBitmap(8, 2, Bitmap.Config.ARGB_8888)
+                        background.setBounds(0, 0, 8, 2); background.draw(Canvas(bitmap))
+                        return listOf(bitmap.getPixel(0, 0), bitmap.getPixel(7, 0)).also { bitmap.recycle() }
+                    }
+                    val guide = MainActivity::class.java.getDeclaredField("guidePanel").apply { isAccessible = true }.get(activity) as View
+                    assertEquals("Library must use the Guide palette and opacity", colors(guide), colors(activity.window.decorView.findViewWithTag<View>("library-panel")))
+                }
                 assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").requestFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
@@ -1825,7 +1858,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("library-favorite").text.toString().contains("Favorited") && store.libraryFavorites(source).contains("series:1") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("library-favorite").text.toString() == "✓ In Watchlist" && store.libraryFavorites(source).contains("series:1") }
                 val beforeEpisodeRefresh = server.requests["/player_api.php"] ?: 0
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-refresh").apply { requestFocus(); performClick() } }
                 waitFor(scenario) {
@@ -1849,8 +1882,14 @@ class SpareDeviceTest {
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.contentDescription?.toString()?.contains("All caught up") == true && store.libraryFavorites(source).watched == setOf("episode:201", "episode:202") }
                 assertEquals(setOf("episode:201", "episode:202"), store.libraryFavorites(source).watched)
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:catchup").performClick() }
+                scenario.onActivity { assertNull("Catch-up is no longer a Library tab", it.window.decorView.findViewWithTag<View>("library-tab:catchup")) }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-catchup").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:xc:1")?.isShown == true }
+                scenario.onActivity {
+                    assertFalse(it.window.decorView.findViewWithTag<View>("library-tab:movie").isShown)
+                    assertTrue(it.window.decorView.findViewWithTag<View>("archive-channels").isShown)
+                }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:xc:1").performClick() }
                 waitFor(scenario) { device.hasObject(By.textContains("Archived fixture")) && !it.window.decorView.findViewWithTag<View>("library-loading").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.performClick() }
@@ -2098,7 +2137,7 @@ class SpareDeviceTest {
 
     private fun activateSetting(scenario: ActivityScenario<MainActivity>, label: String) {
         val parent = when (label) {
-            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Temporarily hidden channels" -> "Playback"
+            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
             else -> null
@@ -2230,7 +2269,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -2259,6 +2298,8 @@ class SpareDeviceTest {
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
+        val episodesRequested = java.util.concurrent.CountDownLatch(1)
+        val finishEpisodes = java.util.concurrent.CountDownLatch(1)
         val finishVodCatalog = java.util.concurrent.CountDownLatch(1)
         private val slowMovies by lazy { (1..16).joinToString(",", "[", "]") { id -> org.json.JSONObject().put("stream_id", 100 + id).put("name", if (id == 1) "EN | Fixture movie (2025) 4K DV" else if (ambiguousVod && id == 2) "Fixture movie (1990) FHD" else "Other movie $id").put("category_id", "1").put("container_extension", "mp4").put("plot", "x".repeat(1024)).toString() }.toByteArray() }
         val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
@@ -2289,6 +2330,7 @@ class SpareDeviceTest {
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
                         if (target.contains("get_vod_streams")) catalogTargets.add(target)
                         if (target.contains("get_simple_data_table")) archiveRequests.incrementAndGet()
+                        if (slowEpisodes && target.contains("get_series_info")) { episodesRequested.countDown(); finishEpisodes.await(12, java.util.concurrent.TimeUnit.SECONDS) }
                         if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {
                             val location = if (path == "/redirect.mp4") "$base/redirect-relative.mp4" else "/channel1.mp4"
                             connection.getOutputStream().write("HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); return@use
@@ -2364,6 +2406,6 @@ class SpareDeviceTest {
                 }
             }
         }
-        override fun close() { finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); clients.forEach { runCatching { it.close() } }; connections?.shutdownNow(); worker.shutdownNow() }
+        override fun close() { finishEpisodes.countDown(); finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); clients.forEach { runCatching { it.close() } }; connections?.shutdownNow(); worker.shutdownNow() }
     }
 }

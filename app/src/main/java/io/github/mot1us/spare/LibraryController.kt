@@ -21,6 +21,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var archive: Channel? = null
     private var directCatchup = false
     private var fromBeginning = false
+    private var startTask: java.util.concurrent.Future<*>? = null
+    private var startEpoch = 0
     private var startEpisode: Pair<Int, Int>? = null
     var catchupClosed: (() -> Unit)? = null
     var archiveLoaded: ((Source, Channel, List<Programme>) -> Unit)? = null
@@ -79,6 +81,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
     }
     val opened get() = panel.isVisible
+    val browsingCatchup get() = kind == "catchup"
     private fun presentFavorites() {
         panel.favorites(favoriteState.entries.map { it.item.id }.toSet(), favoriteState.entries.filter { it.item.kind == "series" }.associate { it.item.id to it.label(favoriteState.watched) })
         val item = detailItem ?: parentSeries
@@ -96,12 +99,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun editFavorites(selected: Source, change: (LibraryFavorites) -> LibraryFavorites) {
         runCatching { change(favoriteState) }.onSuccess { favoriteState = it; presentFavorites() }.onFailure {
-            android.widget.Toast.makeText(activity, it.message ?: "Could not change favorites", android.widget.Toast.LENGTH_SHORT).show(); return
+            android.widget.Toast.makeText(activity, it.message ?: "Could not change Watchlist", android.widget.Toast.LENGTH_SHORT).show(); return
         }
         disk.execute {
             val result = runCatching { store.editLibraryFavorites(selected, change) }
             handler.post { if (!destroyed && source()?.id == selected.id) {
-                result.onSuccess { favoriteState = it; presentFavorites() }.onFailure { android.widget.Toast.makeText(activity, "Could not save Library favorites", android.widget.Toast.LENGTH_SHORT).show() }
+                result.onSuccess { favoriteState = it; presentFavorites() }.onFailure { android.widget.Toast.makeText(activity, "Could not save Watchlist", android.widget.Toast.LENGTH_SHORT).show() }
             } }
         }
     }
@@ -110,10 +113,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val enabled = !favoriteState.contains(item.id)
         val episodes = episodeList.takeIf { parentSeries?.id == item.id }
         editFavorites(selected) { state -> state.save(item, enabled).let { if (enabled && episodes != null) it.update(item, episodes, System.currentTimeMillis()) else it } }
+        panel.confirmation((if (enabled) "Added to Watchlist · " else "Removed from Watchlist · ") + item.title)
     }
     private fun displayFavorites(reset: Boolean = false) {
         val entries = favoriteState.entries
-        panel.page("Favorites", if (checkingFavorites) "Checking saved series for new episodes…" else "${entries.size} saved titles · Hold OK on a movie or series to favorite it", checkingFavorites)
+        panel.page("Watchlist", if (checkingFavorites) "Checking saved series for new episodes…" else "${entries.size} saved movies and series · Hold OK on a title to add it", checkingFavorites)
         panel.submit(entries.map { entry -> browserRow(entry.item).copy(detail = entry.label(favoriteState.watched)) }, entries.associate { it.item.id to if (it.item.kind == "series") "Series" else "Movies" }, reset = reset)
     }
     private fun checkFavoriteEpisodes(selected: Source, force: Boolean = false) {
@@ -140,12 +144,39 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun completed(item: OnDemand) { if (item.kind == "episode" && item.id !in favoriteState.watched) { favoriteState = favoriteState.completed(listOf(item.id)); presentFavorites() } }
     fun knownEpisodes(selected: Source) = episodeCache.filterKeys { it.startsWith("${selected.id}:") }.values.flatten()
     fun knownTitles(selected: Source) = details.filterKeys { it.startsWith("${selected.id}:") }.values.toList() + knownEpisodes(selected)
+    /** Resolve the exact broadcast episode without opening or focusing the Library. */
+    fun resolveEpisode(series: OnDemand, season: Int?, episode: Int?, result: (Result<OnDemand>) -> Unit) {
+        cancelStart()
+        val selected = source() ?: return
+        val key = "${selected.id}:${series.id}"; val cached = episodeCache[key]
+        val token = startEpoch
+        startTask = positions.submit {
+            val loaded = runCatching {
+                require(season != null && episode != null) { "Choose an episode in Library to start this series." }
+                val entries = cached ?: VodCatalog.episodes(selected, series)
+                val item = entries.singleOrNull { it.season == season && it.episode == episode }
+                    ?: error("This episode is not available in your provider's Library.")
+                entries to item
+            }
+            handler.post {
+                if (destroyed || token != startEpoch || source()?.id != selected.id) return@post
+                loaded.onSuccess { (entries, _) ->
+                    if (entries.size <= 2000) { episodeCache[key] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) }
+                    playingEpisodes = entries.filter { it.seriesId == series.id }
+                    parentSeries = series; episodeList = entries; detailItem = null; kind = "series"
+                }
+                result(loaded.map { it.second })
+            }
+        }
+    }
+    fun cancelStart() { ++startEpoch; startTask?.cancel(true); startTask = null }
     fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null) {
         val selected = source() ?: return
         prepareFavorites(selected)
         dismiss(); kind = if (item.kind == "movie") "movie" else "series"
         fromBeginning = restart; startEpisode = if (restart && season != null && episode != null) season to episode else null
         directCatchup = false; archive = null; detailItem = null; parentSeries = null
+        panel.archiveMode(false)
         panel.selectTab(kind); panel.allowArtworkHttp(selected.allowHttp); panel.browse(); panel.resumeImages(); panel.visibility = View.VISIBLE
         episodeList = knownEpisodes(selected).filter { it.seriesId == item.seriesId }
         select(item)
@@ -156,7 +187,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val item = entries.singleOrNull { it.season == target.first && it.episode == target.second } ?: return false
         episodeList = entries; playSelected(item); return true
     }
-    fun open(mode: String = kind) {
+    fun open(mode: String = if (kind == "catchup") "movie" else kind) {
+        panel.archiveMode(mode == "catchup")
         fromBeginning = false; startEpisode = null
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         panel.selectTab(mode); panel.seriesArtwork(null)
@@ -439,12 +471,14 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun catchupChannels() {
         task?.cancel(true); ++epoch; parentSeries = null; archive = null
+        panel.favoriteTitle(null, false); panel.archiveMode(true)
         val channels = Catchup.channels(guide())
         panel.page("Catch-up", if (channels.isEmpty()) "This playlist has no advertised archives. Refresh the playlist if archive support was recently added." else "${channels.size} catch-up channels in your playlist · Choose a channel to browse its provider archive.", false)
         panel.submit(channels.map { channel -> BrowserRow(channel.id, channel.name, "${channel.catchupDays} days · ${channel.group}") { openCatchup(channel) } }, channels.associate { it.id to it.group }, posters = false); panel.focusRows()
     }
     fun openCatchup(channel: Channel, direct: Boolean = false) {
         directCatchup = direct
+        detailItem = null; panel.favoriteTitle(null, false); panel.archiveMode(true)
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         panel.selectTab("catchup"); panel.seriesArtwork(null)
         kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
@@ -472,6 +506,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val series = parentSeries?.takeIf { item == null || item.kind == "episode" && it.id == item.seriesId }
             ?: favoriteState.entries.firstOrNull { it.item.id == item?.seriesId }?.item
         if (selected != null && series != null) {
+            panel.archiveMode(false)
             panel.browse(); panel.selectTab("series"); panel.resumeImages(); panel.visibility = View.VISIBLE; kind = "series"; prepareFavorites(selected); episodes(selected, series)
         } else open(if (item?.kind == "episode") "series" else kind)
     }
@@ -484,6 +519,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
         catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
     }
-    fun destroy() { favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

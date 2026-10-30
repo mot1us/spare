@@ -29,7 +29,7 @@ class PlaybackDetails(
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color) }
-    private val recent = RecentChannels(context, onRecent, onAddView)
+    private val recent = RecentChannels(context, makeButton, onRecent, onAddView)
     private val channel = label(12f, Color.LTGRAY)
     private val title = label(20f).apply { typeface = AppFont.face(true); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
     private val description = label(12f, Color.LTGRAY).apply { maxLines = 3; ellipsize = TextUtils.TruncateAt.END }
@@ -37,9 +37,9 @@ class PlaybackDetails(
     val gameStreamsButton = makeButton("Other streams for this game", onGameStreams).apply { tag = "channel-game-streams"; visibility = View.GONE }
     val guideButton = makeButton("Guide", onGuide)
     private val previous = makeButton("Previous", onPrevious).apply { tag = "previous-channel" }
-    private val favorite = makeButton("Favorite", onFavorite)
-    private val catchup = makeButton("Catch-up", onCatchup).apply { tag = "channel-catchup" }
-    private val vodStart = makeButton("Watch VOD from beginning", onVodStart).apply { tag = "channel-vod-start"; visibility = View.GONE }
+    private val favorite = makeButton("Favorite channel", onFavorite)
+    private val catchup = makeButton("Channel catch-up", onCatchup).apply { tag = "channel-catchup" }
+    private val vodStart = makeButton("Watch from beginning · VOD", onVodStart).apply { tag = "channel-vod-start"; visibility = View.GONE }
     init {
         orientation = VERTICAL; tag = "playback-details"; visibility = View.GONE
         setPadding(dp(22), dp(16), dp(22), dp(16))
@@ -50,11 +50,12 @@ class PlaybackDetails(
         addView(recent, LayoutParams(-1, -2))
         addView(next, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         addView(vodStart, LayoutParams(-2, dp(36)).apply { topMargin = dp(8) })
-        addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }); addView(makeButton("Reconnect", onReconnect).apply { tag = "channel-reconnect" }) }, LayoutParams(-1, dp(36)).apply { topMargin = dp(14) })
+        addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }); addView(makeButton("Reconnect", onReconnect).apply { tag = "channel-reconnect" }) }) }, LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
     }
     fun resumeImages() = recent.resume()
     fun pauseImages() = recent.pause()
     fun closeImages() = recent.close()
+    fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); recent.appearance(); AppFont.apply(this) }
     @SuppressLint("SetTextI18n") // Match the app's existing English UI; programme/channel names come from the provider.
     fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false) {
         vodStart.visibility = if (canVodStart) View.VISIBLE else View.GONE
@@ -67,7 +68,8 @@ class PlaybackDetails(
         next.text = upcoming?.let { "Next · ${GuideAdapter.time(it.start)}  ${it.title}" }.orEmpty()
         next.visibility = if (upcoming == null) View.GONE else View.VISIBLE
         previous.isEnabled = canRecall; previous.alpha = if (canRecall) 1f else 0.4f
-        favorite.text = if (isFavorite) "Favorite ✓" else "Favorite"
+        favorite.text = if (isFavorite) "★ Favorite channel" else "☆ Favorite channel"
+        favorite.contentDescription = if (isFavorite) "Remove ${current.name} from favorite channels" else "Add ${current.name} to favorite channels"
         catchup.visibility = if (canCatchup) View.VISIBLE else View.GONE
     }
 }
