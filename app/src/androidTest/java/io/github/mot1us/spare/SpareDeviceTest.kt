@@ -185,12 +185,12 @@ class SpareDeviceTest {
                 waitFor(scenario) { (server.requests["/playlist.m3u"] ?: 0) == 2 && !PlaylistRefresh.running(source.id) }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(item, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(samePlayer!!.isPlaying) }
                 store.setRefreshPolicy(source, RefreshPolicy()); scenario.onActivity { RefreshJobs.configure(it, listOf(source)) }
-                // A provider refresh failure leaves the authenticated local cache usable.
+                // An edited provider address cannot borrow the old provider's cache, which remains intact.
                 val bad = source.copy(url = "${server.base}/missing-playlist.m3u")
                 store.saveSources(listOf(bad)); val failed = java.util.concurrent.atomic.AtomicReference<PlaylistRefresh.Result>()
                 PlaylistRefresh.request(context, bad, true, false) { failed.set(it) }
                 waitFor(scenario) { failed.get() != null }
-                assertTrue(failed.get().error.isNotBlank()); assertEquals(8, store.cachedLineup(bad)!!.channels.size)
+                assertTrue(failed.get().error.isNotBlank()); assertNull(store.cachedLineup(bad)); assertEquals(8, store.cachedLineup(source)!!.channels.size)
             }
             store.saveSources(emptyList()); RefreshJobs.configure(context, emptyList()); store.removeCache(source)
         }
@@ -1379,7 +1379,11 @@ class SpareDeviceTest {
                         calendar.draw(Canvas(image))
                         File(context.getExternalFilesDir(null), "sports-calendar.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }; image.recycle()
                     }
-                    device.pressDPadRight(); device.pressDPadCenter()
+                    if (calendarToday.dayOfWeek == java.time.DayOfWeek.SATURDAY) {
+                        // Right at the grid edge opens the agenda. Reach Sunday via the next row instead.
+                        device.pressDPadDown(); repeat(6) { device.pressDPadLeft() }
+                    } else device.pressDPadRight()
+                    device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${calendarToday.plusDays(1)}")?.hasFocus() == true }
                     scenario.onActivity { activity ->
                         val panel = activity.window.decorView.findViewWithTag<SportsCalendarPanel>("sports-calendar")
