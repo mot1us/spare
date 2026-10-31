@@ -1277,7 +1277,7 @@ class MainActivity : Activity() {
         videoInfo[channel.id] = observed
         // Coverage is independent of measured quality; cached matches are ranked using fresh readings.
         if (SportsStreams.preferenceRank(channel, previous, sportsFilters) != SportsStreams.preferenceRank(channel, observed, sportsFilters) || FrameRateFilter.bucket(previous?.fps ?: 0f) != FrameRateFilter.bucket(observed.fps) || channel.quality(previous)?.height != channel.quality(observed)?.height) {
-            sportsStreamSummaries.clear()
+            // Keep the discovered channel visible while its quality label is refreshed off-thread.
             if (guideVisible && sportsVisible && !sportsPanel.watching) queueSportsPrefetch()
         }
         if (::sportsPanel.isInitialized) sportsPanel.refreshStreamLabels()
@@ -1870,6 +1870,7 @@ class MainActivity : Activity() {
             if (sportsStreamSummaries[key]?.startsWith("Finding stream") == true) sportsStreamSummaries[key] = "Select to find stream"
         }
         sportsWarmActive = null; sportsWarmPending = false
+        sportsStreamSummaries.replaceAll { _, value -> if (value.startsWith("Finding stream")) "Select to find stream" else value }
         if (clear) { sportsStreamCache.clear(); sportsWarmAttempted.clear(); sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsStreamSummaries.clear(); if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(emptyMap()) }
         else if (::sportsPanel.isInitialized) sportsPanel.updateStreamSummaries(sportsStreamSummaries)
     }

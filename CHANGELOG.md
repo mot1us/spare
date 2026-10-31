@@ -4,6 +4,7 @@
 
 - Keep Sports card-focus handling lightweight: debounce background work, validate coverage and rank cached stream summaries on a worker, and apply only completed text updates to visible cards. Avoid copying a full programme map for matches without extra guide data.
 - Keep an immutable, nonblocking cache snapshot for instant playback of already validated matches. Send cache misses and changed-guide validation to a worker, preserving the existing provider-lookup limits.
+- Reset queued loading labels when background work is canceled, and retain discovered coverage while quality labels refresh.
 
 ## 0.24.0 — 2026-10-30
 
