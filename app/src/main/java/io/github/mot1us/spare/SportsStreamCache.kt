@@ -35,6 +35,21 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
     private data class Entry(val signature: Signature, val match: Match, val expires: Long, val displayUntil: Long)
     private var context: Context? = null
     private val entries = LinkedHashMap<String, Entry>(16, .75f, true)
+    private data class Published(val context: Context?, val entries: Map<String, Entry>)
+    @Volatile private var published = Published(null, emptyMap())
+    private fun publish() { published = Published(context, LinkedHashMap(entries)) }
+    /** Read-only fast path: never waits for background validation or accepts a changed guide. */
+    fun peek(source: String, generation: Int, guide: Guide, favorites: Set<String>, game: SportsGame, now: Long, forAuto: Boolean = true): Match? {
+        val saved = published; val owner = saved.context ?: return null
+        if (owner.source != source || owner.generation != generation || owner.guide.channels !== guide.channels || owner.guide.programmes !== guide.programmes || owner.favorites != favorites) return null
+        if (!game.live(now) && !(game.upcoming(now) && !forAuto)) return null
+        val entry = saved.entries[game.key] ?: return null
+        if (entry.signature != signature(game) || entry.displayUntil <= now) return null
+        val exact = entry.match.game.broadcasts.any { now in it.programme.start until it.programme.end }
+        if (entry.expires <= now && !(forAuto && exact)) return null
+        return entry.match.takeIf { !forAuto || it.autoReady }?.current(game)
+    }
+
     private fun signature(game: SportsGame) = Signature(game.key, game.state, game.start, game.end, game.teams.map { it.id }, game.networks)
     @Synchronized fun use(source: String, generation: Int, guide: Guide, favorites: Set<String>): Context {
         val previous = context
@@ -42,15 +57,15 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
             if (previous.guide.programmes === guide.programmes) return previous
             entries.entries.removeAll { (_, entry) -> entry.match.needsRefresh(previous.guide, guide, System.currentTimeMillis()) }
 
-            return Context(source, generation, guide, favorites).also { context = it }
+            return Context(source, generation, guide, favorites).also { context = it; publish() }
         }
-        return Context(source, generation, guide, favorites).also { context = it; entries.clear() }
+        return Context(source, generation, guide, favorites).also { context = it; entries.clear(); publish() }
     }
     @Synchronized fun current(token: Context) = context === token
     @Synchronized fun get(token: Context, game: SportsGame, now: Long, forAuto: Boolean = true, allowStale: Boolean = false): Match? {
         if (context !== token || !game.live(now) && !(game.upcoming(now) && !forAuto)) return null
         val entry = entries[game.key] ?: return null
-        if (entry.displayUntil <= now || entry.signature != signature(game)) { entries.remove(game.key); return null }
+        if (entry.displayUntil <= now || entry.signature != signature(game)) { entries.remove(game.key); publish(); return null }
         // A refresh becoming due must not erase an already discovered channel from its card.
         // Automatic playback still requires a fresh match; stale evidence is display-only.
         val exact = entry.match.game.broadcasts.any { now in it.programme.start until it.programme.end }
@@ -69,9 +84,9 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
         val found = match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty() || match.game.candidates.isNotEmpty()
         entries[match.game.key] = Entry(signature(match.game), match, expires, if (found) boundary else expires)
         while (entries.size > capacity) entries.remove(entries.keys.first())
-        return true
+        publish(); return true
     }
-    @Synchronized fun clear() { context = null; entries.clear() }
+    @Synchronized fun clear() { context = null; entries.clear(); publish() }
 }
 
 /** A maximum of three automatic attempts; ordinary channel changes abandon the plan. */

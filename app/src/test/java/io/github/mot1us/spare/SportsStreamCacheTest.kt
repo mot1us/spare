@@ -172,4 +172,25 @@ class SportsStreamCacheTest {
         assertNull(cache.get(updated, game, p.end))
     }
 
+    @Test fun publishedFastPathNeverWaitsForCacheWorkAndRejectsUnvalidatedGuideChanges() {
+        val c = channel("ready"); val p = Programme(c.id, game.title, now - 1000, now + 3600000)
+        val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        cache.put(token, SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p)))), now)
+        val locked = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
+        val owner = java.util.concurrent.Executors.newSingleThreadExecutor(); val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            owner.submit { synchronized(cache) { locked.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) } }
+            assertTrue(locked.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            val result = reader.submit<SportsStreamCache.Match?> { cache.peek("source", 1, guide, emptySet(), game, now) }
+            assertNotNull(result.get(500, java.util.concurrent.TimeUnit.MILLISECONDS))
+            val changed = guide.copy(programmes = guide.programmes + ("news" to listOf(p.copy(title = "Headlines"))))
+            assertNull(cache.peek("source", 1, changed, emptySet(), game, now))
+            assertNull(cache.peek("other", 1, guide, emptySet(), game, now))
+        } finally { release.countDown(); owner.shutdownNow(); reader.shutdownNow() }
+        assertNull(cache.get(token, game.copy(networks = listOf("CBS")), now))
+        assertNull(cache.peek("source", 1, guide, emptySet(), game, now))
+        cache.clear(); assertNull(cache.peek("source", 1, guide, emptySet(), game, now))
+    }
+
 }

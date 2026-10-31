@@ -1360,6 +1360,38 @@ class SpareDeviceTest {
                         val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
                         assertFalse(rail.expanded); rail.contentHasFocus = false; rail.sports.requestFocus(); assertFalse(rail.expanded)
                     }
+                    // A cache update may be busy on another thread while the viewer keeps browsing.
+                    // Holding its monitor makes any accidental UI-thread cache access observable.
+                    val cacheHeld = java.util.concurrent.CountDownLatch(1)
+                    val releaseCache = java.util.concurrent.CountDownLatch(1)
+                    val uiResponsive = java.util.concurrent.CountDownLatch(1)
+                    val cacheOwner = Executors.newSingleThreadExecutor()
+                    lateinit var cache: SportsStreamCache
+                    lateinit var focusListener: android.view.ViewTreeObserver.OnGlobalFocusChangeListener
+                    scenario.onActivity { activity ->
+                        cache = MainActivity::class.java.getDeclaredField("sportsStreamCache").apply { isAccessible = true }.get(activity) as SportsStreamCache
+                        focusListener = android.view.ViewTreeObserver.OnGlobalFocusChangeListener { _, focused ->
+                            if ((focused?.tag as? String)?.startsWith("NFL:focus-") == true && focused?.tag != firstKey) {
+                                focused?.post { uiResponsive.countDown() }
+                            }
+                        }
+                        activity.window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener(focusListener)
+                    }
+                    var responsive = false
+                    try {
+                        cacheOwner.submit { synchronized(cache) { cacheHeld.countDown(); releaseCache.await(10, java.util.concurrent.TimeUnit.SECONDS) } }
+                        assertTrue(cacheHeld.await(3, java.util.concurrent.TimeUnit.SECONDS))
+                        val now = android.os.SystemClock.uptimeMillis()
+                        listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP).forEach { action ->
+                            val event = KeyEvent(now, now, action, KeyEvent.KEYCODE_DPAD_RIGHT, 0).apply { this.source = android.view.InputDevice.SOURCE_DPAD }
+                            assertTrue(instrumentation.uiAutomation.injectInputEvent(event, false))
+                        }
+                        responsive = uiResponsive.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    } finally {
+                        releaseCache.countDown(); cacheOwner.shutdownNow()
+                        scenario.onActivity { it.window.decorView.viewTreeObserver.removeOnGlobalFocusChangeListener(focusListener) }
+                    }
+                    assertTrue("Sports focus and the main looper must respond while stream-cache work is blocked", responsive)
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     waitFor(scenario) { activity ->
                         val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)?.itemView
