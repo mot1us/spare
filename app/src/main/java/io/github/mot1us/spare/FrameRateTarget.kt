@@ -8,12 +8,15 @@ class FrameRateTarget {
     private var cached = false
     private var candidate = 0f
     private var since = 0L
+    private var lastSample = -1L
     @Synchronized fun reset(value: Float = 0f) {
-        rate = VideoRate.normalize(value); cached = rate > 0; candidate = 0f; since = 0
+        rate = VideoRate.normalize(value); cached = rate > 0; candidate = 0f; since = 0; lastSample = -1
     }
     @Synchronized fun observe(value: Float, now: Long, reliable: Boolean): Float? {
         val next = VideoRate.normalize(value)
-        if (next <= 0 || cached && !reliable) return null
+        if (lastSample >= 0 && (now < lastSample || now - lastSample > 2000)) candidate = 0f
+        lastSample = now
+        if (next <= 0 || cached && !reliable) { candidate = 0f; return null }
         if (abs(next - rate) < .1f) { candidate = 0f; if (reliable) cached = false; return null }
         if (candidate <= 0 || abs(next - candidate) >= .1f || now < since) { candidate = next; since = now; return null }
         if (now - since < 1500) return null

@@ -73,7 +73,7 @@ class SportsStreamCacheTest {
         val c = channel("one"); val p = Programme(c.id, game.title, now - 1000, now + 3600000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
         val cache = SportsStreamCache(); val first = cache.use("source", 1, guide, emptySet())
-        val match = SportsStreamCache.Match(game.copy(candidates = listOf(c)))
+        val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p))))
         cache.put(first, match, now)
         val unrelated = cache.use("source", 1, guide.copy(programmes = guide.programmes + ("news" to listOf(p))), emptySet())
         assertNotNull(cache.get(unrelated, game, now)); assertTrue("Unrelated EPG updates cannot discard completed work", cache.put(first, match, now))
@@ -156,6 +156,20 @@ class SportsStreamCacheTest {
         assertNull("An upcoming match must not tune automatically", cache.get(token, future, now))
         assertNull(cache.get(token, future.copy(state = "in"), now, forAuto = false))
         assertNull(cache.get(token, future, future.start, forAuto = false, allowStale = true))
+    }
+
+    @Test fun unrelatedCandidateGuideUpdatesAndRefreshAgeDoNotDiscardExactLiveCoverage() {
+        val c = channel("known"); val candidate = channel("guess")
+        val p = Programme(c.id, game.title, now - 1000, now + 3600000)
+        val guide = Guide(listOf(c, candidate), mapOf(c.id to listOf(p)))
+        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val matched = game.copy(broadcasts = listOf(SportsBroadcast(c, p)), candidates = listOf(candidate))
+        cache.put(token, SportsStreamCache.Match(matched), now)
+        val changed = guide.copy(programmes = guide.programmes + (candidate.id to listOf(p.copy(channel = candidate.id, title = "Headlines"))))
+        val updated = cache.use("source", 1, changed, emptySet())
+        assertNotNull(cache.get(updated, game, now + 120001))
+        assertFalse(SportsStreamCache.Match(matched).needsRefresh(guide, changed, now))
+        assertNull(cache.get(updated, game, p.end))
     }
 
 }

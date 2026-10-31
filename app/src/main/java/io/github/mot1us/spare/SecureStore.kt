@@ -75,21 +75,29 @@ class SecureStore(private val context: Context) {
         require(prefix.matches(Regex("catalog-[a-zA-Z0-9_-]+-")))
         context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") && it.name !in keep }?.forEach { delete(it.name) }
     }
+    private fun pruneProviderFiles(prefix: String) {
+        require(prefix.matches(Regex("(?:watch|library-favorites|library-categories)-[a-zA-Z0-9_-]+-")))
+        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") }?.forEach { delete(it.name) }
+    }
     fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
     } ?: emptyList()
     fun saveSources(sources: List<Source>) = write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray())
     fun cache(source: Source, guide: Guide) { saveLineup(source, guide); cacheProgrammes(source, guide.programmes, System.currentTimeMillis()) }
     fun saveLineup(source: Source, guide: Guide, url: String = guideUrl(source)) {
+        synchronized(cacheLock) {
+            if (!providerCurrent(source)) return
+
         write("lineup-${source.id}.enc", guide.copy(programmes = emptyMap()).json().toString().toByteArray())
         if (guide.channels.isNotEmpty() && guide.channels.all { it.archiveMetadataKnown }) preferences.edit { putBoolean("archive-metadata-${source.id}", true) }
         if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
+            }
     }
     fun archiveMetadataReady(source: Source) = preferences.getBoolean("archive-metadata-${source.id}", false)
     fun guideUrl(source: Source) = runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
-    fun cachedLineup(source: Source): Guide? = read("lineup-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
+    fun cachedLineup(source: Source): Guide? = if (!providerCurrent(source)) null else read("lineup-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
         ?: read("cache-${source.id}.enc")?.let { GuideDisk.lineup(it).also { guide -> saveLineup(source, guide) } }
-    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = read("epg-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes }
+    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = if (!providerCurrent(source)) emptyMap() else read("epg-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes }
         ?: read("cache-${source.id}.enc")?.let {
             val entries = Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes
             cacheProgrammes(source, entries, System.currentTimeMillis())
@@ -97,6 +105,7 @@ class SecureStore(private val context: Context) {
             entries
         }.orEmpty()
     fun cacheProgrammes(source: Source, programmes: Map<String, List<Programme>>, observedAt: Long) = synchronized(cacheLock) {
+        if (!providerCurrent(source)) return@synchronized
         if (observedAt >= preferences.getLong("epg-cache-${source.id}", 0)) {
             write("epg-${source.id}.enc", Guide(emptyList(), programmes).json().toString().toByteArray())
             preferences.edit { putLong("epg-cache-${source.id}", observedAt) }
@@ -129,33 +138,53 @@ class SecureStore(private val context: Context) {
         write("library-${source.id}-$kind.enc", JSONObject().put("updated", System.currentTimeMillis()).put("entries", JSONArray(entries.map { it.json() })).toString().toByteArray())
         preferences.edit { putInt("catalog-schema-${source.id}-$kind", 2) }
     }
-    @Synchronized fun watchProgress(source: Source): List<WatchProgress> = read("watch-${source.id}.enc")?.let { bytes ->
+    @Synchronized fun watchProgress(source: Source): List<WatchProgress> = providerRead("watch", source)?.let { bytes ->
         val entries = JSONArray(bytes.toString(Charsets.UTF_8)); require(entries.length() <= 100)
         List(entries.length()) { WatchProgress.from(entries.getJSONObject(it)) }
     }.orEmpty()
     @Synchronized fun saveWatchProgress(source: Source, item: OnDemand, position: Long, duration: Long, ended: Boolean = false) {
         val entries = runCatching { watchProgress(source) }.getOrDefault(emptyList()).filter { it.item.id != item.id }.toMutableList()
         if (!ended && position >= 10000 && (duration <= 0 || position < duration - 30000)) entries.add(WatchProgress(item, position, duration.coerceAtLeast(0), System.currentTimeMillis()))
-        write("watch-${source.id}.enc", JSONArray(entries.takeLast(100).map { it.json() }).toString().toByteArray())
+        write(providerFile("watch", source), JSONArray(entries.takeLast(100).map { it.json() }).toString().toByteArray())
         if (item.kind == "episode" && (ended || duration > 0 && position >= maxOf(10000L, duration - 30000L)))
             editLibraryFavorites(source) { it.completed(listOf(item.id)) }
     }
-    @Synchronized fun libraryFavorites(source: Source): LibraryFavorites = read("library-favorites-${source.id}.enc")?.let { LibraryFavorites.from(JSONObject(it.toString(Charsets.UTF_8))) } ?: LibraryFavorites()
+    @Synchronized fun libraryFavorites(source: Source): LibraryFavorites = providerRead("library-favorites", source)?.let { LibraryFavorites.from(JSONObject(it.toString(Charsets.UTF_8))) } ?: LibraryFavorites()
     @Synchronized fun editLibraryFavorites(source: Source, change: (LibraryFavorites) -> LibraryFavorites): LibraryFavorites {
         val before = libraryFavorites(source); val next = change(before)
-        if (next != before) write("library-favorites-${source.id}.enc", next.json().toString().toByteArray())
+        if (next != before) write(providerFile("library-favorites", source), next.json().toString().toByteArray())
         return next
     }
     fun providerQualityReady(source: Source) = preferences.getBoolean("provider-quality-${source.id}", false)
     fun markProviderQuality(source: Source) { preferences.edit { putBoolean("provider-quality-${source.id}", true) } }
     fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
     fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
+    /** Preserve user preferences, but never reuse derived data from a different server/account. */
+    fun bindProvider(source: Source): Boolean = synchronized(cacheLock) {
+        val key = "provider-identity-${source.id}"; val value = source.providerKey(); val old = preferences.getString(key, null)
+        preferences.edit {
+            if (!preferences.contains("legacy-provider-${source.id}")) putString("legacy-provider-${source.id}", old ?: value)
+            putString(key, value)
+            if (old != null && old != value) listOf("video-info", "unavailable", "last", "previous", "recent", "playlist-refreshed", "epg-refreshed", "epg-cache", "refresh-error", "archive-metadata", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") }
+        }
+        old != null && old != value
+    }
+    private fun providerCurrent(source: Source) = preferences.getString("provider-identity-${source.id}", source.providerKey()) == source.providerKey()
+    fun invalidateProviderFiles(source: Source) {
+        pruneCatalog("catalog-${source.id}-", emptySet())
+        pruneProviderFiles("library-categories-${source.id}-")
+        listOf("cache-${source.id}.enc", "lineup-${source.id}.enc", "epg-${source.id}.enc", "local-matches-${source.id}.enc", "guide-url-${source.id}.enc", "sports-replays-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc").forEach(::delete)
+    }
+    private fun providerFile(prefix: String, source: Source) = "$prefix-${source.id}-${source.providerKey().take(16)}.enc"
+    fun legacyProviderMatches(source: Source) = preferences.getString("legacy-provider-${source.id}", source.providerKey()) == source.providerKey()
+    private fun providerRead(prefix: String, source: Source): ByteArray? = read(providerFile(prefix, source)) ?: if (legacyProviderMatches(source)) read("$prefix-${source.id}.enc") else null
     fun removeCache(source: Source) {
         pruneCatalog("catalog-${source.id}-", emptySet())
+        pruneProviderFiles("watch-${source.id}-"); pruneProviderFiles("library-favorites-${source.id}-"); pruneProviderFiles("library-categories-${source.id}-")
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
         listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc", "library-favorites-${source.id}.enc").forEach { delete(it) }
-        preferences.edit { listOf("min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("provider-identity", "legacy-provider", "min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit { putStringSet("groups-${source.id}", value.groups) } }
@@ -178,15 +207,23 @@ class SecureStore(private val context: Context) {
         }.toMutableMap()
     }.getOrDefault(mutableMapOf())
     fun saveVideoInfo(source: Source, values: Map<String, VideoInfo>) {
+        synchronized(cacheLock) {
+            if (!providerCurrent(source)) return
+
         val j = JSONObject(); values.entries.toList().takeLast(5000).forEach { j.put(it.key, it.value.json()) }
         preferences.edit { putString("video-info-${source.id}", j.toString()) }
+            }
     }
     fun unavailable(source: Source): UnavailableChannels = runCatching {
         val json = JSONObject(preferences.getString("unavailable-${source.id}", "{}").orEmpty())
         UnavailableChannels(json.keys().asSequence().associateWith { json.getLong(it) }.toMutableMap())
     }.getOrDefault(UnavailableChannels())
     fun saveUnavailable(source: Source, channels: UnavailableChannels) {
+        synchronized(cacheLock) {
+            if (!providerCurrent(source)) return
+
         preferences.edit { putString("unavailable-${source.id}", JSONObject(channels.snapshot()).toString()) }
+            }
     }
     fun channelCaptions(source: Source, channel: Channel): String? = runCatching {
         JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()).optString(channel.id).takeIf { it.isNotBlank() }

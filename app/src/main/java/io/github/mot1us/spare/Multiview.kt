@@ -169,6 +169,7 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         place(primary, 0); extras.forEachIndexed { index, extra -> place(extra.view, index + 1) }
     }
     fun appearance() { extras.forEach { SubtitleAppearance.apply(it.view, store.subtitleSize, store.subtitleStyle) } }
+    val streamCount get() = if (active) 1 + extras.size else 1
     fun close() {
         if (!active) return
         extras.forEach { it.view.player = null; it.player.release(); root.removeView(it.view) }; extras.clear()

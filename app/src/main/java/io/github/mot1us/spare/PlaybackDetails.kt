@@ -11,6 +11,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.ProgressBar
+import androidx.core.view.isVisible
 
 @SuppressLint("ViewConstructor") // Constructed with callbacks in code; never inflated from XML.
 class PlaybackDetails(
@@ -59,6 +60,7 @@ class PlaybackDetails(
         addView(vodStart, LayoutParams(-2, dp(36)).apply { topMargin = dp(8) })
         addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; addView(LinearLayout(context).apply { addView(guideButton); addView(previous); addView(favorite); addView(makeButton("Subtitles", onSubtitles).apply { tag = "channel-subtitles" }); addView(catchup); addView(makeButton("Multiview", onMultiview).apply { tag = "channel-multiview" }); addView(makeButton("Reconnect", onReconnect).apply { tag = "channel-reconnect" }) }) }, LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
     }
+    val checkingVod get() = vodChecking.isVisible && vodProgress.isVisible
     fun resumeImages() = recent.resume()
     fun pauseImages() = recent.pause()
     fun closeImages() = recent.close()

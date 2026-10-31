@@ -352,6 +352,14 @@ class MainActivity : Activity() {
     private var started = false
     private var closed = false
     private var hasPlayedChannel = false
+    private val streamHealth = StreamHealth()
+    private val playbackJournal = PlaybackJournal()
+    private var journalSampleAt = 0L
+    private fun journal(event: PlaybackJournal.Event, dropped: Int = 0) {
+        val runtime = Runtime.getRuntime()
+        playbackJournal.record(event, android.os.SystemClock.elapsedRealtime(), player.totalBufferedDuration,
+            runtime.totalMemory() - runtime.freeMemory(), runtime.maxMemory(), if (multiview.active) multiview.streamCount else 1, dropped)
+    }
     private var playbackRebuffers = 0
     private var playbackReconnects = 0
     private var playbackLoadErrors = 0
@@ -369,6 +377,9 @@ class MainActivity : Activity() {
             val state = player.playbackState
             val active = firstFrame && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
                 player.playerError == null && !retryPanel.isVisible && (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
+            val monotonic = android.os.SystemClock.elapsedRealtime()
+            if (onDemand == null && !multiview.active) current?.let { streamHealth.observe(it.id, monotonic, active && state == Player.STATE_READY) }
+            if (monotonic - journalSampleAt >= 5000) { journalSampleAt = monotonic; journal(PlaybackJournal.Event.SAMPLE) }
             val frame = if (!multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
             if (playbackProgress.stalled(playbackToken, android.os.SystemClock.elapsedRealtime(), player.currentPosition, frame, state == Player.STATE_BUFFERING, active)) {
                 reconnectOrFail(if (onDemand != null) "Playback stopped advancing. Retry resumes this title from your saved position. (STREAM_STALLED)" else "Playback stopped advancing. Choose Retry to reconnect this channel. (STREAM_STALLED)")
@@ -383,7 +394,9 @@ class MainActivity : Activity() {
     private var groupsForOrder: List<String>? = null
     private var voiceSearchPending = false
     private val filterSearch = Runnable { query = guideSearch.query(); applyFilter(); updatePlaylistSearch() }
-    private val hideDetails = Runnable { closeDetails() }
+    private val hideDetails = object : Runnable {
+        override fun run() { if (details.isVisible && details.checkingVod) handler.postDelayed(this, 1000) else closeDetails() }
+    }
     private val workingUrls = mutableMapOf<String, String>()
     private val retry = Runnable { if (started && (current != null || onDemand != null)) playAttempt(PlaybackPhase.RECONNECTING) }
     private val revealBuffering = Runnable { if (started && (current != null || onDemand != null) && player.playbackState == Player.STATE_BUFFERING) showPlaybackLoading(PlaybackPhase.BUFFERING) }
@@ -484,6 +497,7 @@ class MainActivity : Activity() {
         }
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (onDemand == null && !multiview.active) current?.let { streamHealth.observe(it.id, android.os.SystemClock.elapsedRealtime(), isPlaying && firstFrame) }
                 syncPlaybackMonitoring()
                 if (onDemand != null) { refreshDemandControls(); handler.removeCallbacks(hideDemandControls); if (isPlaying && demandControls.isShown) handler.postDelayed(hideDemandControls, 8000) }
             }
@@ -514,7 +528,10 @@ class MainActivity : Activity() {
             }
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != player.playbackState) return
-                if (state == Player.STATE_BUFFERING && hasPlayedChannel && player.playWhenReady) playbackRebuffers++
+                if (state == Player.STATE_BUFFERING && firstFrame && hasPlayedChannel && player.playWhenReady) {
+                    playbackRebuffers++; journal(PlaybackJournal.Event.BUFFERING)
+                    if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime()) }
+                }
                 if (state == Player.STATE_BUFFERING) {
                     playbackWarmup.reset()
                     stopSportsPrefetch()
@@ -528,12 +545,15 @@ class MainActivity : Activity() {
             }
         })
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
+                if (started && player.currentMediaItem?.mediaId == expectedMediaId) journal(PlaybackJournal.Event.DROPPED_FRAMES, droppedFrames)
+            }
             override fun onLoadError(eventTime: AnalyticsListener.EventTime, loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo, mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData, error: java.io.IOException, wasCanceled: Boolean) {
                 if (!wasCanceled && !eventTime.timeline.isEmpty && eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId == expectedMediaId) playbackLoadErrors++
             }
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
-                firstFrame = true; hasPlayedChannel = true; backgroundPlaybackReady()
+                firstFrame = true; hasPlayedChannel = true; backgroundPlaybackReady(); journal(PlaybackJournal.Event.FIRST_FRAME)
                 sportsPlaybackPlan?.takeIf { it.channel?.id == current?.id }?.let { plan ->
                     // A working stream is accepted immediately; quality never triggers another connection.
                     plan.accepted = true
@@ -1026,11 +1046,17 @@ class MainActivity : Activity() {
     }
 
     private fun load(selected: Source, force: Boolean = false) {
+        val providerChanged = store.bindProvider(selected)
+        if (providerChanged) {
+            library.invalidateProvider(selected.id)
+            handler.removeCallbacks(saveVideoReadings); videoSavePending = false; handler.removeCallbacks(cacheEpg)
+        }
+        streamHealth.clear()
         clearGuideSearch()
         if (::multiview.isInitialized) multiview.close()
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
-        flushVideoReadings(); cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L; launchRefreshPending = false
+        flushVideoReadings(); if (!providerChanged) cacheEpg.run(); cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L; launchRefreshPending = false
         stopSportsPrefetch(clear = true); clearSportsPlayback()
         val epoch = ++generation; guideTimeline.clear()
         sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; replayDiscovery?.pause(); replayGames = emptyList(); sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
@@ -1046,6 +1072,7 @@ class MainActivity : Activity() {
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
         importTask = imports.submit {
+            if (providerChanged) store.invalidateProviderFiles(selected)
             val saved = if (force) null else runCatching { store.cachedLineup(selected) }.getOrNull()
             if (saved != null && saved.channels.isNotEmpty()) {
                 ui(epoch) { cachedStartup = true; loadingPanel.visibility = View.GONE; if (guide.channels.isEmpty()) accept(saved, resume = true); status.text = "Loading saved programme guide…" }
@@ -1163,6 +1190,7 @@ class MainActivity : Activity() {
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
         if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
+        journal(PlaybackJournal.Event.OPEN)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
         handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
     }
@@ -1174,6 +1202,8 @@ class MainActivity : Activity() {
         return true
     }
     private fun showPlaybackFailure(detail: String) {
+        journal(PlaybackJournal.Event.FAILED)
+        if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime(), true) }
         val plan = sportsPlaybackPlan
         if (plan != null && !plan.accepted && plan.channel?.id == current?.id) {
             if (playNextSportsCandidate("Stream failed · trying another match")) return
@@ -1214,6 +1244,8 @@ class MainActivity : Activity() {
         } else FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM)
     }
     private fun reconnectOrFail(detail: String) {
+        journal(PlaybackJournal.Event.RECONNECT)
+        if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime(), true) }
         cancelPlaybackCallbacks()
         if (!reconnects.take(android.os.SystemClock.elapsedRealtime())) { showPlaybackFailure(detail); return }
         playbackReconnects++
@@ -1852,7 +1884,7 @@ class MainActivity : Activity() {
         (listOfNotNull(sportsWarmPriority) + sportsWarmGames).distinctBy { it.key }.forEach { game ->
             val match = sportsStreamCache.get(token, game, System.currentTimeMillis(), forAuto = false, allowStale = true)
             sportsStreamSummaries[game.key] = when {
-                match != null -> sportsStreamSummaries[game.key]?.takeUnless { it.startsWith("Finding stream") || it.startsWith("Select to") } ?: sportsStreamSummary(match)
+                match != null -> sportsStreamSummary(match)
                 sportsWarmActive == game.key -> sportsWarmProgress
                 sportsWarmAttempted.containsKey(game.key) -> "Select to finish stream search"
                 else -> "Select to find stream"
@@ -1864,6 +1896,10 @@ class MainActivity : Activity() {
     private fun sportsStreamSummary(match: SportsStreamCache.Match): String {
         val evidence = guide.copy(programmes = guide.programmes + match.warmed)
         val now = System.currentTimeMillis()
+        if (match.game.live(now)) {
+            val choices = SportsStreams.automaticChoices(match.game, sportsStreamFilters(), videoInfo, evidence, now) { !unavailable.contains(it.id, now) }
+            streamHealth.order(choices, videoInfo, android.os.SystemClock.elapsedRealtime()).firstOrNull()?.let { return it.name + "\n" + it.qualityLabel(videoInfo[it.id]) }
+        }
         return SportsStreams.cardSummary(match.game, sportsStreamFilters(), videoInfo, evidence, now) { match.game.state == "pre" || !unavailable.contains(it.id, now) }
     }
     private fun prefetchSportsStream() {
@@ -1891,7 +1927,6 @@ class MainActivity : Activity() {
                     }
                 }
             }, background = true) }.getOrNull()
-            val summary = result?.let { SportsStreams.cardSummary(it.game, profile, quality, snapshot.copy(programmes = snapshot.programmes + it.warmed), System.currentTimeMillis()) }
             handler.post {
                 if (closed || epoch != sportsWarmEpoch) return@post
                 sportsWarmTask = null; sportsWarmActive = null
@@ -1900,7 +1935,7 @@ class MainActivity : Activity() {
                 val retained = result?.takeIf { sportsStreamCache.put(token, it, completedAt) }
                     ?: sportsStreamCache.get(latest, game, completedAt, forAuto = false, allowStale = true)
                 if (retained != null) {
-                    sportsStreamSummaries[game.key] = if (retained === result && summary != null) summary else sportsStreamSummary(retained)
+                    sportsStreamSummaries[game.key] = sportsStreamSummary(retained)
                 } else {
                     sportsStreamSummaries[game.key] = "Select to finish stream search"
                     if (result != null && result.game.coverageComplete) sportsWarmAttempted.remove(game.key)
@@ -2020,7 +2055,7 @@ class MainActivity : Activity() {
                 handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
             }
             val latestQuality = videoInfo.toMap()
-            val alternatives = SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }
+            val alternatives = streamHealth.order(SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && Network.allowed(it.url, selected.allowHttp) }, latestQuality, android.os.SystemClock.elapsedRealtime())
             val channels = (alternatives + SportsStreams.rank(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality) {
                 (game.state == "pre" || !unavailable.contains(it.id, now)) && Network.allowed(it.url, selected.allowHttp)
             }).distinctBy { it.id }.filter { game.state != "pre" || matched.broadcasts.any { broadcast -> broadcast.channel.id == it.id } }
@@ -2113,8 +2148,9 @@ class MainActivity : Activity() {
         if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun editSource(existing: Source?) = SourceDialog.show(this, existing, { selected ->
+        existing?.let(store::bindProvider)
         runCatching { val next = sources.filterNot { it.id == selected.id } + selected; store.saveSources(next); sources = next; RefreshJobs.configure(this, sources) }
-            .onSuccess { if (settingsPanel?.opened == true) closeSettings(); load(selected, force = true) }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
+            .onSuccess { existing?.let { library.invalidateProvider(it.id) }; if (settingsPanel?.opened == true) closeSettings(); load(selected, force = true) }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
     }, { removed ->
         if (source?.id == removed.id) { handler.removeCallbacks(saveVideoReadings); videoSavePending = false }
         runCatching { val next = sources.filterNot { it.id == removed.id }; store.saveSources(next); cacheWrites.execute { store.removeCache(removed) }; sources = next; RefreshJobs.configure(this, sources) }
@@ -2191,7 +2227,7 @@ class MainActivity : Activity() {
                 val editor = LocalChannelsEditor(this, store.localLocation, { value ->
                     store.localLocation = value; localLineup = null; requestLocalMatches(); if (localOnly) applyFilter()
                 }, { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) })
-                localEditor = editor; panel.custom(editor, 390); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
+                localEditor = editor; panel.custom(editor, 540); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
             }
             "Playback" -> {
                 panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
@@ -2204,6 +2240,12 @@ class MainActivity : Activity() {
                 panel.page(page, "Current stream information · Provider addresses and credentials are never shown.")
                 panel.note(playbackDiagnostics())
                 panel.action("Refresh diagnostics") { refresh("Refresh diagnostics") }
+                panel.action("Copy redacted playback report", "Local clipboard only · No provider addresses or credentials") {
+                    getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Spare playback report", playbackJournal.report(BuildConfig.VERSION_NAME)))
+                    toast("Playback report copied")
+                }
+                panel.action("Clear playback history") { playbackJournal.clear(); refresh("Clear playback history") }
+                panel.note(playbackJournal.report(BuildConfig.VERSION_NAME))
             }
             "Guide" -> {
                 panel.page(page, "Guide navigation and clock. Appearance, fonts, spacing, opacity and preview mode are in Theme.")

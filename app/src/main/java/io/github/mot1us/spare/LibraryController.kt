@@ -92,7 +92,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (favoriteSource != selected.id) { favoriteSource = selected.id; favoriteState = LibraryFavorites(); presentFavorites() }
         disk.execute {
             val saved = runCatching { store.libraryFavorites(selected) }.getOrDefault(LibraryFavorites())
-            handler.post { if (!destroyed && source()?.id == selected.id && favoriteSource == selected.id) {
+            handler.post { if (!destroyed && source()?.let { it.id == selected.id && it.providerKey() == selected.providerKey() } == true && favoriteSource == selected.id) {
                 favoriteState = saved; presentFavorites(); if (opened && kind == "favorites") checkFavoriteEpisodes(selected)
             } }
         }
@@ -103,7 +103,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
         disk.execute {
             val result = runCatching { store.editLibraryFavorites(selected, change) }
-            handler.post { if (!destroyed && source()?.id == selected.id) {
+            handler.post { if (!destroyed && source()?.let { it.id == selected.id && it.providerKey() == selected.providerKey() } == true) {
                 result.onSuccess { favoriteState = it; presentFavorites() }.onFailure { android.widget.Toast.makeText(activity, "Could not save Watchlist", android.widget.Toast.LENGTH_SHORT).show() }
             } }
         }
@@ -136,7 +136,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     val episodes = VodCatalog.episodes(selected, entry.item, 3000)
                     store.editLibraryFavorites(selected) { it.update(entry.item, episodes, System.currentTimeMillis()) }
                 }
-                handler.post { if (!destroyed && token == favoriteEpoch && source()?.id == selected.id) result.onSuccess { favoriteState = it; presentFavorites() } }
+                handler.post { if (!destroyed && token == favoriteEpoch && source()?.let { it.id == selected.id && it.providerKey() == selected.providerKey() } == true) result.onSuccess { favoriteState = it; presentFavorites() } }
             }
             handler.post { if (!destroyed && token == favoriteEpoch) { checkingFavorites = false; presentFavorites() } }
         }
@@ -232,7 +232,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
         if (!force) repository.memory(selected, mode)?.let { activateCatalog(root, it, !it.complete) }
         request { token ->
-            val file = "library-categories-${selected.id}-$mode.enc"
+            val file = "library-categories-${selected.id}-${selected.providerKey().take(16)}-$mode.enc"
             val cached = runCatching { store.read(file)?.let { org.json.JSONObject(it.toString(Charsets.UTF_8)) }?.let { j -> j.keys().asSequence().associateWith { j.getString(it) } } }.getOrNull()
             if (!force && !cached.isNullOrEmpty()) { ui(token) { bind(cached) }; return@request }
             val names = runCatching { VodCatalog.categories(selected, mode).filterKeys { it.matches(Regex("[0-9]{1,20}")) } }.getOrDefault(emptyMap())
@@ -280,13 +280,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (cached != null) deliver(cached, !cached.complete)
             if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
             runCatching {
-                val writer = repository.Writer(selected, mode, scope = scope); var publishedAt = 0L
-                VodCatalog.stream(selected, mode, scope) { batch ->
-                    writer.append(batch)
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (cached == null && now - publishedAt >= 750) { publishedAt = now; deliver(writer.snapshot(names), true) }
+                repository.load(selected, mode, scope, force, names) { snapshot ->
+                    if (cached == null || snapshot.complete || snapshot.count >= cached.count) deliver(snapshot, !snapshot.complete)
                 }
-                writer.finish(names)
             }.onSuccess { deliver(it, false) }.onFailure { failure -> handler.post {
                 if (!destroyed && catalogGenerations[key] == generation && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (cached != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
             } }
@@ -319,23 +315,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val cached = memory?.takeIf { it.complete } ?: runCatching { repository.cached(selected, mode) }.getOrNull()
             if (cached != null) deliver(cached, force || !cached.complete || System.currentTimeMillis() - cached.updated >= 6 * 3600000L)
             if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
-            val categories = disk.submit<Map<String, String>> { runCatching { VodCatalog.categories(selected, mode) }.getOrDefault(emptyMap()) }
             runCatching {
-                val writer = repository.Writer(selected, mode)
-                var first = true
-                VodCatalog.stream(selected, mode) { batch ->
-                    writer.append(batch)
-                    if (first && cached == null) {
-                        first = false
-                        val partial = writer.snapshot(emptyMap())
-                        deliver(partial, true)
-                        if (BuildConfig.DEBUG) android.util.Log.d("SpareLibrary", "First catalog page: ${android.os.SystemClock.elapsedRealtime() - began} ms")
-                    }
+                repository.load(selected, mode, force = force) { snapshot ->
+                    if (cached == null || snapshot.complete || snapshot.count >= cached.count) deliver(snapshot, !snapshot.complete)
                 }
-                val names = try { categories.get(5, java.util.concurrent.TimeUnit.SECONDS) }
-                catch (cancelled: InterruptedException) { Thread.currentThread().interrupt(); throw cancelled }
-                catch (_: Exception) { emptyMap() }
-                writer.finish(names)
             }.onSuccess { snapshot ->
                 if (BuildConfig.DEBUG) android.util.Log.d("SpareLibrary", "Catalog import: ${android.os.SystemClock.elapsedRealtime() - began} ms, ${snapshot.count} titles")
                 deliver(snapshot, false)
@@ -345,7 +328,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     panel.page(title, (if (cached != null) "Using saved library · " else "Library unavailable · ") + SourceErrors.message(failure) + " · Refresh to retry.", false)
                 }
             } }
-            categories.cancel(true)
         }
     }
     private fun activateCatalog(key: String, snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
@@ -519,6 +501,14 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
         catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
     }
-    fun destroy() { cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun invalidateProvider(id: String) {
+        cancelStart(); ++epoch; task?.cancel(true); favoriteTask?.cancel(true); ++favoriteEpoch
+        catalogImports.values.forEach { it.cancel(true) }; catalogImports.clear(); catalogGenerations.clear()
+        pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null; activeCatalog = ""
+        catalogs.clear(); browsePages.clear(); categoryNames.clear(); episodeCache.clear(); details.clear()
+        parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
+        favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
+    }
+    fun destroy() { repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

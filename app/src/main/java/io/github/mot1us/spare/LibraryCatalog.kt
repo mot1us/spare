@@ -34,6 +34,18 @@ class LibraryCatalog(private val store: SecureStore) {
     private val memory = object : LinkedHashMap<String, List<OnDemand>>(16, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<OnDemand>>?) = size > 16
     }
+    private data class LoadKey(val source: Source, val mode: String, val scope: String)
+    private val jobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog-import") })
+    private val restoreLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
+    private fun lookupKey(source: Source, mode: String) = "${source.id}:${source.providerKey()}:$mode"
+    fun invalidate(sourceId: String) {
+        jobs.cancel { it.source.id == sourceId }
+        synchronized(publishLock) { writers.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
+        synchronized(snapshots) { snapshots.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
+        synchronized(memory) { memory.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
+        lookup.keys.removeAll { it.startsWith("$sourceId:") }; missing.keys.removeAll { it.startsWith("$sourceId:") }
+    }
+    fun close() = jobs.close()
     private val publishLock = Any()
     private val writers = mutableMapOf<String, String>()
     private val snapshots = object : LinkedHashMap<String, Snapshot>(8, .75f, true) {
@@ -46,12 +58,12 @@ class LibraryCatalog(private val store: SecureStore) {
     fun matches(source: Source, request: VodStart.Request): List<OnDemand> {
         val kinds = if (request.episode == null) listOf("movie", "series") else listOf("series")
         val key = ChannelSearch.key(request.query)
-        return VodStart.matches(request, kinds.flatMap { kind -> lookup["${source.id}:$kind"]?.get(key).orEmpty() }.filter { available(source, it.id) }.map { it.item(source) })
+        return VodStart.matches(request, kinds.flatMap { kind -> lookup[lookupKey(source, kind)]?.get(key).orEmpty() }.filter { available(source, it.id) }.map { it.item(source) })
     }
     fun markMissing(source: Source, item: OnDemand) { missing["${source.id}:${item.id}"] = System.currentTimeMillis() + 3600000; changed?.invoke() }
     private fun available(source: Source, id: String) = (missing["${source.id}:$id"] ?: 0) <= System.currentTimeMillis()
     private fun index(source: Source, mode: String, titles: List<Title>) {
-        val map = lookup.getOrPut("${source.id}:$mode") { java.util.concurrent.ConcurrentHashMap() }
+        val map = lookup.getOrPut(lookupKey(source, mode)) { java.util.concurrent.ConcurrentHashMap() }
         titles.forEach { title -> map.compute(title.canonical) { _, old -> (old.orEmpty().filter { it.id != title.id } + title).takeLast(64) } }
     }
     private fun remember(key: String, snapshot: Snapshot) {
@@ -63,11 +75,18 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     private fun prefix(source: Source, mode: String, scope: String = ""): String { require(mode in setOf("movie", "series") && (scope.isEmpty() || scope.matches(Regex("[0-9]{1,20}")))); return "catalog-${source.id}-$mode-${if (scope.isEmpty()) "" else "category-$scope-"}" }
     fun cached(source: Source, mode: String, scope: String = ""): Snapshot? {
+        val lock = restoreLocks.getOrPut(prefix(source, mode, scope)) { java.util.concurrent.locks.ReentrantLock() }
+        lock.lockInterruptibly()
+        try { return restore(source, mode, scope) } finally { lock.unlock() }
+    }
+    private fun restore(source: Source, mode: String, scope: String): Snapshot? {
         val prefix = prefix(source, mode, scope)
         synchronized(snapshots) { snapshots[prefix]?.takeIf { it.source == source } }?.let { return it }
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
-            val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..2)
+            val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..3)
+            if (json.has("provider")) { if (json.getString("provider") != source.providerKey()) return null }
+            else if (!store.legacyProviderMatches(source)) return null
             val pages = json.getJSONArray("pages"); require(pages.length() <= 2000)
             val chunks = List(pages.length()) { i ->
                 val p = pages.getJSONObject(i); val groups = p.getJSONArray("groups"); val keys = p.optJSONArray("keys")
@@ -89,6 +108,26 @@ class LibraryCatalog(private val store: SecureStore) {
         val writer = Writer(source, mode, old.first)
         old.second.chunked(64).forEach(writer::append)
         return writer.finish(emptyMap()).also { store.delete("library-${source.id}-$mode.enc") }
+    }
+    /** Shared by background warming, explicit search and Library; consumers receive useful partial pages. */
+    fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), progress: (Snapshot) -> Unit = {}): Snapshot {
+        fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && System.currentTimeMillis() - value.updated in 0 until 6 * 3600000L
+        val saved = cached(source, mode, scope)
+        if (saved != null) progress(saved)
+        if (!force && fresh(saved)) return saved!!
+        return jobs.await(LoadKey(source.copy(name = ""), mode, scope), progress) { publish ->
+            val latest = cached(source, mode, scope)
+            if (!force && fresh(latest)) return@await latest!!
+            val writer = Writer(source, mode, scope = scope, indexOnly = true)
+            var published = 0L; var checkpoint = 0L
+            VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
+                writer.append(batch)
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (published == 0L || now - published >= 750) { publish(writer.snapshot(labels)); published = now }
+                if (latest?.complete != true && now - checkpoint >= 5000) { writer.checkpoint(labels); checkpoint = now }
+            }
+            writer.finish(labels).also(publish)
+        }
     }
     inner class Writer(private val source: Source, private val mode: String, private val stamp: Long = System.currentTimeMillis(), private val scope: String = "", private val indexOnly: Boolean = false) {
         private val prefix = prefix(source, mode, scope)
@@ -125,10 +164,10 @@ class LibraryCatalog(private val store: SecureStore) {
             val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("titles", JSONArray(it.titles.map(Title::json))) })
             synchronized(publishLock) {
                 if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
-                store.write("${prefix}index.enc", JSONObject().put("schema", 2).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
+                store.write("${prefix}index.enc", JSONObject().put("schema", 3).put("provider", source.providerKey()).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
             }
             if (complete && scope.isEmpty()) {
-                lookup["${source.id}:$mode"] = java.util.concurrent.ConcurrentHashMap(chunks.flatMap { it.titles }.groupBy { it.canonical })
+                lookup[lookupKey(source, mode)] = java.util.concurrent.ConcurrentHashMap(chunks.flatMap { it.titles }.groupBy { it.canonical })
             }
             remember(prefix, value)
             return value

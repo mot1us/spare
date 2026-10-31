@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.24.0 — 2026-10-30
+
+- Share catalog restores/imports between Library and Search; broadcast partial pages to consumers, preserve remaining consumers when one cancels, and keep cached results during refresh.
+- Invalidate derived caches and measured quality when a playlist server/account changes. Scope encrypted Watchlist and continue-watching data to the provider identity while retaining existing data for its original account.
+- Retain confirmed Sports coverage through unrelated EPG updates, and use session-only playback health to rank repeatedly failing feeds below usable alternatives. No background stream probes.
+- Require fresh consecutive frame-rate observations after interruptions; keep VOD-check feedback visible while loading.
+- Add bounded, redacted local playback history with buffer, Java heap, dropped-frame and stream-count readings, plus explicit Copy and Clear actions. Keep buffer durations unchanged pending physical-device memory measurements.
+- Give Local regions separate Add/Edit/Remove controls; keyboard drafts no longer overwrite saved locations.
+
 ## 0.23.1 — 2026-10-30
 
 - Give resumed playback a quiet startup window before optional VOD indexing and automatic playlist/EPG refreshes. Keep explicit search/details and manual refresh available, retain launch refresh requests until playback settles, and leave live/VOD buffer settings unchanged.

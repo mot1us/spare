@@ -125,32 +125,12 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         loads[mode] = io.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
-                val cached = runCatching { repository.cached(selected, mode) }.getOrNull()
-                if (cached != null) synchronized(lock) { if (token == context) { catalogs[mode] = cached; if (active) read() } }
-                // Upgrade old page-only caches once; subsequent searches read the compact title index.
-                if (force || cached == null || !cached.complete || cached.chunks.any { it.titles.size != it.count } || System.currentTimeMillis() - cached.updated !in 0 until 6 * 3600000L) {
-                    val writer = repository.Writer(selected, mode, indexOnly = true)
-                    var publishedAt = 0L; var savedAt = 0L
-                    VodCatalog.stream(selected, mode, lean = true) { batch ->
-                        synchronized(lock) {
-                            if (closed || token != context || Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Search cancelled")
-                            if (query.isNotEmpty()) {
-                                val additions = batch.filter { ChannelSearch.key(it.title).contains(query) }
-                                if (additions.isNotEmpty()) { matches[mode] = (matches[mode].orEmpty() + additions).distinctBy { it.id }.take(40); publish() }
-                            }
-                        }
-                        writer.append(batch)
-                        val now = android.os.SystemClock.elapsedRealtime()
-                        if (now - publishedAt >= 750) {
-                            val snapshot = writer.snapshot(emptyMap()); publishedAt = now
-                            synchronized(lock) { if (token == context && snapshot.count >= (catalogs[mode]?.count ?: 0)) catalogs[mode] = snapshot }
-                            if (cached?.complete != true && snapshot.count >= (cached?.count ?: 0) && now - savedAt >= 5000) {
-                                writer.checkpoint(emptyMap()); savedAt = now
-                            }
+                repository.load(selected, mode, force = force) { snapshot ->
+                    synchronized(lock) {
+                        if (token == context && snapshot.count >= (catalogs[mode]?.count ?: 0)) {
+                            catalogs[mode] = snapshot; if (active) read(); publish()
                         }
                     }
-                    val complete = writer.finish(emptyMap())
-                    synchronized(lock) { if (token == context) { catalogs[mode] = complete; if (active) read() } }
                 }
             } catch (_: Exception) { synchronized(lock) { if (token == context && !Thread.currentThread().isInterrupted) failures.add(mode) } }
             finally { synchronized(lock) {

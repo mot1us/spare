@@ -108,6 +108,24 @@ class SpareDeviceTest {
                 assertTrue(context.filesDir.listFiles()!!.filter { it.name.startsWith("catalog-${source.id}-") }.none { it.readBytes().toString(Charsets.UTF_8).contains("https://example.com/private/") })
             } finally { store.removeCache(source) }
 
+        FixtureServer(slowVod = true, parallelClients = true).use { server ->
+            val source = Source(name = "Shared import", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val repository = LibraryCatalog(store); val consumers = Executors.newFixedThreadPool(2)
+            val partial = java.util.concurrent.CountDownLatch(1); val second = java.util.concurrent.CountDownLatch(1)
+            try {
+                val search = consumers.submit<LibraryCatalog.Snapshot> { repository.load(source, "movie") { if (!it.complete) partial.countDown() } }
+                assertTrue(partial.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                val library = consumers.submit<LibraryCatalog.Snapshot> { repository.load(source, "movie") { if (!it.complete) second.countDown() } }
+                assertTrue(second.await(5, java.util.concurrent.TimeUnit.SECONDS)); server.finishVodCatalog.countDown()
+                assertEquals(16, search.get(10, java.util.concurrent.TimeUnit.SECONDS).count)
+                assertEquals(16, library.get(10, java.util.concurrent.TimeUnit.SECONDS).count)
+                assertEquals("Search and Library must share the provider download", 1, server.catalogTargets.count { "get_vod_streams" in it })
+                val otherAccount = source.copy(password = "different-account")
+                assertNull(repository.memory(otherAccount, "movie")); assertNull(repository.cached(otherAccount, "movie"))
+                assertTrue(repository.matches(otherAccount, VodStart.Request("Other movie 16")).isEmpty())
+                assertEquals(1, repository.matches(source, VodStart.Request("Other movie 16")).size)
+            } finally { server.finishVodCatalog.countDown(); repository.close(); consumers.shutdownNow(); store.removeCache(source) }
+        }
         } finally { context.deleteFile("test-security.enc") }
     }
 
@@ -481,7 +499,7 @@ class SpareDeviceTest {
                     assertTrue(location.hasFocus())
                     assertNotNull(panel.findViewWithTag<View>("local-location-suggestion:Seattle, WA"))
                 }
-                waitFor(scenario) { SecureStore(context).localLocation == "Seatt" }
+                scenario.onActivity { assertEquals("Typing a draft must not overwrite saved regions", "", SecureStore(context).localLocation) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("local-location-input").requestFocus() }
                 device.pressDPadDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-add-region")?.hasFocus() == true }
@@ -502,6 +520,16 @@ class SpareDeviceTest {
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("local-saved-regions").text.contains("Seattle, WA"))
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("local-location-matches").text.toString() == "3 local channels matched" }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("local-edit:0").performClick()
+                    activity.window.decorView.findViewWithTag<EditText>("local-location-input").setText("Seattle Washington")
+                    activity.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA").performClick()
+                    activity.window.decorView.findViewWithTag<View>("local-remove:1").performClick()
+                    assertEquals("Seattle, WA", store.localLocation)
+                    activity.window.decorView.findViewWithTag<EditText>("local-location-input").setText("Portland Oregon")
+                    activity.window.decorView.findViewWithTag<View>("local-location-suggestion:Portland, OR").performClick()
+                    assertEquals("Seattle, WA; Portland, OR", store.localLocation)
+                }
                 setThemeControl(scenario, "Guide", "Opacity", "80%")
                 assertEquals(80, SecureStore(context).guideOpacity)
                 leaveSettings(scenario)
@@ -2035,9 +2063,17 @@ class SpareDeviceTest {
             store.saveWatchProgress(source, item, 45000, 120000)
             val restored = SecureStore(context).watchProgress(source).single()
             assertEquals(45000, restored.position); assertEquals(item, restored.item)
-            val bytes = File(context.filesDir, "watch-${source.id}.enc").readBytes().toString(Charsets.UTF_8)
+            val bytes = File(context.filesDir, "watch-${source.id}-${source.providerKey().take(16)}.enc").readBytes().toString(Charsets.UTF_8)
             assertFalse(bytes.contains("secret-password")); assertFalse(bytes.contains("Fixture movie"))
             assertTrue(store.watchProgress(source.copy(id = "other-source")).isEmpty())
+            store.bindProvider(source)
+            val edited = source.copy(password = "other-account")
+            assertTrue(store.bindProvider(edited)); assertTrue(store.watchProgress(edited).isEmpty())
+            store.saveVideoInfo(source, mapOf("old" to VideoInfo(3840, 2160, 60f)))
+            assertTrue("An old background writer cannot restore the edited account's old quality cache", store.videoInfo(edited).isEmpty())
+            assertEquals("The old account's encrypted progress remains available to that account", 45000, store.watchProgress(source).single().position)
+            store.bindProvider(source)
+
             store.saveWatchProgress(source, item, 120000, 120000, ended = true); assertTrue(store.watchProgress(source).isEmpty())
             store.cacheCatalog(source, "movie", listOf(item)); assertEquals(item, SecureStore(context).catalog(source, "movie")!!.second.single())
         } finally { store.removeCache(source) }

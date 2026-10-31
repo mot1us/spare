@@ -30,4 +30,11 @@ class FrameRateTargetTest {
         assertNull(target.observe(24f, 2000, true))
         assertEquals(24f, target.observe(24f, 3500, true)!!, .001f)
     }
+    @Test fun gapsAndInvalidSamplesRestartTheStabilityWindow() {
+        val target = FrameRateTarget(); target.reset(60f)
+        assertNull(target.observe(50f, 0, true)); assertNull(target.observe(50f, 30000, true))
+        assertNull(target.observe(0f, 30500, true)); assertNull(target.observe(50f, 31000, true))
+        assertNull(target.observe(50f, 32499, true)); assertEquals(50f, target.observe(50f, 32500, true)!!, .001f)
+    }
+
 }
