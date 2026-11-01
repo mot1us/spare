@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 
-/** App-local reminders. Only a fresh scoreboard can announce that a game has started. */
+/** App-local reminders follow the saved start time; scoreboard refreshes correct reschedules. */
 class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String> = emptySet()) {
     private val saved = events.take(64).associateBy(::key).toMutableMap()
     private val shown = delivered.toMutableSet()
@@ -14,7 +14,7 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
     fun toggle(game: SportsGame): Boolean {
         if (saved.remove(key(game)) != null) { shown.remove(key(game)); return false }
         require(game.state == "pre" && game.eventId.isNotBlank() && saved.size < 64)
-        saved[key(game)] = LiveEvent(game.eventId, game.teams.map { it.id }.toSet(), game.start, "pre", game.networks, league = game.leagueId)
+        saved[key(game)] = LiveEvent(game.eventId, game.teams.map { it.id }.toSet(), game.start, "pre", game.networks, logos = game.logos, status = game.status, league = game.leagueId)
         return true
     }
     fun remove(key: String) { saved.remove(key); shown.remove(key) }
@@ -23,19 +23,29 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
         .flatMap { event -> listOf(event.start, now).map { event.league to Instant.ofEpochMilli(it).atZone(ZoneId.of("America/New_York")).toLocalDate() } }.toSet()
     fun update(fresh: List<LiveEvent>, now: Long): List<SportsGame> {
         saved.values.filter { it.start < now - 48 * 3600000L }.map(::key).forEach(::remove)
-        val ready = mutableListOf<LiveEvent>()
         fresh.forEach { event ->
             val key = key(event)
             if (key !in saved) return@forEach
             if (event.state == "post") remove(key) else {
                 saved[key] = event
-                if (event.state == "in" && key !in shown && event.start in (now - 18 * 3600000L)..(now + 60000L)) ready.add(event)
+            }
+        }
+        return due(now)
+    }
+    fun due(now: Long): List<SportsGame> {
+        val ready = saved.values.filter { event ->
+            key(event) !in shown && when (event.state) {
+                "in" -> event.start in (now - 18 * 3600000L)..now
+                "pre" -> event.start in (now - 30 * 60000L)..now &&
+                    !notStarting.containsMatchIn(event.status)
+                else -> false
             }
         }
         return SportsSchedule.games(LiveSportsSnapshot(ready, now, ready.map { it.league }.toSet()), Guide.EMPTY, null, emptySet(), now, matchChannels = false)
     }
     fun json(): JSONObject = SportsSchedule.json(LiveSportsSnapshot(events, 0, emptySet())).put("delivered", JSONArray(shown.toList()))
     companion object {
+        private val notStarting = Regex("postponed|cancelled|canceled|suspended|delayed", RegexOption.IGNORE_CASE)
         private fun key(game: SportsGame) = "${game.leagueId}:${game.eventId}"
         private fun key(event: LiveEvent) = "${event.league}:${event.id}"
         fun from(json: JSONObject): GameReminders {

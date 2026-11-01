@@ -9,14 +9,24 @@ class GameRemindersTest {
     private fun game(start: Long = now + 60_000L) = SportsGame(teams, start, start + 8 * 3600000L, emptyList(), "reminder-test", "pre", competition = "NFL")
     private fun event(start: Long = now, state: String = "in") = LiveEvent("reminder-test", teams.map { it.id }.toSet(), start, state, league = "NFL")
 
-    @Test fun scheduledTimeAloneCannotFireAndDelayedStartsAreUpdated() {
+    @Test fun scheduledStartFiresWithoutWaitingForScoreboardAndReschedulesAreUpdated() {
         val saved = GameReminders(); val game = game()
         assertTrue(saved.toggle(game)); assertTrue(saved.has(game)); assertTrue(saved.targets(now).isNotEmpty())
-        assertTrue(saved.update(listOf(event(state = "pre")), now).isEmpty())
-        assertTrue(saved.update(emptyList(), now + 300_000L).isEmpty())
+        assertTrue(saved.update(emptyList(), now).isEmpty())
+        assertTrue(saved.update(emptyList(), game.start - 1).isEmpty())
+        assertEquals(game.key, saved.update(emptyList(), game.start).single().key)
         saved.update(listOf(event(now + 86400000L, "pre")), now)
         assertTrue(saved.targets(now).isEmpty())
+        assertTrue(saved.update(emptyList(), game.start).isEmpty())
         assertEquals(now + 86400000L, saved.events.single().start)
+    }
+    @Test fun scheduledAlertIsOnceOnlyAndKnownPostponementsDoNotFire() {
+        val saved = GameReminders(); saved.toggle(game())
+        assertTrue(saved.update(listOf(event(state = "pre").copy(status = "Postponed")), now).isEmpty())
+        assertTrue(saved.update(emptyList(), now + 60000).isEmpty())
+        val due = saved.update(listOf(event(state = "pre")), now).single()
+        saved.delivered(due)
+        assertTrue(GameReminders.from(saved.json()).update(emptyList(), now + 60000).isEmpty())
     }
     @Test fun confirmedLiveReminderSurvivesRestartAndIsDeliveredOnlyOnce() {
         val saved = GameReminders(); saved.toggle(game())

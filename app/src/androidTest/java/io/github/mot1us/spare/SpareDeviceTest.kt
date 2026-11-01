@@ -585,7 +585,9 @@ class SpareDeviceTest {
                         playing = find<PlayerView>(activity.window.decorView)!!.player
                         writes = MainActivity::class.java.getDeclaredField("cacheWrites").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
                         MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
-                        MainActivity::class.java.getDeclaredField("reminderPending").apply { isAccessible = true }.set(activity, game.copy(state = "in", start = now - 1000) to System.currentTimeMillis())
+                        val due = GameReminders().apply { toggle(game.copy(start = System.currentTimeMillis() - 1000)) }
+                        MainActivity::class.java.getDeclaredField("reminders").apply { isAccessible = true }.set(activity, due)
+                        MainActivity::class.java.getDeclaredField("reminderChecking").apply { isAccessible = true }.setBoolean(activity, true)
                         MainActivity::class.java.getDeclaredMethod("checkGameReminders").apply { isAccessible = true }.invoke(activity)
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
@@ -596,6 +598,30 @@ class SpareDeviceTest {
                     device.pressBack()
                     waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
                     scenario.onActivity { assertTrue(playing!!.isPlaying); assertSame(playing, find<PlayerView>(it.window.decorView)!!.player) }
+                    val releaseReminderSearch = java.util.concurrent.CountDownLatch(1)
+                    try {
+                        scenario.onActivity { activity ->
+                            val worker = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                            worker.submit { releaseReminderSearch.await(20, java.util.concurrent.TimeUnit.SECONDS) }
+                            val due = GameReminders().apply { toggle(game.copy(start = System.currentTimeMillis() - 1000)) }
+                            MainActivity::class.java.getDeclaredField("reminders").apply { isAccessible = true }.set(activity, due)
+                            MainActivity::class.java.getDeclaredMethod("checkGameReminders").apply { isAccessible = true }.invoke(activity)
+                        }
+                        device.pressDPadCenter()
+                        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-watch-panel").isShown }
+                        scenario.onActivity { activity ->
+                            assertEquals("game-watch-cancel", activity.currentFocus?.tag)
+                            assertFalse("Watch game must not navigate to the guide while matching", channelList(activity)?.isShown == true)
+                            assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                            assertTrue("The previous programme keeps playing during lookup", playing!!.isPlaying)
+                        }
+                        device.pressBack()
+                        waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("game-watch-panel").isShown }
+                        scenario.onActivity { activity ->
+                            assertFalse(channelList(activity)?.isShown == true)
+                            assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
+                        }
+                    } finally { releaseReminderSearch.countDown() }
                     assertFalse(SecureStore(context).sportsAutoPlay)
                     device.pressMenu(); activateSetting(scenario, "Sports"); activateSetting(scenario, "Play best stream on selection")
                     assertTrue("Automatic playback persists from main Settings", SecureStore(context).sportsAutoPlay)
@@ -732,6 +758,8 @@ class SpareDeviceTest {
                     assertNull("An unconfirmed 4K broadcaster must not displace the reminder's exact 720p game", server.requests["/channel6.mp4"])
                     scenario.onActivity { activity ->
                         assertFalse("Lower measured quality must not interrupt a playable game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                        assertFalse("Reminder playback finishes full screen", channelList(activity)?.isShown == true)
+                        assertFalse(activity.window.decorView.findViewWithTag<View>("game-watch-panel").isShown)
                         assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
                     }
                 }

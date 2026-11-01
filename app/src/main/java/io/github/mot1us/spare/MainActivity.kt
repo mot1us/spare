@@ -63,6 +63,8 @@ class MainActivity : Activity() {
     private lateinit var sourceVideoFrames: SourceVideoFrames
     private lateinit var reminders: GameReminders
     private lateinit var reminderBanner: GameReminderBanner
+    private lateinit var gameWatchPanel: GameWatchPanel
+    private var reminderWatchReturnSports = false
     private var reminderGame: SportsGame? = null
     private var reminderPending: Pair<SportsGame, Long>? = null
     private var reminderCheckedAt = 0L
@@ -779,6 +781,8 @@ class MainActivity : Activity() {
         root.addView(favoriteFeedback, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(30) })
         reminderBanner = GameReminderBanner(this, ::button, ::watchGameReminder, ::dismissGameReminder)
         root.addView(reminderBanner, FrameLayout.LayoutParams(dp(420), -2, Gravity.BOTTOM or Gravity.END).apply { marginEnd = dp(24); bottomMargin = dp(24) })
+        gameWatchPanel = GameWatchPanel(this, ::button, ::cancelReminderWatch)
+        root.addView(gameWatchPanel, FrameLayout.LayoutParams(-1, -1))
         playbackLoading = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             isIndeterminate = true; visibility = View.GONE; tag = "playback-status"
             indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
@@ -1580,9 +1584,11 @@ class MainActivity : Activity() {
     private fun checkGameReminders() {
         if (!started || !::reminders.isInitialized || !::reminderBanner.isInitialized) return
         val now = System.currentTimeMillis()
+        val due = reminders.due(now)
+        if (reminderPending == null && reminderGame == null) due.firstOrNull()?.let { reminderPending = it to now }
         reminderPending?.let { (game, checked) ->
-            if (!reminders.has(game) || now - checked > 120000L) reminderPending = null
-            else if (reminderGame == null && !guideVisible && !library.opened && settingsPanel?.opened != true && sportsManager?.opened != true && sportsCalendar?.opened != true && !details.isVisible && player.isPlaying) {
+            if (!reminders.has(game) || due.none { it.key == game.key } || now - checked > 120000L) reminderPending = null
+            else if (reminderGame == null && !guideVisible && !gameWatchPanel.isVisible && !library.opened && settingsPanel?.opened != true && sportsManager?.opened != true && sportsCalendar?.opened != true && !details.isVisible && player.playWhenReady && (current != null || onDemand != null)) {
                 reminderGame = game; reminderReturnFocus = currentFocus
                 reminders.delivered(game); saveGameReminders(); root.bringChildToFront(reminderBanner); reminderBanner.show(game)
                 handler.removeCallbacks(hideReminder); handler.postDelayed(hideReminder, 30000)
@@ -1602,6 +1608,7 @@ class MainActivity : Activity() {
                 if (!closed) {
                     val before = reminders.json().toString()
                     val ready = reminders.update(events, System.currentTimeMillis())
+                    if (reminderPending?.first?.key?.let { key -> ready.none { it.key == key } } == true) reminderPending = null
                     if (before != reminders.json().toString()) saveGameReminders()
                     if (reminderPending == null && reminderGame == null) ready.firstOrNull()?.let { reminderPending = it to System.currentTimeMillis() }
                 }
@@ -1615,13 +1622,22 @@ class MainActivity : Activity() {
         reminderReturnFocus?.takeIf { it.isShown }?.requestFocus(); reminderReturnFocus = null
     }
     private fun watchGameReminder() {
-        val game = reminderGame ?: return
+        val reminder = reminderGame ?: return
+        // A scheduled reminder can precede the scoreboard's delayed live flag.
+        // Search current EPG/title coverage without falsifying the saved scoreboard.
+        val game = reminder.copy(state = "in")
         val now = System.currentTimeMillis()
-        val event = LiveEvent(game.eventId, game.teams.map { it.id }.toSet(), game.start, "in", game.networks, game.scores, game.logos, game.status, league = game.leagueId)
+        val event = LiveEvent(reminder.eventId, reminder.teams.map { it.id }.toSet(), reminder.start, reminder.state, reminder.networks, reminder.scores, reminder.logos, reminder.status, league = reminder.leagueId)
         liveSports = LiveSportsSnapshot((liveSports.events.filterNot { it.id == event.id && it.league == event.league } + event), now, liveSports.leagues + game.leagueId)
         selectedGame = game; sportsTeam = "today"; liveSportsAttempt = now
-        dismissGameReminder(); multiview.close(); sportsVisible = true; clearGuideSearch(); showGuide(true)
+        reminderWatchReturnSports = sportsVisible
+        dismissGameReminder(); multiview.close(); sportsVisible = true; clearGuideSearch(); showGuide(false)
+        gameWatchPanel.open(game); root.bringChildToFront(gameWatchPanel)
         selectGame(game, autoWatch = true)
+    }
+    private fun cancelReminderWatch() {
+        ++sportsMatchEpoch; sportsMatchTask?.cancel(true); sportsMatchTask = null
+        gameWatchPanel.dismiss(); clearSportsPlayback(); sportsPanel.back(); sportsVisible = reminderWatchReturnSports
     }
     private fun checkLiveSports(force: Boolean = false) {
         val now = System.currentTimeMillis()
@@ -2014,7 +2030,7 @@ class MainActivity : Activity() {
         (if (channel.id in favorites) "★ " else "") + channel.name + " · " + channel.qualityLabel(videoInfo[channel.id]) +
             if (game.state == "pre" && game.broadcasts.any { it.channel.id == channel.id }) " · Scheduled ${GuideClock.time(game.broadcasts.first { it.channel.id == channel.id }.programme.start)}" else if (game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
-        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null, background: Boolean = false): SportsStreamCache.Match {
+        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null, background: Boolean = false, quickTune: Boolean = false): SportsStreamCache.Match {
         var lastProgress = 0L
         // A finite local pass can finish on a large lineup at background priority. Tuning and
         // lifecycle changes still interrupt it; only explicit foreground searches have a deadline.
@@ -2027,7 +2043,7 @@ class MainActivity : Activity() {
         val needsProvider = selected.kind == "xtream" && selected.epgUrl.isBlank()
         val coverageNow = System.currentTimeMillis()
         val locallyConfirmed = result.broadcasts.any { game.state == "pre" || coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
-        if (confirm && needsProvider && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
+        if (confirm && needsProvider && (!quickTune || !locallyConfirmed) && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             val bestHeight = (result.broadcasts.map { it.channel } + result.titleMatches).maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
             val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis())
@@ -2058,6 +2074,7 @@ class MainActivity : Activity() {
         pendingSportsTune = null; sportsMatchTask?.cancel(true)
         val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = sportsStreamFilters(); val quality = videoInfo.toMap(); val sourceEpoch = generation
+        val reminderWatch = gameWatchPanel.isVisible
         val fastCached = sportsStreamCache.peek(selected.id, sourceEpoch, snapshot, favoritesSnapshot, game, System.currentTimeMillis(), forAuto = autoWatch)
         showGameInfo(game); val matchEpoch = ++sportsMatchEpoch
         sportsPanel.matching(game)
@@ -2084,20 +2101,33 @@ class MainActivity : Activity() {
                     showGameInfo(matched); sportsChannels = channels.take(4)
                     sportsPanel.showStreams(matched, channels, null, streamLabel)
                     multiview.close(); sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives)
+                    if (reminderWatch) { gameWatchPanel.dismiss(); showGuide(false) }
                     if (!playNextSportsCandidate("Opening best game stream")) showSportsAlternatives("The available streams changed. Choose another result.")
                     return
                 }
             }
             showGameInfo(matched); sportsChannels = channels.take(4); scheduleEpg()
             sportsPanel.showStreams(matched, channels, if (autoWatch) SportsStreams.unavailableReason(matched, channels, latestQuality, now) else null, streamLabel)
+            if (reminderWatch) { gameWatchPanel.dismiss(); applyFilter(); showGuide(true) }
         }
         if (fastCached != null && fastCached.autoReady) { present(fastCached); return }
         sportsMatchTask = sportsMatchWorker.submit {
             val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
             val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = autoWatch)
             if (cached != null && cached.autoReady) { handler.post { present(cached) }; return@submit }
-            fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, message, checked, total) } }
-            val prepared = resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached)
+            fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && sportsVisible) {
+                sportsPanel.matchingProgress(game, message, checked, total)
+                if (reminderWatch && gameWatchPanel.isVisible) gameWatchPanel.update(message, checked, total)
+            } } }
+            val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached, quickTune = reminderWatch) }.getOrElse {
+                if (!Thread.currentThread().isInterrupted) handler.post {
+                    if (!closed && started && sourceEpoch == generation && matchEpoch == sportsMatchEpoch && sportsVisible) {
+                        sportsPanel.showMatchNotice("Could not finish finding this game. Go back and try again.")
+                        if (reminderWatch) { gameWatchPanel.dismiss(); applyFilter(); showGuide(true) }
+                    }
+                }
+                return@submit
+            }
             sportsStreamCache.put(cacheContext, prepared, System.currentTimeMillis())
             handler.post { present(prepared) }
         }
@@ -2328,7 +2358,7 @@ class MainActivity : Activity() {
             }
             "Subtitles" -> renderCaptionSettings()
             "Sports" -> {
-                panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear over playback while Spare is open, once the scoreboard confirms the game is live. Watch best prefers the highest-resolution matching game stream. Known FPS breaks resolution ties. Broadcaster matches are labelled when game coverage is unconfirmed. All qualities remain playable.")
+                panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear at the scheduled start over playback while Spare is open. Schedule updates adjust rescheduled games. Watch best prefers the highest-resolution matching game stream. Known FPS breaks resolution ties. Broadcaster matches are labelled when game coverage is unconfirmed. All qualities remain playable.")
                 panel.action("Play best stream on selection", "Skip live-game actions and play the highest-resolution match. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts. FPS is learned from normal playback.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }
@@ -2540,6 +2570,10 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (::gameWatchPanel.isInitialized && gameWatchPanel.isVisible) {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) cancelReminderWatch(); return true }
+            return super.dispatchKeyEvent(event)
+        }
         if (::vodStartPanel.isInitialized && vodStartPanel.isVisible) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) closeVodStart(); return true }
             return super.dispatchKeyEvent(event)
@@ -2670,7 +2704,7 @@ class MainActivity : Activity() {
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onStop() { handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
     override fun onDestroy() { if (::playlistSearch.isInitialized) playlistSearch.close(); replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); reminderWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

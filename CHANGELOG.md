@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.24.2 — 2026-11-01
+
+- Deliver game reminders at their scheduled start while Spare is open, without waiting for a delayed live scoreboard flag. Honor updated start times and known postponements, and retain once-only delivery across restarts.
+- Keep Watch game full screen with a focused, cancelable progress overlay while the current programme continues. Play an already-confirmed match without waiting to search for a higher-resolution alternative; use the Sports choices screen only when automatic matching cannot find a confirmed feed.
+
 ## 0.24.1 — 2026-10-31
 
 - Keep Sports card-focus handling lightweight: debounce background work, validate coverage and rank cached stream summaries on a worker, and apply only completed text updates to visible cards. Avoid copying a full programme map for matches without extra guide data.
