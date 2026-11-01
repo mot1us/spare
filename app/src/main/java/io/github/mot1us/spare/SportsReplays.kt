@@ -16,18 +16,18 @@ object SportsReplays {
     fun find(game: SportsGame, guide: Guide, now: Long): List<SportsReplay> {
         val target = game.teams.map { it.id }.toSet()
         val hints = game.teams.map { (it.aliases + it.name.split(' ').filter { word -> word.length >= 4 }).map(SportsCatalog::normalize).distinct() }
-        val parsed = hashMapOf<Triple<String, String, String>, Boolean>()
+        val parsed = hashMapOf<Pair<String, String>, Boolean>()
         val result = mutableListOf<SportsReplay>()
         for (channel in guide.channels) {
             if (Thread.currentThread().isInterrupted) break
             if (!eligible(game, channel, now)) continue
-            val context = channel.name + " " + channel.group
             val match = guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { p ->
                 if (!Catchup.available(channel, p, now) || abs(p.start - game.start) > 90 * 60000L || p.end <= game.start) false else {
-                    val text = SportsCatalog.normalize(p.title + " " + p.description)
-                    hints.all { aliases -> aliases.any { it in text } }
+                    hints.all { aliases -> aliases.any { p.title.contains(it, true) || p.description.contains(it, true) } } ||
+                        ((p.title.any { it.code > 127 } || p.description.any { it.code > 127 }) &&
+                            SportsCatalog.normalize(p.title + " " + p.description).let { text -> hints.all { aliases -> aliases.any { it in text } } })
                 }
-            }.filter { p -> parsed.getOrPut(Triple(p.title, p.description, context)) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target } }
+            }.filter { p -> parsed.getOrPut(p.title to p.description) { SportsGuide.teams(p, game.teams.first().league)?.map { it.id }?.toSet() == target } }
                 .minByOrNull { abs(it.start - game.start) }
             if (match != null) result.add(SportsReplay(channel, match))
         }
@@ -54,12 +54,15 @@ object SportsReplays {
     /** Search the archive inventory, prioritizing broadcasters/teams without excluding other feeds. */
     fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, limit: Int = 6): List<Channel> {
         data class Candidate(val channel: Channel, val score: Int, val family: String)
+        val teamHints = game.teams.associateWith { team -> team.aliases.map(SportsCatalog::normalize).filter { it.length >= 3 }.map { " $it " } }
+        val networkKeys = game.networks.associateWith(SportsStreams::broadcasterKey)
+        val groupKeys = mutableMapOf<String, String>()
+        val league = SportsCatalog.normalize(game.teams.first().league)
         fun candidate(channel: Channel): Candidate {
             val name = channel.sportsKey
-            val teams = game.teams.filter { team -> team.aliases.any { alias -> SportsCatalog.normalize(alias).let { it.length >= 3 && " $it " in name } } }
-            val networks = game.networks.filter { SportsStreams.broadcasterMatches(it, channel) }
-            val context = SportsCatalog.normalize(channel.group + " " + channel.name)
-            val league = SportsCatalog.normalize(game.teams.first().league)
+            val teams = game.teams.filter { team -> teamHints.getValue(team).any { it in name } }
+            val networks = game.networks.filter { SportsStreams.broadcasterMatchesKey(networkKeys.getValue(it), channel) }
+            val context = groupKeys.getOrPut(channel.group) { SportsCatalog.normalize(channel.group) } + " " + name.trim()
             val score = teams.size * 4 + (if (networks.isNotEmpty()) 2 else 0) + (if (" $league " in " $context ") 1 else 0)
             val family = networks.firstOrNull()?.let(SportsCatalog::normalize) ?: teams.joinToString { it.id }.ifBlank { context }
             return Candidate(channel, score, family)

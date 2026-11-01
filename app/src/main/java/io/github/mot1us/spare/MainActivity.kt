@@ -1692,7 +1692,6 @@ class MainActivity : Activity() {
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val archiveDays = snapshot.channels.maxOfOrNull { if (Catchup.supported(it)) it.catchupDays else 0 } ?: 0
-            val redZone = redZoneCache.find(snapshot, redZoneProfile, qualitySnapshot, now).filter { (hidden[it.id] ?: 0) <= now }
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
@@ -1703,7 +1702,7 @@ class MainActivity : Activity() {
             val archiveChannels = archiveGuide.channels.associateBy { it.id }
             val directReplays = games.filter { SportsReplays.eligible(it, archiveDays, now) }.take(256).mapNotNull { game ->
                 val cached = SportsReplays.retained(replaySnapshot["$selectedSourceId:$sourceEpoch:${game.key}"]?.second.orEmpty(), archiveChannels, now)
-                SportsReplays.best(cached.ifEmpty { if (game.key in replayChecked) emptyList() else SportsReplays.find(game, archiveGuide, now) }, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
+                SportsReplays.best(cached, quality = qualitySnapshot, favorites = favoriteSnapshot)?.let { game.key to it }
             }.toMap()
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
@@ -1717,7 +1716,6 @@ class MainActivity : Activity() {
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.archiveWindowDays = archiveDays
-                sportsPanel.updateRedZone(redZone, qualitySnapshot)
                 sportsPanel.updateCardReplays(directReplays)
                 sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
                 selectedGame?.let(::showGameInfo) ?: run {
@@ -1728,6 +1726,8 @@ class MainActivity : Activity() {
                 scheduleEpg()
                 if (sportsDirty) { sportsDirty = false; scheduleSports() }
             }
+            val redZone = redZoneCache.find(snapshot, redZoneProfile, qualitySnapshot, now).filter { (hidden[it.id] ?: 0) <= now }
+            handler.post { if (!closed && generation == sourceEpoch && epoch == sportsEpoch && sportsVisible) sportsPanel.updateRedZone(redZone, qualitySnapshot) }
         }
     }
     private fun openSportsCalendar() {

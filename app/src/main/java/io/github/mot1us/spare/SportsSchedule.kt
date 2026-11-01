@@ -11,7 +11,7 @@ import java.util.concurrent.Executors
 object SportsSchedule {
     fun reminderEvents(targets: Set<Pair<String, java.time.LocalDate>>, now: Long = System.currentTimeMillis(), get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): List<LiveEvent> {
         if (targets.isEmpty()) return emptyList()
-        val pool = Executors.newFixedThreadPool(4)
+        val pool = Executors.newFixedThreadPool(4) { task -> Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, "spare-scoreboard").apply { priority = Thread.MIN_PRIORITY } }
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<List<LiveEvent>>(pool)
             val wanted = targets.take(14)
@@ -65,7 +65,7 @@ object SportsSchedule {
         } }
         if (events.isNotEmpty()) partial(LiveSportsSnapshot(events.values.toList(), now, emptySet()))
         val completedBoards = mutableMapOf<String, Int>(); val expectedBoards = urls.groupingBy { it.first }.eachCount()
-        val pool = Executors.newFixedThreadPool(4)
+        val pool = Executors.newFixedThreadPool(4) { task -> Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, "spare-scoreboard").apply { priority = Thread.MIN_PRIORITY } }
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<Triple<String, String, List<LiveEvent>>>(pool)
             urls.forEach { (league, url) -> completion.submit(java.util.concurrent.Callable { Triple(league, url, (if (url.contains("/scoreboard")) scoreboard(league, url, now, get) else LiveSports.parse(get(url), league, now, onlyLive = false)).map { it.copy(scoreboard = url.contains("/scoreboard")) }) }) }

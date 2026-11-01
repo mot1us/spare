@@ -20,7 +20,7 @@ class SportsReplayDiscovery internal constructor(
     private val handler = if (post == null) Handler(Looper.getMainLooper()) else null
     private fun main(block: () -> Unit) { if (post != null) post.invoke(block) else handler!!.post(block) }
     private fun pool(count: Int, name: String) = Executors.newFixedThreadPool(count) { task ->
-        Thread(task, name).apply { priority = Thread.MIN_PRIORITY }
+        Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, name).apply { priority = Thread.MIN_PRIORITY }
     } as ThreadPoolExecutor
     private val worker = pool(1, "spare-replay")
     private val metadata = pool(2, "spare-replay-metadata")

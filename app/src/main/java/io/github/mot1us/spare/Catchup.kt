@@ -9,8 +9,10 @@ import kotlin.math.ceil
 /** Only advertised archive formats are used; live URLs are never guessed into archives. */
 object Catchup {
     private const val DAY = 86400000L
-    fun supported(channel: Channel) = channel.archiveMetadataKnown && channel.catchupDays > 0 && channel.catchupMode in setOf("xc", "default", "append", "shift") &&
-        (channel.catchupMode !in setOf("default", "append") || channel.catchupTemplate.isNotBlank())
+    private val modes = setOf("xc", "default", "append", "shift")
+    private val templates = setOf("default", "append")
+    fun supported(channel: Channel) = channel.archiveMetadataKnown && channel.catchupDays > 0 && channel.catchupMode in modes &&
+        (channel.catchupMode !in templates || channel.catchupTemplate.isNotBlank())
     /** Capabilities come from every playlist entry, independent of guide/category filters. */
     fun channels(guide: Guide) = guide.channels.filter { !it.media && supported(it) }.distinctBy { it.id }
     fun available(channel: Channel, programme: Programme, now: Long = System.currentTimeMillis()) = supported(channel) &&

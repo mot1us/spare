@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.24.4 — 2026-11-01
+
+- Show Sports fixtures before archive and RedZone discovery. Replay availability fills in separately instead of blocking the initial page.
+- Reuse normalized team/network/channel data during archive searches, reject unrelated programme text without repeated Unicode normalization, and run scoreboard/replay workers at Android background priority to protect playback.
+
 ## 0.24.3 — 2026-11-01
 
 - Show overall team records beneath team names on Sports cards and in the hero. Keep scoreboard records in the encrypted schedule cache, omit missing records, and hide completed-game records when spoiler protection is enabled.

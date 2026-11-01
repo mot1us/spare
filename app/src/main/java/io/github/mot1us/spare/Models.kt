@@ -22,6 +22,7 @@ data class Channel(val id: String, val name: String, val group: String, val url:
     val rowId: Long by lazy { stableLongId(id) }
     val searchKey: String = ChannelSearch.key(name)
     val sportsKey: String by lazy { " ${SportsCatalog.normalize(name)} " }
+    val broadcastKey: String by lazy { SportsStreams.broadcasterKey(name) }
     fun quality(observed: VideoInfo?): VideoInfo? {
         if (observed == null) return reportedQuality
         val provider = reportedQuality ?: return observed

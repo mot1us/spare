@@ -58,10 +58,12 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 object SportsStreams {
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
     private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
-    private fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
+    internal fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
     internal fun broadcasterMatches(network: String, channel: Channel): Boolean {
-        val key = broadcasterKey(network)
-        val name = broadcasterKey(channel.name)
+        return broadcasterMatchesKey(broadcasterKey(network), channel)
+    }
+    internal fun broadcasterMatchesKey(key: String, channel: Channel): Boolean {
+        val name = channel.broadcastKey
         return key.trim().length >= 3 && key in name && (key.trimEnd() + " plus ") !in name
     }
     fun qualifies(channel: Channel, observed: VideoInfo?) = preferredQuality.matches(channel, observed)
