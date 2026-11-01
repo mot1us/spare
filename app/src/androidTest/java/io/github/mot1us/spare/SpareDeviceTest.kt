@@ -497,8 +497,8 @@ class SpareDeviceTest {
                     location.requestFocus(); location.setText("Seatt")
                     assertNull(panel.findViewWithTag<View>("settings-option:Save location"))
                     assertTrue(location.hasFocus())
-                    assertNotNull(panel.findViewWithTag<View>("local-location-suggestion:Seattle, WA"))
                 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA") != null }
                 scenario.onActivity { assertEquals("Typing a draft must not overwrite saved regions", "", SecureStore(context).localLocation) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("local-location-input").requestFocus() }
                 device.pressDPadDown()
