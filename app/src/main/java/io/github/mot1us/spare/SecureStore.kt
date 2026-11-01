@@ -277,6 +277,12 @@ class SecureStore(private val context: Context) {
     var hiddenDock: Boolean
         get() = preferences.getBoolean("hidden-dock", true)
         set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
+    var sportsAutoFailover: Boolean
+        get() = preferences.getBoolean("sports-auto-failover", false)
+        set(value) { preferences.edit { putBoolean("sports-auto-failover", value) } }
+    var sportsFailoverSeconds: Int
+        get() = preferences.getInt("sports-failover-seconds", 15).takeIf { it in listOf(10, 15, 20, 30) } ?: 15
+        set(value) { preferences.edit { putInt("sports-failover-seconds", value.takeIf { it in listOf(10, 15, 20, 30) } ?: 15) } }
     var frameRateMatching: Boolean
         get() = preferences.getBoolean("frame-rate-matching", true)
         set(value) { preferences.edit { putBoolean("frame-rate-matching", value) } }

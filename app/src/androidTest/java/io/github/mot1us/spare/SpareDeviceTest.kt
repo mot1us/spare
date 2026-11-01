@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -1373,6 +1373,7 @@ class SpareDeviceTest {
                     }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-loading.png")); scoresReady.countDown()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 9 && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-scroll-hint")?.let { hint -> hint.isShown && hint.visibility == View.VISIBLE && hint.text.contains("Scroll down ↓") } == true }
                     var heroHeight = 0; var firstKey: Any? = null
                     scenario.onActivity { activity ->
                         assertNull(activity.window.decorView.findViewWithTag<View>("sports-leagues"))
@@ -2594,6 +2595,77 @@ class SpareDeviceTest {
         } } }
     }
 
+    @Test fun redZonePublishesNamesBeforeGuideAndPromotesFhdFiftyWithoutMovingFocus() {
+        FixtureServer().use { first -> FixtureServer().use { second ->
+            val a = Source(name = "RedZone primary", kind = "m3u", url = "${first.base}/playlist.m3u", allowHttp = true)
+            val b = Source(name = "RedZone secondary", kind = "m3u", url = "${second.base}/playlist.m3u", allowHttp = true)
+            val low = Channel("redzone", "NFL RedZone HD", "NFL", "${first.base}/channel1.mp4", reportedQuality = VideoInfo(1280, 720, 60f))
+            val high = Channel("sky", "Sky Sports Mix FHD", "UK Sports", "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 50f))
+            val now = System.currentTimeMillis()
+            store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id
+            store.cache(a, Guide(listOf(low), emptyMap())); store.cache(b, Guide(listOf(high), mapOf(high.id to listOf(Programme(high.id, "NFL RedZone", now - 1000, now + 3600000)))))
+            listOf(a, b).forEach(store::markPlaylistRefreshed)
+            val finish = java.util.concurrent.CountDownLatch(1)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var samePlayer: Player? = null
+                waitFor(scenario) { activity -> val p = find<PlayerView>(activity.window.decorView)?.player; p?.repeatMode = Player.REPEAT_MODE_ONE; samePlayer = p; p?.isPlaying == true && (MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide).channels.size == 2 }
+                scenario.onActivity { activity ->
+                    activity.liveSportsLoader = { LiveSportsSnapshot(emptyList(), System.currentTimeMillis(), setOf("NFL")) }
+                    activity.redZoneLoader = { snapshot, profile, quality, at -> finish.await(6, java.util.concurrent.TimeUnit.SECONDS); SportsDestinations.redZone(snapshot, profile, quality, at) }
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-redzone")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-redzone").performClick(); it.window.decorView.findViewWithTag<View>("sports-watch").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:redzone")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertTrue("Named results are usable before guide discovery completes", finish.count > 0)
+                    activity.window.decorView.findViewWithTag<View>("sports-stream:redzone").requestFocus()
+                }
+                finish.countDown()
+                val highId = "playlist:${b.id}:sky"
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-stream:$highId")?.text.toString().contains("50 fps") && it.window.decorView.findViewWithTag<TextView>("sports-status").text.toString().contains("2 RedZone channels") }
+                scenario.onActivity { activity ->
+                    assertTrue("Refinement preserves the selected row", activity.window.decorView.findViewWithTag<View>("sports-stream:redzone").hasFocus())
+                    val rows = activity.window.decorView.findViewWithTag<RecyclerView>("sports-streams")
+                    assertEquals("Higher resolution beats 60 FPS at a lower resolution", "sports-stream:$highId", (rows.getChildViewHolder(rows.getChildAt(0)).itemView as ViewGroup).getChildAt(0).tag)
+                    activity.window.decorView.findViewWithTag<View>("sports-stream:$highId").performClick()
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') } == true }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
+            } } finally { finish.countDown(); store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
+        } }
+    }
+
+    @Test fun sustainedSportsBufferingUsesAnotherMatchedProviderOnTheSamePlayer() {
+        FixtureServer(stalled = true, stallSeconds = 30).use { first -> FixtureServer().use { second ->
+            val a = Source(name = "Primary game", kind = "m3u", url = "${first.base}/playlist.m3u", allowHttp = true)
+            val b = Source(name = "Backup game", kind = "m3u", url = "${second.base}/playlist.m3u", allowHttp = true)
+            val normal = Channel("normal", "News", "News", "${first.base}/channel2.mp4")
+            val stalled = Channel("stall", "NFL main 4K", "NFL", "${first.base}/channel1.ts", reportedQuality = VideoInfo(3840, 2160, 60f))
+            val backup = Channel("backup", "NFL backup FHD", "NFL", "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 50f))
+            val now = System.currentTimeMillis(); val listing = Programme(stalled.id, "NFL: Seahawks vs 49ers", now - 1000, now + 3600000)
+            store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id; store.recentFeeds = emptyList()
+            store.cache(a, Guide(listOf(normal, stalled), mapOf(stalled.id to listOf(listing))))
+            store.cache(b, Guide(listOf(backup), mapOf(backup.id to listOf(listing.copy(channel = backup.id)))))
+            listOf(a, b).forEach(store::markPlaylistRefreshed); store.sportsAutoFailover = true; store.sportsFailoverSeconds = 10
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var samePlayer: Player? = null
+                waitFor(scenario) { activity -> val p = find<PlayerView>(activity.window.decorView)?.player; p?.repeatMode = Player.REPEAT_MODE_ONE; samePlayer = p; p?.isPlaying == true && (MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide).channels.size == 3 }
+                scenario.onActivity { activity ->
+                    val snapshot = LiveSportsSnapshot(listOf(LiveEvent("recovery", setOf("nfl:SEA", "nfl:SF"), now - 1000, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
+                    activity.liveSportsLoader = { snapshot.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, snapshot)
+                    MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NFL:recovery")?.isShown == true }
+                scenario.onActivity { activity -> store.sportsAutoPlay = true; activity.window.decorView.findViewWithTag<View>("NFL:recovery").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { it.currentMediaItem?.localConfiguration?.uri?.path == "/channel1.ts" && it.isPlaying } == true }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') } == true }
+                scenario.onActivity { assertSame("Recovery reuses one player", samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
+            } } finally { store.sportsAutoPlay = false; store.sportsAutoFailover = false; first.resumeStream.countDown(); store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
+        } }
+    }
+
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
@@ -2630,7 +2702,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -2739,7 +2811,7 @@ class SpareDeviceTest {
                         if (stalled && path == "/channel1.ts") {
                             val split = avTransport.size * 2
                             output.write(body, 0, split); output.flush()
-                            resumeStream.await(14, java.util.concurrent.TimeUnit.SECONDS)
+                            resumeStream.await(stallSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, split, body.size - split); output.flush()
                         } else if (slowVod && target.contains("get_vod_streams")) {
                             val value = body.toString(Charsets.UTF_8); var cut = 0

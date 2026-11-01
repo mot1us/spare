@@ -11,6 +11,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Local guide tab combining up to eight cities/states, with suggestions and cached station matches.
 - Live preview or a guide with adjustable opacity and programme artwork from your provider or optional metadata.
 - Switchable frame-rate matching, audio tracks, and per-channel subtitles.
+- Optional automatic recovery switches a buffering game to another matched feed; configure it under Playback.
 - Sports stream selection by resolution first, with known FPS as a tie-breaker. FPS is learned during playback without extra stream probes; all qualities remain playable.
 - Sports hub opening on Today, with illustrated game cards, a card grid, featured game artwork, live/final scores, followed teams, saved game reminders, Watch best stream selection, completed-game catch-up and optional hidden final scores. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
 - Provider movies and series, a Watchlist with new/unwatched episodes, and Continue watching. Channel catch-up is in the Guide.

@@ -98,6 +98,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val rows = RecyclerView(context).apply { layoutManager = object : GridLayoutManager(context, COLUMNS) { override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false }; itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-games"; setItemViewCacheSize(8); isFocusableInTouchMode = true }
     private val gridArea = FrameLayout(context)
     private val skeleton = SportsLoadingView(context).apply { tag = "sports-skeleton"; visibility = GONE }
+    private val scrollHint = label(10f).apply { tag = "sports-scroll-hint"; gravity = Gravity.CENTER; setTextColor(Color.LTGRAY); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES; visibility = INVISIBLE }
+    private fun updateScrollHint() {
+        val layout = rows.layoutManager as GridLayoutManager
+        val up = rows.canScrollVertically(-1); val down = rows.canScrollVertically(1)
+        scrollHint.visibility = if (!watchMode && !initialReveal && rows.isVisible && (up || down)) VISIBLE else INVISIBLE
+        val first = layout.findFirstVisibleItemPosition().coerceAtLeast(0) + 1
+        val last = (layout.findLastVisibleItemPosition() + 1).coerceAtLeast(first).coerceAtMost(cards.itemCount)
+        scrollHint.text = listOfNotNull(if (up) "↑ Scroll up" else null, "$first–$last of ${cards.itemCount}", if (down) "Scroll down ↓" else null).joinToString("    ·    ")
+    }
     private val streams = RecyclerView(context).apply { layoutManager = TvFocus.Layout(context); itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-streams"; visibility = GONE }
     private val artworkFiles = ArtworkFiles(context)
     private val logos = LogoLoader(512, 6 * 1024 * 1024, artworkFiles)
@@ -260,9 +269,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && filtersButton.isShown) filtersButton.requestFocus(); true }
             else -> false
         } } }
-        addView(empty, LayoutParams(-1, dp(32))); empty.visibility = INVISIBLE
+        addView(empty, LayoutParams(-1, dp(32))); empty.visibility = GONE
         rows.adapter = cards; streams.adapter = streamAdapter
         gridArea.addView(rows, FrameLayout.LayoutParams(-1, -1)); gridArea.addView(skeleton, FrameLayout.LayoutParams(-1, -1)); addView(gridArea, LayoutParams(-1, 0, 1f)); addView(streams, LayoutParams(-1, 0, 1f))
+        addView(scrollHint, LayoutParams(-1, dp(20)))
+        rows.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { updateScrollHint() } })
+        rows.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateScrollHint() }
+
         heroTitle.text = "Your sports"; heroDetail.text = "Live games, final scores and upcoming matchups."; findStreams.isEnabled = false
     }
     private fun tileKey(position: Int) = games.getOrNull(position)?.key ?: REDZONE
@@ -363,6 +376,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!enabled) featured?.takeUnless(::scoresHidden)?.let { artwork.request(it) }
     }
     private fun showSkeleton() {
+        scrollHint.visibility = INVISIBLE
         skeleton.isVisible = true; heroSkeleton.isVisible = true; rows.visibility = INVISIBLE; gridArea.isVisible = true
         heroContent.visibility = INVISIBLE; crests.visibility = INVISIBLE; backdrop.visibility = INVISIBLE; credit.visibility = INVISIBLE
         empty.text = "Loading Sports…"; empty.isVisible = true
@@ -398,7 +412,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val showRedZone = "NFL" in enabledLeagues
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
         empty.text = if (scanning) "Checking games…" else if (selected == "live") "No live games. Choose Today for upcoming games and results." else "No games on this date. Try another date or league."
-        empty.visibility = if(next.isEmpty() && !watchMode && !actionsOpen) VISIBLE else INVISIBLE
+        empty.visibility = if(next.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
         if (first) revealContent()
         if (games != next || displayedRedZone != showRedZone) {
             val old = games; val hadFocus = rows.hasFocus(); val input = inputEpoch; val anchor = remembered
@@ -418,10 +432,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             else { featured = null; heroRecords.visibility = GONE; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
             if (hadFocus && cards.itemCount > 0) rows.postOnAnimation { if (input == inputEpoch && !watchMode && !actionsOpen && !rows.hasFocus()) focusAt(newKeys.indexOf(anchor).coerceAtLeast(0)) }
         } else if (remembered != REDZONE) featured?.let { current -> next.firstOrNull { it.key == current.key }?.let(::showHero) }
+        rows.post { updateScrollHint() }
         if (pendingEnter && cards.itemCount > 0 && !watchMode && !actionsOpen) { pendingEnter = false; val input = pendingInput; post { if (input == inputEpoch && isShown) focusGames() } }
     }
     @SuppressLint("NotifyDataSetChanged")
-    fun matching(game: SportsGame) { matchNotice.visibility = GONE; actionsOpen = false; actionRow.visibility = GONE; replayMode = game.state == "post"; replays = emptyList(); streamEntry = true; streamInput = inputEpoch; streamsList = emptyList(); streamAdapter.notifyDataSetChanged(); empty.visibility = INVISIBLE; showHero(game); watchMode = true; matchingKey = game.key; progress.isIndeterminate = true; rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = !replayMode; progress.isVisible = true; status.text = if (replayMode) "Finding provider replays…" else "Finding playlist streams…"; presentationChanged?.invoke() }
+    fun matching(game: SportsGame) { scrollHint.visibility = INVISIBLE; matchNotice.visibility = GONE; actionsOpen = false; actionRow.visibility = GONE; replayMode = game.state == "post"; replays = emptyList(); streamEntry = true; streamInput = inputEpoch; streamsList = emptyList(); streamAdapter.notifyDataSetChanged(); empty.visibility = GONE; showHero(game); watchMode = true; matchingKey = game.key; progress.isIndeterminate = true; rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = !replayMode; progress.isVisible = true; status.text = if (replayMode) "Finding provider replays…" else "Finding playlist streams…"; presentationChanged?.invoke() }
     fun matchingProgress(game: SportsGame, message: String, checked: Int = 0, total: Int = 0) {
         if (!watchMode || matchingKey != game.key) return
         progress.isVisible = true; progress.isIndeterminate = total <= 0
@@ -450,7 +465,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!same) streamAdapter.notifyDataSetChanged() else refreshStreamLabels()
         progress.visibility = INVISIBLE; status.text = message ?: if (game.state == "pre") "${channels.size} scheduled EPG matches · OK previews the channel · Starts ${GuideClock.sportsDate(game.start)}" else "${channels.size} streams${if (game.coverageComplete) "" else " · More coverage may be available"} · OK to watch · ＋ Multiview"
         empty.text = when (game.state) { "post" -> "This game has ended."; "pre" -> "No scheduled EPG match yet. The provider may not have listings this far ahead."; else -> "No matching streams. Try Stream quality." }
-        empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE; val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
+        empty.visibility = if(channels.isEmpty()) VISIBLE else GONE; val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }
     @SuppressLint("NotifyDataSetChanged")
     fun showReplays(game: SportsGame, choices: List<SportsReplay>) {
@@ -461,11 +476,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         streamAdapter.notifyDataSetChanged(); progress.visibility = INVISIBLE
         status.text = "${choices.size} replays · Back returns to games"
         empty.text = "No catch-up available. The provider may not archive this game."
-        empty.visibility = if(choices.isEmpty()) VISIBLE else INVISIBLE
+        empty.visibility = if(choices.isEmpty()) VISIBLE else GONE
         val enter = streamEntry && streamInput == inputEpoch; streamEntry = false
         if (enter && !streams.hasFocus()) { if (choices.isNotEmpty()) focusStream(0) else scoresButton.requestFocus() }
     }
-    private fun showGames() { matchNotice.visibility = GONE; gridArea.animate().cancel(); heroContent.animate().cancel(); gridArea.alpha = 1f; heroContent.alpha = 1f; actionsOpen = false; actionRow.visibility = GONE; progress.visibility = INVISIBLE; empty.visibility = INVISIBLE; replayMode = false; replays = emptyList(); watchMode = false; matchingKey = null; streams.isVisible = false; rows.isVisible = true; gridArea.isVisible = true; scoresButton.isVisible = false; filtersButton.isVisible = false; presentationChanged?.invoke() }
+    private fun showGames() { rows.post { updateScrollHint() }; matchNotice.visibility = GONE; gridArea.animate().cancel(); heroContent.animate().cancel(); gridArea.alpha = 1f; heroContent.alpha = 1f; actionsOpen = false; actionRow.visibility = GONE; progress.visibility = INVISIBLE; empty.visibility = GONE; replayMode = false; replays = emptyList(); watchMode = false; matchingKey = null; streams.isVisible = false; rows.isVisible = true; gridArea.isVisible = true; scoresButton.isVisible = false; filtersButton.isVisible = false; presentationChanged?.invoke() }
     fun home() { remembered = null; showGames(); pendingEnter = true; pendingInput = inputEpoch }
     fun back(): Boolean { if (!watchMode && !actionsOpen) return false; showGames(); focusGames(); return true }
     fun focusTeams() { ++focusEpoch; teamsButton.requestFocus() }
@@ -481,19 +496,36 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
     }
     fun matchingRedZone() {
+        scrollHint.visibility = INVISIBLE
+        streamEntry = true; streamInput = inputEpoch
         remembered = REDZONE; actionsOpen = false; actionRow.visibility = GONE; replayMode = false; replays = emptyList(); watchMode = true; matchingKey = REDZONE
         showRedZoneHero(); rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; val oldCount = streamsList.size; streamsList = emptyList(); streamAdapter.notifyItemRangeRemoved(0, oldCount)
-        scoresButton.isVisible = true; filtersButton.isVisible = false; empty.visibility = INVISIBLE; progress.isIndeterminate = true; progress.isVisible = true
+        scoresButton.isVisible = true; filtersButton.isVisible = false; empty.visibility = GONE; progress.isIndeterminate = true; progress.isVisible = true
         status.text = "Finding RedZone in your playlist…"; presentationChanged?.invoke(); scoresButton.requestFocus()
     }
-    @SuppressLint("NotifyDataSetChanged")
-    fun showRedZoneStreams(channels: List<Channel>, label: (Channel) -> String) {
+    fun showRedZoneStreams(channels: List<Channel>, checking: Boolean = false, label: (Channel) -> String) {
         if (!watchMode || matchingKey != REDZONE) return
-        showRedZoneHero(); streamsList = channels; streamLabels = label; streamAdapter.notifyDataSetChanged()
-        rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = true; progress.visibility = INVISIBLE
-        status.text = "${channels.size} RedZone channels · Availability follows your provider"
-        empty.text = "No RedZone channel was found in this playlist’s names or current guide."; empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE
-        presentationChanged?.invoke(); if (channels.isEmpty()) scoresButton.requestFocus() else focusStream(0)
+        val previous = streamsList; val hadFocus = streams.hasFocus()
+        val anchor = streams.findFocus()?.let(streams::findContainingViewHolder)?.bindingAdapterPosition?.let { previous.getOrNull(it)?.id }
+        val input = inputEpoch
+        showRedZoneHero(); streamsList = channels; streamLabels = label
+        if (previous != channels) {
+            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize() = previous.size
+                override fun getNewListSize() = channels.size
+                override fun areItemsTheSame(old: Int, new: Int) = previous[old].id == channels[new].id
+                override fun areContentsTheSame(old: Int, new: Int) = previous[old] == channels[new]
+            })
+            diff.dispatchUpdatesTo(streamAdapter)
+        }
+        refreshStreamLabels()
+        rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = true; progress.visibility = if (checking) VISIBLE else INVISIBLE
+        status.text = "${channels.size} RedZone channels · " + if (checking) "Checking provider guide for more…" else "Availability follows your provider"
+        empty.text = "No RedZone channel was found in this playlist’s names or current guide."; empty.visibility = if(channels.isEmpty()) VISIBLE else GONE
+        presentationChanged?.invoke()
+        val enter = streamEntry && streamInput == inputEpoch; streamEntry = false
+        if (enter && !hadFocus) { if (channels.isEmpty()) scoresButton.requestFocus() else focusStream(0) }
+        else if (hadFocus && anchor != null) post { if (input == inputEpoch && !streams.hasFocus()) channels.indexOfFirst { it.id == anchor }.takeIf { it >= 0 }?.let(::focusStream) }
     }
     private fun focusAt(position: Int) { focusRow(rows, position) }
     private fun focusStream(position: Int) { focusRow(streams, position) }

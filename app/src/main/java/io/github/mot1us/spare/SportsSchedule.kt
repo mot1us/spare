@@ -177,9 +177,10 @@ object SportsSchedule {
             if (Thread.currentThread().isInterrupted) return game
             if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedChannels++
+            if (!relevant(channel.name) && !SportsStreams.speculative(channel)) continue
             if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
             if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
-            else if (patterns.any { it in channel.sportsKey }) candidates.add(channel)
+            else if (SportsStreams.speculative(channel) && patterns.any { it in channel.sportsKey }) candidates.add(channel)
             if (index % 512 == 0) progress(checkedKeys + index, channels.size + byGuideKey.size)
         }
         val confirmed = matches.map { it.channel.id }.toSet()

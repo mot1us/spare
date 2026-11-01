@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.26.0 — 2026-11-01
+
+- Add a game-position indicator and up/down cues when more Sports cards are off-screen; remove an invisible message row that clipped the cards.
+- Add opt-in Sports stream recovery under Playback: switch to a confirmed alternative after 10–30 seconds of sustained buffering, with session limits and one player.
+- Exclude obvious movie, series, 24/7 and PBS channels from speculative provider lookups while retaining explicit game matches from any category.
+
+- Show named RedZone feeds immediately while provider-guide discovery continues, retaining remote focus as results arrive. Look for higher-resolution alternatives across NFL/Game Pass and Sky Sports feeds; resolution takes priority over FPS.
+- Avoid normalizing unrelated channels during RedZone discovery, reuse discovery when quality readings change, and precompute Game Pass priorities before sorting lookup candidates.
+
 ## 0.25.1 — 2026-11-01
 
 - Present cached and arriving Sports schedules without waiting for disk writes, archive capability checks or RedZone scans; keep the NFL RedZone destination in Today and Live.

@@ -30,6 +30,24 @@ class SportsRebuildTest {
         assertEquals(listOf("alias"), cache.find(changed, filters, emptyMap(), now).map { it.id })
         assertTrue(SportsDestinations.guideTargets(Guide((1..30).map { pass.copy(id = "$it") }, emptyMap()), emptyMap(), now).size <= 12)
     }
+    @Test fun redZoneNamesAreImmediateAndQualityChangesDoNotRepeatDiscovery() {
+        val named = Channel("named", "UK_NFL_RED-ZONE_HD", "UK", "https://example.test/named", reportedQuality = VideoInfo(1280, 720, 60f))
+        val sky = Channel("sky", "Sky Sports Mix FHD", "UK Sports", "https://example.test/sky", reportedQuality = VideoInfo(1920, 1080, 50f))
+        val unrelated = (1..20000).map { Channel("film$it", "Movie station $it", "Movies", "https://example.test/$it") }
+        var reads = 0
+        val data = mapOf(sky.id to listOf(Programme(sky.id, "NFL RedZone", now - 1000, now + 60000)))
+        val entries = object : Map<String, List<Programme>> by data { override fun get(key: String): List<Programme>? { reads++; return data[key] } }
+        val guide = Guide(unrelated + named + sky, entries); val cache = SportsDestinations.RedZoneCache()
+        assertEquals(listOf(named), cache.named(guide, GuideFilters(), emptyMap())); assertEquals(0, reads)
+        assertEquals(listOf(sky, named), cache.find(guide, GuideFilters(), emptyMap(), now))
+        val firstReads = reads
+        assertEquals(listOf(named, sky), cache.find(guide, GuideFilters(), mapOf(named.id to VideoInfo(3840, 2160, 30f)), now + 1))
+        assertEquals("Only ranking changes when a playback measurement arrives", firstReads, reads)
+        val targets = SportsDestinations.guideTargets(Guide((1..30).map { named.copy(id = "nfl$it", name = "NFL Game Pass $it FHD") } + sky, emptyMap()), emptyMap(), now)
+        assertTrue("Sky Sports is checked even with many NFL feeds", sky in targets); assertTrue(targets.size <= 12)
+        val delegated = Channel::class.java.getDeclaredField("sportsKey\$delegate").apply { isAccessible = true }
+        assertFalse("Unrelated names do not need Unicode sports normalization", (delegated.get(unrelated.first()) as Lazy<*>).isInitialized())
+    }
     @Test fun liveScopeContainsOnlyFreshInProgressEventsAcrossLeagues() {
         val events = listOf(LiveEvent("nfl", setOf("nfl:BUF", "nfl:KC"), now - 1000, league = "NFL"),
             LiveEvent("mlb", setOf("mlb:NYY", "mlb:BOS"), now - 1000, league = "MLB"),

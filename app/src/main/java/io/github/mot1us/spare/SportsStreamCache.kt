@@ -90,11 +90,12 @@ class SportsStreamCache(private val capacity: Int = 48, private val lifetimeMs: 
 }
 
 /** A maximum of three automatic attempts; ordinary channel changes abandon the plan. */
-class SportsPlaybackPlan(val game: SportsGame, candidates: List<Channel>) {
+class SportsPlaybackPlan(val game: SportsGame, candidates: List<Channel>, val backgroundRecovery: Boolean = false) {
     val candidates = candidates.distinctBy { it.id }.take(12)
     private val attempted = mutableSetOf<String>()
     var channel: Channel? = null; private set
     var accepted = false
+    val attemptedIds get() = attempted.toSet()
     fun next(available: (Channel) -> Boolean): Channel? = if (attempted.size >= 3) null else candidates.firstOrNull { it.id !in attempted && available(it) }?.also {
         attempted.add(it.id); channel = it; accepted = false
     }

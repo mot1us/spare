@@ -107,6 +107,17 @@ class SportsCoverageTest {
         assertEquals(listOf(second), found.broadcasts.map { it.channel })
         assertEquals(listOf(second), SportsStreams.automaticChoices(found, GuideFilters(), emptyMap(), guide, now))
     }
+    @Test fun nonSportsCategoriesSkipSpeculationButCannotHideAnExactGameListing() {
+        val movie = channel("movie", "NFL Football 4K").copy(group = "Movies")
+        val loop = channel("loop", "ESPN 24/7 4K").copy(group = "USA 24/7")
+        val pbs = channel("pbs", "PBS 4K").copy(group = "USA")
+        val actual = movie.copy(id = "actual", name = "Unusually categorized feed")
+        val guide = Guide(listOf(movie, loop, pbs, actual), mapOf(actual.id to listOf(Programme(actual.id, game.title, game.start, game.end))))
+        assertTrue(SportsStreams.confirmationTargets(game, guide, listOf(movie, loop, pbs), emptySet(), emptyMap(), now).isEmpty())
+        val match = SportsSchedule.match(game, guide, emptySet(), now)
+        assertEquals(listOf(actual), match.broadcasts.map { it.channel })
+        assertEquals(listOf(actual), SportsStreams.automaticChoices(match, GuideFilters(), emptyMap(), guide, now))
+    }
     @Test fun schedulesOnlyRequestChosenLeagues() {
         val urls = java.util.Collections.synchronizedList(mutableListOf<String>())
         val snapshot = SportsSchedule.load(emptySet(), enabledLeagues = setOf("NFL"), get = { url -> urls.add(url); """{"events":[]}""" })

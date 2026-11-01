@@ -56,6 +56,9 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 }
 
 object SportsStreams {
+    private val nonSportsCategory = Regex("(?:^|[^a-z0-9])(movies?|cinema|vod|series|24\\s*(?:[/x-]|\\s)\\s*7)(?:$|[^a-z0-9])", RegexOption.IGNORE_CASE)
+    private val nonSportsName = Regex("(?:^|[^a-z0-9])(pbs|24\\s*(?:[/x-]|\\s)\\s*7)(?:$|[^a-z0-9])", RegexOption.IGNORE_CASE)
+    internal fun speculative(channel: Channel) = !channel.media && !nonSportsCategory.containsMatchIn(channel.group) && !nonSportsName.containsMatchIn(channel.name)
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
     private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
     internal fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
@@ -120,7 +123,7 @@ object SportsStreams {
             "NHL" -> listOf("hockey"); "NFL" -> listOf("football"); "NBA" -> listOf("basketball"); "MLB" -> listOf("baseball"); else -> emptyList()
         }).map { " ${SportsCatalog.normalize(it)} " }.distinct()
         fun eligible(channel: Channel): Boolean {
-            if (channel.media || SportsGuide.excludedTitle(channel.sportsKey)) return false
+            if (!speculative(channel) || SportsGuide.excludedTitle(channel.sportsKey)) return false
             val programme = guide.at(channel, at)
             if (programme != null && (game.state != "pre" && SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) ||
                 SportsGuide.teams(programme, league)?.map { it.id }?.toSet()?.let { it != target } == true)) return false
@@ -131,8 +134,9 @@ object SportsStreams {
         val order = preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }
         // A UHD event feed often has no league/team in its name. Its current EPG is
         // still authoritative; include these feeds before the generic network guesses.
-        val highResolution = guide.channels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && (game.state == "pre" || guide.at(it, at) == null) }.sortedWith(order)
-        val leagueChannels = guide.channels.filter { channel -> words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " } }
+        val speculativeChannels = guide.channels.filter(::speculative)
+        val highResolution = speculativeChannels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && (game.state == "pre" || guide.at(it, at) == null) }.sortedWith(order)
+        val leagueChannels = speculativeChannels.filter { channel -> words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " } }
             .sortedWith(order)
         val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
