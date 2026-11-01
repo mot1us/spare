@@ -13,6 +13,23 @@ class SportsRebuildTest {
         assertEquals("Unknown quality remains watchable", listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).map { it.id })
         assertEquals(listOf("two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()) { it.id != "one" }.map { it.id })
     }
+    @Test fun redZoneFindsCurrentGamePassCoverageOutsideMatchupCategoriesAndExpiresItsCache() {
+        val pass = Channel("pass", "Game Pass 12 FHD", "NFL Game Pass", "https://example.test/pass", reportedQuality = VideoInfo(1920, 1080, 0f))
+        val replay = pass.copy(id = "replay", name = "NFL RedZone highlights")
+        val other = pass.copy(id = "film", name = "Movie channel", group = "Movies")
+        val alias = pass.copy(id = "alias", name = "RZ HD", reportedQuality = VideoInfo(1280, 720, 0f))
+        val entry = Programme(pass.id, "NFL RedZone", now - 1000, now + 1000)
+        val guide = Guide(listOf(pass, replay, other, alias), mapOf(pass.id to listOf(entry), other.id to listOf(entry.copy(channel = other.id, title = "Red Zone"))))
+        val filters = GuideFilters(2160, FrameRateFilter.sixtyOrBetter, groups = setOf("Other sports"))
+        val cache = SportsDestinations.RedZoneCache()
+        val found = cache.find(guide, filters, emptyMap(), now)
+        assertEquals(listOf("pass", "alias"), found.map { it.id })
+        assertSame("Unchanged metadata reuses the session result", found, cache.find(guide, filters, emptyMap(), now + 1))
+        assertEquals(listOf("alias"), cache.find(guide, filters, emptyMap(), now + 1001).map { it.id })
+        val changed = guide.copy(programmes = guide.programmes + (pass.id to listOf(entry.copy(title = "Football highlights"))))
+        assertEquals(listOf("alias"), cache.find(changed, filters, emptyMap(), now).map { it.id })
+        assertTrue(SportsDestinations.guideTargets(Guide((1..30).map { pass.copy(id = "$it") }, emptyMap()), emptyMap(), now).size <= 12)
+    }
     @Test fun liveScopeContainsOnlyFreshInProgressEventsAcrossLeagues() {
         val events = listOf(LiveEvent("nfl", setOf("nfl:BUF", "nfl:KC"), now - 1000, league = "NFL"),
             LiveEvent("mlb", setOf("mlb:NYY", "mlb:BOS"), now - 1000, league = "MLB"),

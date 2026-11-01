@@ -38,6 +38,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val backdrop = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = .65f; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
     private val heroBadge = label(11f).apply { tag = "sports-hero-badge"; typeface = AppFont.face(true) }
     private val heroTitle = label(25f).apply { tag = "sports-hero-title"; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) }
+    private val heroRecords = label(11f).apply { tag = "sports-hero-records"; maxLines = 1; visibility = GONE }
     private val heroScore = label(25f).apply { tag = "sports-hero-score"; typeface = AppFont.face(true) }
     private val heroDetail = label(11f).apply { tag = "sports-hero-detail"; maxLines = 2; setTextColor(Color.LTGRAY) }
     private val credit = label(8f).apply { maxLines = 1; gravity = Gravity.END; setTextColor(Color.LTGRAY) }
@@ -130,6 +131,14 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     } }
     fun setLeagues(leagues: Set<String>) { enabledLeagues = leagues }
     private var displayedRedZone = false
+    private var redZoneSummary = "Finding RedZone…"
+    fun updateRedZone(channels: List<Channel>, quality: Map<String, VideoInfo>) {
+        val summary = channels.firstOrNull()?.let { it.name + "\n" + it.qualityLabel(quality[it.id]) } ?: "Select to check provider guide"
+        if (summary == redZoneSummary) return
+        redZoneSummary = summary
+        for (i in 0 until rows.childCount) (rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard)?.takeIf { it.box.tag == REDZONE }?.let { it.stream.text = summary }
+        if (remembered == REDZONE) heroDetail.text = summary
+    }
     private var initialReveal = true
     private var scope: String? = null
     private var focusEpoch = 0
@@ -155,7 +164,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun getItemCount() = games.size + if (displayedRedZone) 1 else 0
         override fun getItemId(position: Int) = Channel.stableLongId(tileKey(position))
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GameCard {
-            val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(8)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(-1, dp(190)).apply { marginEnd = dp(8); bottomMargin = dp(8) } }
+            val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(10), dp(12), dp(8)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(-1, dp(214)).apply { marginEnd = dp(8); bottomMargin = dp(8) } }
             val badge = label(10f).apply { typeface = AppFont.face(true); gravity = Gravity.CENTER_VERTICAL; minHeight = dp(18) }; val title = label(12f).apply { maxLines = 2; typeface = AppFont.face(true); ellipsize = android.text.TextUtils.TruncateAt.END }; val detail = label(10f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
             val stream = label(9f).apply { minLines = 2; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
             val poster = FrameLayout(context).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF172B40.toInt(), 0xFF344258.toInt())); clipChildren = true }
@@ -163,14 +172,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             val logos = List(2) { ImageView(context).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setPadding(dp(7), dp(3), dp(7), dp(3)); crests.addView(this, LayoutParams(0, -1, 1f)) } }
             poster.addView(crests, FrameLayout.LayoutParams(-1, -1))
             val photo = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = GONE }; poster.addView(photo, FrameLayout.LayoutParams(-1, -1))
-            box.addView(poster, LayoutParams(-1, dp(74)).apply { bottomMargin = dp(5) }); box.addView(badge); box.addView(title, LayoutParams(-1, 0, 1f)); box.addView(detail); box.addView(stream)
+            title.maxLines = 4
+            box.addView(poster, LayoutParams(-1, dp(64)).apply { bottomMargin = dp(5) }); box.addView(badge); box.addView(title, LayoutParams(-1, 0, 1f)); box.addView(detail); box.addView(stream)
             val special = label(24f).apply { text = "REDZONE"; typeface = AppFont.face(true); gravity = Gravity.CENTER; visibility = GONE; setTextColor(0xFFF2D9D9.toInt()) }; poster.addView(special, FrameLayout.LayoutParams(-1, -1))
             return GameCard(box, badge, title, detail, stream, logos, photo, special)
         }
         override fun onBindViewHolder(holder: GameCard, position: Int) {
             val game = games.getOrNull(position)
             if (game == null) { bindRedZone(holder); return }
-            holder.special.visibility = GONE; holder.box.tag = game.key; holder.badge.tag = "sports-badge:${game.key}"; holder.title.text = scoreText(game)
+            holder.special.visibility = GONE; holder.box.tag = game.key; holder.badge.tag = "sports-badge:${game.key}"; holder.title.tag = "sports-card-teams:${game.key}"; holder.title.text = cardTeams(game)
             drawCard(holder, game)
             holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + GuideClock.sportsDate(game.start) + if (game.state != "pre") "\n" + statusText(game) else ""
             holder.stream.text = cardStream(game); holder.stream.tag = "sports-coverage:${game.key}"
@@ -224,7 +234,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         hero.background = GuideTheme.glass(resources.displayMetrics.density); hero.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
         hero.addView(crests, FrameLayout.LayoutParams(dp(310), -1, Gravity.END))
         hero.addView(View(context).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF5091019.toInt(), 0xB0091019.toInt(), 0x00091019)) }, FrameLayout.LayoutParams(-1, -1))
-        heroContent.addView(heroBadge); heroContent.addView(heroTitle); heroContent.addView(heroScore); heroContent.addView(heroDetail)
+        heroContent.addView(heroBadge); heroContent.addView(heroTitle); heroContent.addView(heroRecords); heroContent.addView(heroScore); heroContent.addView(heroDetail)
         hero.addView(heroContent, FrameLayout.LayoutParams(-1, -1)); hero.addView(credit, FrameLayout.LayoutParams(-1, dp(16), Gravity.BOTTOM).apply { marginEnd = dp(8) })
         hero.addView(heroSkeleton, FrameLayout.LayoutParams(-1, -1))
         addView(hero, LayoutParams(-1, dp(180)))
@@ -283,18 +293,18 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!findStreams.requestFocus()) todayButton.requestFocus()
     }
     private fun bindRedZone(holder: GameCard) {
-        holder.stream.text = ""; holder.stream.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
+        holder.stream.text = redZoneSummary; holder.stream.tag = "sports-redzone-coverage"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
         holder.special.isVisible = true; holder.box.contentDescription = "NFL RedZone. Find channels in your playlist"; holder.box.tag = REDZONE; holder.badge.text = "NFL"; holder.title.text = "NFL RedZone"; holder.detail.text = "Every touchdown, one destination"
         holder.logos.forEach { cardLogos.bind(it, "") }; thumbnails.bind(holder.photo, ""); holder.photo.visibility = GONE
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
-        fun ink(active: Boolean) { holder.title.setTextColor(if(active) GuideTheme.focusText else Color.WHITE); holder.detail.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.badge.setTextColor(if(active) GuideTheme.focusText else GuideTheme.current.accent) }
+        fun ink(active: Boolean) { holder.title.setTextColor(if(active) GuideTheme.focusText else Color.WHITE); holder.detail.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.stream.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.badge.setTextColor(if(active) GuideTheme.focusText else GuideTheme.current.accent) }
         ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = REDZONE; showRedZoneHero() } }
         holder.box.setOnClickListener { remembered = REDZONE; actionsOpen = true; showRedZoneHero(); rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true; findStreams.requestFocus() }
         cardKeys(holder)
     }
     private fun showRedZoneHero() {
         featured = null; removeCallbacks(loadHeroArt); pictures.bind(backdrop, ""); credit.text = ""; crestViews.forEach { logos.bind(it, "") }; crests.isVisible = false
-        heroBadge.text = "NFL COVERAGE"; heroTitle.text = "NFL RedZone"; heroScore.text = "Every touchdown"; heroDetail.text = "Find RedZone in your playlist. Availability follows the provider’s schedule."
+        heroBadge.text = "NFL COVERAGE"; heroTitle.text = "NFL RedZone"; heroRecords.visibility = GONE; heroScore.text = "Every touchdown"; heroDetail.text = redZoneSummary
         findStreams.text = "Find RedZone channels"; findStreams.isEnabled = true; chooseStreams.isVisible = false; reminder.visibility = GONE
     }
     private fun hasReplay(game: SportsGame) = game.state == "post" && cardReplays[game.key]?.let { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) } == true
@@ -322,6 +332,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val changed = featured?.key != game.key; featured = game
         refreshHeroBadge(game)
         heroTitle.text = game.title; heroScore.text = if (scoresHidden(game)) "Score hidden" else if (game.state == "pre") GuideClock.time(game.start) else if (game.scores.isEmpty()) "Score unavailable" else game.teams.joinToString("   :   ") { game.scores[it.id] ?: "–" }
+        heroRecords.text = if (scoresHidden(game)) "" else game.teams.mapNotNull { team -> game.records[team.id]?.let { "${team.name}  $it" } }.joinToString("   ·   ")
+        heroRecords.isVisible = heroRecords.text.isNotEmpty()
         heroDetail.text = GuideClock.sportsDate(game.start) + "\n" + statusText(game) + " · " + game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
 
         findStreams.isEnabled = game.state != "post" || SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis()); findStreams.text = when { game.state == "pre" -> "Find coverage"; game.state == "post" -> "Find replay"; game.live(System.currentTimeMillis()) -> "Watch live"; else -> "Find streams" }
@@ -403,7 +415,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             val chosen = next.firstOrNull { it.key == remembered } ?: featured(next, followed, System.currentTimeMillis())
             if (showRedZone && (remembered == REDZONE || chosen == null)) showRedZoneHero()
             else if (chosen != null) showHero(chosen)
-            else { featured = null; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
+            else { featured = null; heroRecords.visibility = GONE; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
             if (hadFocus && cards.itemCount > 0) rows.postOnAnimation { if (input == inputEpoch && !watchMode && !actionsOpen && !rows.hasFocus()) focusAt(newKeys.indexOf(anchor).coerceAtLeast(0)) }
         } else if (remembered != REDZONE) featured?.let { current -> next.firstOrNull { it.key == current.key }?.let(::showHero) }
         if (pendingEnter && cards.itemCount > 0 && !watchMode && !actionsOpen) { pendingEnter = false; val input = pendingInput; post { if (input == inputEpoch && isShown) focusGames() } }
@@ -480,7 +492,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         showRedZoneHero(); streamsList = channels; streamLabels = label; streamAdapter.notifyDataSetChanged()
         rows.isVisible = false; gridArea.isVisible = false; streams.isVisible = true; scoresButton.isVisible = true; filtersButton.isVisible = true; progress.visibility = INVISIBLE
         status.text = "${channels.size} RedZone channels · Availability follows your provider"
-        empty.text = "No RedZone channel matches your playlist and stream filters."; empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE
+        empty.text = "No RedZone channel was found in this playlist’s names or current guide."; empty.visibility = if(channels.isEmpty()) VISIBLE else INVISIBLE
         presentationChanged?.invoke(); if (channels.isEmpty()) scoresButton.requestFocus() else focusStream(0)
     }
     private fun focusAt(position: Int) { focusRow(rows, position) }
@@ -511,6 +523,20 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (holder.box.tag != game.key) return
         game.teams.forEachIndexed { index, team -> bindCrest(cardLogos, holder.logos[index], game.logos[team.id].orEmpty().ifBlank { team.logo }) }
         thumbnails.bind(holder.photo, if (scoresHidden(game)) "" else gameArt[game.key].orEmpty()) { bitmap -> holder.photo.isVisible = bitmap != null; if (bitmap != null) fadeArtwork(holder.photo) }
+    }
+    private fun cardTeams(game: SportsGame): CharSequence {
+        if (game.records.isEmpty() || scoresHidden(game)) return scoreText(game)
+        val text = android.text.SpannableStringBuilder()
+        game.teams.forEachIndexed { index, team ->
+            if (index > 0) text.append('\n')
+            text.append(team.name)
+            if (game.state != "pre") game.scores[team.id]?.let { text.append("  $it") }
+            game.records[team.id]?.let { record ->
+                text.append('\n'); val start = text.length; text.append(record)
+                text.setSpan(android.text.style.RelativeSizeSpan(.83f), start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        return text
     }
     private fun redrawVisiblePosters() {
         for (index in 0 until rows.childCount) {

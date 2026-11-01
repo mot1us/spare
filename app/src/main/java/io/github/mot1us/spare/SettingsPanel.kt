@@ -25,6 +25,8 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     private val controls = mutableListOf<View>()
     var leaveNavigation: (() -> Unit)? = null
     private var selected = "Playlists"
+    private var renderPending = false
+    private val renderSelection = Runnable { if (opened && renderPending) { renderPending = false; render(selected) } }
     private var detailBack: (() -> Unit)? = null
     val currentPage get() = selected
     val opened get() = isVisible
@@ -57,7 +59,7 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
                 isFocusableInTouchMode = true; isClickable = true; setPadding(dp(12), 0, dp(8), 0)
                 background = GuideTheme.background(resources.displayMetrics.density); setTextColor(GuideTheme.ink())
                 tag = "settings-nav:$item"; layoutParams = LayoutParams(-1, dp(37)).apply { bottomMargin = dp(4) }
-                setOnFocusChangeListener { _, active -> if (active && selected != item) selectPage(item) }
+                setOnFocusChangeListener { _, active -> if (active && selected != item) selectPage(item, defer = true) }
                 setOnClickListener { selectPage(item); focusContent() }
                 setOnKeyListener { _, key, event -> when (key) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) navRows[items[(index + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1).coerceIn(items.indices)]]?.requestFocus(); true }
@@ -71,7 +73,11 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         if (selected !in items) selected = items.first()
         visibility = VISIBLE; selectPage(selected); navRows[selected]?.requestFocus()
     }
-    private fun selectPage(item: String) { selected = item; navRows.forEach { (name, row) -> row.isSelected = name == item }; render(item) }
+    private fun selectPage(item: String, defer: Boolean = false) {
+        removeCallbacks(renderSelection); selected = item; navRows.forEach { (name, row) -> row.isSelected = name == item }
+        renderPending = defer
+        if (defer) postDelayed(renderSelection, 120) else render(item)
+    }
     fun onDetailBack(action: (() -> Unit)?) { detailBack = action }
     fun custom(view: View, heightDp: Int = 390) {
         controls.add(view); content.addView(view, LayoutParams(-1, dp(heightDp)))
@@ -156,13 +162,14 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     }
     private class ChoiceHolder(val label: TextView) : androidx.recyclerview.widget.RecyclerView.ViewHolder(label)
     fun refresh(focus: String? = null) {
+        removeCallbacks(renderSelection); renderPending = false
         val restore = focus ?: content.findFocus()?.tag?.toString()?.removePrefix("settings-option:")
         navRows.values.forEach { it.background = GuideTheme.background(resources.displayMetrics.density) }
         render(selected); if (restore != null) post { if (opened) content.findViewWithTag<View>("settings-option:$restore")?.requestFocus() }
     }
     fun selectSetting(item: String) { navRows[item]?.requestFocus(); selectPage(item); focusContent() }
     fun focusNavigation() { navRows[selected]?.requestFocus() }
-    fun focusContent() { val first = controls.firstOrNull(); if (first is SettingsContent) first.focusContent() else if (first?.requestFocus() != true) contentScroll.requestFocus() }
+    fun focusContent() { if (renderPending) { removeCallbacks(renderSelection); renderPending = false; render(selected) }; val first = controls.firstOrNull(); if (first is SettingsContent) first.focusContent() else if (first?.requestFocus() != true) contentScroll.requestFocus() }
     fun focusOption(title: String) { content.findViewWithTag<View>("settings-option:$title")?.requestFocus() }
     fun back() { if (contentScroll.hasFocus() && detailBack != null) { val action = detailBack; detailBack = null; action?.invoke() } else if (contentScroll.hasFocus()) focusNavigation() else close() }
 }

@@ -26,8 +26,16 @@ class LiveSportsTest {
         item.put("date", java.time.Instant.ofEpochMilli(now - 600000).atOffset(java.time.ZoneOffset.UTC).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mmX")))
         val sides = item.getJSONArray("competitions").getJSONObject(0).getJSONArray("competitors")
         sides.getJSONObject(0).put("score", "27"); sides.getJSONObject(1).put("score", "24")
+        sides.getJSONObject(0).put("records", JSONArray().put(JSONObject().put("type", "home").put("summary", "1-0")).put(JSONObject().put("type", "total").put("name", "overall").put("summary", "2-4-1")))
+        sides.getJSONObject(1).put("records", JSONArray().put(JSONObject().put("type", "total").put("summary", "4-2")))
         val parsed = LiveSports.parse(json.toString(), "NFL", now, onlyLive = false, includeCompleted = true).single()
         assertEquals("post", parsed.state); assertEquals("27", parsed.scores["nfl:SEA"])
+        assertEquals(mapOf("nfl:SEA" to "2-4-1", "nfl:SF" to "4-2"), parsed.records)
+        val snapshot = LiveSportsSnapshot(listOf(parsed), now, setOf("NFL"))
+        assertEquals(snapshot, SportsSchedule.from(SportsSchedule.json(snapshot)))
+        assertEquals(parsed.records, SportsSchedule.games(snapshot, Guide.EMPTY, null, emptySet(), now, matchChannels = false).single().records)
+        sides.getJSONObject(0).put("records", JSONArray().put(JSONObject().put("type", "home").put("summary", "1-0")))
+        assertFalse("A home record must not masquerade as the overall record", LiveSports.parse(json.toString(), "NFL", now, onlyLive = false, includeCompleted = true).single().records.containsKey("nfl:SEA"))
         assertTrue(LiveSports.parse(json.toString(), "NFL", now).isEmpty())
     }
     @Test fun currentProviderListingCannotTurnFutureSeahawksGameIntoLiveMatch() {

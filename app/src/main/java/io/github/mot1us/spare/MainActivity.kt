@@ -114,6 +114,7 @@ class MainActivity : Activity() {
     private val sportsWorker = Executors.newSingleThreadExecutor()
     private val sportsMatchWorker = Executors.newSingleThreadExecutor()
     private val sportsStreamCache = SportsStreamCache()
+    private val redZoneCache = SportsDestinations.RedZoneCache()
     private val sportsWarmWorker = Executors.newSingleThreadExecutor()
     private var sportsWarmTask: java.util.concurrent.Future<*>? = null
     private var sportsWarmActive: String? = null
@@ -755,14 +756,34 @@ class MainActivity : Activity() {
         sportsPanel.playOnSelection = { store.sportsAutoPlay && !(::multiview.isInitialized && multiview.browsing) }
         sportsPanel.findRedZone = {
             sportsResults = null
-            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = sportsStreamFilters()
+            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = sportsStreamFilters(); val selected = source; val hidden = unavailable.snapshot()
             sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
             sportsPanel.matchingRedZone()
             sportsMatchTask = sportsMatchWorker.submit {
                 val now = System.currentTimeMillis()
-                val channels = SportsDestinations.redZone(snapshot.channels, profile, quality) { !unavailable.contains(it.id, now) }
+                var evidence = snapshot
+                val warmed = linkedMapOf<String, List<Programme>>()
+                val archiveDays = mutableMapOf<String, Int>()
+                val known = redZoneCache.find(snapshot, profile, quality, now)
+                if ((known.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0) < 1080 && selected?.kind == "xtream" && selected.epgUrl.isBlank()) {
+                    val targets = SportsDestinations.guideTargets(snapshot, quality, now)
+                    val highest = targets.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
+                    val keys = targets.map(snapshot::key).toSet()
+                    snapshot.channels.forEach { channel -> val key = snapshot.key(channel); if (key in keys) archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays) }
+                    val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
+                        get = { channel, timeout -> XtreamEpg.load(selected, channel, 6, timeout) },
+                        confirmed = { channel, entries -> (channel.quality(quality[channel.id])?.height ?: 0) >= highest && SportsDestinations.redZone(Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), profile, quality, now).isNotEmpty() })
+                    replies.forEach { (channel, entries) ->
+                        val key = snapshot.key(channel); archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays)
+                        warmed[key] = GuideHistory.merge(snapshot.programmes[key].orEmpty(), entries, archiveDays.getValue(key), now)
+                    }
+                    if (warmed.isNotEmpty()) evidence = snapshot.copy(programmes = snapshot.programmes + warmed)
+                }
+                val channels = redZoneCache.find(evidence, profile, quality, now).filter { (hidden[it.id] ?: 0) <= now }
                 handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible) {
+                    if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
                     sportsChannels = channels.take(4)
+                    sportsPanel.updateRedZone(channels, quality)
                     sportsPanel.showRedZoneStreams(channels) { it.name + " · " + (it.quality(videoInfo[it.id])?.label() ?: "Quality unverified") }
                 } }
             }
@@ -1627,7 +1648,7 @@ class MainActivity : Activity() {
         // Search current EPG/title coverage without falsifying the saved scoreboard.
         val game = reminder.copy(state = "in")
         val now = System.currentTimeMillis()
-        val event = LiveEvent(reminder.eventId, reminder.teams.map { it.id }.toSet(), reminder.start, reminder.state, reminder.networks, reminder.scores, reminder.logos, reminder.status, league = reminder.leagueId)
+        val event = LiveEvent(reminder.eventId, reminder.teams.map { it.id }.toSet(), reminder.start, reminder.state, reminder.networks, reminder.scores, reminder.logos, reminder.status, league = reminder.leagueId, records = reminder.records)
         liveSports = LiveSportsSnapshot((liveSports.events.filterNot { it.id == event.id && it.league == event.league } + event), now, liveSports.leagues + game.leagueId)
         selectedGame = game; sportsTeam = "today"; liveSportsAttempt = now
         reminderWatchReturnSports = sportsVisible
@@ -1666,10 +1687,12 @@ class MainActivity : Activity() {
         val epoch = ++sportsEpoch; val sourceEpoch = generation; val snapshot = guide
         val followed = store.followedTeams; val selectedTeam = sportsTeam; val favoriteSnapshot = favorites; val qualitySnapshot = videoInfo.toMap()
         val replaySnapshot = replayCache.toMap(); val replayChecked = replayDiscovery?.checkedKeys.orEmpty(); val selectedSourceId = source?.id
+        val redZoneProfile = sportsStreamFilters(); val hidden = unavailable.snapshot()
         val now = System.currentTimeMillis()
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val archiveDays = snapshot.channels.maxOfOrNull { if (Catchup.supported(it)) it.catchupDays else 0 } ?: 0
+            val redZone = redZoneCache.find(snapshot, redZoneProfile, qualitySnapshot, now).filter { (hidden[it.id] ?: 0) <= now }
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
             val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
@@ -1694,6 +1717,7 @@ class MainActivity : Activity() {
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.archiveWindowDays = archiveDays
+                sportsPanel.updateRedZone(redZone, qualitySnapshot)
                 sportsPanel.updateCardReplays(directReplays)
                 sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
                 selectedGame?.let(::showGameInfo) ?: run {
@@ -2277,7 +2301,7 @@ class MainActivity : Activity() {
                 panel.page(page, "Enter a U.S. city or state. Matches update automatically from your playlist; location stays on this device.")
                 val editor = LocalChannelsEditor(this, store.localLocation, { value ->
                     store.localLocation = value; localLineup = null; requestLocalMatches(); if (localOnly) applyFilter()
-                }, { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) })
+                }, { localOnly = true; favoritesOnly = false; group = null; sportsVisible = false; closeSettings(); applyFilter(); showGuide(true) }, { localStations }, localWorker)
                 localEditor = editor; panel.custom(editor, 540); requestLocalMatches(); editor.updateMatches(localIds.size, localLoading)
             }
             "Playback" -> {

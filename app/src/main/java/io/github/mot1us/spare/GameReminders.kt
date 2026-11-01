@@ -14,7 +14,7 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
     fun toggle(game: SportsGame): Boolean {
         if (saved.remove(key(game)) != null) { shown.remove(key(game)); return false }
         require(game.state == "pre" && game.eventId.isNotBlank() && saved.size < 64)
-        saved[key(game)] = LiveEvent(game.eventId, game.teams.map { it.id }.toSet(), game.start, "pre", game.networks, logos = game.logos, status = game.status, league = game.leagueId)
+        saved[key(game)] = LiveEvent(game.eventId, game.teams.map { it.id }.toSet(), game.start, "pre", game.networks, logos = game.logos, status = game.status, league = game.leagueId, records = game.records)
         return true
     }
     fun remove(key: String) { saved.remove(key); shown.remove(key) }

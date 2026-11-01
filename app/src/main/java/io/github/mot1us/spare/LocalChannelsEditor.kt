@@ -19,10 +19,12 @@ import androidx.core.widget.doAfterTextChanged
 /** Explicit region rows keep IME drafts separate from saved locations. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class LocalChannelsEditor(context: Context, initialLocation: String, private val onChanged: (String) -> Unit,
-    private val onOpenGuide: () -> Unit) : LinearLayout(context), SettingsContent {
+    private val onOpenGuide: () -> Unit, directoryLoader: () -> LocalChannels, worker: java.util.concurrent.ExecutorService) : LinearLayout(context), SettingsContent {
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private val keyboard get() = context.getSystemService(InputMethodManager::class.java)
-    private val directory = LocalChannels(context.assets.open("local-stations.tsv").bufferedReader().use { it.readText() })
+    private var directory: LocalChannels? = null
+    private var detached = false
+    private val directoryTask: java.util.concurrent.Future<*>
     private val regions = LocalRegions.parse(initialLocation).toMutableList()
     private var editing: String? = null
     private var count = 0
@@ -77,6 +79,10 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
         addView(suggestions, LayoutParams(-1, -2))
         addView(openGuide, LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
         renderRegions(); renderMatches()
+        directoryTask = worker.submit {
+            val loaded = runCatching(directoryLoader).getOrNull() ?: return@submit
+            post { if (!detached) { directory = loaded; renderSuggestions() } }
+        }
     }
     private fun commit(value: String) {
         val saved = LocalRegions.parse(value).firstOrNull() ?: return
@@ -110,7 +116,7 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
     } }
     private fun renderSuggestions() {
         suggestions.removeAllViews(); suggestionRows.clear()
-        directory.locations(input.text.toString(), 3).forEach { value ->
+        directory?.locations(input.text.toString(), 3).orEmpty().forEach { value ->
             val row = option(value).apply {
                 tag = "local-location-suggestion:$value"; setOnClickListener { commit(value) }
                 setOnKeyListener { view, key, event -> if (key in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) {
@@ -126,5 +132,5 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
     private fun label(text: String, size: Float) = TextView(context).apply { this.text = text; textSize = size; typeface = AppFont.face(); setTextColor(Color.WHITE); gravity = Gravity.CENTER_VERTICAL }
     private fun option(text: String) = label(text, 13f).apply { isFocusableInTouchMode = true; isClickable = true; setPadding(dp(10), 0, dp(10), 0); setTextColor(GuideTheme.ink()); background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B) }
     private fun hideKeyboard() { keyboard.hideSoftInputFromWindow(input.windowToken, 0) }
-    override fun onDetachedFromWindow() { hideKeyboard(); super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() { detached = true; directoryTask.cancel(true); hideKeyboard(); super.onDetachedFromWindow() }
 }

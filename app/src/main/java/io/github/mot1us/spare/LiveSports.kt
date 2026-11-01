@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "")
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap())
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {
@@ -69,16 +69,20 @@ object LiveSports {
                         for (n in 0 until minOf(names.length(), 20)) networks.add(names.optString(n).take(80))
                     } }
                     competition.optJSONArray("geoBroadcasts")?.let { array -> for (i in 0 until minOf(array.length(), 20)) array.optJSONObject(i)?.optJSONObject("media")?.optString("shortName")?.takeIf { it.isNotBlank() }?.let { networks.add(it.take(80)) } }
-                    val scores = linkedMapOf<String, String>(); val logos = linkedMapOf<String, String>()
+                    val scores = linkedMapOf<String, String>(); val logos = linkedMapOf<String, String>(); val records = linkedMapOf<String, String>()
                     for (i in 0 until competitors.length()) {
                         val side = competitors.getJSONObject(i); val team = side.getJSONObject("team")
                         val id = resolve(league, team.optString("abbreviation"), team.optString("displayName"), team.optString("id")) ?: continue
+                        val summaries = side.optJSONArray("records")
+                        val overall = (0 until minOf(summaries?.length() ?: 0, 12)).mapNotNull { summaries?.optJSONObject(it) }
+                            .firstOrNull { it.optString("type") == "total" || it.optString("name").equals("overall", true) }
+                        overall?.optString("summary")?.takeIf { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }?.let { records[id] = it }
                         val score = side.optJSONObject("score")?.optString("displayValue") ?: side.optString("score")
                         if (score.matches(Regex("[0-9]{1,3}"))) scores[id] = score
                         val logo = team.optString("logo").ifBlank { team.optJSONArray("logos")?.optJSONObject(0)?.optString("href").orEmpty() }
                         if (logo.length <= 2048 && Network.allowed(logo, false)) logos[id] = if (runCatching { java.net.URI(logo).host }.getOrNull() == "a.espncdn.com") logo.replace("/500/scoreboard/", "/500/").replace("/500-dark/scoreboard/", "/500-dark/") else logo
                     }
-                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100), league = league))
+                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100), league = league, records = records))
                 }
             }
         }

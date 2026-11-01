@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.3 — 2026-11-01
+
+- Show overall team records beneath team names on Sports cards and in the hero. Keep scoreboard records in the encrypted schedule cache, omit missing records, and hide completed-game records when spoiler protection is enabled.
+- Discover RedZone from channel names, aliases and current NFL/Game Pass guide listings across playlist categories. Cache and display the best match with its quality; explicitly opening RedZone can check a bounded set of missing provider guide listings without probing video streams.
+- Keep Settings focus movement lightweight: defer pages skipped during scrolling, render immediately when entering a page, and load/reuse the local-station directory on a background worker.
+
 ## 0.24.2 — 2026-11-01
 
 - Deliver game reminders at their scheduled start while Spare is open, without waiting for a delayed live scoreboard flag. Honor updated start times and known postponements, and retain once-only delivery across restarts.

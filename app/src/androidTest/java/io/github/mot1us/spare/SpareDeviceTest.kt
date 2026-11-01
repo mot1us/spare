@@ -1697,17 +1697,17 @@ class SpareDeviceTest {
         store.delete("game-reminders.enc")
         FixtureServer(channelCount = 12).use { server ->
             val source = Source(name = "Schedule fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
-            val channels = (1..12).map { Channel("xc:$it", "ESPN $it", "Sports", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it") }
+            val channels = (1..12).map { Channel("xc:$it", "ESPN $it", if (it == 12) "NFL Game Pass" else "Sports", "${server.base}/live/test/test-secret/$it.mp4", guideId = "xc:$it", reportedQuality = if (it == 12) VideoInfo(1920, 1080, 0f) else null) }
             val cachedAt = System.currentTimeMillis()
             val midnight = java.time.Instant.ofEpochMilli(cachedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
             val upcomingAt = cachedAt + minOf(3600000L, (midnight - cachedAt) / 2)
             val programmes = channels.associate { it.guideId to listOf(Programme(it.guideId, "Cached guide", cachedAt - 60000, cachedAt + 3 * 3600000)) } + mapOf(channels.first().guideId to listOf(
                 Programme(channels.first().guideId, "Cached guide", cachedAt - 60000, upcomingAt),
-                Programme(channels.first().guideId, "NFL: Seahawks vs 49ers", upcomingAt, upcomingAt + 3 * 3600000)))
+                Programme(channels.first().guideId, "NFL: Seahawks vs 49ers", upcomingAt, upcomingAt + 3 * 3600000))) + mapOf(channels.last().guideId to listOf(Programme(channels.last().guideId, "NFL RedZone", cachedAt - 60000, cachedAt + 3 * 3600000)))
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             store.setSportsFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             val scoreboard = LiveSportsSnapshot(listOf(LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), cachedAt - 300000),
-                LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), upcomingAt, "pre")), cachedAt, setOf("NFL", "MLB"))
+                LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), upcomingAt, "pre", records = mapOf("nfl:SEA" to "6-2", "nfl:SF" to "2-6"))), cachedAt, setOf("NFL", "MLB"))
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
                 scenario.onActivity { activity -> activity.liveSportsLoader = { scoreboard.copy(checked = System.currentTimeMillis()) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
@@ -1720,7 +1720,13 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     assertTrue("Hero: ${activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text}; focus ${activity.currentFocus?.tag}", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle"))
                     assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("UPCOMING"))
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-records").text.contains("6-2"))
+                    val card = activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:next").text.toString()
+                    assertTrue("Records appear beneath the matching team", card.contains("Seattle Seahawks\n6-2"))
+                    assertTrue(card.contains("San Francisco 49ers\n2-6"))
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage").text.toString().contains("ESPN 12"))
                 }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-records.png"))
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("sports-today").isSelected)
                     store.sportsFollowedOnly = true
@@ -1738,6 +1744,13 @@ class SpareDeviceTest {
                 device.pressDPadRight(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("sports-reminder").text.contains("Reminder set") }
                 device.pressBack(); waitFor(scenario) { it.currentFocus?.tag == "next" }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("sports-redzone").performClick()
+                    activity.window.decorView.findViewWithTag<View>("sports-watch").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-status").text.contains("1 RedZone channels") }
+                assertEquals("A cached Game Pass listing needs no provider lookup", 0, server.epgTargets.size)
+                device.pressBack(); waitFor(scenario) { it.currentFocus?.tag == "sports-redzone" }
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
@@ -2237,6 +2250,9 @@ class SpareDeviceTest {
                     assertTrue(left[0] + nav.width < right[0]); assertEquals(activity.window.decorView.width, find<PlayerView>(activity.window.decorView)!!.width)
                     listOf("Playback", "Theme", "Guide", "Categories").forEach { assertNotNull(activity.window.decorView.findViewWithTag<View>("settings-nav:$it")) }
                     listOf("Font", "Guide video", "Subtitles", "Time format").forEach { assertNull(activity.window.decorView.findViewWithTag<View>("settings-nav:$it")) }
+                    activity.window.decorView.findViewWithTag<View>("settings-nav:Local channels").requestFocus()
+                    activity.window.decorView.findViewWithTag<View>("settings-nav:Playback").requestFocus()
+                    assertEquals("Rapid menu movement does not build skipped pages", "Playlists", activity.window.decorView.findViewWithTag<TextView>("settings-page-title").text.toString())
                     activity.window.decorView.findViewWithTag<View>("settings-nav:Theme").requestFocus()
                 }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
