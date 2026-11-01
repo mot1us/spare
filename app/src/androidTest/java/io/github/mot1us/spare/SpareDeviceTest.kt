@@ -1745,6 +1745,7 @@ class SpareDeviceTest {
                     summaries.values.any { it.startsWith("Scheduled · ESPN 1") }
                 }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage")?.text.toString().contains("ESPN 12") }
                 scenario.onActivity { activity ->
                     assertTrue("Hero: ${activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text}; focus ${activity.currentFocus?.tag}", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle"))
                     assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("UPCOMING"))
