@@ -48,10 +48,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         scaleType = ImageView.ScaleType.FIT_CENTER; alpha = .88f; rotation = if (index == 0) -8f else 8f
         crests.addView(this, FrameLayout.LayoutParams(dp(190), dp(190), if (index == 0) Gravity.TOP or Gravity.START else Gravity.BOTTOM or Gravity.END).apply { topMargin = dp(if (index == 0) -12 else 0); bottomMargin = dp(if (index == 1) -12 else 0) })
     } }
-    private val findStreams = button("Find streams") { if (remembered == REDZONE) findRedZone() else featured?.let { if (it.live(System.currentTimeMillis())) watchBest(it) else select(it) } }.apply { tag = "sports-watch" }
+    private val findStreams = button("Find streams") { if (remembered == REDZONE) watchRedZone() else featured?.let { if (it.live(System.currentTimeMillis())) watchBest(it) else select(it) } }.apply { tag = "sports-watch" }
     private val reminder = button("Remind me") { featured?.takeIf { it.state == "pre" }?.let { toggleReminder(it); updateReminder(it) } }.apply { tag = "sports-reminder"; isEnabled = false }
     var findRedZone: () -> Unit = {}
-    private val chooseStreams = button("Choose stream") { featured?.let(select) }.apply { tag = "sports-choose-stream" }
+    var watchRedZone: () -> Unit = { findRedZone() }
+    val redZoneResults get() = watchMode && matchingKey == REDZONE
+    val redZoneFocused get() = remembered == REDZONE
+    private val chooseStreams = button("Choose stream") { if (remembered == REDZONE) findRedZone() else featured?.let(select) }.apply { tag = "sports-choose-stream" }
     private var actionsOpen = false
     var hasReminder: (SportsGame) -> Boolean = { false }
     var toggleReminder: (SportsGame) -> Unit = {}
@@ -197,7 +200,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
             fun ink(active: Boolean) { val color = if (active) GuideTheme.focusText else Color.WHITE; holder.title.setTextColor(color); holder.detail.setTextColor(if (active) GuideTheme.focusText else Color.LTGRAY); holder.stream.setTextColor(if (active) GuideTheme.focusText else Color.LTGRAY); styleBadge(holder.badge, game, active) }
             ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = game.key; showHero(game); focused(game) } }
-            holder.box.setOnClickListener { openGame(game) }
+            holder.box.setOnClickListener { openGame(game) }; holder.box.setOnLongClickListener { openGameActions(game); true }
             cardKeys(holder)
 
         }
@@ -299,7 +302,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             cardReplays[game.key]?.takeIf { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) }?.let { focused(game); watchReplay(it); return }
             if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) { focused(game); select(game); return }
         }
-        if (playOnSelection() && game.live(System.currentTimeMillis())) { focused(game); watchBest(game); return }
+        if (direct && playOnSelection() && game.live(System.currentTimeMillis())) { focused(game); watchBest(game); return }
         actionsOpen = true; showHero(game); focused(game)
         rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true
         status.text = if (game.state == "post" && !findStreams.isEnabled) "No catch-up available for this game." else "Back returns to games"
@@ -307,18 +310,19 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     private fun bindRedZone(holder: GameCard) {
         holder.stream.text = redZoneSummary; holder.stream.tag = "sports-redzone-coverage"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
-        holder.special.isVisible = true; holder.box.contentDescription = "NFL RedZone. Find channels in your playlist"; holder.box.tag = REDZONE; holder.badge.text = "NFL"; holder.title.text = "NFL RedZone"; holder.detail.text = "Every touchdown, one destination"
+        holder.special.isVisible = true; holder.box.contentDescription = "NFL RedZone. OK watches the best feed. Hold OK for stream options"; holder.box.tag = REDZONE; holder.badge.text = "NFL"; holder.title.text = "NFL RedZone"; holder.detail.text = "Every touchdown, one destination"
         holder.logos.forEach { cardLogos.bind(it, "") }; thumbnails.bind(holder.photo, ""); holder.photo.visibility = GONE
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
         fun ink(active: Boolean) { holder.title.setTextColor(if(active) GuideTheme.focusText else Color.WHITE); holder.detail.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.stream.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.badge.setTextColor(if(active) GuideTheme.focusText else GuideTheme.current.accent) }
         ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = REDZONE; showRedZoneHero() } }
-        holder.box.setOnClickListener { remembered = REDZONE; actionsOpen = true; showRedZoneHero(); rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true; findStreams.requestFocus() }
+        holder.box.setOnClickListener { remembered = REDZONE; watchRedZone() }
+        holder.box.setOnLongClickListener { remembered = REDZONE; actionsOpen = true; showRedZoneHero(); rows.isVisible = false; gridArea.isVisible = false; actionRow.isVisible = true; chooseStreams.requestFocus(); true }
         cardKeys(holder)
     }
     private fun showRedZoneHero() {
         featured = null; removeCallbacks(loadHeroArt); pictures.bind(backdrop, ""); credit.text = ""; crestViews.forEach { logos.bind(it, "") }; crests.isVisible = false
         heroBadge.text = "NFL COVERAGE"; heroTitle.text = "NFL RedZone"; heroRecords.visibility = GONE; heroScore.text = "Every touchdown"; heroDetail.text = redZoneSummary
-        findStreams.text = "Find RedZone channels"; findStreams.isEnabled = true; chooseStreams.isVisible = false; reminder.visibility = GONE
+        findStreams.text = "Watch RedZone"; findStreams.isEnabled = true; chooseStreams.isVisible = true; reminder.visibility = GONE
     }
     private fun hasReplay(game: SportsGame) = game.state == "post" && cardReplays[game.key]?.let { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) } == true
     private fun badge(game: SportsGame) = when { game.live(System.currentTimeMillis()) -> "● LIVE"; hasReplay(game) -> "↺ CATCH-UP"; game.state == "post" -> "FINAL"; game.state == "pre" -> "UPCOMING"; else -> "SAVED SCORE" }
@@ -495,6 +499,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             else -> { pendingEnter = true; pendingInput = inputEpoch; todayButton.requestFocus() }
         }
     }
+    fun tuningRedZone(message: String) { progress.isIndeterminate = true; progress.isVisible = true; status.text = message }
     fun matchingRedZone() {
         scrollHint.visibility = INVISIBLE
         streamEntry = true; streamInput = inputEpoch

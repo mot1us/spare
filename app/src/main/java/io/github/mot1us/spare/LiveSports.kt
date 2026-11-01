@@ -8,6 +8,15 @@ import java.time.format.DateTimeFormatter
 data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap())
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
+    /** A partial reply must not erase leagues whose requests are still pending. */
+    fun mergeRefresh(update: LiveSportsSnapshot, complete: Boolean = false): LiveSportsSnapshot {
+        if (update.events.isEmpty() && update.leagues.isEmpty()) return this
+        fun league(event: LiveEvent) = event.league.ifBlank { event.teams.firstNotNullOfOrNull { SportsCatalog.byId[it]?.league }.orEmpty() }
+        fun key(event: LiveEvent) = "${league(event)}:${event.id}"
+        val incoming = update.events.associateBy(::key)
+        val retained = events.filter { key(it) !in incoming && (!complete || league(it) !in update.leagues) }
+        return LiveSportsSnapshot((retained + update.events).takeLast(2048), maxOf(checked, update.checked), leagues + update.leagues)
+    }
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {
         if (!fresh(now)) return emptyList()
         return games.filter { game ->

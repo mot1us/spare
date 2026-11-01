@@ -7,6 +7,19 @@ import org.junit.Test
 import java.time.Instant
 
 class SportsRebuildTest {
+    @Test fun partialRefreshKeepsOtherLeaguesAndFinalRepliesCanRemoveFinishedSchedules() {
+        val nfl = LiveEvent("football", setOf("nfl:BUF", "nfl:KC"), now, league = "NFL")
+        val mlb = LiveEvent("baseball", setOf("mlb:SEA", "mlb:TEX"), now, league = "MLB")
+        val saved = LiveSportsSnapshot(listOf(nfl, mlb), now, setOf("NFL", "MLB"))
+        val first = saved.mergeRefresh(LiveSportsSnapshot(emptyList(), now + 1, setOf("NBA")))
+        assertEquals("A league replying first must not leave only the RedZone card", saved.events, first.events)
+        val updated = nfl.copy(scores = mapOf("nfl:BUF" to "14"))
+        val partial = first.mergeRefresh(LiveSportsSnapshot(listOf(updated), now + 2, setOf("NFL")))
+        assertEquals(2, partial.events.size); assertEquals(updated, partial.events.single { it.id == nfl.id })
+        val complete = partial.mergeRefresh(LiveSportsSnapshot(emptyList(), now + 3, setOf("NFL", "NBA")), complete = true)
+        assertEquals("Successful empty leagues remove old games; failed leagues retain saved data", listOf(mlb), complete.events)
+        assertSame(complete, complete.mergeRefresh(LiveSportsSnapshot.EMPTY, complete = true))
+    }
     @Test fun redZoneDestinationUsesPlaylistNamesHonorsFiltersAndDoesNotInventAnEvent() {
         val channels = listOf(Channel("one", "US: NFL RedZone FHD", "NFL", "https://example.test/one"), Channel("two", "NFL Red Zone 4K", "NFL", "https://example.test/two"), Channel("other", "NFL Network", "NFL", "https://example.test/three"))
         assertEquals(listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()).map { it.id })

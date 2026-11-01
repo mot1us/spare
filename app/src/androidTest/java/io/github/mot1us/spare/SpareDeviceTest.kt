@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -1474,7 +1474,7 @@ class SpareDeviceTest {
                         assertEquals("NFL COVERAGE", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.toString())
                         assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("LIVE"))
                     }
-                    device.pressDPadCenter(); device.pressDPadCenter()
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-redzone").performLongClick(); it.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:focus")?.isShown == true }
                     scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isShown) }
                     device.pressBack()
@@ -1740,6 +1740,15 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 assertTrue("Cold scoreboard results must not wait behind RedZone discovery", android.os.SystemClock.elapsedRealtime() - openedAt < 3000)
                 scenario.onActivity { assertTrue("More scoreboard results are still arriving", MainActivity::class.java.getDeclaredField("liveSportsChecking").apply { isAccessible = true }.getBoolean(it)) }
+                scenario.onActivity { activity ->
+                    val request = MainActivity::class.java.getDeclaredField("liveSportsRequest").apply { isAccessible = true }.getInt(activity)
+                    MainActivity::class.java.getDeclaredMethod("publishSportsSchedule", LiveSportsSnapshot::class.java, java.time.LocalDate::class.java, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+                        .invoke(activity, LiveSportsSnapshot(emptyList(), System.currentTimeMillis(), setOf("NBA")), null, request, false)
+                }
+                waitFor(scenario) { activity ->
+                    val scores = MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.get(activity) as LiveSportsSnapshot
+                    "NBA" in scores.leagues && activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3
+                }
                 finishScoreboard.countDown(); finishDestination.countDown()
                 waitFor(scenario) { activity ->
                     @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
@@ -1775,8 +1784,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("sports-reminder").text.contains("Reminder set") }
                 device.pressBack(); waitFor(scenario) { it.currentFocus?.tag == "next" }
                 scenario.onActivity { activity ->
-                    activity.window.decorView.findViewWithTag<View>("sports-redzone").performClick()
-                    activity.window.decorView.findViewWithTag<View>("sports-watch").performClick()
+                    activity.window.decorView.findViewWithTag<View>("sports-redzone").performLongClick()
+                    activity.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick()
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-status").text.contains("1 RedZone channels") }
                 assertEquals("A cached Game Pass listing needs no provider lookup", 0, server.epgTargets.size)
@@ -2615,7 +2624,7 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-redzone")?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-redzone").performClick(); it.window.decorView.findViewWithTag<View>("sports-watch").performClick() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-redzone").performLongClick(); it.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:redzone")?.isShown == true }
                 scenario.onActivity { activity ->
                     assertTrue("Named results are usable before guide discovery completes", finish.count > 0)
@@ -2664,6 +2673,103 @@ class SpareDeviceTest {
                 scenario.onActivity { assertSame("Recovery reuses one player", samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
             } } finally { store.sportsAutoPlay = false; store.sportsAutoFailover = false; first.resumeStream.countDown(); store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
         } }
+    }
+
+    @Test fun pinnedScoreStripSharesLiveScoresPreservesFocusAndCancelsPendingTunes() {
+        store.delete("game-reminders.enc")
+        FixtureServer().use { server ->
+            val source = Source(name = "Score strip fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val channels = (1..2).map { Channel("score$it", "Sports feed $it", "Sports", "${server.base}/channel$it.mp4") }
+            val one = LiveEvent("one", setOf("nfl:SEA", "nfl:SF"), now - 1000, scores = mapOf("nfl:SEA" to "7", "nfl:SF" to "3"), league = "NFL")
+            val two = LiveEvent("two", setOf("nfl:BUF", "nfl:KC"), now - 1000, scores = mapOf("nfl:BUF" to "10", "nfl:KC" to "7"), league = "NFL")
+            var snapshot = LiveSportsSnapshot(listOf(one, two, one.copy(id = "final", state = "post"), two.copy(id = "upcoming", state = "pre", start = now + 3600000)), now, setOf("NFL"))
+            val programmes = mapOf(channels[0].id to listOf(Programme(channels[0].id, "NFL: Seahawks vs 49ers", now - 1000, now + 3600000)), channels[1].id to listOf(Programme(channels[1].id, "NFL: Bills vs Chiefs", now - 1000, now + 3600000)))
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null; var original = ""; val polls = java.util.concurrent.atomic.AtomicInteger()
+                waitFor(scenario) { activity -> val p = find<PlayerView>(activity.window.decorView)?.player; p?.repeatMode = Player.REPEAT_MODE_ONE; player = p; p?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    original = player!!.currentMediaItem!!.mediaId
+                    activity.liveSportsLoader = { polls.incrementAndGet(); snapshot.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, snapshot)
+                }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-scores")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-scores").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:one")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    val strip = activity.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip")
+                    assertEquals(android.view.Gravity.BOTTOM, (strip.layoutParams as android.widget.FrameLayout.LayoutParams).gravity)
+                    assertEquals(2, activity.window.decorView.findViewWithTag<RecyclerView>("score-strip-games").adapter!!.itemCount)
+                    assertEquals(original, player!!.currentMediaItem!!.mediaId)
+                    activity.window.decorView.findViewWithTag<View>("score-strip-pin").performClick()
+                }
+                device.pressBack()
+                scenario.onActivity { activity -> val strip = activity.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip"); assertTrue(strip.isShown); assertFalse(strip.interactive); assertEquals(ViewGroup.FOCUS_BLOCK_DESCENDANTS, strip.descendantFocusability); assertTrue(SecureStore(context).scoreOverlayPinned); store.scoreOverlayPosition = "Top" }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-details")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-scores").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:one")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    assertEquals(android.view.Gravity.TOP, (activity.window.decorView.findViewWithTag<View>("sports-score-strip").layoutParams as android.widget.FrameLayout.LayoutParams).gravity)
+                    snapshot = snapshot.copy(events = listOf(one.copy(scores = mapOf("nfl:SEA" to "14", "nfl:SF" to "3")), two), checked = System.currentTimeMillis())
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, snapshot)
+                    MainActivity::class.java.getDeclaredMethod("updateScoreStrip").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:one")?.contentDescription.toString().contains("14") }
+                val blocked = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
+                var worker: java.util.concurrent.ExecutorService? = null
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("score-game:NFL:one").hasFocus()); assertEquals(original, player!!.currentMediaItem!!.mediaId)
+                    worker = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    worker!!.submit { blocked.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                }
+                assertTrue(blocked.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("score-game:NFL:two").performClick() }
+                device.pressBack(); release.countDown(); worker!!.submit {}.get(3, java.util.concurrent.TimeUnit.SECONDS)
+                scenario.onActivity { assertEquals("Cancel keeps the current game playing", original, player!!.currentMediaItem!!.mediaId) }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-scores")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-scores").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:two")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("score-game:NFL:two").performClick() }
+                waitFor(scenario) { player!!.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && player!!.isPlaying }
+                scenario.onActivity { activity ->
+                    assertSame(player, find<PlayerView>(activity.window.decorView)!!.player)
+                    val strip = activity.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip"); assertTrue(strip.isShown); assertFalse(strip.interactive)
+                    assertFalse(channelList(activity)?.isShown == true)
+                    assertEquals("Visible score polling shares the minute budget", 1, polls.get())
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "score-strip.png"))
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<View>("sports-score-strip").isShown); assertEquals("Top", SecureStore(context).scoreOverlayPosition) }
+            } } finally { store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun redZoneTileAutoplaysTheBestFeedAndDetailsRetainManualChoices() {
+        FixtureServer().use { server ->
+            val source = Source(name = "RedZone autoplay", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val normal = Channel("normal", "News", "News", "${server.base}/channel1.mp4")
+            val low = Channel("low", "NFL RedZone HD", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(1280, 720, 60f))
+            val best = Channel("best", "Sky Sports Mix FHD", "UK Sports", "${server.base}/channel3.mp4", reportedQuality = VideoInfo(1920, 1080, 50f))
+            val now = System.currentTimeMillis()
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(normal, low, best), mapOf(best.id to listOf(Programme(best.id, "NFL RedZone", now - 1000, now + 3600000))))); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null
+                waitFor(scenario) { val p = find<PlayerView>(it.window.decorView)?.player; p?.repeatMode = Player.REPEAT_MODE_ONE; player = p; p?.isPlaying == true }
+                scenario.onActivity { activity -> activity.liveSportsLoader = { LiveSportsSnapshot(emptyList(), System.currentTimeMillis(), setOf("NFL")) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-redzone")?.isShown == true && it.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage")?.text.toString().contains("Sky Sports") }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-redzone").performClick() }
+                waitFor(scenario) { player!!.currentMediaItem?.localConfiguration?.uri?.path == "/channel3.mp4" && player!!.isPlaying }
+                scenario.onActivity { assertFalse(channelList(it)?.isShown == true); assertSame(player, find<PlayerView>(it.window.decorView)!!.player) }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-game-streams").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:best")?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-stream:low")?.isShown == true }
+                scenario.onActivity { assertEquals("Opening alternatives preserves playback", "/channel3.mp4", player!!.currentMediaItem!!.localConfiguration!!.uri.path) }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
     }
 
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {

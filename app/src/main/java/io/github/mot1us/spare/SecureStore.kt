@@ -277,6 +277,12 @@ class SecureStore(private val context: Context) {
     var hiddenDock: Boolean
         get() = preferences.getBoolean("hidden-dock", true)
         set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
+    var scoreOverlayPinned: Boolean
+        get() = preferences.getBoolean("score-overlay-pinned", false)
+        set(value) { preferences.edit { putBoolean("score-overlay-pinned", value) } }
+    var scoreOverlayPosition: String
+        get() = preferences.getString("score-overlay-position", "Bottom").takeIf { it in setOf("Top", "Bottom") } ?: "Bottom"
+        set(value) { preferences.edit { putString("score-overlay-position", if (value == "Top") "Top" else "Bottom") } }
     var sportsAutoFailover: Boolean
         get() = preferences.getBoolean("sports-auto-failover", false)
         set(value) { preferences.edit { putBoolean("sports-auto-failover", value) } }

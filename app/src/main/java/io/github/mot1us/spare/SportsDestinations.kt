@@ -39,6 +39,11 @@ object SportsDestinations {
                 }
             return found.sortedWith(SportsStreams.preferenceComparator(filters, quality))
         }
+        fun peek(guide: Guide, filters: GuideFilters, quality: Map<String, VideoInfo>, now: Long): List<Channel>? {
+            val saved = entry ?: return null
+            if (saved.guide.channels !== guide.channels || saved.guide.programmes !== guide.programmes || now >= saved.until) return null
+            return saved.channels.sortedWith(SportsStreams.preferenceComparator(filters, quality))
+        }
         fun find(guide: Guide, filters: GuideFilters, quality: Map<String, VideoInfo>, now: Long): List<Channel> {
             val saved = entry
             val current = if (saved != null && saved.guide.channels === guide.channels && saved.guide.programmes === guide.programmes && now < saved.until) saved else {
