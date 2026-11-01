@@ -1708,10 +1708,38 @@ class SpareDeviceTest {
             store.setSportsFilters(source, GuideFilters(minHeight = 1080)); store.followedTeams = setOf("nfl:SEA")
             val scoreboard = LiveSportsSnapshot(listOf(LiveEvent("live", setOf("nfl:BUF", "nfl:KC"), cachedAt - 300000),
                 LiveEvent("next", setOf("nfl:SEA", "nfl:SF"), upcomingAt, "pre", records = mapOf("nfl:SEA" to "6-2", "nfl:SF" to "2-6"))), cachedAt, setOf("NFL", "MLB"))
+            val destinationStarted = java.util.concurrent.CountDownLatch(1)
+            val finishDestination = java.util.concurrent.CountDownLatch(1)
+            val firstBatchDrawn = java.util.concurrent.CountDownLatch(1)
+            val finishScoreboard = java.util.concurrent.CountDownLatch(1)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
-                scenario.onActivity { activity -> activity.liveSportsLoader = { scoreboard.copy(checked = System.currentTimeMillis()) }; activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                val openedAt = android.os.SystemClock.elapsedRealtime()
+                scenario.onActivity { activity ->
+                    activity.redZoneLoader = { snapshot, profile, quality, at ->
+                        destinationStarted.countDown()
+                        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(8)
+                        while (finishDestination.count > 0 && System.nanoTime() < deadline) try { finishDestination.await(100, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { }
+                        SportsDestinations.redZone(snapshot, profile, quality, at)
+                    }
+                    activity.liveSportsLoader = {
+                        assertTrue(destinationStarted.await(3, java.util.concurrent.TimeUnit.SECONDS))
+                        val request = MainActivity::class.java.getDeclaredField("liveSportsRequest").apply { isAccessible = true }.getInt(activity)
+                        val publish = MainActivity::class.java.getDeclaredMethod("publishSportsSchedule", LiveSportsSnapshot::class.java, java.time.LocalDate::class.java, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+                        publish.invoke(activity, scoreboard.copy(events = scoreboard.events.takeLast(1)), null, request, false)
+                        assertTrue(firstBatchDrawn.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        publish.invoke(activity, scoreboard, null, request, false)
+                        finishScoreboard.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                        scoreboard.copy(checked = System.currentTimeMillis())
+                    }
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
+                firstBatchDrawn.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                assertTrue("Cold scoreboard results must not wait behind RedZone discovery", android.os.SystemClock.elapsedRealtime() - openedAt < 3000)
+                scenario.onActivity { assertTrue("More scoreboard results are still arriving", MainActivity::class.java.getDeclaredField("liveSportsChecking").apply { isAccessible = true }.getBoolean(it)) }
+                finishScoreboard.countDown(); finishDestination.countDown()
                 waitFor(scenario) { activity ->
                     @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
                     summaries.values.any { it.startsWith("Scheduled · ESPN 1") }
@@ -1732,10 +1760,10 @@ class SpareDeviceTest {
                     store.sportsFollowedOnly = true
                     activity.window.decorView.findViewWithTag<View>("sports-live").apply { requestFocus(); performClick() }
                 }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("sports-live").hasFocus()); assertTrue(activity.window.decorView.findViewWithTag<View>("sports-live").isSelected)
-                    assertNull(activity.window.decorView.findViewWithTag<View>("sports-redzone"))
+                    assertNotNull("RedZone remains reachable in Live", activity.window.decorView.findViewWithTag<View>("sports-redzone"))
                 }
                 device.pressDPadDown(); device.pressDPadUp(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle") }

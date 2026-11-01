@@ -18,4 +18,13 @@ class PlaylistCatalog(val legacySource: String) {
             rawKey(source.id, key) to entries.map { it.copy(channel = rawKey(source.id, it.channel)) }
         }.toMap(), if (source.id == legacySource) guide.categoryOrder else emptyList())
     }
+    companion object {
+        /** Share finite lookup budgets across owners instead of exhausting the first playlist. */
+        fun interleave(channels: List<Channel>): List<Channel> {
+            val groups = channels.groupBy { it.playlistId }.values.toList()
+            if (groups.size <= 1) return channels
+            return buildList(channels.size) { for (index in 0 until groups.maxOf { it.size }) groups.forEach { it.getOrNull(index)?.let(::add) } }
+        }
+    }
+
 }

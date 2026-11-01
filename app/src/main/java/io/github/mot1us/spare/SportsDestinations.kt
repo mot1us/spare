@@ -11,7 +11,7 @@ object SportsDestinations {
         return !SportsGuide.excludedTitle(name) && (redZone.containsMatchIn(name) || nfl.containsMatchIn(context) && abbreviated.containsMatchIn(name))
     }
     fun redZone(guide: Guide, filters: GuideFilters, quality: Map<String, VideoInfo>, now: Long, available: (Channel) -> Boolean = { true }): List<Channel> =
-        guide.channels.asSequence().filter { channel ->
+        guide.channels.asSequence().takeWhile { !Thread.currentThread().isInterrupted }.filter { channel ->
             !channel.media && available(channel) && (nameMatches(channel.name, context(channel)) ||
                 guide.at(channel, now)?.let { programme ->
                     val context = "${context(channel)} ${SportsCatalog.normalize(programme.title)}"
@@ -28,12 +28,13 @@ object SportsDestinations {
             val saved = entry
             if (saved != null && saved.guide.channels === guide.channels && saved.guide.programmes === guide.programmes && saved.filters == filters && saved.quality == quality && now < saved.until) return saved.channels
             val channels = redZone(guide, filters, quality, now)
+            if (Thread.currentThread().isInterrupted) return emptyList()
             val boundary = channels.mapNotNull { guide.at(it, now)?.end }.minOrNull() ?: Long.MAX_VALUE
             entry = Entry(guide, filters, quality, minOf(now + 60000, boundary), channels)
             return channels
         }
     }
-    fun guideTargets(guide: Guide, quality: Map<String, VideoInfo>, now: Long): List<Channel> = guide.channels.asSequence()
-        .filter { !it.media && nfl.containsMatchIn(context(it)) && guide.at(it, now) == null && !SportsGuide.excludedTitle(it.sportsKey) }
-        .sortedWith(compareByDescending<Channel> { "game pass" in context(it) || "gamepass" in context(it) }.then(SportsStreams.preferenceComparator(GuideFilters(), quality))).take(12).toList()
+    fun guideTargets(guide: Guide, quality: Map<String, VideoInfo>, now: Long, available: (Channel) -> Boolean = { true }): List<Channel> = guide.channels.asSequence()
+        .filter { available(it) && !it.media && nfl.containsMatchIn(context(it)) && guide.at(it, now) == null && !SportsGuide.excludedTitle(it.sportsKey) }
+        .toList().let { channels -> SportsStreams.lookupOrder(channels, compareByDescending<Channel> { "game pass" in context(it) || "gamepass" in context(it) }.then(SportsStreams.preferenceComparator(GuideFilters(), quality))) }.take(12)
 }

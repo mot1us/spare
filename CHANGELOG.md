@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.25.1 — 2026-11-01
+
+- Present cached and arriving Sports schedules without waiting for disk writes, archive capability checks or RedZone scans; keep the NFL RedZone destination in Today and Live.
+- Check existing EPG before expensive channel-name matching. Preserve identically named feeds across providers and share lookup budgets between enabled playlists.
+
 ## 0.25.0 — 2026-11-01
 
 - Enable several playlists together. Browse collapsible playlist/category sections, search across their live and VOD catalogs, and compare Sports streams and catch-up across providers.

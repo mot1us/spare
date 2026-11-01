@@ -127,7 +127,7 @@ object SportsStreams {
             return SportsGuide.teams(Programme(channel.id, channel.name, game.start, game.end), league)?.map { it.id }?.toSet()?.let { it == target } != false
         }
         val variants = Regex("\\b(uhd|fhd|hd|sd|4k|8k|hevc|h264|h265|backup|raw|[0-9]+fps)\\b")
-        fun varied(channels: List<Channel>) = channels.filter(::eligible).distinctBy { variants.replace(SportsCatalog.normalize(it.name), " ").trim().replace(Regex(" +"), " ") }
+        fun varied(channels: List<Channel>) = PlaylistCatalog.interleave(channels.filter(::eligible).distinctBy { it.playlistId to variants.replace(SportsCatalog.normalize(it.name), " ").trim().replace(Regex(" +"), " ") })
         val order = preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }
         // A UHD event feed often has no league/team in its name. Its current EPG is
         // still authoritative; include these feeds before the generic network guesses.
@@ -137,7 +137,18 @@ object SportsStreams {
         val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
         for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && (game.state == "pre" || guide.at(it, at) == null)) picked[it.id] = it }
-        return picked.values.sortedWith(order)
+        return lookupOrder(picked.values.toList(), order)
+    }
+    internal fun lookupOrder(channels: List<Channel>, order: Comparator<Channel>): List<Channel> {
+        val sorted = channels.sortedWith(order)
+        return buildList {
+            var start = 0
+            while (start < sorted.size) {
+                var end = start + 1
+                while (end < sorted.size && order.compare(sorted[start], sorted[end]) == 0) end++
+                addAll(PlaylistCatalog.interleave(sorted.subList(start, end))); start = end
+            }
+        }
     }
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {

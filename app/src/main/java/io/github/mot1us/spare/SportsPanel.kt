@@ -389,13 +389,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         liveButton.isSelected = selected == "live"
         dateButton.isSelected = selected?.startsWith("date:") == true
         dateButton.text = SportsSchedule.selectedDate(selected)?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d")) ?: "Calendar"
-        if (scanning && (initialReveal && next.isEmpty() || !initialReveal && !changedScope)) {
+        if (scanning && next.isEmpty() && (initialReveal || !changedScope)) {
             if (!watchMode && !actionsOpen) { progress.isIndeterminate = true; progress.isVisible = true; status.text = "Updating sports…" }
             if (initialReveal) { loadingGames = true; showSkeleton() }
             return
         }
         val first = initialReveal; initialReveal = false; loadingGames = false
-        val showRedZone = selected != "live" && "NFL" in enabledLeagues
+        val showRedZone = "NFL" in enabledLeagues
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
         empty.text = if (scanning) "Checking games…" else if (selected == "live") "No live games. Choose Today for upcoming games and results." else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && !watchMode && !actionsOpen) VISIBLE else INVISIBLE

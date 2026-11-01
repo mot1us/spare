@@ -157,16 +157,8 @@ object SportsSchedule {
             return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
         }
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
-        val channels = guide.channels.filter { !it.media }
+        val channels = PlaylistCatalog.interleave(guide.channels.filter { !it.media })
         var complete = true
-        for ((index, channel) in channels.withIndex()) {
-            if (Thread.currentThread().isInterrupted) return game
-            if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
-            if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
-            if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
-            else if (patterns.any { it in channel.sportsKey }) candidates.add(channel)
-            if (index % 512 == 0) progress(index, channels.size * 2)
-        }
         val byGuideKey = channels.groupBy { guide.key(it) }
         val matches = mutableListOf<SportsBroadcast>()
         var checkedKeys = 0
@@ -178,14 +170,24 @@ object SportsSchedule {
                 broadcastWindow(game, p, now) && matchesTarget(p, game.teams.first().league)
             }.minByOrNull { kotlin.math.abs(it.start - game.start) }
             if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
-            if (index % 512 == 0) progress(channels.size + index, channels.size + byGuideKey.size)
+            if (index % 512 == 0) progress(index, channels.size + byGuideKey.size)
+        }
+        var checkedChannels = 0
+        for ((index, channel) in channels.withIndex()) {
+            if (Thread.currentThread().isInterrupted) return game
+            if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
+            checkedChannels++
+            if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
+            if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
+            else if (patterns.any { it in channel.sportsKey }) candidates.add(channel)
+            if (index % 512 == 0) progress(checkedKeys + index, channels.size + byGuideKey.size)
         }
         val confirmed = matches.map { it.channel.id }.toSet()
         val titleOnly = titles.filter { it.id !in confirmed }
         val found = confirmed + titleOnly.map { it.id }
-        progress(channels.size + checkedKeys, channels.size + byGuideKey.size)
+        progress(checkedChannels + checkedKeys, channels.size + byGuideKey.size)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
-            .sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites }).take(512), coverageComplete = complete)
+            .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(512), coverageComplete = complete)
     }
     internal fun broadcastWindow(game: SportsGame, programme: Programme, now: Long): Boolean =
         if (game.state == "pre") programme.end > game.start && programme.start in (game.start - 90 * 60000L)..(game.start + 45 * 60000L)

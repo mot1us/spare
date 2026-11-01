@@ -81,6 +81,32 @@ class SportsCoverageTest {
         assertNull(SportsStreams.bestConfirmed(possible, ranked, emptyMap(), now))
         assertTrue(SportsStreams.unavailableReason(possible, ranked, emptyMap(), now).contains("coverage unconfirmed"))
     }
+    @Test fun identicalProviderNamesKeepBothOwnersInsideTheLookupBudget() {
+        val a = Source(id = "main", name = "Main", kind = "xtream", url = "https://main.example")
+        val b = a.copy(id = "second", name = "Second", url = "https://second.example")
+        val catalog = PlaylistCatalog(a.id).apply { configure(listOf(a, b)) }
+        val raw = (1..20).map { channel("xc:$it", "NFL Event $it FHD").copy(reportedQuality = VideoInfo(1920, 1080, 0f)) }
+        val channels = raw.map { catalog.scope(a, it) } + raw.map { catalog.scope(b, it) }
+        val targets = SportsStreams.confirmationTargets(game, Guide(channels, emptyMap()), emptyList(), emptySet(), emptyMap(), now)
+        assertEquals(12, targets.size)
+        assertEquals(setOf(a.id, b.id), targets.take(2).map { catalog.owner(it)!!.id }.toSet())
+        assertEquals(6, targets.count { catalog.owner(it) == b })
+        assertTrue(targets.any { it.nativeId == "xc:1" && catalog.owner(it) == a })
+        assertTrue(targets.any { it.nativeId == "xc:1" && catalog.owner(it) == b })
+    }
+    @Test fun existingProgrammeEvidenceMatchesSecondaryProviderBeforeNameDiscovery() {
+        val a = Source(id = "main", name = "Main", kind = "xtream", url = "https://main.example")
+        val b = a.copy(id = "second", url = "https://second.example")
+        val catalog = PlaylistCatalog(a.id).apply { configure(listOf(a, b)) }
+        val raw = channel("xc:1", "ESPN FHD")
+        val first = catalog.scope(a, raw); val second = catalog.scope(b, raw)
+        val other = Programme(first.id, "NFL: Bills at Chiefs", game.start, game.end)
+        val correct = Programme(second.guideId, "NFL: Seattle Seahawks at San Francisco 49ers", game.start, game.end)
+        val guide = Guide(listOf(first, second), mapOf(first.id to listOf(other), second.guideId to listOf(correct)))
+        val found = SportsSchedule.match(game, guide, emptySet(), now)
+        assertEquals(listOf(second), found.broadcasts.map { it.channel })
+        assertEquals(listOf(second), SportsStreams.automaticChoices(found, GuideFilters(), emptyMap(), guide, now))
+    }
     @Test fun schedulesOnlyRequestChosenLeagues() {
         val urls = java.util.Collections.synchronizedList(mutableListOf<String>())
         val snapshot = SportsSchedule.load(emptySet(), enabledLeagues = setOf("NFL"), get = { url -> urls.add(url); """{"events":[]}""" })
