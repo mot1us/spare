@@ -16,7 +16,7 @@ object RefreshJobs {
         val service = ComponentName(context, RefreshJobService::class.java)
         val existing = scheduler.allPendingJobs.filter { it.service == service }
         val wanted = mutableSetOf<Int>()
-        sources.forEachIndexed { index, source ->
+        sources.filter { it.enabled }.forEachIndexed { index, source ->
             val p = store.refreshPolicy(source); val hours = listOf(p.playlistHours, p.epgHours).filter { it > 0 }.minOrNull() ?: return@forEachIndexed
             val id = 4100 + index; wanted.add(id)
             if (existing.any { it.id == id && it.extras.getString("source") == source.id && it.intervalMillis == hours * 3600000L }) return@forEachIndexed
@@ -33,7 +33,7 @@ class RefreshJobService : JobService() {
         stopped.remove(params.jobId)
         val app = applicationContext
         loader.execute {
-            val store = SecureStore(app); val source = runCatching { store.sources().firstOrNull { it.id == params.extras.getString("source") } }.getOrNull()
+            val store = SecureStore(app); val source = runCatching { store.sources().firstOrNull { it.enabled && it.id == params.extras.getString("source") } }.getOrNull()
             handler.post {
                 if (params.jobId in stopped) return@post
                 if (source == null) { jobFinished(params, false); return@post }

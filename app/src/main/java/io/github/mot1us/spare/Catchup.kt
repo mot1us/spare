@@ -50,13 +50,13 @@ object Catchup {
         return load(source, channel, timeoutMs) { url, timeout -> Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeout) }
     }
     internal fun load(source: Source, channel: Channel, timeoutMs: Int, get: (String, Int) -> ByteArray): List<Programme> {
-        require(source.kind == "xtream" && channel.id.matches(Regex("xc:[0-9]{1,20}")))
+        require(source.kind == "xtream" && channel.nativeId.matches(Regex("xc:[0-9]{1,20}")))
         val deadline = System.nanoTime() + timeoutMs * 1_000_000L
         fun request(action: String): List<Programme> {
             if (Thread.currentThread().isInterrupted) throw InterruptedException()
             val left = ((deadline - System.nanoTime()) / 1_000_000L).coerceAtMost(timeoutMs.toLong()).toInt()
             if (left <= 0) throw java.net.SocketTimeoutException("Archive lookup deadline exceeded")
-            val url = Importers.endpoint(source, "player_api.php", action) + "&stream_id=${channel.id.removePrefix("xc:")}"
+            val url = Importers.endpoint(source, "player_api.php", action) + "&stream_id=${channel.nativeId.removePrefix("xc:")}"
             return XtreamEpg.parse(get(url, left).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
         }
         val primary = runCatching { request("get_simple_data_table") }

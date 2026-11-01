@@ -1874,6 +1874,7 @@ class SpareDeviceTest {
     }
 
     @Test fun guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes() {
+        device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
         FixtureServer(libraryCategories = true, longVideo = true).use { server ->
             val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             val channel = Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4", catchupDays = 2, catchupMode = "xc")
@@ -2437,6 +2438,133 @@ class SpareDeviceTest {
         }
         return result
     }
+    @Test fun enabledPlaylistsShareSearchAndSportsWithoutMixingProviderState() {
+        FixtureServer().use { first -> FixtureServer().use { second -> FixtureServer().use { disabled ->
+            val a = Source(name = "Provider A", kind = "xtream", url = first.base, username = "test", password = "test-secret", allowHttp = true)
+            val b = Source(name = "Provider B", kind = "xtream", url = second.base, username = "test", password = "test-secret", allowHttp = true, maxStreams = 1)
+            val c = Source(name = "Disabled provider", kind = "m3u", url = "${disabled.base}/playlist.m3u", allowHttp = true, enabled = false)
+            val ca = Channel("xc:1", "KING 5 HD", "USA News", "${first.base}/channel1.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
+            val cb = ca.copy(name = "KING 5 FHD", group = "NFL Game Pass", url = "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 60f))
+            val backup = cb.copy(id = "xc:2", name = "Backup feed", url = "${second.base}/channel2.mp4", reportedQuality = VideoInfo(1280, 720, 30f))
+            val now = System.currentTimeMillis()
+            val listing = Programme("xc:1", "NFL Football: Seattle Seahawks at San Francisco 49ers", now - 60000, now + 3 * 3600000)
+            store.saveSources(listOf(a, b, c)); store.active = a.id; store.catalogRoot = a.id; store.recentFeeds = emptyList()
+            store.cache(a, Guide(listOf(ca), mapOf(ca.id to listOf(listing))))
+            store.cache(b, Guide(listOf(cb, backup), mapOf(cb.id to listOf(listing), backup.id to listOf(listing.copy(channel = backup.id)))))
+            store.markPlaylistRefreshed(a); store.markPlaylistRefreshed(b); store.toggleFavorite(a, ca)
+            val movieA = OnDemand("movie:42", "Orbit", "1", "${first.base}/movie.mp4", year = "2025")
+            val movieB = movieA.copy(url = "${second.base}/movie.mp4")
+            val catalog = LibraryCatalog(store)
+            listOf(a to movieA, b to movieB).forEach { (provider, movie) -> catalog.Writer(provider, "movie").apply { append(listOf(movie)); finish(mapOf("1" to "Movies")) } }
+            catalog.close()
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var playing: Player? = null; var ownedB: Channel? = null
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    val p = find<PlayerView>(activity.window.decorView)?.player
+                    p?.repeatMode = Player.REPEAT_MODE_ONE
+                    if (guide.channels.size == 3 && p?.isPlaying == true) { playing = p; ownedB = guide.channels.firstOrNull { it.playlistId == b.id && it.nativeId == "xc:1" }; true } else false
+                }
+                scenario.onActivity { activity ->
+                    assertNotNull(ownedB); assertNotEquals(ca.id, ownedB!!.id)
+                    assertEquals(first.base.substringAfterLast(':'), playing!!.currentMediaItem!!.localConfiguration!!.uri.port.toString())
+                    val denied = b.copy(allowHttp = false)
+                    MainActivity::class.java.getDeclaredMethod("configurePlaylists", List::class.java).apply { isAccessible = true }.invoke(activity, listOf(a, denied, c))
+                    val attempt = playing!!.currentMediaItem!!.mediaId
+                    MainActivity::class.java.getDeclaredMethod("tune", Channel::class.java).apply { isAccessible = true }.invoke(activity, ownedB)
+                    assertEquals("Another provider's HTTP permission cannot authorize this feed", attempt, playing!!.currentMediaItem!!.mediaId)
+                    MainActivity::class.java.getDeclaredMethod("configurePlaylists", List::class.java).apply { isAccessible = true }.invoke(activity, listOf(a, b, c))
+                    MainActivity::class.java.getDeclaredMethod("toggleFavorite", Channel::class.java).apply { isAccessible = true }.invoke(activity, ownedB)
+                    assertEquals(setOf("xc:1"), store.favorites(a)); assertEquals(setOf("xc:1"), store.favorites(b))
+                    MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist:${b.id}")?.isShown == true }
+                scenario.onActivity { activity ->
+                    val attempt = playing!!.currentMediaItem!!.mediaId
+                    activity.window.decorView.findViewWithTag<View>("playlist:${b.id}").performClick()
+                    assertFalse(store.playlistCollapsed(b.id))
+                    assertEquals("Expanding another playlist does not restart playback", attempt, playing!!.currentMediaItem!!.mediaId)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-group:${b.id}:NFL Game Pass") != null }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("playlist-group:${b.id}:NFL Game Pass").performClick()
+                    assertTrue((channelList(activity)!!.adapter as GuideAdapter).channels.all { it.playlistId == b.id })
+                    val scores = LiveSportsSnapshot(listOf(LiveEvent("multi-game", setOf("nfl:SEA", "nfl:SF"), now - 60000, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
+                    activity.liveSportsLoader = { scores.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                    val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), System.currentTimeMillis(), matchChannels = false).single()
+                    MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, game, true)
+                }
+                waitFor(scenario) { playing!!.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') && playing!!.isPlaying }
+                scenario.onActivity { activity ->
+                    assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
+                    assertFalse("Watch best starts the other provider full screen", channelList(activity)?.isShown == true)
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    val secondB = guide.channels.first { it.playlistId == b.id && it.nativeId == "xc:2" }
+                    MainActivity::class.java.getDeclaredMethod("startMultiview", Channel::class.java).apply { isAccessible = true }.invoke(activity, secondB)
+                    val views = MainActivity::class.java.getDeclaredField("multiview").apply { isAccessible = true }.get(activity) as Multiview
+                    assertEquals("Provider B's configured connection limit is respected", 1, views.count)
+                    MainActivity::class.java.getDeclaredMethod("startMultiview", Channel::class.java).apply { isAccessible = true }.invoke(activity, ca)
+                    assertEquals("Another provider can supply the second view", 2, views.count)
+                    views.close()
+                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, "KING 5", false)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:1") != null && it.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}") != null }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("search-result:live:xc:1").text.contains(a.name))
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("search-result:live:${ownedB!!.id}").text.contains(b.name))
+                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, "Orbit", false)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:42") != null && it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42") != null }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
+                waitFor(scenario) { activity ->
+                    val item = MainActivity::class.java.getDeclaredField("onDemand").apply { isAccessible = true }.get(activity) as? OnDemand
+                    item?.playlistId == b.id && playing!!.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') && playing!!.isPlaying
+                }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("returnToLive").apply { isAccessible = true }.invoke(activity)
+                    MainActivity::class.java.getDeclaredMethod("setPlaylistEnabled", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, b, false)
+                }
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.channels.size == 1 && playing!!.currentMediaItem?.localConfiguration?.uri?.port.toString() == first.base.substringAfterLast(':') && playing!!.isPlaying
+                }
+                assertEquals("Disabling a playlist keeps its own favorites", setOf("xc:1"), store.favorites(b))
+                assertTrue("Disabled sources are not fetched", disabled.requests.isEmpty())
+                scenario.onActivity { activity ->
+                    val toggle = MainActivity::class.java.getDeclaredMethod("setPlaylistEnabled", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+                    toggle.invoke(activity, a, false)
+                    assertTrue((MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide).channels.isEmpty())
+                    toggle.invoke(activity, a, true)
+                }
+                waitFor(scenario) { (MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(it) as Guide).channels.size == 1 && playing!!.isPlaying }
+                scenario.onActivity { activity -> MainActivity::class.java.getDeclaredMethod("setPlaylistEnabled", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, b, true) }
+                waitFor(scenario) { activity -> (MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide).channels.size == 3 }
+                var base = Guide.EMPTY
+                scenario.onActivity { base = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(it) as Guide }
+                val archivedAt = System.currentTimeMillis() - 3600000
+                val archives = (1000..12999).map { Channel("xc:$it", "Station $it", "Other", "${first.base}/live/test/test-secret/$it.ts", catchupDays = 2, catchupMode = "xc") }
+                val history = archives.associate { it.id to listOf(Programme(it.id, "Unrelated film", archivedAt, archivedAt + 1800000, "Local weather and community report. ".repeat(16))) }
+                val complete = LiveSportsSnapshot((1..40).map { LiveEvent("final-$it", setOf("nfl:SEA", "nfl:SF"), archivedAt, "post", league = "NFL") }, System.currentTimeMillis(), setOf("NFL"))
+                val openedAt = android.os.SystemClock.elapsedRealtime(); var attempt = ""
+                scenario.onActivity { activity ->
+                    attempt = playing!!.currentMediaItem!!.mediaId
+                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(base.channels + archives, base.programmes + history))
+                    MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "date:" + Instant.ofEpochMilli(archivedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate())
+                    activity.liveSportsLoader = { complete.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, complete)
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { (it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount ?: 0) >= 40 }
+                assertTrue("Fixtures must appear before scanning forty games across a large archive", android.os.SystemClock.elapsedRealtime() - openedAt < 5000)
+                scenario.onActivity { activity -> assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertEquals("Opening Sports keeps playback on its existing attempt", attempt, playing!!.currentMediaItem!!.mediaId) }
+            } } finally { store.saveSources(emptyList()); listOf(a, b, c).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
+        } } }
+    }
+
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }

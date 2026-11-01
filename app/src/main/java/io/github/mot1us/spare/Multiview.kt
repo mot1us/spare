@@ -29,10 +29,11 @@ import androidx.media3.ui.PlayerView
 @SuppressLint("SetTextI18n")
 class Multiview(private val root: FrameLayout, private val primary: PlayerView, private val main: ExoPlayer,
     private val button: (String, () -> Unit) -> Button, private val factory: DataSource.Factory,
-    private val store: SecureStore, private val fullScreen: (Channel) -> Unit, private val back: () -> Unit) {
+    private val store: SecureStore, private val fullScreen: (Channel) -> Unit, private val back: () -> Unit,
+    private val sourceFor: (Channel) -> Source? = { null }, private val currentChannel: () -> Channel? = { null }) {
     private val context = root.context
     private fun dp(n: Int) = (n * context.resources.displayMetrics.density).toInt()
-    private data class Extra(val channel: Channel, val player: ExoPlayer, val view: PlayerView, var error: String = "")
+    private data class Extra(val channel: Channel, val player: ExoPlayer, val view: PlayerView, var error: String = "", val sourceId: String = "")
     private val extras = mutableListOf<Extra>()
     private var overlay: FrameLayout? = null
     private val tiles = mutableListOf<FrameLayout>()
@@ -61,14 +62,18 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         if (!active) open(primaryName, primaryId)
         if (contains(channel.id)) { present(); return }
         if (extras.size >= 3) { present(); status?.text = "Four streams are already open. Select a view and choose Remove view to replace it."; return }
+        val provider = sourceFor(channel)
+        val used = extras.count { it.sourceId == provider?.id } + if (currentChannel()?.let(sourceFor)?.id == provider?.id) 1 else 0
+        if (provider != null && (!provider.enabled || provider.maxStreams > 0 && used >= provider.maxStreams)) { present(); status?.text = "${provider.name} connection limit reached. Choose a feed from another playlist or remove a view."; return }
+        val streamFactory = if (provider == null) factory else DataSource.Factory { LiveProviderDataSource { provider.allowHttp } }
         val player = ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableDecoderFallback(true))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(factory, DefaultExtractorsFactory().setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors()))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(streamFactory, DefaultExtractorsFactory().setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors()))
             .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(25000, 45000, 1500, 8000).setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(true).build())
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
         player.volume = 0f
         val view = PlayerView(context).apply { useController = false; setKeepContentOnPlayerReset(true); this.player = player; tag = when (extras.size) { 0 -> "multiview-second"; 1 -> "multiview-third"; else -> "multiview-fourth" } }
         SubtitleAppearance.apply(view, store.subtitleSize, store.subtitleStyle)
-        val extra = Extra(channel, player, view); extras.add(extra); root.addView(view)
+        val extra = Extra(channel, player, view, sourceId = provider?.id.orEmpty()); extras.add(extra); root.addView(view)
         if (extras.size > 1) fourUp = true
         var alternate = false
         player.addListener(object : Player.Listener {
@@ -80,6 +85,12 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
             }
         })
         player.setMediaItem(MediaItem.fromUri(url)); player.prepare(); player.play(); selected = extras.size; present()
+    }
+    fun removePlaylist(id: String) {
+        val removed = extras.filter { it.sourceId == id }
+        removed.forEach { it.view.player = null; it.player.release(); root.removeView(it.view) }
+        extras.removeAll(removed.toSet())
+        if (removed.isNotEmpty() && active) { selected = 0; if (count <= 2) fourUp = false; rebuild() }
     }
     fun open(name: String, id: String) {
         if (active) { present(); return }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.25.0 — 2026-11-01
+
+- Enable several playlists together. Browse collapsible playlist/category sections, search across their live and VOD catalogs, and compare Sports streams and catch-up across providers.
+- Keep channel identities, favorites, quality/history, HTTP consent, metadata requests and playback settings tied to the owning provider. Preserve existing caches and account data; support mixed-provider multiview with per-playlist connection limits.
+- Share bounded search/import workers, restore cached catalogs progressively, and keep live-channel search off the UI thread.
+
 ## 0.24.4 — 2026-11-01
 
 - Show Sports fixtures before archive and RedZone discovery. Replay availability fills in separately instead of blocking the initial page.

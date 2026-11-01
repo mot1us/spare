@@ -8,17 +8,20 @@ import java.util.UUID
 data class Source(
     val id: String = UUID.randomUUID().toString(), val name: String,
     val kind: String, val url: String, val username: String = "", val password: String = "",
-    val epgUrl: String = "", val allowHttp: Boolean = false,
+    val epgUrl: String = "", val allowHttp: Boolean = false, val enabled: Boolean = true, val maxStreams: Int = 0,
 ) {
     fun json() = JSONObject().put("id", id).put("name", name).put("kind", kind).put("url", url)
-        .put("username", username).put("password", password).put("epg", epgUrl).put("http", allowHttp)
+        .put("username", username).put("password", password).put("epg", epgUrl).put("http", allowHttp).put("enabled", enabled).put("maxStreams", maxStreams)
     companion object {
         fun from(j: JSONObject) = Source(j.getString("id"), j.getString("name"), j.getString("kind"),
-            j.getString("url"), j.optString("username"), j.optString("password"), j.optString("epg"), j.optBoolean("http"))
+            j.getString("url"), j.optString("username"), j.optString("password"), j.optString("epg"), j.optBoolean("http"), j.optBoolean("enabled", true), j.optInt("maxStreams").coerceIn(0, 4))
     }
 }
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
-    val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null, val archiveMetadataKnown: Boolean = true) {
+    val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null, val archiveMetadataKnown: Boolean = true,
+    val playlistId: String = "", val providerId: String = "", val providerGuideId: String = "") {
+    val nativeId get() = providerId.ifBlank { id }
+    fun native() = if (playlistId.isBlank()) this else copy(id = nativeId, guideId = providerGuideId, playlistId = "", providerId = "", providerGuideId = "")
     val rowId: Long by lazy { stableLongId(id) }
     val searchKey: String = ChannelSearch.key(name)
     val sportsKey: String by lazy { " ${SportsCatalog.normalize(name)} " }
@@ -59,10 +62,10 @@ data class Channel(val id: String, val name: String, val group: String, val url:
         return info.label() + " · " + source + mixed
     }
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
-        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.let(ProviderQuality::json)).put("archiveMetadataKnown", archiveMetadataKnown)
+        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.let(ProviderQuality::json)).put("archiveMetadataKnown", archiveMetadataKnown).put("playlist", playlistId).put("providerId", providerId).put("providerGuide", providerGuideId)
     companion object {
         fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
-            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")), j.optBoolean("archiveMetadataKnown", false))
+            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")), j.optBoolean("archiveMetadataKnown", false), j.optString("playlist"), j.optString("providerId"), j.optString("providerGuide"))
         /** Same first 64 SHA-256 bits as the existing RecyclerView IDs, without hex formatting. */
         fun stableLongId(value: String): Long = java.nio.ByteBuffer.wrap(MessageDigest.getInstance("SHA-256").digest(value.toByteArray())).long
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }

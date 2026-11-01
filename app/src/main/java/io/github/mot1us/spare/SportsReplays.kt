@@ -23,6 +23,8 @@ object SportsReplays {
             if (!eligible(game, channel, now)) continue
             val match = guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { p ->
                 if (!Catchup.available(channel, p, now) || abs(p.start - game.start) > 90 * 60000L || p.end <= game.start) false else {
+                    // Most listings are ASCII. Reject unrelated programmes without
+                    // allocating and normalizing the entire description for every game.
                     hints.all { aliases -> aliases.any { p.title.contains(it, true) || p.description.contains(it, true) } } ||
                         ((p.title.any { it.code > 127 } || p.description.any { it.code > 127 }) &&
                             SportsCatalog.normalize(p.title + " " + p.description).let { text -> hints.all { aliases -> aliases.any { it in text } } })

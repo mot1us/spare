@@ -17,7 +17,7 @@ import androidx.core.graphics.withClip
 
 class GuideAdapter(
     private val context: Context, private val logos: LogoLoader,
-    private val source: () -> Source?, private val guide: () -> Guide,
+    private val source: (Channel) -> Source?, private val guide: () -> Guide,
     private val favorites: () -> Set<String>, private val windowStart: (Channel) -> Long,
     private val selected: (Channel) -> Unit, private val favorite: (Channel) -> Unit,
     private val focus: (Channel) -> Unit, private val scrollTime: (Channel, Int) -> Unit,
@@ -110,7 +110,7 @@ class GuideAdapter(
             val base = height / 2f + text.textSize * .35f
             val ink = if (hasFocus()) GuideTheme.focusText else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
             text.color = ink
-            val logo = logos.get(channel.logo, source()?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
+            val logo = logos.get(channel.logo, source(channel)?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
             if (logo != null) {
                 val size = 24 * rowDensity
                 val ratio = minOf(size / logo.width, size / logo.height)

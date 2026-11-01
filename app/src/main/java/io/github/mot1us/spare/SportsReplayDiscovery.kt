@@ -16,6 +16,7 @@ class SportsReplayDiscovery internal constructor(
     private val now: () -> Long = System::currentTimeMillis,
     private val load: (Source, Channel, Int) -> List<Programme> = Catchup::load,
     private val budgetMs: Long = 3500,
+    private val canLoad: (Source, Channel) -> Boolean = { selected, channel -> selected.kind == "xtream" && channel.nativeId.matches(XTREAM_ID) },
 ) {
     private val handler = if (post == null) Handler(Looper.getMainLooper()) else null
     private fun main(block: () -> Unit) { if (post != null) post.invoke(block) else handler!!.post(block) }
@@ -112,8 +113,8 @@ class SportsReplayDiscovery internal constructor(
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
         val local = SportsReplays.find(game, guide, at)
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
-        if (local.isNotEmpty() || source.kind != "xtream") return Outcome(local, true)
-        val candidates = SportsReplays.candidates(game, guide, emptySet(), at, limit = Importers.MAX_CHANNELS).filter { it.id.matches(XTREAM_ID) }
+        if (local.isNotEmpty()) return Outcome(local, true)
+        val candidates = SportsReplays.candidates(game, guide, emptySet(), at, limit = Importers.MAX_CHANNELS).filter { canLoad(source, it) }
         val listings = linkedMapOf<Channel, List<Programme>>()
         val fresh = linkedMapOf<ArchiveKey, History>()
         val missing = candidates.filter { channel ->

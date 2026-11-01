@@ -10,7 +10,7 @@ class VodStartTest {
         val title = LibraryCatalog.Title.from(item, source)
         assertFalse(title.json().toString().contains("secret"))
         val restored = LibraryCatalog.Title.from(title.json()).item(source)
-        assertEquals(item, restored)
+        assertEquals(item.copy(playlistId = source.id), restored)
         assertEquals("amovie", title.canonical)
         assertEquals("https://example.com/asset.mp4", LibraryCatalog.Title.from(item.copy(url = "https://example.com/asset.mp4"), source).item(source).url)
     }

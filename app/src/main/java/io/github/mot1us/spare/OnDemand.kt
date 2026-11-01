@@ -5,11 +5,11 @@ import org.json.JSONObject
 
 /** URLs may contain credentials; serialize only inside SecureStore's encrypted files. */
 data class OnDemand(val id: String, val title: String, val category: String, val url: String = "", val kind: String = "movie",
-    val description: String = "", val seriesId: String = "", val season: Int = 0, val episode: Int = 0, val poster: String = "", val backdrop: String = "", val year: String = "", val genre: String = "", val runtime: String = "", val cast: String = "", val externalId: String = "") {
+    val description: String = "", val seriesId: String = "", val season: Int = 0, val episode: Int = 0, val poster: String = "", val backdrop: String = "", val year: String = "", val genre: String = "", val runtime: String = "", val cast: String = "", val externalId: String = "", val playlistId: String = "") {
     fun json() = JSONObject().put("id", id).put("title", title).put("category", category).put("url", url).put("kind", kind)
-        .put("description", description).put("seriesId", seriesId).put("season", season).put("episode", episode).put("poster", poster).put("backdrop", backdrop).put("year", year).put("genre", genre).put("runtime", runtime).put("cast", cast).put("externalId", externalId)
+        .put("description", description).put("seriesId", seriesId).put("season", season).put("episode", episode).put("poster", poster).put("backdrop", backdrop).put("year", year).put("genre", genre).put("runtime", runtime).put("cast", cast).put("externalId", externalId).put("playlist", playlistId)
     companion object {
-        fun from(j: JSONObject) = OnDemand(j.getString("id"), j.getString("title"), j.optString("category"), j.optString("url"), j.optString("kind", "movie"), j.optString("description"), j.optString("seriesId"), j.optInt("season"), j.optInt("episode"), j.optString("poster"), j.optString("backdrop"), j.optString("year"), j.optString("genre"), j.optString("runtime"), j.optString("cast"), j.optString("externalId"))
+        fun from(j: JSONObject) = OnDemand(j.getString("id"), j.getString("title"), j.optString("category"), j.optString("url"), j.optString("kind", "movie"), j.optString("description"), j.optString("seriesId"), j.optInt("season"), j.optInt("episode"), j.optString("poster"), j.optString("backdrop"), j.optString("year"), j.optString("genre"), j.optString("runtime"), j.optString("cast"), j.optString("externalId"), j.optString("playlist"))
     }
 }
 data class WatchProgress(val item: OnDemand, val position: Long, val duration: Long, val updated: Long) {

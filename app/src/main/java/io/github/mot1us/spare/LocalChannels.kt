@@ -50,7 +50,7 @@ class LocalChannels(text: String) {
             if (Thread.currentThread().isInterrupted) return emptySet()
             if (channel.media) continue
             if (continuous.containsMatchIn(channel.name + " " + channel.group)) continue
-            val name = key(channel.name); val group = key(channel.group); val guide = key(channel.guideId.substringBefore('.'))
+            val name = key(channel.name); val group = key(channel.group); val guide = key(channel.providerGuideId.ifBlank { channel.guideId }.substringBefore('.'))
             val located = places.any { " $it " in " $name $group " }
             val context = " $name $group "
             val rightState = stateWords.any { " $it " in context }

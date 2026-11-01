@@ -226,12 +226,12 @@ class SecureStore(private val context: Context) {
             }
     }
     fun channelCaptions(source: Source, channel: Channel): String? = runCatching {
-        JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()).optString(channel.id).takeIf { it.isNotBlank() }
+        JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()).optString(channel.nativeId).takeIf { it.isNotBlank() }
     }.getOrNull()
     fun setChannelCaptions(source: Source, channel: Channel, mode: String?) {
         val entries = runCatching { JSONObject(preferences.getString("channel-captions-${source.id}", "{}").orEmpty()) }.getOrDefault(JSONObject())
-        entries.remove(channel.id)
-        if (mode != null) entries.put(channel.id, mode)
+        entries.remove(channel.nativeId)
+        if (mode != null) entries.put(channel.nativeId, mode)
         while (entries.length() > 5000) entries.remove(entries.keys().next())
         preferences.edit { putString("channel-captions-${source.id}", entries.toString()) }
     }
@@ -286,6 +286,14 @@ class SecureStore(private val context: Context) {
     var active: String
         get() = preferences.getString("active", "").orEmpty()
         set(value) { preferences.edit { putString("active", value) } }
+    var catalogRoot: String
+        get() = preferences.getString("catalog-root", "").orEmpty()
+        set(value) { preferences.edit { putString("catalog-root", value) } }
+    var recentFeeds: List<String>
+        get() = runCatching { JSONArray(preferences.getString("recent-feeds", "[]")).let { a -> List(minOf(a.length(), 12)) { a.getString(it) } } }.getOrDefault(emptyList())
+        set(value) { preferences.edit { putString("recent-feeds", JSONArray(value.distinct().take(12)).toString()) } }
+    fun playlistCollapsed(id: String) = preferences.getBoolean("playlist-collapsed-$id", id != active)
+    fun setPlaylistCollapsed(id: String, value: Boolean) { preferences.edit { putBoolean("playlist-collapsed-$id", value) } }
     fun last(source: Source) = preferences.getString("last-${source.id}", "").orEmpty()
     fun previous(source: Source) = preferences.getString("previous-${source.id}", "").orEmpty()
     fun recent(source: Source): List<String> = runCatching {
@@ -295,17 +303,17 @@ class SecureStore(private val context: Context) {
     // Called only after a rendered frame: a failed tune must not replace watch history.
     fun setLast(source: Source, channel: Channel) {
         val prior = last(source)
-        val history = (listOf(channel.id) + recent(source)).distinct().take(12)
+        val history = (listOf(channel.nativeId) + recent(source)).distinct().take(12)
         preferences.edit {
             putString("recent-${source.id}", JSONArray(history).toString())
-            if (prior.isNotBlank() && prior != channel.id) putString("previous-${source.id}", prior)
-            putString("last-${source.id}", channel.id)
+            if (prior.isNotBlank() && prior != channel.nativeId) putString("previous-${source.id}", prior)
+            putString("last-${source.id}", channel.nativeId)
         }
     }
     fun favorites(source: Source) = preferences.getStringSet("favorites-${source.id}", emptySet()).orEmpty().toSet()
     fun toggleFavorite(source: Source, channel: Channel) {
         val favorites = favorites(source).toMutableSet()
-        if (!favorites.add(channel.id)) favorites.remove(channel.id)
+        if (!favorites.add(channel.nativeId)) favorites.remove(channel.nativeId)
         preferences.edit { putStringSet("favorites-${source.id}", favorites) }
     }
     var lastUpdateCheck: Long

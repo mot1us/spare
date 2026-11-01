@@ -12,7 +12,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-data class GuideSection(val title: String, val key: String, val active: Boolean = false) {
+data class GuideSection(val title: String, val key: String, val active: Boolean = false, val playlist: String = "", val category: String? = null, val header: Boolean = false) {
     val rowId: Long by lazy { Channel.stableLongId(key) }
 }
 
@@ -63,7 +63,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         val item = items[position]
         holder.label.tag = item.key; holder.label.text = item.title; holder.label.contentDescription = item.title
         holder.label.isSelected = item.active
-        holder.label.typeface = AppFont.face(item.active)
+        holder.label.typeface = AppFont.face(item.active || item.header)
         holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key }
         holder.label.setOnClickListener { select(item) }
     }

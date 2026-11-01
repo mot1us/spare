@@ -42,6 +42,23 @@ class SportsReplayDiscoveryTest {
         } finally { discovery.close() }
     }
 
+    @Test fun secondaryProviderArchiveUsesScopedIdentityEvenWithAnM3uMainPlaylist() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
+        val primary = source.copy(id = "m3u-main", kind = "m3u")
+        val playlists = PlaylistCatalog(primary.id).apply { configure(listOf(primary, source)) }
+        val scoped = playlists.scope(source, channel)
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, candidate, _ ->
+                assertEquals(source, playlists.owner(candidate)); assertEquals("xc:1", candidate.nativeId)
+                calls.incrementAndGet(); listOf(listing().copy(channel = candidate.guideId))
+            }, canLoad = { _, candidate -> playlists.owner(candidate)?.kind == "xtream" })
+        try {
+            discovery.update(primary, 1, Guide(listOf(scoped), emptyMap()), listOf(game), game, true)
+            main.await { results.size == 1 }
+            assertEquals(listOf(scoped), results.single().replays.map { it.channel }); assertEquals(1, calls.get())
+        } finally { discovery.close() }
+    }
+
     @Test fun focusedFinalRunsFirstAndAllDisplayedFinalsShareMetadataCache() {
         val main = MainQueue(); val results = mutableListOf<Result>(); val calls = AtomicInteger()
         val games = (0..11).map { game.copy(eventId = "final-$it", start = game.start - it * 600000, end = game.end - it * 600000) }

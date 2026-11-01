@@ -6,11 +6,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
 /** Explicit, playlist-wide title search. Catalog pages stay encrypted; no video streams are probed. */
-class PlaylistSearch(private val store: SecureStore, private val repository: LibraryCatalog = LibraryCatalog(store), private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
+private class ProviderPlaylistSearch(private val store: SecureStore, private val repository: LibraryCatalog, sharedIo: java.util.concurrent.ExecutorService, sharedReader: java.util.concurrent.ExecutorService, private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
     private val background = java.util.concurrent.ThreadFactory { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog") }
-    private val io = Executors.newFixedThreadPool(2, background)
-    private val reader = Executors.newSingleThreadExecutor(background)
+    private val io = sharedIo
+    private val reader = sharedReader
     private val lock = Any()
     private var source: Source? = null
     private var context = 0
@@ -30,6 +30,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
     private var publishPending = false
     private var warming = false
     private var restoring = false
+    var serialImports = false
     var stateChanged: (() -> Unit)? = null
     data class CatalogStatus(val checking: Boolean, val complete: Boolean, val failed: Boolean)
     fun catalogStatus(selected: Source, kinds: Set<String>): CatalogStatus = synchronized(lock) {
@@ -43,7 +44,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
             cancelLoads(); warming = false; catalogs.clear(); failures.clear(); source = selected; ++context
             val token = context
             restoring = true; publish()
-            io.submit {
+            reader.submit {
                 try { listOf("movie", "series").forEach { mode ->
                     val saved = runCatching { repository.cached(selected, mode) }.getOrNull()
                     synchronized(lock) { if (token == context && saved != null) { catalogs[mode] = saved; if (active) read() } }
@@ -88,7 +89,11 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
             matches.clear()
             if (query.isEmpty()) { ++readEpoch; reading = false; readTask?.cancel(true); publish(); return }
             read()
-            if (selected.kind == "xtream") modes.forEach { mode -> if (mode !in loads || (mode in failures && loads[mode]?.isDone == true)) load(selected, mode, context) }
+            if (selected.kind == "xtream") {
+                val pending = modes.filter { it !in loads || (it in failures && loads[it]?.isDone == true) }
+                if (serialImports) { if (loading.isEmpty()) pending.firstOrNull()?.let { load(selected, it, context) } }
+                else pending.forEach { load(selected, it, context) }
+            }
             publish()
         }
     }
@@ -137,6 +142,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
                 if (token == context) {
                     loading.remove(mode); publish()
                     if (warming && !active && mode == "movie" && "series" !in loads && "series" !in failures) load(selected, "series", token)
+                    if (active && serialImports && loading.isEmpty()) modes.firstOrNull { it !in loads && it !in failures }?.let { load(selected, it, context) }
                     if (loading.isEmpty()) warming = false
                 }
             } }
@@ -149,5 +155,60 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         if (cancel) { warming = false; ++context; cancelLoads() }
         handler.removeCallbacks(publish); publishPending = false
     } }
-    fun close() { pause(cancel = true); closed = true; io.shutdownNow(); reader.shutdownNow() }
+    fun close() { pause(cancel = true); closed = true }
+}
+
+
+/** Fan out explicit search over independent cached indexes, sharing two I/O workers. */
+class PlaylistSearch(private val store: SecureStore, private val repository: LibraryCatalog = LibraryCatalog(store),
+    private val sources: () -> List<Source> = { emptyList() }, private val deliver: (List<OnDemand>, Boolean, String) -> Unit) {
+    private val background = java.util.concurrent.ThreadFactory { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-search") }
+    private val io = Executors.newFixedThreadPool(2, background)
+    private val reader = Executors.newSingleThreadExecutor(background)
+    private data class Session(val source: Source, val engine: ProviderPlaylistSearch, var items: List<OnDemand> = emptyList(), var busy: Boolean = false, var warning: String = "")
+    private val sessions = linkedMapOf<String, Session>()
+    private var selected: Source? = null
+    private var active = false
+    var stateChanged: (() -> Unit)? = null
+    data class CatalogStatus(val checking: Boolean, val complete: Boolean, val failed: Boolean)
+    private fun wanted(fallback: Source) = sources().filter { it.enabled }.ifEmpty { listOf(fallback).filter { it.enabled } }
+    private fun session(source: Source): Session {
+        sessions[source.id]?.takeIf { it.source == source }?.let { return it }
+        sessions.remove(source.id)?.engine?.close()
+        val engine = ProviderPlaylistSearch(store, repository, io, reader) { items, busy, warning ->
+            sessions[source.id]?.let { state -> state.items = items.map { it.copy(playlistId = source.id) }; state.busy = busy; state.warning = warning; publish() }
+        }
+        engine.stateChanged = { stateChanged?.invoke() }
+        return Session(source, engine).also { sessions[source.id] = it }
+    }
+    private fun configure(source: Source): List<Source> {
+        selected = source; val wanted = wanted(source); val ids = wanted.map { it.id }.toSet()
+        sessions.keys.toList().filter { it !in ids }.forEach { sessions.remove(it)?.engine?.close() }
+        return wanted
+    }
+    private fun publish() {
+        stateChanged?.invoke()
+        if (!active) return
+        val states = sessions.values.toList()
+        deliver(states.flatMap { it.items }.distinctBy { it.playlistId to it.id }.take(120), states.any { it.busy }, states.map { it.warning }.filter { it.isNotBlank() }.distinct().joinToString(" · "))
+    }
+    fun prepare(source: Source) { configure(source).forEach { session(it).engine.prepare(it) } }
+    fun prefetch(source: Source) {
+        val wanted = configure(source)
+        wanted.forEach { session(it).engine.prepare(it) }
+        wanted.firstOrNull { candidate -> listOf("movie", "series").any { repository.memory(candidate, it)?.complete != true } }?.let { session(it).engine.prefetch(it) }
+    }
+    fun catalogStatus(source: Source, kinds: Set<String>): CatalogStatus {
+        val values = wanted(source).map { session(it).engine.catalogStatus(it, kinds) }
+        return CatalogStatus(values.any { it.checking }, values.isNotEmpty() && values.all { it.complete }, values.any { it.failed })
+    }
+    fun refresh(source: Source, mode: String) { session(source).engine.refresh(source, mode) }
+    fun search(source: Source, query: String, known: List<OnDemand>, kinds: Set<String> = setOf("movie", "series")) {
+        active = false; val wanted = configure(source)
+        wanted.forEach { selected -> val state = session(selected); state.items = emptyList(); state.busy = query.isNotBlank(); state.engine.serialImports = wanted.size > 1; state.engine.prepare(selected); state.engine.search(selected, query, known.filter { it.playlistId.isBlank() && selected.id == source.id || it.playlistId == selected.id }, kinds) }
+        active = true; publish()
+    }
+    fun pausePrefetch() { sessions.values.forEach { it.engine.pausePrefetch() } }
+    fun pause(cancel: Boolean = false) { active = false; sessions.values.forEach { it.engine.pause(cancel) } }
+    fun close() { pause(true); sessions.values.forEach { it.engine.close() }; sessions.clear(); io.shutdownNow(); reader.shutdownNow() }
 }

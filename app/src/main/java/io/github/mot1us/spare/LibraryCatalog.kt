@@ -10,7 +10,7 @@ class LibraryCatalog(private val store: SecureStore) {
     data class Title(val id: String, val name: String, val category: String, val extension: String, val year: String, val poster: String, val direct: String, val externalId: String = "") {
         val key = ChannelSearch.key(name)
         val canonical = VodStart.titleKey(OnDemand(id, name, category, year = year))
-        fun item(source: Source) = OnDemand(id, name, category, if (id.startsWith("series:")) "" else direct.ifBlank { VodCatalog.streamUrl(source, "movie", id.substringAfter(':'), extension) }, id.substringBefore(':'), poster = poster, year = year, externalId = externalId)
+        fun item(source: Source) = OnDemand(id, name, category, if (id.startsWith("series:")) "" else direct.ifBlank { VodCatalog.streamUrl(source, "movie", id.substringAfter(':'), extension) }, id.substringBefore(':'), poster = poster, year = year, externalId = externalId, playlistId = source.id)
         fun json() = JSONArray(listOf(id, name, category, extension, year, poster, direct, externalId))
         companion object {
             fun from(item: OnDemand, source: Source): Title {
