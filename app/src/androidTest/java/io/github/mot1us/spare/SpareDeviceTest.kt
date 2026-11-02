@@ -2592,10 +2592,13 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     attempt = playing!!.currentMediaItem!!.mediaId
                     MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, Guide(base.channels + archives, base.programmes + history))
-                    MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "date:" + Instant.ofEpochMilli(archivedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate())
                     activity.liveSportsLoader = { complete.copy(checked = System.currentTimeMillis()) }
                     MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, complete)
                     activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                    // Opening Sports intentionally selects Today. Apply the historical fixture date afterward.
+                    val day = Instant.ofEpochMilli(archivedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+                    MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "date:$day")
+                    MainActivity::class.java.getDeclaredField("liveSportsDay").apply { isAccessible = true }.set(activity, day)
                 }
                 waitFor(scenario) { (it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount ?: 0) >= 40 }
                 assertTrue("Fixtures must appear before scanning forty games across a large archive", android.os.SystemClock.elapsedRealtime() - openedAt < 5000)
