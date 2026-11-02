@@ -17,7 +17,7 @@ class SportsRebuildTest {
         val partial = first.mergeRefresh(LiveSportsSnapshot(listOf(updated), now + 2, setOf("NFL")))
         assertEquals(2, partial.events.size); assertEquals(updated, partial.events.single { it.id == nfl.id })
         val complete = partial.mergeRefresh(LiveSportsSnapshot(emptyList(), now + 3, setOf("NFL", "NBA")), complete = true)
-        assertEquals("Successful empty leagues remove old games; failed leagues retain saved data", listOf(mlb), complete.events)
+        assertEquals("Successful empty leagues remove old games; failed leagues retain saved data", listOf(mlb.copy(state = "hold", status = "Saved score · checking live status")), complete.events)
         assertSame(complete, complete.mergeRefresh(LiveSportsSnapshot.EMPTY, complete = true))
     }
     @Test fun redZoneDestinationUsesPlaylistNamesHonorsFiltersAndDoesNotInventAnEvent() {

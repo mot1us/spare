@@ -1921,7 +1921,7 @@ class MainActivity : Activity() {
         sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty()
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
         handler.removeCallbacks(renderSports); sportsRenderPending = false
-        liveSports = calendarSnapshot
+        liveSports = calendarSnapshot; liveSportsDay = day
         sportsPanel.submit(calendarGames(calendarSnapshot, day), store.followedTeams, sportsTeam, "Games · ${day}", false)
         closeSportsCalendar(); showGameInfo(game); sportsPanel.openGameActions(game)
     }
@@ -2018,63 +2018,62 @@ class MainActivity : Activity() {
         tune(best); watchingRedZone = true; showGuide(false); return true
     }
     private fun findRedZone(autoPlay: Boolean) {
-
-            sportsResults = null
-            redZoneAutoPending = autoPlay
-            val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = sportsStreamFilters(); val selected = source; val hidden = unavailable.snapshot()
-            sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
-            if (autoPlay) {
-                redZoneCache.peek(snapshot, profile, quality, System.currentTimeMillis())?.filter { (hidden[it.id] ?: 0) <= System.currentTimeMillis() && allowed(it) }?.takeIf { it.isNotEmpty() }?.let { playRedZone(it); return }
-                sportsPanel.tuningRedZone("Finding the best RedZone feed… · Back cancels")
-            } else sportsPanel.matchingRedZone()
-            sportsMatchTask = sportsMatchWorker.submit {
-                val now = System.currentTimeMillis()
-                var evidence = snapshot
-                val warmed = linkedMapOf<String, List<Programme>>()
-                val archiveDays = mutableMapOf<String, Int>()
-                val direct = redZoneCache.named(snapshot, profile, quality).filter { (hidden[it.id] ?: 0) <= now }
-                if (direct.isNotEmpty()) handler.post {
-                    if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
-                        sportsPanel.updateRedZone(direct, quality)
-                        if (!autoPlay) sportsPanel.showRedZoneStreams(direct, checking = true) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
-                    }
+        sportsResults = null
+        redZoneAutoPending = autoPlay
+        val snapshot = guide; val sourceEpoch = generation; val quality = videoInfo.toMap(); val profile = sportsStreamFilters(); val selected = source; val hidden = unavailable.snapshot()
+        sportsMatchTask?.cancel(true); val epoch = ++sportsMatchEpoch
+        if (autoPlay) {
+            redZoneCache.peek(snapshot, profile, quality, System.currentTimeMillis())?.filter { (hidden[it.id] ?: 0) <= System.currentTimeMillis() && allowed(it) }?.takeIf { it.isNotEmpty() }?.let { playRedZone(it); return }
+            sportsPanel.tuningRedZone("Finding the best RedZone feed… · Back cancels")
+        } else sportsPanel.matchingRedZone()
+        sportsMatchTask = sportsMatchWorker.submit {
+            val now = System.currentTimeMillis()
+            var evidence = snapshot
+            val warmed = linkedMapOf<String, List<Programme>>()
+            val archiveDays = mutableMapOf<String, Int>()
+            val direct = redZoneCache.named(snapshot, profile, quality).filter { (hidden[it.id] ?: 0) <= now }
+            if (direct.isNotEmpty()) handler.post {
+                if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
+                    sportsPanel.updateRedZone(direct, quality)
+                    if (!autoPlay) sportsPanel.showRedZoneStreams(direct, checking = true) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
                 }
-                val known = redZoneLoader(snapshot, profile, quality, now).filter { (hidden[it.id] ?: 0) <= now }
-                if (known.isNotEmpty()) handler.post {
-                    if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
-                        sportsPanel.updateRedZone(known, quality)
-                        if (!autoPlay) sportsPanel.showRedZoneStreams(known, checking = true) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
-                    }
-                }
-                val height = known.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
-                val targets = SportsDestinations.guideTargets(snapshot, quality, now) { channel ->
-                    owner(channel)?.let { provider -> provider.enabled && provider.kind == "xtream" && provider.epgUrl.isBlank() } == true && (height == 0 || (channel.quality(quality[channel.id])?.height ?: 0) > height)
-                }
-                if (targets.isNotEmpty() && selected != null) {
-                    val highest = targets.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
-                    val keys = targets.map(snapshot::key).toSet()
-                    snapshot.channels.forEach { channel -> val key = snapshot.key(channel); if (key in keys) archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays) }
-                    val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
-                        get = { channel, timeout -> XtreamEpg.load(owner(channel) ?: selected, channel, 6, timeout) },
-                        confirmed = { channel, entries -> (channel.quality(quality[channel.id])?.height ?: 0) >= highest && SportsDestinations.redZone(Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), profile, quality, now).isNotEmpty() })
-                    replies.forEach { (channel, entries) ->
-                        val key = snapshot.key(channel); archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays)
-                        warmed[key] = GuideHistory.merge(snapshot.programmes[key].orEmpty(), entries, archiveDays.getValue(key), now)
-                    }
-                    if (warmed.isNotEmpty()) evidence = snapshot.copy(programmes = snapshot.programmes + warmed)
-                }
-                val channels = (if (warmed.isEmpty()) known else redZoneLoader(evidence, profile, quality, now)).filter { (hidden[it.id] ?: 0) <= now }
-                handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
-                    if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
-                    sportsChannels = channels.take(4)
-                    sportsPanel.updateRedZone(channels, quality)
-                    redZoneAutoPending = false; sportsPanel.finishTuning()
-                    if (autoPlay && playRedZone(channels)) return@post
-                    if (autoPlay) sportsPanel.matchingRedZone()
-                    sportsPanel.showRedZoneStreams(channels) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
-                } }
             }
+            val known = redZoneLoader(snapshot, profile, quality, now).filter { (hidden[it.id] ?: 0) <= now }
+            if (known.isNotEmpty()) handler.post {
+                if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
+                    sportsPanel.updateRedZone(known, quality)
+                    if (!autoPlay) sportsPanel.showRedZoneStreams(known, checking = true) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
+                }
             }
+            val height = known.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
+            val targets = SportsDestinations.guideTargets(snapshot, quality, now) { channel ->
+                owner(channel)?.let { provider -> provider.enabled && provider.kind == "xtream" && provider.epgUrl.isBlank() } == true && (height == 0 || (channel.quality(quality[channel.id])?.height ?: 0) > height)
+            }
+            if (targets.isNotEmpty() && selected != null) {
+                val highest = targets.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
+                val keys = targets.map(snapshot::key).toSet()
+                snapshot.channels.forEach { channel -> val key = snapshot.key(channel); if (key in keys) archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays) }
+                val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
+                    get = { channel, timeout -> XtreamEpg.load(owner(channel) ?: selected, channel, 6, timeout) },
+                    confirmed = { channel, entries -> (channel.quality(quality[channel.id])?.height ?: 0) >= highest && SportsDestinations.redZone(Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), profile, quality, now).isNotEmpty() })
+                replies.forEach { (channel, entries) ->
+                    val key = snapshot.key(channel); archiveDays[key] = maxOf(archiveDays[key] ?: 0, channel.catchupDays)
+                    warmed[key] = GuideHistory.merge(snapshot.programmes[key].orEmpty(), entries, archiveDays.getValue(key), now)
+                }
+                if (warmed.isNotEmpty()) evidence = snapshot.copy(programmes = snapshot.programmes + warmed)
+            }
+            val channels = (if (warmed.isEmpty()) known else redZoneLoader(evidence, profile, quality, now)).filter { (hidden[it.id] ?: 0) <= now }
+            handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
+                if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
+                sportsChannels = channels.take(4)
+                sportsPanel.updateRedZone(channels, quality)
+                redZoneAutoPending = false; sportsPanel.finishTuning()
+                if (autoPlay && playRedZone(channels)) return@post
+                if (autoPlay) sportsPanel.matchingRedZone()
+                sportsPanel.showRedZoneStreams(channels) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) }
+            } }
+        }
+    }
     private fun rememberSportsReplays(game: SportsGame, choices: List<SportsReplay>) {
         val selected = source ?: return
         if (choices.isEmpty()) return

@@ -1275,14 +1275,14 @@ class SpareDeviceTest {
                 scenario.onActivity { activity -> assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
                 scenario.onActivity { activity ->
-                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000)), now, setOf("NFL")) }
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000)), now, SportsLeagues.byId.keys) }
                     pollSportsFixture(activity)
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
                 scenario.onActivity { activity ->
                     val games = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
                     games.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
-                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, status = "Updated score")), now, setOf("NFL")) }
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("nfl-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, status = "Updated score")), now, SportsLeagues.byId.keys) }
                     pollSportsFixture(activity)
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail").text.contains("Updated score") }
@@ -1359,7 +1359,7 @@ class SpareDeviceTest {
                         activity.liveSportsLoader = { scoresReady.await(5, java.util.concurrent.TimeUnit.SECONDS); snapshot }
                         activity.calendarSportsLoader = { day, leagues ->
                             val today = java.time.LocalDate.now()
-                            val start = if (day == today) System.currentTimeMillis() - 60000 else day.atTime(17, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            val start = if (day == today) maxOf(System.currentTimeMillis() - 60000, day.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()) else day.atTime(17, 0).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
                             LiveSportsSnapshot(listOf(LiveEvent("calendar-$day", setOf("nfl:BUF", "nfl:KC"), start, if (day == today) "in" else if (day.isBefore(today)) "post" else "pre", scores = mapOf("nfl:BUF" to "24", "nfl:KC" to "21"), league = "NFL")), System.currentTimeMillis(), leagues)
                         }
                         activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()

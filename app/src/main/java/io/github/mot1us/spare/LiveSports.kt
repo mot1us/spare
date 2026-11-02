@@ -14,7 +14,9 @@ data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, va
         fun league(event: LiveEvent) = event.league.ifBlank { event.teams.firstNotNullOfOrNull { SportsCatalog.byId[it]?.league }.orEmpty() }
         fun key(event: LiveEvent) = "${league(event)}:${event.id}"
         val incoming = update.events.associateBy(::key)
-        val retained = events.filter { key(it) !in incoming && (!complete || league(it) !in update.leagues) }
+        val retained = events.filter { key(it) !in incoming && (!complete || league(it) !in update.leagues) }.map { event ->
+            if (complete && event.state == "in") event.copy(state = "hold", status = "Saved score · checking live status") else event
+        }
         return LiveSportsSnapshot((retained + update.events).takeLast(2048), maxOf(checked, update.checked), leagues + update.leagues)
     }
     fun confirm(games: List<SportsGame>, now: Long): List<SportsGame> {

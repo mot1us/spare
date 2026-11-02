@@ -2,7 +2,7 @@
 
 ## 0.27.0 — 2026-11-01
 
-- Retain saved games while other leagues refresh, and reject renders for an old Sports tab; avoid temporarily showing only RedZone when returning to Sports.
+- Retain saved games while other leagues refresh, mark unrefreshed live scores as saved, and reject renders for an old Sports tab; avoid temporarily showing only RedZone when returning to Sports.
 
 - Add a compact live-score strip through OK → Scores, with saved top/bottom placement, pinning, followed-team priority and single-player game switching. Share Sports schedule caching and request limits; preserve remote focus and current playback during matching.
 - Clicking RedZone autoplays the highest-resolution cached or discovered feed. Hold OK for manual stream choices, also reachable from playback details.
