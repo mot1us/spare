@@ -802,6 +802,7 @@ class MainActivity : Activity() {
         })
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
+            ++sportsMatchEpoch; sportsMatchTask?.cancel(true); clearSportsPlayback()
             val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
@@ -1860,7 +1861,8 @@ class MainActivity : Activity() {
                 if (epoch == sportsEpoch) sportsComputing = false
                 if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
                 if (liveSnapshot !== liveSports || selectedTeam != sportsTeam) { sportsDirty = false; scheduleSports(); return@post }
-                selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
+                val browsing = sportsPanel.browsingGames
+                if (browsing) selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
                 val scanning = checkingSnapshot
                 val progress = when {
                     scanning -> "Updating sports…"
@@ -1868,7 +1870,7 @@ class MainActivity : Activity() {
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(store.sportsLeagues); sportsPanel.submit(games, followed, selectedTeam, progress, scanning)
-                selectedGame?.let(::showGameInfo) ?: run {
+                if (browsing) selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
                 queueSportsPrefetch(games)
@@ -2118,7 +2120,7 @@ class MainActivity : Activity() {
             }
             val result = SportsReplays.rank(choices, quality, favoriteSnapshot)
             handler.post {
-                if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || selectedGame?.key != game.key) return@post
+                if (closed || !started || generation != sourceEpoch || source?.id != selected.id || epoch != sportsMatchEpoch || !sportsVisible || !sportsPanel.showingStreams(game)) return@post
                 replayDiscovery?.remember(selected, sourceEpoch, snapshot, listings)
                 rememberSportsReplays(game, result)
                 sportsPanel.showReplays(game, result)
@@ -2292,16 +2294,16 @@ class MainActivity : Activity() {
         showGameStreamChoices(context, message)
     }
     private fun showGameStreamChoices(context: GameStreams, message: String) {
-        val selected = source ?: return
+        if (source == null) return
         val now = System.currentTimeMillis(); val lineup = guide.channels.associateBy { it.id }
         val choices = context.channels.mapNotNull { lineup[it.id] }.distinctBy { it.id }
             .filter { !unavailable.contains(it.id, now) && allowed(it) }
         stopSportsPrefetch(); clearSportsPlayback(); closeDetails()
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
-        sportsVisible = true; showGameInfo(context.game); applyFilter(); showGuide(true)
+        sportsVisible = true; showGameInfo(context.game); applyFilter()
+        sportsPanel.matching(context.game); showGuide(true)
         if (choices.none { it.id != current?.id }) { selectGame(context.game); return }
         sportsResults = GameStreams(context.game, choices); sportsChannels = choices.take(4)
-        sportsPanel.matching(context.game)
         sportsPanel.showStreams(context.game, choices, message) { channel -> (if (channel.id == current?.id) "Current · " else "") + gameStreamLabel(context.game, channel) }
     }
     private fun gameStreamLabel(game: SportsGame, channel: Channel): String =
@@ -2360,9 +2362,10 @@ class MainActivity : Activity() {
         if (fromScores) selectedGame = game else showGameInfo(game)
         val matchEpoch = ++sportsMatchEpoch
         if (!fromScores) sportsPanel.matching(game)
+        fun targetActive() = if (fromScores) scoreStrip.isVisible && scoreStripLoading == game.key else sportsVisible && sportsPanel.showingStreams(game)
         fun present(prepared: SportsStreamCache.Match) {
             val warmed = prepared.warmed; val matched = prepared.game
-            if (closed || !started || generation != sourceEpoch || source?.id != selected.id || (!fromScores && !sportsVisible) || fromScores && (!scoreStrip.isVisible || scoreStripLoading != game.key) || matchEpoch != sportsMatchEpoch || selectedGame?.key != game.key) return
+            if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !targetActive() || matchEpoch != sportsMatchEpoch) return
             val now = System.currentTimeMillis()
             if (prepared.needsRefresh(snapshot, guide, now)) { selectSportsGame(game, autoWatch, fromScores); return }
             val (mergedGuide, _) = prepared.mergeGuide(guide, now)
@@ -2406,13 +2409,13 @@ class MainActivity : Activity() {
             val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
             val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = autoWatch)
             if (cached != null && cached.autoReady) { handler.post { present(cached) }; return@submit }
-            fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && (sportsVisible || fromScores && scoreStripLoading == game.key)) {
+            fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && targetActive()) {
                 if (fromScores) scoreStrip.tuning(game.key, message) else sportsPanel.matchingProgress(game, message, checked, total)
                 if (reminderWatch && gameWatchPanel.isVisible) gameWatchPanel.update(message, checked, total)
             } } }
             val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached, quickTune = reminderWatch) }.getOrElse {
                 if (!Thread.currentThread().isInterrupted) handler.post {
-                    if (!closed && started && sourceEpoch == generation && matchEpoch == sportsMatchEpoch && (sportsVisible || fromScores && scoreStripLoading == game.key)) {
+                    if (!closed && started && sourceEpoch == generation && matchEpoch == sportsMatchEpoch && targetActive()) {
                         if (fromScores) { scoreStripLoading = null; scoreStrip.tuning(game.key, "Could not find stream · Retry"); return@post }
                         sportsPanel.showMatchNotice("Could not finish finding this game. Go back and try again.")
                         if (reminderWatch) { gameWatchPanel.dismiss(); applyFilter(); showGuide(true) }

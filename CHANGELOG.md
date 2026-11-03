@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.1 — 2026-11-02
+
+- Fix Other streams for this game stopping partway through a search when a background scoreboard refresh selects a different game. Keep the active game, hero, search progress and stream choices stable while scores update; retain playback and reuse existing alternatives immediately.
+
 ## 0.27.0 — 2026-11-01
 
 - Retain saved games while other leagues refresh, mark unrefreshed live scores as saved, and reject renders for an old Sports tab; avoid temporarily showing only RedZone when returning to Sports.

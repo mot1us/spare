@@ -28,8 +28,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun label(size: Float) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(Color.WHITE) }
     val teamsButton = button("Sports settings", chooseTeams).apply { tag = "sports-teams" }
     private val dateButton = button("Calendar") { chooseDate() }.apply { tag = "sports-date" }
-    private val todayButton = button("Today") { chooseTeam("today") }.apply { tag = "sports-today" }
-    private val liveButton = button("Live") { chooseTeam("live") }.apply { tag = "sports-live" }
+    private val todayButton = button("Today") { showGames(); chooseTeam("today") }.apply { tag = "sports-today" }
+    private val liveButton = button("Live") { showGames(); chooseTeam("live") }.apply { tag = "sports-live" }
     private val filtersButton = button("Stream quality", filters).apply { tag = "sports-filters"; visibility = GONE }
     private val scoresButton = button("Back to games") { showGames(); focusGames() }.apply { tag = "sports-scores"; visibility = GONE }
     private val actionRow = LinearLayout(context).apply { tag = "sports-actions"; visibility = GONE }
@@ -168,6 +168,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var streamLabels: (Channel) -> String = { it.name }
     private var watchMode = false
     val watching get() = watchMode
+    val browsingGames get() = !watchMode && !actionsOpen
+    fun showingStreams(game: SportsGame) = watchMode && matchingKey == game.key
     var watchChannel: (Channel) -> Unit = {}
     var secondChannel: (Channel) -> Unit = {}
     var presentationChanged: (() -> Unit)? = null
@@ -387,7 +389,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     private fun revealContent() {
         if (skeleton.visibility != VISIBLE) return
-        skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = true; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
+        skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = browsingGames; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
         gridArea.alpha = 0f; heroContent.alpha = 0f
         gridArea.animate().alpha(1f).setDuration(180).start(); heroContent.animate().alpha(1f).setDuration(180).start()
@@ -400,8 +402,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             scope = selected
             // A date refresh can finish after the viewer has already moved to a card.
             // Keep that visible focus and its hero in agreement when it still exists.
-            remembered = if (rows.hasFocus()) rows.findFocus()?.tag as? String else null
-            showGames()
+            if (browsingGames) {
+                remembered = if (rows.hasFocus()) rows.findFocus()?.tag as? String else null
+                showGames()
+            }
         }
         todayButton.isSelected = selected == "today" || selected == null
         liveButton.isSelected = selected == "live"
@@ -409,7 +413,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         dateButton.text = SportsSchedule.selectedDate(selected)?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d")) ?: "Calendar"
         if (scanning && next.isEmpty() && (initialReveal || !changedScope)) {
             if (!watchMode && !actionsOpen) { progress.isIndeterminate = true; progress.isVisible = true; status.text = "Updating sports…" }
-            if (initialReveal) { loadingGames = true; showSkeleton() }
+            if (initialReveal && browsingGames) { loadingGames = true; showSkeleton() }
             return
         }
         val first = initialReveal; initialReveal = false; loadingGames = false
@@ -430,12 +434,14 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
                 override fun areContentsTheSame(a: Int, b: Int) = old.getOrNull(a) == next.getOrNull(b)
             })
             games = next; displayedRedZone = showRedZone; diff.dispatchUpdatesTo(cards)
-            val chosen = next.firstOrNull { it.key == remembered } ?: featured(next, followed, System.currentTimeMillis())
-            if (showRedZone && (remembered == REDZONE || chosen == null)) showRedZoneHero()
-            else if (chosen != null) showHero(chosen)
-            else { featured = null; heroRecords.visibility = GONE; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
+            if (browsingGames) {
+                val chosen = next.firstOrNull { it.key == remembered } ?: featured(next, followed, System.currentTimeMillis())
+                if (showRedZone && (remembered == REDZONE || chosen == null)) showRedZoneHero()
+                else if (chosen != null) showHero(chosen)
+                else { featured = null; heroRecords.visibility = GONE; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
+            }
             if (hadFocus && cards.itemCount > 0) rows.postOnAnimation { if (input == inputEpoch && !watchMode && !actionsOpen && !rows.hasFocus()) focusAt(newKeys.indexOf(anchor).coerceAtLeast(0)) }
-        } else if (remembered != REDZONE) featured?.let { current -> next.firstOrNull { it.key == current.key }?.let(::showHero) }
+        } else if (browsingGames && remembered != REDZONE) featured?.let { current -> next.firstOrNull { it.key == current.key }?.let(::showHero) }
         rows.post { updateScrollHint() }
         if (pendingEnter && cards.itemCount > 0 && !watchMode && !actionsOpen) { pendingEnter = false; val input = pendingInput; post { if (input == inputEpoch && isShown) focusGames() } }
     }

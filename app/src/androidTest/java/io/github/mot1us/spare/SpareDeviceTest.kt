@@ -2775,6 +2775,72 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun playbackAlternativesFinishWhenScoreboardRefreshesToAnotherGame() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Playback alternatives", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val current = Channel("watched", "Sports One", "NFL", "${server.base}/channel1.mp4")
+            val alternate = Channel("alternate", "Sports Two", "NFL", "${server.base}/channel2.mp4")
+            val other = Channel("other", "Sports Three", "NFL", "${server.base}/channel3.mp4")
+            val programme = Programme(current.id, "NFL: Seahawks vs 49ers", now - 60000, now + 3600000)
+            val event = LiveEvent("watched", setOf("nfl:SEA", "nfl:SF"), now - 60000, league = "NFL")
+            var scores = LiveSportsSnapshot(listOf(event), now, SportsLeagues.byId.keys)
+            val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(current, other), mapOf(current.id to listOf(programme)))); store.markPlaylistRefreshed(source)
+            val release = java.util.concurrent.CountDownLatch(1)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null
+                waitFor(scenario) { val p = find<PlayerView>(it.window.decorView)?.player; player = p; p?.repeatMode = Player.REPEAT_MODE_ONE; p?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    activity.liveSportsLoader = { scores }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>(game.key)?.isShown == true }
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, game, true) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-panel")?.isShown == false && player!!.isPlaying }
+                var playing = ""
+                val blocked = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity { activity ->
+                    playing = player!!.currentMediaItem!!.mediaId
+                    val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val guide = guideField.get(activity) as Guide
+                    guideField.set(activity, guide.copy(channels = guide.channels + alternate, programmes = guide.programmes + (alternate.id to listOf(programme.copy(channel = alternate.id)))))
+                    scores = scores.copy(events = listOf(event.copy(id = "different-game", teams = setOf("nfl:BUF", "nfl:KC"))))
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    val worker = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    worker.submit { blocked.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+                }
+                assertTrue(blocked.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }
+                device.pressDPadCenter()
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(it) }
+                waitFor(scenario) { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")
+                    @Suppress("UNCHECKED_CAST") val games = SportsPanel::class.java.getDeclaredField("games").apply { isAccessible = true }.get(panel) as List<SportsGame>
+                    games.singleOrNull()?.eventId == "different-game" && !MainActivity::class.java.getDeclaredField("sportsComputing").apply { isAccessible = true }.getBoolean(activity)
+                }
+                scenario.onActivity { activity ->
+                    val selected = MainActivity::class.java.getDeclaredField("selectedGame").apply { isAccessible = true }.get(activity) as SportsGame?
+                    assertEquals("Scoreboard refresh cannot replace the active alternatives search", game.key, selected?.key)
+                    assertEquals("Searching alternatives keeps the original stream", playing, player!!.currentMediaItem!!.mediaId)
+                }
+                release.countDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:alternate")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-title").text.contains("Seattle"))
+                    assertEquals(playing, player!!.currentMediaItem!!.mediaId)
+                    activity.window.decorView.findViewWithTag<View>("sports-stream:alternate").performClick()
+                }
+                waitFor(scenario) { player!!.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && player!!.isPlaying }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }; device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:watched")?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-stream:alternate")?.isShown == true }
+                scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player); assertEquals("/channel2.mp4", player!!.currentMediaItem!!.localConfiguration!!.uri.path) }
+            } } finally { release.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
