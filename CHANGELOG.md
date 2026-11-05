@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.3 — 2026-11-04
+
+- Combine channel OK-menu actions into one consistent icon row, focused on Sports overlay. Remove manual Reconnect; recent channels use hold OK to add a screen. Keep VOD title/episode details alongside the action row.
+- Show today’s final scores after live games in Sports overlay, honoring hidden-final-score preferences. Stop navigation at both ends and hide the overlay immediately over Settings, Sports settings and Calendar.
+- A reminder now refreshes the complete scoreboard instead of treating its single event as a recent full refresh; show a small loading indicator while other games arrive.
+
 ## 0.27.2 — 2026-11-04
 
 - Render Sports stream and replay results with the same channel rows as the Guide: channel logos, theme spacing and focus, programme titles, and provider/quality details. Hold OK on a live result to add it to multiview.

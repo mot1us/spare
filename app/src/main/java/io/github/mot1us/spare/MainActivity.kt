@@ -202,8 +202,8 @@ class MainActivity : Activity() {
     private fun publishSportsSchedule(snapshot: LiveSportsSnapshot, day: java.time.LocalDate?, request: Int, cached: Boolean = false) {
         if (snapshot.events.isEmpty() && snapshot.leagues.isEmpty()) return
         handler.post {
-            if (!closed && request == liveSportsRequest && liveSportsDay == day && (!cached || liveSports.events.isEmpty())) {
-                liveSports = if (cached) snapshot else liveSports.mergeRefresh(snapshot); scheduleSports(); updateScoreStrip()
+            if (!closed && request == liveSportsRequest && liveSportsDay == day && (!cached || liveSports.leagues.isEmpty())) {
+                liveSports = liveSports.mergeRefresh(snapshot); scheduleSports(); updateScoreStrip()
             }
         }
     }
@@ -860,9 +860,9 @@ class MainActivity : Activity() {
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { closeDetails(); showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openCatchup(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, { current?.let(::tune) }, ::showOtherGameStreams, ::watchVodFromBeginning, ::openScoreStrip)
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openCatchup(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, ::showOtherGameStreams, ::watchVodFromBeginning, ::openScoreStrip)
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
-        scoreStrip = SportsScoreStrip(this, ::button, { game -> scoreStripLoading = game.key; scoreStrip.tuning(game.key, "Finding stream…"); selectSportsGame(game, true, fromScores = true) },
+        scoreStrip = SportsScoreStrip(this, ::button, ::selectOverlayGame,
             { cancelScoreTune(); scoreStripOpen = false; root.isFocusableInTouchMode = true; root.requestFocus(); syncScoreStrip() },
             { store.scoreOverlayPinned = false; cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend(); root.isFocusableInTouchMode = true; root.requestFocus() })
         root.addView(scoreStrip, FrameLayout.LayoutParams(-1, dp(64), Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(18); topMargin = dp(18) })
@@ -1021,6 +1021,18 @@ class MainActivity : Activity() {
         if (current == null || onDemand != null || multiview.active) return
         closeDetails(); store.scoreOverlayPinned = true; scoreStripOpen = true; syncScoreStrip(); scoreStrip.enter()
     }
+    private fun suspendSportsOverlay() {
+        if (!::scoreStrip.isInitialized) return
+        cancelScoreTune(); scoreStripOpen = false; scoreStripEntryPressed = false; scoreStrip.suspend()
+    }
+    private fun selectOverlayGame(game: SportsGame) {
+        if (game.state == "post") {
+            suspendSportsOverlay(); sportsVisible = true; clearGuideSearch(); applyFilter(); showGuide(true)
+            showGameInfo(game); sportsPanel.openGameActions(game)
+        } else {
+            scoreStripLoading = game.key; scoreStrip.tuning(game.key, "Finding stream…"); selectSportsGame(game, true, fromScores = true)
+        }
+    }
     private fun cancelScoreTune() {
         if (scoreStripLoading != null) { ++sportsMatchEpoch; sportsMatchTask?.cancel(true); scoreStripLoading = null }
         if (::scoreStrip.isInitialized) scoreStrip.tuning(null)
@@ -1028,7 +1040,7 @@ class MainActivity : Activity() {
     private fun syncScoreStrip() {
         if (!::scoreStrip.isInitialized || !::library.isInitialized) return
         val show = started && !closed && !guideVisible && current != null && onDemand == null && !multiview.active && !details.isVisible &&
-            settingsPanel?.opened != true && !library.opened && !searchPanel.isVisible && !vodStartPanel.isVisible && !retryPanel.isVisible &&
+            settingsPanel?.opened != true && sportsManager?.opened != true && sportsCalendar?.opened != true && !library.opened && !searchPanel.isVisible && !vodStartPanel.isVisible && !retryPanel.isVisible &&
             !reminderBanner.isVisible && !gameWatchPanel.isVisible && (scoreStripOpen || store.scoreOverlayPinned)
         if (!show) { if (scoreStrip.isVisible) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; return }
         val wasVisible = scoreStrip.isVisible
@@ -1043,11 +1055,11 @@ class MainActivity : Activity() {
     private fun updateScoreStrip() {
         if (!::scoreStrip.isInitialized || !scoreStrip.isVisible) return
         val now = System.currentTimeMillis(); val leagues = store.sportsLeagues; val followed = store.followedTeams
-        val preferences = leagues.sorted().joinToString() + followed.sorted().joinToString() + watchingSports?.game?.key.orEmpty() + liveSportsChecking + liveSportsDay
+        val preferences = leagues.sorted().joinToString() + followed.sorted().joinToString() + watchingSports?.game?.key.orEmpty() + liveSportsChecking + liveSportsDay + store.hideCompletedScores
         if (scoreStripSnapshot === liveSports && scoreStripPreferences == preferences && now < scoreStripRefreshAt) return
         scoreStripSnapshot = liveSports; scoreStripPreferences = preferences; scoreStripRefreshAt = now + 30000
-        val games = if (liveSportsDay == null) SportsScoreStrip.liveGames(liveSports, leagues, followed, now) else emptyList()
-        scoreStrip.submit(games, watchingSports?.game?.key, liveSportsChecking || liveSportsDay != null)
+        val games = if (liveSportsDay == null) SportsScoreStrip.todayGames(liveSports, leagues, followed, now) else emptyList()
+        scoreStrip.submit(games, watchingSports?.game?.key, liveSportsChecking || liveSportsDay != null, store.hideCompletedScores)
     }
     private fun switchMode(sports: Boolean) {
         clearGuideSearch(); sportsVisible = sports; if (sports) sportsPanel.loading("Finding live games…"); applyFilter(); showGuide(true)
@@ -1807,12 +1819,13 @@ class MainActivity : Activity() {
         val game = reminder.copy(state = "in")
         val now = System.currentTimeMillis()
         val event = LiveEvent(reminder.eventId, reminder.teams.map { it.id }.toSet(), reminder.start, reminder.state, reminder.networks, reminder.scores, reminder.logos, reminder.status, league = reminder.leagueId, records = reminder.records)
-        liveSports = LiveSportsSnapshot((liveSports.events.filterNot { it.id == event.id && it.league == event.league } + event), now, liveSports.leagues + game.leagueId)
-        selectedGame = game; sportsTeam = "today"; liveSportsAttempt = now
+        liveSports = liveSports.copy(events = liveSports.events.filterNot { it.id == event.id && it.league == event.league } + event)
+        selectedGame = game; sportsTeam = "today"
         reminderWatchReturnSports = sportsVisible
         dismissGameReminder(); multiview.close(); sportsVisible = true; clearGuideSearch(); showGuide(false)
         gameWatchPanel.open(game); root.bringChildToFront(gameWatchPanel)
         selectGame(game, autoWatch = true)
+        checkLiveSports(force = true)
     }
     private fun cancelReminderWatch() {
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); sportsMatchTask = null
@@ -1904,6 +1917,7 @@ class MainActivity : Activity() {
         }
     }
     private fun openSportsCalendar() {
+        suspendSportsOverlay()
         showGuide(false); nowPlaying.hide(immediate = true)
         val panel = sportsCalendar ?: SportsCalendarPanel(this, ::button, { day ->
             sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty(); sportsPanel.home()
@@ -1916,7 +1930,7 @@ class MainActivity : Activity() {
             }
         }
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
-        root.bringChildToFront(panel); panel.open(SportsSchedule.selectedDate(sportsTeam) ?: java.time.LocalDate.now())
+        root.bringChildToFront(panel); panel.open(SportsSchedule.selectedDate(sportsTeam) ?: java.time.LocalDate.now()); syncScoreStrip()
     }
     private fun calendarGames(snapshot: LiveSportsSnapshot, day: java.time.LocalDate) = SportsSchedule.games(snapshot, Guide.EMPTY, "date:$day", emptySet(), System.currentTimeMillis(), matchChannels = false)
         .filter { it.leagueId in store.sportsLeagues && (!store.sportsFollowedOnly || it.teams.any { team -> team.id in store.followedTeams }) }
@@ -1934,6 +1948,7 @@ class MainActivity : Activity() {
         showGuide(true); sportsPanel.focusCalendar()
     }
     private fun sportsTeams() {
+        suspendSportsOverlay()
         sportsManagerReturnGuide = guideVisible; sportsManagerReturnSettings = settingsPanel?.opened == true
         if (sportsManagerReturnSettings) settingsPanel?.visibility = View.GONE
         showGuide(false); nowPlaying.hide(immediate = true); closeDetails()
@@ -1942,7 +1957,7 @@ class MainActivity : Activity() {
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
-        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Stream quality", "Leagues") + SportsLeagues.all.map { it.name })
+        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Stream quality", "Leagues") + SportsLeagues.all.map { it.name }); syncScoreStrip()
     }
     private fun openSportsQuality() {
         if (sportsManager?.opened != true) sportsTeams()
@@ -2488,8 +2503,8 @@ class MainActivity : Activity() {
         if (onDemand != null) { showDemandControls(); return }
         if (current == null) return
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
-        if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }
-        details.resumeImages(); refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; (if (details.gameStreamsButton.isVisible) details.gameStreamsButton else details.guideButton).requestFocus()
+        suspendSportsOverlay()
+        details.resumeImages(); refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.focusActions()
         handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000)
     }
     private fun closeDetails() {
@@ -2576,6 +2591,7 @@ class MainActivity : Activity() {
         if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         val existing = settingsPanel
         if (existing?.opened == true) { existing.focusNavigation(); return }
+        suspendSportsOverlay()
         settingsReturnGuide = guideVisible; settingsReturnLibrary = library.opened; ++focusEpoch; handler.removeCallbacks(backHold)
         showGuide(false); nowPlaying.hide(immediate = true); previewCaption.visibility = View.GONE
         val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
@@ -2583,6 +2599,7 @@ class MainActivity : Activity() {
         showNavigation("settings")
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
         panel.open(listOf("Playlists", "Local channels", "Playback", "Theme", "Guide", "Categories", "Sports", "Metadata", "Updates", "About Spare", "Open-source licenses", "Exit Spare"))
+        syncScoreStrip()
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
@@ -2595,7 +2612,7 @@ class MainActivity : Activity() {
         if (page != "Local channels") localEditor = null
         val parent = when (page) {
             "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
-            "Score overlay" -> "Sports"
+            "Sports overlay" -> "Sports"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
             else -> null
@@ -2709,14 +2726,14 @@ class MainActivity : Activity() {
                 } }
             }
             "Subtitles" -> renderCaptionSettings()
-            "Score overlay" -> {
-                panel.page(page, "Open Scores from a live channel’s OK menu; it stays visible until closed. Press Up to focus it, Left/Right to browse games, OK to watch, and Back to return focus to playback.")
-                panel.action("Show scores", if (store.scoreOverlayPinned) "Visible until closed" else "Open from OK → Scores", store.scoreOverlayPinned) { store.scoreOverlayPinned = !store.scoreOverlayPinned; syncScoreStrip(); refresh("Show scores") }
+            "Sports overlay" -> {
+                panel.page(page, "Open Sports overlay from a live channel’s OK menu; it stays visible until closed. Press Up to focus it, Left/Right to browse games, OK to watch, and Back to return focus to playback.")
+                panel.action("Show sports overlay", if (store.scoreOverlayPinned) "Visible until closed" else "Open from OK → Sports overlay", store.scoreOverlayPinned) { store.scoreOverlayPinned = !store.scoreOverlayPinned; syncScoreStrip(); refresh("Show sports overlay") }
                 listOf("Top", "Bottom").forEach { position -> panel.action(position, selected = store.scoreOverlayPosition == position) { store.scoreOverlayPosition = position; syncScoreStrip(); refresh(position) } }
             }
             "Sports" -> {
                 panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear at the scheduled start over playback while Spare is open. Schedule updates adjust rescheduled games. Watch best prefers the highest-resolution matching game stream. Known FPS breaks resolution ties. Broadcaster matches are labelled when game coverage is unconfirmed. All qualities remain playable.")
-                panel.action("Score overlay", "Compact live scores · ${store.scoreOverlayPosition}" ) { renderSettingsPage("Score overlay"); panel.focusContent() }
+                panel.action("Sports overlay", "Compact live scores · ${store.scoreOverlayPosition}" ) { renderSettingsPage("Sports overlay"); panel.focusContent() }
                 panel.action("Play best stream on selection", "Skip live-game actions and play the highest-resolution match. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts. FPS is learned from normal playback.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
                 panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
                 panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }

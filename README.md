@@ -11,7 +11,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Local guide tab combining up to eight cities/states, with suggestions and cached station matches.
 - Live preview or a guide with adjustable opacity and programme artwork from your provider or optional metadata.
 - Switchable frame-rate matching, audio tracks, and per-channel subtitles.
-- Compact live scores through OK → Scores, automatically pinned until closed, with top/bottom placement; Up focuses the bar, Left/Right browses, and OK tunes a game. RedZone tiles autoplay; hold OK for stream choices.
+- Sports overlay through OK → Sports overlay, showing today’s live and final scores, automatically pinned until closed, with top/bottom placement; Up focuses the bar, Left/Right browses, and OK tunes a game. RedZone tiles autoplay; hold OK for stream choices.
 - Optional automatic recovery switches a buffering game to another matched feed; configure it under Playback.
 - Sports stream selection by resolution first, with known FPS as a tie-breaker. FPS is learned during playback without extra stream probes; all qualities remain playable.
 - Sports hub opening on Today, with illustrated game cards, a card grid, featured game artwork, live/final scores, followed teams, saved game reminders, Watch best stream selection, completed-game catch-up and optional hidden final scores. NFL, MLB, NBA, NHL, Premier League, MLS and Champions League.
@@ -30,7 +30,7 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Where | Control | Action |
 | --- | --- | --- |
 | Watching live | Up / Down | Change channel |
-| Watching live | OK | Details, recent channels, and other streams for the current game |
+| Watching live | OK | One row of icon actions, programme details, and recent channels |
 | Watching live | Left | Previous watched channel |
 | Watching live | Back | Open guide |
 | Guide | OK | Watch selected channel full screen |

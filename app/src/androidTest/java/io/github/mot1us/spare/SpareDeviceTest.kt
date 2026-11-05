@@ -670,7 +670,7 @@ class SpareDeviceTest {
                     assertEquals("A failed cached pick falls through once to the next game stream", 1, server.requests["/live/test/test-secret/2.ts"])
                     scenario.onActivity { assertSame("Watch Best uses explicit provider FHD+/60 data before the first playback measurement", playing, find<PlayerView>(it.window.decorView)!!.player) }
                     device.pressDPadCenter()
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }
+                    focusDetailsAction(scenario, "channel-game-streams")
                     device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:provider-game")?.isShown == true }
                     scenario.onActivity { activity ->
@@ -873,7 +873,7 @@ class SpareDeviceTest {
                     field.set(activity, guide.copy(programmes = guide.programmes + (guide.key(channel) to listOf(Programme(guide.key(channel), "NFL: Seahawks vs 49ers", now - 60000, now + 3600000)))))
                 }
                 device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }
+                focusDetailsAction(scenario, "channel-game-streams")
                 device.pressBack()
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED).moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
                 scenario.onActivity { activity ->
@@ -899,10 +899,9 @@ class SpareDeviceTest {
                     assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player)
                     before = samePlayer!!.currentMediaItem!!.mediaId
                     MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity)
-                    activity.window.decorView.findViewWithTag<View>("channel-reconnect").performClick()
+                    assertNull("Reconnect is no longer a playback action", activity.window.decorView.findViewWithTag<View>("channel-reconnect"))
+                    assertEquals("Opening details preserves playback", before, samePlayer!!.currentMediaItem!!.mediaId)
                 }
-                waitFor(scenario) { samePlayer?.let { p -> p.currentMediaItem?.mediaId != before && p.isPlaying } == true }
-                assertEquals(3, server.requests["/channel1.ts"])
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -997,12 +996,12 @@ class SpareDeviceTest {
                 device.pressDPadLeft(); waitFor(scenario) { store.last(source) == "xc:3" }
                 assertEquals("xc:1", store.previous(source))
                 device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("recent-add:xc:1")?.isShown == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("recent-watch:xc:1")?.isShown == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle()
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "details-multiview.png"))
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("recent-watch:xc:1").isFocusable)
-                    activity.window.decorView.findViewWithTag<View>("recent-add:xc:1").performClick()
+                    activity.window.decorView.findViewWithTag<View>("recent-watch:xc:1").performLongClick()
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
@@ -1822,7 +1821,7 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
                     val lookupStarted = android.os.SystemClock.elapsedRealtime()
                     scenario.onActivity { activity ->
-                        val label = activity.window.decorView.findViewWithTag<android.widget.Button>("channel-vod-start").text.toString()
+                        val label = activity.window.decorView.findViewWithTag<View>("channel-vod-start").contentDescription.toString()
                         assertTrue(label.contains(if (title.startsWith("Fixture series")) "Fixture series · S01E02" else "Fixture movie (2025)"))
                     }
                     scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-catchup").isShown); val player = find<PlayerView>(it.window.decorView)!!.player!!
@@ -1876,7 +1875,8 @@ class SpareDeviceTest {
                 server.finishVodCatalog.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
                 scenario.onActivity { activity ->
-                    assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-status").isShown)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("vod-match-status").contentDescription.toString().contains("Other movie 16"))
                     assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                 }
             }
@@ -2686,7 +2686,7 @@ class SpareDeviceTest {
             val channels = (1..2).map { Channel("score$it", "Sports feed $it", "Sports", "${server.base}/channel$it.mp4") }
             val one = LiveEvent("one", setOf("nfl:SEA", "nfl:SF"), now - 1000, scores = mapOf("nfl:SEA" to "7", "nfl:SF" to "3"), league = "NFL")
             val two = LiveEvent("two", setOf("nfl:BUF", "nfl:KC"), now - 1000, scores = mapOf("nfl:BUF" to "10", "nfl:KC" to "7"), league = "NFL")
-            var snapshot = LiveSportsSnapshot(listOf(one, two, one.copy(id = "final", state = "post"), two.copy(id = "upcoming", state = "pre", start = now + 3600000)), now, setOf("NFL"))
+            var snapshot = LiveSportsSnapshot(listOf(one, two, one.copy(id = "final", state = "post", start = maxOf(now - 60000, java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())), two.copy(id = "upcoming", state = "pre", start = now + 3600000)), now, setOf("NFL"))
             val programmes = mapOf(channels[0].id to listOf(Programme(channels[0].id, "NFL: Seahawks vs 49ers", now - 1000, now + 3600000)), channels[1].id to listOf(Programme(channels[1].id, "NFL: Bills vs Chiefs", now - 1000, now + 3600000)))
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -2704,7 +2704,7 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val strip = activity.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip")
                     assertEquals(android.view.Gravity.BOTTOM, (strip.layoutParams as android.widget.FrameLayout.LayoutParams).gravity)
-                    assertEquals(2, activity.window.decorView.findViewWithTag<RecyclerView>("score-strip-games").adapter!!.itemCount)
+                    assertEquals(3, activity.window.decorView.findViewWithTag<RecyclerView>("score-strip-games").adapter!!.itemCount)
                     assertEquals(original, player!!.currentMediaItem!!.mediaId)
                     assertNull(activity.window.decorView.findViewWithTag<View>("score-strip-pin"))
                     assertTrue("Opening scores pins automatically", SecureStore(context).scoreOverlayPinned)
@@ -2815,7 +2815,7 @@ class SpareDeviceTest {
                 }
                 assertTrue(blocked.await(2, java.util.concurrent.TimeUnit.SECONDS))
                 device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }
+                focusDetailsAction(scenario, "channel-game-streams")
                 device.pressDPadCenter()
                 scenario.onActivity { MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(it) }
                 waitFor(scenario) { activity ->
@@ -2836,7 +2836,7 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("sports-stream:alternate").performClick()
                 }
                 waitFor(scenario) { player!!.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" && player!!.isPlaying }
-                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }; device.pressDPadCenter()
+                device.pressDPadCenter(); focusDetailsAction(scenario, "channel-game-streams"); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:watched")?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-stream:alternate")?.isShown == true }
                 scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player); assertEquals("/channel2.mp4", player!!.currentMediaItem!!.localConfiguration!!.uri.path) }
             } } finally { release.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
@@ -2880,7 +2880,7 @@ class SpareDeviceTest {
                 }
                 assertTrue("The team channel's owning provider is queried", second.requestedEpgTargets.any { it.contains("stream_id=9") })
                 assertNull("A radio match must never be auto-tuned", first.requests["/channel2.mp4"])
-                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }; device.pressDPadCenter()
+                device.pressDPadCenter(); focusDetailsAction(scenario, "channel-game-streams"); device.pressDPadCenter()
                 val rowTag = "sports-stream:playlist:${b.id}:xc:9"
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>(rowTag)?.isShown == true }
                 scenario.onActivity { activity ->
@@ -2891,6 +2891,89 @@ class SpareDeviceTest {
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-results.png"))
             } } finally { store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
         } }
+    }
+
+    private fun focusDetailsAction(scenario: ActivityScenario<MainActivity>, tag: String) {
+        waitFor(scenario) { it.window.decorView.findViewWithTag<View>(tag)?.isShown == true }
+        scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>(tag).requestFocus()) }
+    }
+
+    @Test fun playbackActionsAndTodaysOverlayStayBoundedAndHideInSettings() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Overlay menu fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val channel = Channel("overlay", "Sports feed", "Sports", "${server.base}/channel1.mp4")
+            val one = LiveEvent("overlay-live", setOf("nfl:SEA", "nfl:SF"), now - 1000, league = "NFL")
+            val two = LiveEvent("overlay-other", setOf("nfl:BUF", "nfl:KC"), now - 1000, league = "NFL")
+            val finalStart = maxOf(now - 7200000, java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())
+            val final = LiveEvent("overlay-final", setOf("nba:BOS", "nba:MIL"), finalStart, "post", scores = mapOf("nba:BOS" to "123", "nba:MIL" to "112"), league = "NBA")
+            val snapshot = LiveSportsSnapshot(listOf(one, two, final), now, SportsLeagues.byId.keys)
+            val game = SportsSchedule.games(LiveSportsSnapshot(listOf(one), now, setOf("NFL")), Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(channel), mapOf(channel.id to listOf(Programme(channel.id, "NFL: Seahawks vs 49ers", now - 1000, now + 3600000))))); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null; val polls = java.util.concurrent.atomic.AtomicInteger()
+                waitFor(scenario) { player = find<PlayerView>(it.window.decorView)?.player; player?.repeatMode = Player.REPEAT_MODE_ONE; player?.isPlaying == true }
+                device.pressBack()
+                scenario.onActivity { activity ->
+                    activity.liveSportsLoader = { polls.incrementAndGet(); snapshot.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSportsAttempt").apply { isAccessible = true }.setLong(activity, now)
+                    MainActivity::class.java.getDeclaredField("reminderGame").apply { isAccessible = true }.set(activity, game.copy(state = "pre"))
+                    MainActivity::class.java.getDeclaredMethod("watchGameReminder").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { activity ->
+                    val scores = MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.get(activity) as LiveSportsSnapshot
+                    scores.events.any { it.id == two.id } && player?.isPlaying == true && activity.window.decorView.findViewWithTag<View>("game-watch-panel")?.isShown != true
+                }
+                assertEquals("A reminder forces the full scoreboard refresh despite the minute cooldown", 1, polls.get())
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-scores")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    val row = activity.window.decorView.findViewWithTag<ViewGroup>("playback-actions")
+                    assertTrue(row.childCount >= 8)
+                    repeat(row.childCount) { i -> val button = row.getChildAt(i) as android.widget.Button; assertNotNull(button.compoundDrawables[1]); assertEquals(row, button.parent) }
+                    assertNull(activity.window.decorView.findViewWithTag<View>("channel-reconnect"))
+                    assertEquals("Sports overlay", activity.window.decorView.findViewWithTag<android.widget.Button>("channel-scores").text.toString())
+                }
+                device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "playback-actions.png"))
+                repeat(3) { device.pressDPadLeft() }
+                scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-scores").hasFocus()) }
+                device.pressDPadRight(); scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-guide-action").hasFocus()) }
+                device.pressDPadRight(); device.pressDPadDown(); scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("channel-game-streams").hasFocus()) }
+                device.pressDPadLeft(); device.pressDPadLeft(); device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:overlay-live")?.hasFocus() == true }
+                scenario.onActivity { assertEquals(3, it.window.decorView.findViewWithTag<RecyclerView>("score-strip-games").adapter!!.itemCount) }
+                repeat(4) { device.pressDPadLeft() }
+                scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("score-game:NFL:overlay-live").hasFocus()) }
+                device.pressDPadRight(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final")?.hasFocus() == true }
+                scenario.onActivity { assertTrue(it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final").contentDescription.toString().contains("FINAL")) }
+                scenario.onActivity { activity -> store.hideCompletedScores = true; MainActivity::class.java.getDeclaredMethod("updateScoreStrip").apply { isAccessible = true }.invoke(activity) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final")?.contentDescription.toString().contains("Scores hidden") }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final").contentDescription.toString().contains("123"))
+                    store.hideCompletedScores = false; MainActivity::class.java.getDeclaredMethod("updateScoreStrip").apply { isAccessible = true }.invoke(activity)
+                }
+                device.pressDPadRight(); repeat(4) { device.pressDPadRight() }
+                scenario.onActivity { assertTrue("The right edge stops at Close instead of wrapping", it.window.decorView.findViewWithTag<View>("score-strip-close").hasFocus()) }
+                device.pressDPadLeft(); device.pressBack()
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("playbackMenu").apply { isAccessible = true }.invoke(activity)
+                    assertEquals("Settings hides the elevated overlay in the same frame", View.GONE, activity.window.decorView.findViewWithTag<View>("sports-score-strip").visibility)
+                }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-score-strip")?.isShown == true }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("sportsTeams").apply { isAccessible = true }.invoke(activity)
+                    assertEquals(View.GONE, activity.window.decorView.findViewWithTag<View>("sports-score-strip").visibility)
+                    MainActivity::class.java.getDeclaredMethod("closeSportsManager").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-score-strip")?.isShown == true }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final")?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-actions")?.isShown == true && it.window.decorView.findViewWithTag<TextView>("sports-hero-badge")?.text.toString().contains("FINAL") }
+                scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player); assertTrue(player!!.isPlaying) }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-overlay-final.png"))
+            } } finally { store.scoreOverlayPinned = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
     }
 
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
