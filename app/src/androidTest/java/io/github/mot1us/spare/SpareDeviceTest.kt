@@ -2635,11 +2635,11 @@ class SpareDeviceTest {
                 }
                 finish.countDown()
                 val highId = "playlist:${b.id}:sky"
-                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-stream:$highId")?.text.toString().contains("50 fps") && it.window.decorView.findViewWithTag<TextView>("sports-status").text.toString().contains("2 RedZone channels") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:$highId")?.contentDescription.toString().contains("50 fps") && it.window.decorView.findViewWithTag<TextView>("sports-status").text.toString().contains("2 RedZone channels") }
                 scenario.onActivity { activity ->
                     assertTrue("Refinement preserves the selected row", activity.window.decorView.findViewWithTag<View>("sports-stream:redzone").hasFocus())
                     val rows = activity.window.decorView.findViewWithTag<RecyclerView>("sports-streams")
-                    assertEquals("Higher resolution beats 60 FPS at a lower resolution", "sports-stream:$highId", (rows.getChildViewHolder(rows.getChildAt(0)).itemView as ViewGroup).getChildAt(0).tag)
+                    assertEquals("Higher resolution beats 60 FPS at a lower resolution", "sports-stream:$highId", rows.getChildViewHolder(rows.getChildAt(0)).itemView.tag)
                     activity.window.decorView.findViewWithTag<View>("sports-stream:$highId").performClick()
                 }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') } == true }
