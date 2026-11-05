@@ -289,7 +289,7 @@ class SpareDeviceTest {
                 device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
                 waitFor(scenario) { device.hasObject(By.textContains("World News")) }
-                assertNull("Xtream must not require the whole provider XMLTV", server.requests["/xmltv.php"])
+                assertNull("A provider without XMLTV IDs keeps its per-channel fallback", server.requests["/xmltv.php"])
                 scenario.onActivity { activity -> assertEquals(25001, channelList(activity)!!.adapter!!.itemCount) }
                 val expected = listOf("USA | News", "CA | News", "UK | News", "US | MLB")
                 waitFor(scenario) { File(context.filesDir, "lineup-${source.id}.enc").exists() }
@@ -303,6 +303,52 @@ class SpareDeviceTest {
                 assertEquals(expected, store.cached(source)?.categoryOrder)
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun fullProviderEpgWarmsUnvisitedChannelsAndSurvivesRestart() {
+        FixtureServer(channelCount = 96, fullGuide = true).use { server ->
+            val source = Source(name = "Full guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            val lineup = Importers.xtream(source)
+            store.cache(source, Guide(lineup.channels.map { it.copy(xmltvId = "") }, emptyMap())); store.markPlaylistRefreshed(source)
+            // Simulate an upgrade: the saved lineup predates preservation of XMLTV IDs.
+            context.getSharedPreferences("view-state", android.content.Context.MODE_PRIVATE).edit().remove("epg-mapping-${source.id}").apply()
+            assertEquals(6, store.refreshPolicy(source).epgHours)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null; var media = ""
+                waitFor(scenario) { player = find<PlayerView>(it.window.decorView)?.player; player?.repeatMode = Player.REPEAT_MODE_ONE; player?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    media = player!!.currentMediaItem!!.mediaId
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
+                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 21000, true, 6000)
+                }
+                try { waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:96"]?.isNotEmpty() == true && store.fullEpgAttempted(source)
+                } } catch (failure: AssertionError) { throw AssertionError("Full guide: requests=${server.requests}, mapped=${store.epgMappingReady(source)}, attempted=${store.fullEpgAttempted(source)}, error=${store.refreshError(source)}", failure) }
+                assertEquals("One full download fills channels never visited", 1, server.requests["/xmltv.php"])
+                assertEquals("The old lineup recovered the provider XMLTV mapping", "test96", store.cachedLineup(source)!!.channels.last().xmltvId)
+                assertFalse(server.requestedEpgTargets.any { "stream_id=96&" in it || it.endsWith("stream_id=96") })
+                scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player); assertEquals(media, player!!.currentMediaItem!!.mediaId) }
+                assertTrue(store.cachedProgrammes(source)["xc:96"].orEmpty().isNotEmpty())
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("focusChannelAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, 95)
+                }
+                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.nativeId == "xc:96" }
+                scenario.onActivity { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    assertNotNull(guide.at(guide.channels.first { it.nativeId == "xc:96" }, System.currentTimeMillis()))
+                }
+                scenario.recreate()
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:96"].orEmpty().isNotEmpty()
+                }
+                assertEquals("Saved guide is reused across launches", 1, server.requests["/xmltv.php"])
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
 
@@ -3012,7 +3058,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -3026,7 +3072,7 @@ class SpareDeviceTest {
         private val captionTransport by lazy { EmbeddedCaptionFixture.add(repeatTransport(avTransport, 8), embeddedCaptions == 708) }
         private val longTransport by lazy { repeatTransport(avTransport, liveCycles) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
-            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"test1","tv_archive":1,"tv_archive_duration":7}"""
+            """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"${if (fullGuide) "test$id" else ""}","tv_archive":1,"tv_archive_duration":7}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
             val bitmap = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
@@ -3059,8 +3105,8 @@ class SpareDeviceTest {
             val encodedTitle = java.util.Base64.getEncoder().encodeToString(programmeTitle.toByteArray())
             shortEpg = """{"epg_listings":[{"title":"$encodedTitle","description":"U3BhcmUgcHJvZ3JhbW1lIGd1aWRlIHRlc3Qu","start_timestamp":"${now / 1000}","stop_timestamp":${(now + 3600000) / 1000}}]}""".toByteArray()
             val format = DateTimeFormatter.ofPattern("uuuuMMddHHmmss Z").withZone(ZoneOffset.UTC)
-            xml = ("<tv>" + (1..8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
-                "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${listOf("World News", "Live Report", "Evening Update")[slot % 3]}</title><desc>Spare playback and guide test fixture.</desc></programme>"
+            xml = ("<tv>" + (1..if (fullGuide) channelCount else 8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
+                "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${if (programmeTitle == "World News") listOf("World News", "Live Report", "Evening Update")[slot % 3] else programmeTitle}</title><desc>Spare playback and guide test fixture.</desc></programme>"
             } } + "</tv>").toByteArray()
             fun serve(client: java.net.Socket) {
                 clients.add(client)

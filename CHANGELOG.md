@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.4 — 2026-11-04
+
+- Cache the provider’s full XMLTV guide in the background after playback settles, so unvisited categories already have programme listings. Preserve Xtream XMLTV IDs without changing existing channel or catch-up identities; upgrade old lineups once.
+- Stream bounded plain/gzipped XMLTV without buffering the complete download, retain archive history, and keep per-channel EPG when a provider lacks a usable full guide. Keep large guide caches instead of trimming them to 5,000 channels.
+- Default EPG refresh to every six hours when no interval has been configured; preserve explicitly chosen refresh settings.
+
 ## 0.27.3 — 2026-11-04
 
 - Combine channel OK-menu actions into one consistent icon row, focused on Sports overlay. Remove manual Reconnect; recent channels use hold OK to add a screen. Keep VOD title/episode details alongside the action row.

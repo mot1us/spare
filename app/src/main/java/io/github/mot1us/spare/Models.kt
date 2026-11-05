@@ -19,7 +19,7 @@ data class Source(
 }
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",
     val catchupDays: Int = 0, val catchupMode: String = "", val catchupTemplate: String = "", val media: Boolean = false, val reportedQuality: VideoInfo? = null, val archiveMetadataKnown: Boolean = true,
-    val playlistId: String = "", val providerId: String = "", val providerGuideId: String = "") {
+    val playlistId: String = "", val providerId: String = "", val providerGuideId: String = "", val xmltvId: String = "") {
     val nativeId get() = providerId.ifBlank { id }
     fun native() = if (playlistId.isBlank()) this else copy(id = nativeId, guideId = providerGuideId, playlistId = "", providerId = "", providerGuideId = "")
     val rowId: Long by lazy { stableLongId(id) }
@@ -62,10 +62,10 @@ data class Channel(val id: String, val name: String, val group: String, val url:
         return info.label() + " · " + source + mixed
     }
     fun json() = JSONObject().put("id", id).put("name", name).put("group", group).put("url", url).put("logo", logo).put("guide", guideId)
-        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.let(ProviderQuality::json)).put("archiveMetadataKnown", archiveMetadataKnown).put("playlist", playlistId).put("providerId", providerId).put("providerGuide", providerGuideId)
+        .put("catchupDays", catchupDays).put("catchupMode", catchupMode).put("catchupTemplate", catchupTemplate).put("media", media).put("quality", reportedQuality?.let(ProviderQuality::json)).put("archiveMetadataKnown", archiveMetadataKnown).put("playlist", playlistId).put("providerId", providerId).put("providerGuide", providerGuideId).put("xmltv", xmltvId)
     companion object {
         fun from(j: JSONObject) = Channel(j.getString("id"), j.getString("name"), j.getString("group"), j.getString("url"), j.optString("logo"), j.optString("guide"),
-            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")), j.optBoolean("archiveMetadataKnown", false), j.optString("playlist"), j.optString("providerId"), j.optString("providerGuide"))
+            j.optInt("catchupDays").coerceIn(0, 30), j.optString("catchupMode"), j.optString("catchupTemplate"), j.optBoolean("media"), ProviderQuality.restore(j.optJSONObject("quality"), j.getString("name")), j.optBoolean("archiveMetadataKnown", false), j.optString("playlist"), j.optString("providerId"), j.optString("providerGuide"), j.optString("xmltv").take(256))
         /** Same first 64 SHA-256 bits as the existing RecyclerView IDs, without hex formatting. */
         fun stableLongId(value: String): Long = java.nio.ByteBuffer.wrap(MessageDigest.getInstance("SHA-256").digest(value.toByteArray())).long
         fun stableId(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }

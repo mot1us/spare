@@ -17,6 +17,9 @@ object RefreshJobs {
         val existing = scheduler.allPendingJobs.filter { it.service == service }
         val wanted = mutableSetOf<Int>()
         sources.filter { it.enabled }.forEachIndexed { index, source ->
+            // Initial EPG seeding is owned by the foreground playback warm-up. A newly
+            // scheduled periodic job may otherwise run immediately on Android.
+            if (!store.fullEpgAttempted(source)) return@forEachIndexed
             val p = store.refreshPolicy(source); val hours = listOf(p.playlistHours, p.epgHours).filter { it > 0 }.minOrNull() ?: return@forEachIndexed
             val id = 4100 + index; wanted.add(id)
             if (existing.any { it.id == id && it.extras.getString("source") == source.id && it.intervalMillis == hours * 3600000L }) return@forEachIndexed

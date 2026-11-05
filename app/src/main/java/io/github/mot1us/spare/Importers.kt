@@ -121,61 +121,74 @@ object Importers {
             Channel("xc:$id", j.optString("name", "Channel $id").take(256), names[j.optString("category_id")] ?: "Other",
                 "$base/live/${encoded(source.username)}/${encoded(source.password)}/$id.$extension",
                 j.optString("stream_icon").takeIf { Network.allowed(it, source.allowHttp) }.orEmpty(), if (source.epgUrl.isBlank()) "xc:$id" else j.optString("epg_channel_id").trim().take(256).ifBlank { "xc:$id" },
-                if (j.optString("tv_archive").lowercase(Locale.ROOT) in setOf("1", "true")) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc", reportedQuality = ProviderQuality.parse(j, j.optString("name")))
+                if (j.optString("tv_archive").lowercase(Locale.ROOT) in setOf("1", "true")) j.optInt("tv_archive_duration").coerceIn(0, 30) else 0, "xc", reportedQuality = ProviderQuality.parse(j, j.optString("name")), xmltvId = j.optString("epg_channel_id").trim().take(256))
         }
         if (channels.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return channels.distinctBy { it.id }
     }
 
-    fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> {
+    fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> =
+        xmltv(bytes.inputStream(), channelIds, now, historyDays)
+
+    fun xmltv(input: java.io.InputStream, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         catch (_: org.xmlpull.v1.XmlPullParserException) { /* Some parsers only expose the disabled default. */ }
         require(!parser.getFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL)) { "DTD processing must be disabled" }
-        parser.setInput(Network.xmlPayload(bytes).inputStream(), null)
-        val result = ArrayList<Programme>()
-        var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
-        var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0
-        while (true) {
-            when (parser.nextToken()) {
-                XmlPullParser.END_DOCUMENT -> break
-                XmlPullParser.DOCDECL -> throw IllegalArgumentException("DTDs are not accepted")
-                XmlPullParser.ENTITY_REF -> {
-                    require(parser.name in setOf("amp", "lt", "gt", "quot", "apos") || parser.name.matches(Regex("#(?:x[0-9a-fA-F]+|[0-9]+)"))) { "Custom XML entities are not accepted" }
-                    if (field.isNotEmpty()) { require(text.length < 16384); text.append(parser.text.orEmpty()) }
-                }
-                XmlPullParser.START_TAG -> {
-                    require(++elements <= 2_000_000 && parser.depth <= 32) { "Guide exceeds safety limits" }
-                    when (parser.name) {
-                        "programme" -> {
-                            channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
-                            start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
-                            end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
-                            title = ""; description = ""; artwork = ""; inside = true; programmeDepth = parser.depth
-                        }
-                        "icon" -> if (inside && parser.depth == programmeDepth + 1 && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }
-                        "image" -> if (inside && parser.depth == programmeDepth + 1) { field = "image"; text = StringBuilder() }
-                        "title", "desc" -> if (inside) { field = parser.name; text = StringBuilder() }
+        val raw = input.buffered(); raw.mark(2); val gzip = raw.read() == 0x1f && raw.read() == 0x8b; raw.reset()
+        val decoded = if (gzip) java.util.zip.GZIPInputStream(raw) else raw
+        val bounded = object : java.io.FilterInputStream(decoded) {
+            private var consumed = 0L
+            private fun count(size: Int) { if (size > 0) consumed += size; require(consumed <= 64L * 1024 * 1024) { "Guide exceeds download limit" }; if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Guide cancelled") }
+            override fun read(): Int = `in`.read().also { count(if (it < 0) 0 else 1) }
+            override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { count(it) }
+        }
+        return bounded.use { stream ->
+            parser.setInput(stream, null)
+            val result = ArrayList<Programme>()
+            var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
+            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0
+            while (true) {
+                when (parser.nextToken()) {
+                    XmlPullParser.END_DOCUMENT -> break
+                    XmlPullParser.DOCDECL -> throw IllegalArgumentException("DTDs are not accepted")
+                    XmlPullParser.ENTITY_REF -> {
+                        require(parser.name in setOf("amp", "lt", "gt", "quot", "apos") || parser.name.matches(Regex("#(?:x[0-9a-fA-F]+|[0-9]+)"))) { "Custom XML entities are not accepted" }
+                        if (field.isNotEmpty()) { require(text.length < 16384); text.append(parser.text.orEmpty()) }
                     }
-                }
-                XmlPullParser.TEXT, XmlPullParser.CDSECT -> if (field.isNotEmpty()) {
-                    require(text.length + parser.text.length <= 16384) { "Guide field too long" }; text.append(parser.text)
-                }
-                XmlPullParser.END_TAG -> when (parser.name) {
-                    "title" -> if (inside) { if (title.isEmpty()) title = text.toString().take(512); field = "" }
-                    "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
-                    "image" -> if (inside && parser.depth == programmeDepth + 1 && field == "image") { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
-                    "programme" -> {
-                        inside = false; field = ""
-                        if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
-                            require(result.size < 200000) { "Guide has too many programmes" }
-                            result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
+                    XmlPullParser.START_TAG -> {
+                        require(++elements <= 2_000_000 && parser.depth <= 32) { "Guide exceeds safety limits" }
+                        when (parser.name) {
+                            "programme" -> {
+                                channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
+                                start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
+                                end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
+                                title = ""; description = ""; artwork = ""; inside = true; programmeDepth = parser.depth
+                            }
+                            "icon" -> if (inside && parser.depth == programmeDepth + 1 && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }
+                            "image" -> if (inside && parser.depth == programmeDepth + 1) { field = "image"; text = StringBuilder() }
+                            "title", "desc" -> if (inside) { field = parser.name; text = StringBuilder() }
+                        }
+                    }
+                    XmlPullParser.TEXT, XmlPullParser.CDSECT -> if (field.isNotEmpty()) {
+                        require(text.length + parser.text.length <= 16384) { "Guide field too long" }; text.append(parser.text)
+                    }
+                    XmlPullParser.END_TAG -> when (parser.name) {
+                        "title" -> if (inside) { if (title.isEmpty()) title = text.toString().take(512); field = "" }
+                        "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
+                        "image" -> if (inside && parser.depth == programmeDepth + 1 && field == "image") { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
+                        "programme" -> {
+                            inside = false; field = ""
+                            if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
+                                require(result.size < 200000) { "Guide has too many programmes" }
+                                result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
+                            }
                         }
                     }
                 }
             }
+            result.groupBy { it.channel }.mapValues { (_, list) -> list.distinctBy { it.start }.sortedBy { it.start } }
         }
-        return result.groupBy { it.channel }.mapValues { (_, list) -> list.distinctBy { it.start }.sortedBy { it.start } }
     }
     fun timestamp(value: String): Long = runCatching {
         val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L

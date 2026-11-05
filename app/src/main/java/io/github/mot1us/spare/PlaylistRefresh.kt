@@ -27,7 +27,7 @@ object PlaylistRefresh {
             val result = runCatching {
                 var cached = store.cachedLineup(source) ?: Guide.EMPTY
                 var changed = false; val errors = mutableListOf<String>()
-                if (playlist || cached.channels.isEmpty()) {
+                if (playlist || cached.channels.isEmpty() || !store.epgMappingReady(source)) {
                     runCatching {
                         stage("Downloading playlist…")
                         val lineup = if (source.kind == "xtream") Importers.xtream(source) else Importers.m3u(Network.get(source.url, source.allowHttp).toString(Charsets.UTF_8), source.allowHttp)
@@ -44,27 +44,36 @@ object PlaylistRefresh {
                     runCatching {
                         stage("Updating programme guide…")
                         val url = source.epgUrl.ifBlank { store.guideUrl(source) }.ifBlank { if (source.kind == "xtream") Importers.endpoint(source, "xmltv.php") else "" }
-                        if (source.kind == "xtream" && source.epgUrl.isBlank()) {
-                            // Refresh channels people actually use, without 20,000 separate connections.
+                        var fullFailure: Throwable? = null
+                        val full = if (url.isBlank()) emptyMap() else runCatching { FullEpg.load(source, cached.channels, url) }
+                            .onFailure { fullFailure = it }.getOrDefault(emptyMap())
+                        if (full.isNotEmpty()) programmes = saved + full
+                        else if (source.kind == "xtream" && source.epgUrl.isBlank()) {
+                            // Unsupported XMLTV never blocks browsing: the visible guide still uses short EPG.
+                            // Keep scheduled fallback work bounded instead of querying the entire playlist.
+                            stage("Updating recently watched channels…")
                             val wanted = (listOf(store.last(source)) + store.recent(source) + store.favorites(source)).toSet()
-                            val targets = (cached.channels.filter { it.id in wanted } + cached.channels.filter { it.id in saved.keys }.take(24) + cached.channels.take(8)).distinctBy { it.id }.take(32)
+                            val targets = (cached.channels.filter { it.id in wanted } + cached.channels.filter { it.id in saved.keys }.take(4) + cached.channels.take(4)).distinctBy { it.id }.take(8)
                             val updated = linkedMapOf<String, List<Programme>>(); var failure: Throwable? = null
-                            targets.forEach { channel -> runCatching { XtreamEpg.load(source, channel, 24) }.onSuccess { if (it.isNotEmpty()) updated[channel.id] = it }.onFailure { failure = it } }
+                            targets.forEach { channel -> runCatching { XtreamEpg.load(source, channel, 24, timeoutMs = 6000) }.onSuccess { if (it.isNotEmpty()) updated[channel.guideId.ifBlank { channel.id }] = it }.onFailure { failure = it } }
                             if (updated.isEmpty() && failure != null) throw failure!!
                             programmes = saved + updated
-                        } else if (url.isNotBlank()) {
-                            val entries = Importers.xmltv(Network.get(url, source.allowHttp, 64 * 1024 * 1024), cached.channels.map { it.guideId.ifBlank { it.id } }.toSet(), historyDays = cached.channels.filter { it.catchupDays > 0 }.associate { it.guideId to it.catchupDays })
-                            require(entries.isNotEmpty()) { "No programme data matched this playlist" }; programmes = saved + entries
-                        }
+                        } else if (fullFailure != null) throw fullFailure!!
+                        // Retain archive history and any visible-channel data saved during the download.
+                        val latest = runCatching { store.cachedProgrammes(source) }.getOrDefault(saved)
+                        val now = System.currentTimeMillis()
+                        val days = cached.channels.groupBy { it.guideId.ifBlank { it.id } }.mapValues { (_, feeds) -> feeds.maxOf { it.catchupDays } }
+                        programmes = latest + programmes.mapValues { (key, entries) -> GuideHistory.merge(latest[key].orEmpty(), entries, days[key] ?: 0, now) }
                         require(store.sources().any { it == source })
                         store.cacheProgrammes(source, programmes, System.currentTimeMillis()); store.markEpgRefreshed(source)
                     }.onFailure { errors.add("EPG: ${SourceErrors.message(it)}") }
+                    if (store.epgMappingReady(source)) store.markFullEpgAttempted(source)
                 }
                 Result(cached.takeIf { it.channels.isNotEmpty() }?.copy(programmes = programmes), errors.joinToString(" · "), changed)
             }.getOrElse { Result(null, SourceErrors.message(it)) }
             store.refreshError(source, result.error)
             val callbacks = synchronized(pending) { progress.remove(source.id); pending.remove(source.id).orEmpty() }
-            handler.post { listeners.values.toList().forEach { it(source, result) }; callbacks.forEach { it(result) } }
+            handler.post { RefreshJobs.configure(app, store.sources()); listeners.values.toList().forEach { it(source, result) }; callbacks.forEach { it(result) } }
         }
         return true
     }

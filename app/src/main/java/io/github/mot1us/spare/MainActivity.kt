@@ -1217,8 +1217,8 @@ class MainActivity : Activity() {
         if (launch) additionalLaunch.add(selected.id)
         if (!selected.enabled || selected.id == source?.id || !started || (!force && !backgroundPlaybackReady()) || (!force && PlaylistRefresh.running(selected.id))) return
         val policy = store.refreshPolicy(selected); val now = System.currentTimeMillis(); val onLaunch = selected.id in additionalLaunch
-        val playlist = force || policy.playlistDue(store.playlistRefreshed(selected), now, onLaunch)
-        val epg = !force && policy.epgDue(store.epgRefreshed(selected), now, onLaunch)
+        val playlist = force || !store.epgMappingReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, onLaunch)
+        val epg = !force && (!store.fullEpgAttempted(selected) || policy.epgDue(store.epgRefreshed(selected), now, onLaunch))
         additionalLaunch.remove(selected.id)
         if (!playlist && !epg) return
         val epoch = generation; ownRefreshes.add(selected.id)
@@ -1279,7 +1279,7 @@ class MainActivity : Activity() {
                 }
             } else ui(epoch) {
                 refreshCurrent(selected, true, false) {
-                    if (selected.kind != "xtream" || selected.epgUrl.isNotBlank()) refreshCurrent(selected, false, true)
+                    autoRefresh(selected, true)
                 }
             }
         }
@@ -1289,8 +1289,8 @@ class MainActivity : Activity() {
         if (!started || guide.channels.isEmpty() || !backgroundPlaybackReady()) return
         val refreshLaunch = launchRefreshPending; launchRefreshPending = false
         val policy = store.refreshPolicy(selected); val now = System.currentTimeMillis()
-        val playlist = !store.archiveMetadataReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, refreshLaunch)
-        val epg = policy.epgDue(store.epgRefreshed(selected), now, refreshLaunch)
+        val playlist = !store.archiveMetadataReady(selected) || !store.epgMappingReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, refreshLaunch)
+        val epg = !store.fullEpgAttempted(selected) || policy.epgDue(store.epgRefreshed(selected), now, refreshLaunch)
         if ((playlist || epg) && !PlaylistRefresh.running(selected.id)) refreshCurrent(selected, playlist, epg)
     }
     private fun refreshCurrent(selected: Source, playlist: Boolean = true, epg: Boolean = true, after: (() -> Unit)? = null) {
@@ -1493,7 +1493,7 @@ class MainActivity : Activity() {
                                 val key = guide.key(channel)
                                 val days = guide.channels.asSequence().filter { guide.key(it) == key }.maxOfOrNull { it.catchupDays } ?: 0
                                 val programmes = LinkedHashMap(guide.programmes); programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), entries, days, now)
-                                while (programmes.size > 5000) programmes.remove(programmes.keys.first())
+                                while (programmes.size > Importers.MAX_CHANNELS) programmes.remove(programmes.keys.first())
                                 guide = Guide(guide.channels, programmes, guide.categoryOrder); epgErrors.remove(channel.id)
                                 handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
                             } else epgErrors[channel.id] = "Provider supplied no current programme data."
