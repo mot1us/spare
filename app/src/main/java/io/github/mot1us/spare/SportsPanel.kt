@@ -207,26 +207,27 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
 
         }
     }
+    var streamSource: (Channel) -> Source? = { null }
+    var streamFavorites: () -> Set<String> = { emptySet() }
+    private val channelLogos = LogoLoader(96, 1024 * 1024, artworkFiles)
+    // Use the Guide's actual row renderer so themes, spacing, logos and focus stay consistent.
+    private val streamRows = GuideAdapter(context, channelLogos, { streamSource(it) }, { Guide.EMPTY }, { streamFavorites() },
+        { GuideTimeline.live(System.currentTimeMillis()) },
+        { channel -> if (replayMode) replays.firstOrNull { it.channel.id == channel.id }?.let(watchReplay) else watchChannel(channel) },
+        { channel -> if (!replayMode) secondChannel(channel) }, {}, { _, _ -> }, { scoresButton.requestFocus() },
+        { id, direction -> val next = streamsList.indexOfFirst { it.id == id } + direction; if (next < 0) scoresButton.requestFocus() else if (next in streamsList.indices) focusStream(next) },
+        { channel ->
+            val title = replays.firstOrNull { replayMode && it.channel.id == channel.id }?.programme?.title ?: featured?.title ?: "NFL RedZone"
+            title to streamLabels(channel).replace(channel.name, "").split('·', '\n').map { it.trim().removePrefix("★").trim() }.filter { it.isNotEmpty() }.joinToString(" · ")
+        })
     private val streamAdapter = object : RecyclerView.Adapter<StreamCard>() {
         init { setHasStableIds(true) }
         override fun getItemCount() = streamsList.size
         override fun getItemId(position: Int) = streamsList[position].rowId
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): StreamCard {
-            val box = LinearLayout(context).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutParams = RecyclerView.LayoutParams(-1, dp(54)).apply { bottomMargin = dp(6) } }
-            val play = button("") {}.apply { maxLines = 2; textSize = 11f; isLongClickable = true }
-            val together = button("＋ View") {}.apply { contentDescription = "Add to multiview"; tag = "sports-add-view" }
-            box.addView(play, LayoutParams(0, -1, 1f).apply { marginEnd = dp(8) }); box.addView(together, LayoutParams(dp(82), -1)); return StreamCard(box, play, together)
-        }
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = StreamCard(streamRows.Row(context))
         override fun onBindViewHolder(holder: StreamCard, position: Int) {
-            val channel = streamsList[position]; holder.play.text = streamLabels(channel); holder.play.tag = "sports-stream:${channel.id}"; holder.together.contentDescription = "Add to multiview · " + channel.name
-            holder.together.isVisible = !replayMode
-            holder.play.setOnClickListener { if (replayMode) replays.firstOrNull { it.channel.id == channel.id }?.let(watchReplay) else watchChannel(channel) }; holder.play.setOnLongClickListener { if (replayMode) false else { secondChannel(channel); true } }; holder.together.setOnClickListener { secondChannel(channel) }
-            listOf(holder.play, holder.together).forEach { view -> view.setOnKeyListener { _, key, event -> when (key) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (view === holder.together) holder.play.requestFocus() else scoresButton.requestFocus() }; true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && holder.together.isShown) holder.together.requestFocus(); true }
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { val at = holder.bindingAdapterPosition; if (at != RecyclerView.NO_POSITION) { val next = at + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1; if (next < 0) scoresButton.requestFocus() else if (next in streamsList.indices) focusStream(next) } }; true }
-                else -> false
-            } } }
+            val channel = streamsList[position]
+            holder.play.channel = channel; holder.play.tag = "sports-stream:${channel.id}"; holder.play.appearance()
         }
     }
     init {
@@ -458,7 +459,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (replayMode) return
         for (i in 0 until streams.childCount) {
             val holder = streams.getChildViewHolder(streams.getChildAt(i)) as? StreamCard ?: continue
-            streamsList.getOrNull(holder.bindingAdapterPosition)?.let { holder.play.text = streamLabels(it) }
+            streamsList.getOrNull(holder.bindingAdapterPosition)?.let { holder.play.invalidate() }
         }
     }
     fun showMatchNotice(message: String) { matchNotice.text = message; matchNotice.isVisible = true; progress.visibility = INVISIBLE }
@@ -473,7 +474,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         matchNotice.isVisible = message != null; matchNotice.text = message.orEmpty()
         val same = streamsList == channels; val hadFocus = streams.hasFocus(); streamsList = channels; streamLabels = label
         if (!same) streamAdapter.notifyDataSetChanged() else refreshStreamLabels()
-        progress.visibility = INVISIBLE; status.text = message ?: if (game.state == "pre") "${channels.size} scheduled EPG matches · OK previews the channel · Starts ${GuideClock.sportsDate(game.start)}" else "${channels.size} streams${if (game.coverageComplete) "" else " · More coverage may be available"} · OK to watch · ＋ Multiview"
+        progress.visibility = INVISIBLE; status.text = message ?: if (game.state == "pre") "${channels.size} scheduled EPG matches · OK previews the channel · Starts ${GuideClock.sportsDate(game.start)}" else "${channels.size} streams${if (game.coverageComplete) "" else " · More coverage may be available"} · OK Watch · Hold OK Add screen"
         empty.text = when (game.state) { "post" -> "This game has ended."; "pre" -> "No scheduled EPG match yet. The provider may not have listings this far ahead."; else -> "No matching streams. Try Stream quality." }
         empty.visibility = if(channels.isEmpty()) VISIBLE else GONE; val enter = streamEntry && streamInput == inputEpoch; streamEntry = false; if (enter && !hadFocus) { if (channels.isNotEmpty()) focusStream(0) else filtersButton.requestFocus() }
     }
@@ -557,9 +558,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }; attempt(15)
     }
     @SuppressLint("NotifyDataSetChanged") fun refreshTheme() { hero.background = GuideTheme.glass(resources.displayMetrics.density); cards.notifyDataSetChanged(); streamAdapter.notifyDataSetChanged(); featured?.let(::showHero) }
-    fun pauseImages() { ++focusEpoch; removeCallbacks(loadHeroArt); artwork.pause(); logos.pause(); pictures.pause(); cardLogos.pause(); thumbnails.pause() }
-    fun resumeImages() { artwork.resume(); logos.resume(); pictures.resume(); cardLogos.resume(); thumbnails.resume(); redrawVisiblePosters(); featured?.let { showHero(it); if (!scoresHidden(it)) artwork.request(it) } }
-    fun closeImages() { removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close(); thumbnails.close() }
+    fun pauseImages() { channelLogos.pause(); ++focusEpoch; removeCallbacks(loadHeroArt); artwork.pause(); logos.pause(); pictures.pause(); cardLogos.pause(); thumbnails.pause() }
+    fun resumeImages() { channelLogos.resume(); refreshStreamLabels(); artwork.resume(); logos.resume(); pictures.resume(); cardLogos.resume(); thumbnails.resume(); redrawVisiblePosters(); featured?.let { showHero(it); if (!scoresHidden(it)) artwork.request(it) } }
+    fun closeImages() { channelLogos.close(); removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close(); thumbnails.close() }
     private fun fadeArtwork(view: ImageView, opacity: Float = 1f) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(opacity).setDuration(160).start() }
     private fun bindCrest(loader: LogoLoader, view: ImageView, url: String, opacity: Float = 1f) { loader.bind(view, url) { bitmap -> if (bitmap != null) { (view.drawable as? android.graphics.drawable.BitmapDrawable)?.isFilterBitmap = true; fadeArtwork(view, opacity) } } }
     private fun drawCard(holder: GameCard, game: SportsGame) {
@@ -588,7 +589,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
     }
     private class GameCard(val box: LinearLayout, val badge: TextView, val title: TextView, val detail: TextView, val stream: TextView, val logos: List<ImageView>, val photo: ImageView, val special: TextView) : RecyclerView.ViewHolder(box)
-    private class StreamCard(val box: LinearLayout, val play: Button, val together: Button) : RecyclerView.ViewHolder(box)
+    private class StreamCard(val play: GuideAdapter.Row) : RecyclerView.ViewHolder(play)
     companion object {
         private const val COLUMNS = 3
         private const val REDZONE = "sports-redzone"

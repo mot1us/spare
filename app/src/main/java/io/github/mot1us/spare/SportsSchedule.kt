@@ -150,6 +150,7 @@ object SportsSchedule {
         val names = game.networks.map { " ${SportsCatalog.normalize(it)} " }.filter { it.length >= 5 }
         val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }.map { " $it " }
         val patterns = names + mascots
+        val candidateHints = patterns.flatMap { it.trim().split(' ') }.filter { it.length >= 3 }.distinct()
         val dates = Regex("(?<!\\d)(\\d{1,2})/(\\d{1,2})(?!\\d)")
         val gameDates = listOf(ZoneId.systemDefault(), ZoneId.of("America/New_York")).map { Instant.ofEpochMilli(game.start).atZone(it).toLocalDate() }
         fun currentTitle(title: String): Boolean {
@@ -157,7 +158,7 @@ object SportsSchedule {
             return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
         }
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
-        val channels = PlaylistCatalog.interleave(guide.channels.filter { !it.media })
+        val channels = PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
         var complete = true
         val byGuideKey = channels.groupBy { guide.key(it) }
         val matches = mutableListOf<SportsBroadcast>()
@@ -177,11 +178,13 @@ object SportsSchedule {
             if (Thread.currentThread().isInterrupted) return game
             if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedChannels++
-            if (!relevant(channel.name) && !SportsStreams.speculative(channel)) continue
-            if (SportsGuide.excludedTitle(channel.sportsKey) || relevant(channel.name) && !currentTitle(channel.name)) continue
-            if (game.live(now) && relevant(channel.name) && currentTitle(channel.name) && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
-            else if (SportsStreams.speculative(channel) && patterns.any { it in channel.sportsKey }) candidates.add(channel)
-            if (index % 512 == 0) progress(checkedKeys + index, channels.size + byGuideKey.size)
+            if (index % 512 == 0) progress(checkedKeys + checkedChannels, channels.size + byGuideKey.size)
+            val named = relevant(channel.name)
+            val possibleNetwork = candidateHints.any { channel.name.contains(it, true) } && SportsStreams.speculative(channel)
+            if (!named && !possibleNetwork) continue
+            if (SportsGuide.excludedTitle(channel.sportsKey) || named && !currentTitle(channel.name)) continue
+            if (game.live(now) && named && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
+            else if (possibleNetwork && patterns.any { it in channel.sportsKey }) candidates.add(channel)
         }
         val confirmed = matches.map { it.channel.id }.toSet()
         val titleOnly = titles.filter { it.id !in confirmed }

@@ -22,6 +22,7 @@ class GuideAdapter(
     private val selected: (Channel) -> Unit, private val favorite: (Channel) -> Unit,
     private val focus: (Channel) -> Unit, private val scrollTime: (Channel, Int) -> Unit,
     private val openSidebar: () -> Unit, private val moveChannel: (String, Int) -> Unit,
+    private val rowDetails: ((Channel) -> Pair<String, String>)? = null,
 ) : RecyclerView.Adapter<GuideAdapter.Holder>() {
     var channels: List<Channel> = emptyList()
         private set
@@ -139,6 +140,18 @@ class GuideAdapter(
                 canvas.drawLine(x, y, x, y - 3 * rowDensity, paint)
                 canvas.drawLine(x, y, x + 2.5f * rowDensity, y + rowDensity, paint)
                 paint.style = Paint.Style.FILL
+            }
+            rowDetails?.invoke(channel)?.let { (title, detail) ->
+                val x = leftWidth + 10 * rowDensity
+                val available = (width - x - 10 * rowDensity).coerceAtLeast(1f)
+                text.typeface = titleFace; text.textSize = textSizePx
+                canvas.drawText(TextUtils.ellipsize(title, text, available, TextUtils.TruncateAt.END).toString(), x, height / 2f - 2 * rowDensity, text)
+                text.typeface = regularFace; text.textSize = smallTextSizePx
+                canvas.drawText(TextUtils.ellipsize(detail.replace('\n', ' '), text, available, TextUtils.TruncateAt.END).toString(), x, height / 2f + 10 * rowDensity, text)
+                text.textSize = textSizePx
+                val description = "${channel.name}. $title. $detail"
+                if (contentDescription != description) contentDescription = description
+                return
             }
             text.typeface = regularFace
             val duration = 3 * 3600000L

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.2 — 2026-11-04
+
+- Render Sports stream and replay results with the same channel rows as the Guide: channel logos, theme spacing and focus, programme titles, and provider/quality details. Hold OK on a live result to add it to multiview.
+
+- Finish Sports searches across every enabled playlist instead of treating the 1.5-second partial scan as a final result. Keep progress advancing through both guide and channel-name checks, avoid normalizing unrelated channel names, and check named team feeds before generic event channels. Exclude radio from game playback.
+- Scores stay pinned automatically after opening, with a single close control. Press Up to focus the bar without changing channels; Left/Right browses, OK watches, and Back returns to playback.
+
 ## 0.27.1 — 2026-11-02
 
 - Fix Other streams for this game stopping partway through a search when a background scoreboard refresh selects a different game. Keep the active game, hero, search progress and stream choices stable while scores update; retain playback and reuse existing alternatives immediately.

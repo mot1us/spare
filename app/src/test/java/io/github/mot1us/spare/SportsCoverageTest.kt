@@ -7,6 +7,30 @@ class SportsCoverageTest {
     private val now = java.time.Instant.parse("2026-10-26T23:00:00Z").toEpochMilli()
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000, emptyList(), "game", "in", networks = listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, name: String) = Channel(id, name, "NFL", "https://example.com/$id")
+    @Test fun basketballFindsTheOtherProvidersLateEpgAndExcludesRadio() {
+        val basketball = game.copy(teams = listOf("nba:BOS", "nba:MIL").map { SportsCatalog.byId.getValue(it) }, competition = "NBA", networks = listOf("ESPN"))
+        val filler = (1..26000).map { channel("filler$it", "Local news $it").copy(playlistId = if (it % 2 == 0) "main" else "other") }
+        val radio = channel("radio", "Bucks at Celtics Radio 4K").copy(playlistId = "main", group = "Radio")
+        val video = channel("second-provider", "Boston Celtics FHD").copy(playlistId = "other", group = "NBA Teams")
+        val title = Programme(video.id, "NBA: Bucks at Celtics", game.start, game.end)
+        val guide = Guide(filler + radio + video, mapOf(radio.id to listOf(title.copy(channel = radio.id)), video.id to listOf(title)))
+        var checked = 0; var total = 0
+        val found = SportsSchedule.match(basketball, guide, emptySet(), now, progress = { a, b -> checked = a; total = b })
+        assertTrue(found.coverageComplete); assertEquals(total, checked)
+        assertEquals(listOf(video), found.broadcasts.map { it.channel })
+        assertEquals(listOf(video), SportsStreams.automaticChoices(found, GuideFilters(), emptyMap(), guide, now))
+        val normalized = Channel::class.java.getDeclaredField("sportsKey\$delegate").apply { isAccessible = true }.get(filler.first()) as Lazy<*>
+        assertFalse("Unrelated channels need no sports-name normalization", normalized.isInitialized())
+    }
+    @Test fun missingEpgChecksNamedTeamFeedsBeforeGenericUhdAndBalancesProviders() {
+        val basketball = game.copy(teams = listOf("nba:BOS", "nba:MIL").map { SportsCatalog.byId.getValue(it) }, competition = "NBA")
+        val generic = (1..60).map { channel("nba$it", "NBA Event $it 4K").copy(group = "NBA", reportedQuality = VideoInfo(3840, 2160, 0f)) }
+        val a = channel("a", "Boston Celtics FHD").copy(playlistId = "main", group = "NBA Teams", reportedQuality = VideoInfo(1920, 1080, 0f))
+        val b = a.copy(id = "b", playlistId = "other")
+        val radio = a.copy(id = "radio", name = "Celtics Radio")
+        val targets = SportsStreams.confirmationTargets(basketball, Guide(generic + a + b + radio, emptyMap()), generic, emptySet(), emptyMap(), now)
+        assertEquals(setOf(a, b), targets.take(2).toSet()); assertFalse(radio in targets); assertTrue(targets.size <= 12)
+    }
     @Test fun watchBestCanTryTheAdvertisedBroadcasterButNeverKnownOtherGamesOrReplays() {
         val espn = channel("network", "USA ESPN 4K")
         val other = channel("other", "USA ESPN 2 4K")

@@ -19,11 +19,11 @@ import androidx.recyclerview.widget.RecyclerView
 /** A small score surface; it owns remote keys only after the viewer explicitly opens it. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
-    private val choose: (SportsGame) -> Unit, private val pinChanged: (Boolean) -> Unit,
+    private val choose: (SportsGame) -> Unit,
     private val leave: () -> Unit, close: () -> Unit) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private val logos = LogoLoader(72, 1024 * 1024, ArtworkFiles(context))
-    private val pin: Button = button("Pin") { pinned = !pinned; pinChanged(pinned); pin.text = if (pinned) "Pinned" else "Pin" }.apply { tag = "score-strip-pin"; textSize = 10f; minWidth = 0; setPadding(dp(5), 0, dp(5), 0) }
+    private val navigationHint = TextView(context).apply { text = "↑ Browse"; textSize = 10f; gravity = Gravity.CENTER; setTextColor(Color.WHITE) }
     private val hide = button("×", close).apply { tag = "score-strip-close"; contentDescription = "Hide scores"; textSize = 18f; minWidth = 0; setPadding(0, 0, 0, 0) }
     private val rows = RecyclerView(context).apply { tag = "score-strip-games"; layoutManager = LinearLayoutManager(context, RecyclerView.HORIZONTAL, false); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; preserveFocusAfterLayout = true }
     private val empty = TextView(context).apply { textSize = 12f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; tag = "score-strip-status" }
@@ -32,7 +32,6 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
     private var busy: String? = null
     private var message = ""
     private var selected: String? = null
-    private var pinned = false
     var interactive = false; private set
     private val idle = Runnable { if (busy == null) releaseFocus() }
     private fun armIdle() { removeCallbacks(idle); if (interactive && busy == null) postDelayed(idle, 8000) }
@@ -42,7 +41,7 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
         addView(LinearLayout(context).apply {
             orientation = VERTICAL; gravity = Gravity.CENTER
             addView(TextView(context).apply { text = "LIVE SCORES"; textSize = 8f; gravity = Gravity.CENTER; setTextColor(Color.LTGRAY) }, LayoutParams(-1, dp(15)))
-            addView(pin, LayoutParams(-1, dp(29)))
+            addView(navigationHint, LayoutParams(-1, dp(29)))
         }, LayoutParams(dp(72), -1).apply { marginEnd = dp(6) })
         addView(rows, LayoutParams(0, -1, 1f)); addView(empty, LayoutParams(0, -1, 1f)); addView(hide, LayoutParams(dp(30), -1).apply { marginStart = dp(6) })
         rows.adapter = object : RecyclerView.Adapter<Tile>() {
@@ -75,28 +74,28 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
                     if (key !in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) false else {
                         if (event.action == KeyEvent.ACTION_DOWN) when (key) {
                             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> releaseFocus()
-                            else -> { val next = holder.bindingAdapterPosition + if (key == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1; when { next < 0 -> pin.requestFocus(); next >= games.size -> hide.requestFocus(); else -> focusTile(next) } }
+                            else -> { val next = holder.bindingAdapterPosition + if (key == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1; when { next < 0 -> hide.requestFocus(); next >= games.size -> hide.requestFocus(); else -> focusTile(next) } }
                         }; true
                     }
                 }
             }
         }
-        listOf(pin, hide).forEach { view -> view.setOnKeyListener { _, key, event ->
+        hide.setOnKeyListener { _, key, event ->
             when (key) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) releaseFocus(); true }
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (games.isNotEmpty()) focusTile(if (view === pin) 0 else games.lastIndex) else if (view === pin) hide.requestFocus() else pin.requestFocus() }; true }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && games.isNotEmpty()) focusTile(if (key == KeyEvent.KEYCODE_DPAD_LEFT) games.lastIndex else 0); true }
                 else -> false
             }
-        } }
+        }
         appearance()
     }
     private class Tile(val box: LinearLayout, val icons: List<ImageView>, val scores: List<TextView>, val status: TextView) : RecyclerView.ViewHolder(box)
     override fun focusSearch(focused: View, direction: Int): View? = FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
     override fun dispatchKeyEvent(event: KeyEvent): Boolean { if (event.action == KeyEvent.ACTION_DOWN) armIdle(); return super.dispatchKeyEvent(event) }
     private fun focusTile(position: Int) { rows.scrollToPosition(position); rows.post { if (interactive && isShown) rows.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus() } }
-    fun enter() { interactive = true; descendantFocusability = FOCUS_AFTER_DESCENDANTS; if (games.isEmpty()) pin.requestFocus() else focusTile(games.indexOfFirst { it.key == (selected ?: current) }.coerceAtLeast(0)); armIdle() }
+    fun enter() { interactive = true; navigationHint.text = "← → Browse"; descendantFocusability = FOCUS_AFTER_DESCENDANTS; if (games.isEmpty()) hide.requestFocus() else focusTile(games.indexOfFirst { it.key == (selected ?: current) }.coerceAtLeast(0)); armIdle() }
     fun releaseFocus() { removeCallbacks(idle); interactive = false; descendantFocusability = FOCUS_BLOCK_DESCENDANTS; clearFocus(); leave() }
-    fun present(isPinned: Boolean) { pinned = isPinned; pin.text = if (pinned) "Pinned" else "Pin"; if (visibility != VISIBLE) { visibility = VISIBLE; logos.resume(); rows.adapter?.notifyItemRangeChanged(0, games.size) } }
+    fun present() { navigationHint.text = if (interactive) "← → Browse" else "↑ Browse"; if (visibility != VISIBLE) { visibility = VISIBLE; logos.resume(); rows.adapter?.notifyItemRangeChanged(0, games.size) } }
     fun suspend() { removeCallbacks(idle); interactive = false; descendantFocusability = FOCUS_BLOCK_DESCENDANTS; clearFocus(); visibility = GONE; logos.pause() }
     fun submit(next: List<SportsGame>, currentGame: String?, checking: Boolean) {
         val before = games; val currentChanged = current != currentGame; current = currentGame
@@ -109,7 +108,7 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
         val hadFocus = rows.hasFocus(); games = next; diff.dispatchUpdatesTo(rows.adapter!!)
         rows.visibility = if (next.isEmpty()) GONE else VISIBLE; empty.visibility = if (next.isEmpty()) VISIBLE else GONE
         empty.text = if (checking) "Checking live games…" else "No live games in your enabled leagues"
-        if (interactive && hadFocus && next.none { it.key == selected }) { selected = next.firstOrNull()?.key; rows.post { if (interactive) { if (next.isEmpty()) pin.requestFocus() else focusTile(0) } } }
+        if (interactive && hadFocus && next.none { it.key == selected }) { selected = next.firstOrNull()?.key; rows.post { if (interactive) { if (next.isEmpty()) hide.requestFocus() else focusTile(0) } } }
     }
     fun tuning(key: String?, text: String = "") { val previous = busy; busy = key; message = text; games.forEachIndexed { i, game -> if (game.key == key || game.key == previous) rows.adapter?.notifyItemChanged(i) }; armIdle() }
     fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); AppFont.apply(this); rows.adapter?.notifyItemRangeChanged(0, games.size) }

@@ -56,9 +56,11 @@ class GameReminders(events: List<LiveEvent> = emptyList(), delivered: Set<String
 }
 
 object SportsStreams {
+    private val audioOnly = Regex("(?:^|[^a-z0-9])(radio|audio[\\W_]*only)(?:$|[^a-z0-9])", RegexOption.IGNORE_CASE)
+    internal fun video(channel: Channel) = !channel.media && !audioOnly.containsMatchIn(channel.name) && !audioOnly.containsMatchIn(channel.group)
     private val nonSportsCategory = Regex("(?:^|[^a-z0-9])(movies?|cinema|vod|series|24\\s*(?:[/x-]|\\s)\\s*7)(?:$|[^a-z0-9])", RegexOption.IGNORE_CASE)
     private val nonSportsName = Regex("(?:^|[^a-z0-9])(pbs|24\\s*(?:[/x-]|\\s)\\s*7)(?:$|[^a-z0-9])", RegexOption.IGNORE_CASE)
-    internal fun speculative(channel: Channel) = !channel.media && !nonSportsCategory.containsMatchIn(channel.group) && !nonSportsName.containsMatchIn(channel.name)
+    internal fun speculative(channel: Channel) = video(channel) && !nonSportsCategory.containsMatchIn(channel.group) && !nonSportsName.containsMatchIn(channel.name)
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
     private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
     internal fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
@@ -86,7 +88,7 @@ object SportsStreams {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
         val confirmed = epg + game.titleMatches.map { it.id }
         return (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).distinctBy { it.id }
-            .filter { available(it) && matchingCategory(it, filters) }
+            .filter { video(it) && available(it) && matchingCategory(it, filters) }
             .sortedWith(compareByDescending<Channel> { it.id in confirmed }
                 .then(preferenceComparator(filters, quality))
                 .thenByDescending { it.id in epg })
@@ -135,13 +137,21 @@ object SportsStreams {
         // A UHD event feed often has no league/team in its name. Its current EPG is
         // still authoritative; include these feeds before the generic network guesses.
         val speculativeChannels = guide.channels.filter(::speculative)
+        val aliases = game.teams.flatMap { it.aliases + it.name.substringBefore(' ') }.distinct()
+        val teamKeys = aliases.map { " ${SportsCatalog.normalize(it)} " }.distinct()
+        val teamChannels = speculativeChannels.filter { channel -> aliases.any { channel.name.contains(it, true) } && teamKeys.any { it in channel.sportsKey } }.sortedWith(order)
         val highResolution = speculativeChannels.filter { (it.quality(quality[it.id])?.height ?: 0) >= 2160 && (game.state == "pre" || guide.at(it, at) == null) }.sortedWith(order)
-        val leagueChannels = speculativeChannels.filter { channel -> words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " } }
-            .sortedWith(order)
+        val leagueChannels = speculativeChannels.filter { channel ->
+            words.any { channel.name.contains(it.trim(), true) || channel.group.contains(it.trim(), true) } &&
+                (words.any { it in channel.sportsKey } || words.any { it in " ${SportsCatalog.normalize(channel.group)} " })
+        }.sortedWith(order)
         val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
+        val teamTargets = varied(teamChannels).filter { game.state == "pre" || guide.at(it, at) == null }.take(6)
+        teamTargets.forEach { picked[it.id] = it }
         for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && (game.state == "pre" || guide.at(it, at) == null)) picked[it.id] = it }
-        return lookupOrder(picked.values.toList(), order)
+        val teamIds = teamTargets.map { it.id }.toSet()
+        return lookupOrder(picked.values.toList(), compareByDescending<Channel> { it.id in teamIds }.then(order))
     }
     internal fun lookupOrder(channels: List<Channel>, order: Comparator<Channel>): List<Channel> {
         val sorted = channels.sortedWith(order)
@@ -179,7 +189,7 @@ object SportsStreams {
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."
-        ranked.isEmpty() -> "No matching streams found in this playlist."
+        ranked.isEmpty() -> "No matching video streams found in enabled playlists."
         ranked.any { qualifies(it, quality[it.id]) } -> "FHD+/60 streams found · game coverage unconfirmed. Choose a stream."
         ranked.any { channel -> channel.quality(quality[channel.id])?.let { it.height >= 1080 && (!it.fps.isFinite() || it.fps <= 0) } == true } -> "Highest-resolution matches shown first. FPS is learned during playback."
         else -> "Best available matches shown first. Choose a stream to watch."

@@ -2706,14 +2706,14 @@ class SpareDeviceTest {
                     assertEquals(android.view.Gravity.BOTTOM, (strip.layoutParams as android.widget.FrameLayout.LayoutParams).gravity)
                     assertEquals(2, activity.window.decorView.findViewWithTag<RecyclerView>("score-strip-games").adapter!!.itemCount)
                     assertEquals(original, player!!.currentMediaItem!!.mediaId)
-                    activity.window.decorView.findViewWithTag<View>("score-strip-pin").performClick()
+                    assertNull(activity.window.decorView.findViewWithTag<View>("score-strip-pin"))
+                    assertTrue("Opening scores pins automatically", SecureStore(context).scoreOverlayPinned)
                 }
                 device.pressBack()
                 scenario.onActivity { activity -> val strip = activity.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip"); assertTrue(strip.isShown); assertFalse(strip.interactive); assertEquals(ViewGroup.FOCUS_BLOCK_DESCENDANTS, strip.descendantFocusability); assertTrue(SecureStore(context).scoreOverlayPinned); store.scoreOverlayPosition = "Top" }
-                device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playback-details")?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("channel-scores").performClick() }
+                device.pressDPadUp()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NFL:one")?.hasFocus() == true }
+                scenario.onActivity { assertEquals("Up focuses scores instead of changing channels", original, player!!.currentMediaItem!!.mediaId) }
                 scenario.onActivity { activity ->
                     assertEquals(android.view.Gravity.TOP, (activity.window.decorView.findViewWithTag<View>("sports-score-strip").layoutParams as android.widget.FrameLayout.LayoutParams).gravity)
                     snapshot = snapshot.copy(events = listOf(one.copy(scores = mapOf("nfl:SEA" to "14", "nfl:SF" to "3")), two), checked = System.currentTimeMillis())
@@ -2745,6 +2745,8 @@ class SpareDeviceTest {
                     assertEquals("Visible score polling shares the minute budget", 1, polls.get())
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "score-strip.png"))
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<SportsScoreStrip>("sports-score-strip")?.interactive == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("score-strip-close").performClick(); assertFalse(SecureStore(context).scoreOverlayPinned) }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
                 scenario.onActivity { activity -> assertFalse(activity.window.decorView.findViewWithTag<View>("sports-score-strip").isShown); assertEquals("Top", SecureStore(context).scoreOverlayPosition) }
             } } finally { store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.saveSources(emptyList()); store.removeCache(source) }
@@ -2841,6 +2843,56 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun basketballSearchFindsTheTeamFeedInTheSecondPlaylistInsteadOfRadio() {
+        FixtureServer(parallelClients = true).use { first -> FixtureServer(programmeTitle = "NBA: Bucks at Celtics", parallelClients = true).use { second ->
+            val a = Source(name = "Basketball primary", kind = "xtream", url = first.base, username = "test", password = "test-secret", allowHttp = true)
+            val b = a.copy(id = java.util.UUID.randomUUID().toString(), name = "Basketball alternate", url = second.base)
+            val now = System.currentTimeMillis()
+            val news = Channel("xc:1", "News", "News", "${first.base}/channel1.mp4")
+            val radio = Channel("xc:2", "Celtics vs Bucks Radio 4K", "Radio", "${first.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 60f))
+            val generic = (100..159).map { Channel("xc:$it", "NBA Event $it 4K", "NBA", "${first.base}/unused$it.mp4", reportedQuality = VideoInfo(3840, 2160, 0f)) }
+            val filler = (1000..26999).map { Channel("xc:$it", "Local news $it", "News", "${first.base}/unused$it.mp4") }
+            val video = Channel("xc:9", "Boston Celtics FHD", "NBA Teams", "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 0f))
+            val listing = Programme(radio.id, "NBA: Bucks at Celtics", now - 1000, now + 3600000)
+            store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id
+            store.cache(a, Guide(listOf(news, radio) + generic + filler, mapOf(radio.id to listOf(listing)))); store.cache(b, Guide(listOf(video), emptyMap()))
+            listOf(a, b).forEach(store::markPlaylistRefreshed)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    player = find<PlayerView>(activity.window.decorView)?.player; player?.repeatMode = Player.REPEAT_MODE_ONE
+                    player?.isPlaying == true && guide.channels.any { it.playlistId == b.id }
+                }
+                val scores = LiveSportsSnapshot(listOf(LiveEvent("basketball", setOf("nba:BOS", "nba:MIL"), now - 1000, league = "NBA")), now, SportsLeagues.byId.keys)
+                val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
+                scenario.onActivity { activity -> activity.liveSportsLoader = { scores }; MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores); activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>(game.key)?.isShown == true }
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, game, true) }
+                waitFor(scenario) { player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') } == true }
+                scenario.onActivity { activity ->
+                    assertSame(player, find<PlayerView>(activity.window.decorView)!!.player)
+                    val results = MainActivity::class.java.getDeclaredField("sportsResults").apply { isAccessible = true }.get(activity)!!
+                    val matched = results.javaClass.getDeclaredField("game").apply { isAccessible = true }.get(results) as SportsGame
+                    assertTrue("Both provider passes finish before no-match can be reported", matched.coverageComplete)
+                    assertTrue(matched.broadcasts.any { it.channel.playlistId == b.id })
+                    assertFalse(matched.broadcasts.any { it.channel.name.contains("Radio") })
+                }
+                assertTrue("The team channel's owning provider is queried", second.requestedEpgTargets.any { it.contains("stream_id=9") })
+                assertNull("A radio match must never be auto-tuned", first.requests["/channel2.mp4"])
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-game-streams")?.hasFocus() == true }; device.pressDPadCenter()
+                val rowTag = "sports-stream:playlist:${b.id}:xc:9"
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>(rowTag)?.isShown == true }
+                scenario.onActivity { activity ->
+                    val row = activity.window.decorView.findViewWithTag<View>(rowTag)
+                    assertTrue("Sports results use the Guide's channel row", row is GuideAdapter.Row)
+                    assertEquals((GuideTheme.rowHeightDp * activity.resources.displayMetrics.density).toInt(), row.height)
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-results.png"))
+            } } finally { store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
+        } }
+    }
+
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
@@ -2915,6 +2967,7 @@ class SpareDeviceTest {
         private val actionMovies = (1..400).joinToString(",", "[", "]") { """{"stream_id":${2000+it},"name":"Action title $it","category_id":"2","container_extension":"mp4"}""" }.toByteArray()
         val archiveRequests = java.util.concurrent.atomic.AtomicInteger()
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val requestedEpgTargets = java.util.Collections.synchronizedList(mutableListOf<String>())
         val catalogTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
         init {
@@ -2936,6 +2989,7 @@ class SpareDeviceTest {
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
+                        if (target.contains("get_short_epg")) requestedEpgTargets.add(target)
                         if (target.contains("get_vod_streams")) catalogTargets.add(target)
                         if (target.contains("get_simple_data_table")) archiveRequests.incrementAndGet()
                         if (slowEpisodes && target.contains("get_series_info")) { episodesRequested.countDown(); finishEpisodes.await(12, java.util.concurrent.TimeUnit.SECONDS) }
