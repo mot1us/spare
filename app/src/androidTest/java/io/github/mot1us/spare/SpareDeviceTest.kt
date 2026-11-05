@@ -926,7 +926,7 @@ class SpareDeviceTest {
                     instrumentation.waitForIdleSync()
                     scenario.onActivity { assertTrue("Search icon must retain remote focus", it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
                     device.pressDPadCenter()
-                    waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 }
+                    waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 && activity.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results")?.hasFocus() == true }
                     assertEquals("Native speech must not launch a chooser/activity", 0, monitor.hits)
                     scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertEquals(1f, find<PlayerView>(it.window.decorView)!!.player!!.volume, 0f) }
                     assertEquals("/channel1.mp4", playingPath(scenario))
