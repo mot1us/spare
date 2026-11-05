@@ -1188,7 +1188,7 @@ class MainActivity : Activity() {
                 playlistLoading.remove(selected.id); refreshBar.isVisible = playlistLoading.isNotEmpty() || enabledSources().any { PlaylistRefresh.running(it.id) }
                 loadingPanel.visibility = View.GONE
                 if (same) adapter.refreshRows() else { groupsForChannels = null; updateGroups(); applyFilter(); if (searchPanel.isVisible) updatePlaylistSearch() }
-                if (current == null && started && (resume || source?.id == selected.id || !playlistLoading.contains(source?.id))) {
+                if (current == null && onDemand == null && !library.opened && started && (resume || source?.id == selected.id || !playlistLoading.contains(source?.id))) {
                     val recent = store.recentFeeds.firstNotNullOfOrNull { id -> guide.channels.firstOrNull { it.id == id } }
                     val saved = playlists.key(selected.id, store.last(selected))
                     (recent ?: guide.channels.firstOrNull { it.id == saved } ?: scoped.channels.firstOrNull { !it.media })?.let { tune(it); showGuide(false) }
@@ -1279,7 +1279,7 @@ class MainActivity : Activity() {
                 }
             } else ui(epoch) {
                 refreshCurrent(selected, true, false) {
-                    autoRefresh(selected, true)
+                    if (selected.kind != "xtream" || selected.epgUrl.isNotBlank()) refreshCurrent(selected, false, true) else autoRefresh(selected, true)
                 }
             }
         }

@@ -2,9 +2,9 @@
 
 ## 0.27.4 — 2026-11-04
 
-- Cache the provider’s full XMLTV guide in the background after playback settles, so unvisited categories already have programme listings. Preserve Xtream XMLTV IDs without changing existing channel or catch-up identities; upgrade old lineups once.
+- Cache Xtream providers’ full XMLTV guides in the background after playback settles, so unvisited categories already have programme listings. Preserve Xtream XMLTV IDs without changing existing channel or catch-up identities; upgrade old lineups once.
 - Stream bounded plain/gzipped XMLTV without buffering the complete download, retain archive history, and keep per-channel EPG when a provider lacks a usable full guide. Keep large guide caches instead of trimming them to 5,000 channels.
-- Default EPG refresh to every six hours when no interval has been configured; preserve explicitly chosen refresh settings.
+- Default EPG refresh to every six hours when no interval has been configured; preserve explicitly chosen refresh settings. Seed missing data without replacing fresh listings or restarting stopped/on-demand playback in Library.
 
 ## 0.27.3 — 2026-11-04
 

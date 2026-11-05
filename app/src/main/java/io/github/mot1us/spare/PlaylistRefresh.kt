@@ -53,7 +53,10 @@ object PlaylistRefresh {
                             // Keep scheduled fallback work bounded instead of querying the entire playlist.
                             stage("Updating recently watched channels…")
                             val wanted = (listOf(store.last(source)) + store.recent(source) + store.favorites(source)).toSet()
-                            val targets = (cached.channels.filter { it.id in wanted } + cached.channels.filter { it.id in saved.keys }.take(4) + cached.channels.take(4)).distinctBy { it.id }.take(8)
+                            val seed = !store.fullEpgAttempted(source)
+                            val at = System.currentTimeMillis()
+                            val targets = (cached.channels.filter { it.id in wanted } + cached.channels.filter { it.id in saved.keys }.take(4) + cached.channels.take(4)).distinctBy { it.id }
+                                .filter { channel -> !seed || saved[channel.guideId.ifBlank { channel.id }].orEmpty().none { at >= it.start && at < it.end } }.take(8)
                             val updated = linkedMapOf<String, List<Programme>>(); var failure: Throwable? = null
                             targets.forEach { channel -> runCatching { XtreamEpg.load(source, channel, 24, timeoutMs = 6000) }.onSuccess { if (it.isNotEmpty()) updated[channel.guideId.ifBlank { channel.id }] = it }.onFailure { failure = it } }
                             if (updated.isEmpty() && failure != null) throw failure!!
