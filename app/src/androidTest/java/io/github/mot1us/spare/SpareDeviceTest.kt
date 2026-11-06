@@ -1797,7 +1797,11 @@ class SpareDeviceTest {
                 finishScoreboard.countDown(); finishDestination.countDown()
                 waitFor(scenario) { activity ->
                     @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
-                    summaries.values.any { it.startsWith("Scheduled · ESPN 1") }
+                    summaries["live"]?.startsWith("Finding stream") == false
+                }
+                scenario.onActivity { activity ->
+                    @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
+                    assertFalse("Upcoming games must not start automatic playlist searches", summaries.containsKey("next"))
                 }
                 assertEquals("Displaying schedules must not query every provider channel", 0, server.epgTargets.size)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage")?.text.toString().contains("ESPN 12") }
