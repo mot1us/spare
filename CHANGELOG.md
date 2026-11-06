@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.4 — 2026-11-06
+
+- Keep channel logos in an encrypted, size-limited disk cache; decode guide-size thumbnails, retain each visible row's bitmap, and warm nearby category logos one at a time after playback settles. HTTP images still require playlist consent.
+- Keep a fair, bounded current/upcoming programme window for oversized XMLTV feeds and playlists with many HD/4K aliases instead of discarding their whole guide. Retain the existing XML/download/memory safety limits and retry the bulk guide once with this policy.
+- Warm missing listings for nearby categories and favorites while watching. Foreground rows have priority; speculative guide work uses one metadata request at a time, pauses during buffering, and stays off during VOD and multiview. Build the category look-ahead index off the main thread.
+
 ## 0.28.3 — 2026-11-06
 
 - Back moves from guide channels to categories, then to the main menu; Back from that menu returns to live playback. Left remains available for moving between columns.

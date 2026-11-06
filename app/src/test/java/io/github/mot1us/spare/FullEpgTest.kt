@@ -31,4 +31,13 @@ class FullEpgTest {
         val result = FullEpg.map(listOf(channel.copy(guideId = "custom")), custom, mapOf("custom" to listOf(programme.copy(channel = "custom"))))
         assertEquals(setOf("custom"), result.keys)
     }
+    @Test fun aLargeAliasedPlaylistKeepsEveryStationsCurrentGuideWithinTheSameRecordBudget() {
+        val now = System.currentTimeMillis()
+        val channels = (1..26000).map { Channel("xc:$it", "Channel $it", "News", "https://example.test/$it", guideId = "xc:$it", xmltvId = "shared") }
+        val programmes = (0..11).map { Programme("shared", "Slot $it", now - 1000 + it * 3600000L, now + (it + 1) * 3600000L) }
+        val result = FullEpg.map(channels, source, mapOf("shared" to programmes))
+        assertEquals(26000, result.size); assertTrue(result.values.sumOf { it.size } <= ProgrammeBudget.MAX)
+        assertEquals("Slot 0", result.getValue("xc:26000").first().title)
+        assertEquals("xc:26000", result.getValue("xc:26000").first().channel)
+    }
 }

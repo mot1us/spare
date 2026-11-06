@@ -120,8 +120,8 @@ class SecureStore(private val context: Context) {
     } }
     fun epgRefreshed(source: Source) = preferences.getLong("epg-refreshed-${source.id}", 0)
     fun epgMappingReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("epg-mapping-${source.id}", false)
-    fun fullEpgAttempted(source: Source) = preferences.getBoolean("epg-full-attempt-${source.id}", false)
-    fun markFullEpgAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("epg-full-attempt-${source.id}", true) } }
+    fun fullEpgAttempted(source: Source) = preferences.getBoolean("epg-full-attempt-${source.id}", false) && preferences.getInt("epg-full-window-${source.id}", 0) == 1
+    fun markFullEpgAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("epg-full-attempt-${source.id}", true); putInt("epg-full-window-${source.id}", 1) } }
     fun markEpgRefreshed(source: Source) { preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
     fun refreshError(source: Source, value: String) { preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
@@ -188,7 +188,7 @@ class SecureStore(private val context: Context) {
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
         listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc", "library-favorites-${source.id}.enc").forEach { delete(it) }
-        preferences.edit { listOf("provider-identity", "legacy-provider", "min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("provider-identity", "legacy-provider", "min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "epg-full-window", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit { putStringSet("groups-${source.id}", value.groups) } }

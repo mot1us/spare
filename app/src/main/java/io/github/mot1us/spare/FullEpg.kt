@@ -17,13 +17,16 @@ object FullEpg {
     }
 
     internal fun map(channels: List<Channel>, source: Source, entries: Map<String, List<Programme>>): Map<String, List<Programme>> {
-        var count = 0
+        val mapped = channels.distinctBy { it.guideId.ifBlank { it.id } }.filter { xmlId(source, it) in entries }
+        val total = mapped.sumOf { entries[xmlId(source, it)].orEmpty().size.toLong() }
+        val quota = (ProgrammeBudget.MAX / mapped.size.coerceAtLeast(1)).coerceAtLeast(1)
+        val now = System.currentTimeMillis()
         return buildMap {
-            channels.forEach { channel ->
+            mapped.forEach { channel ->
                 val key = channel.guideId.ifBlank { channel.id }
                 if (!containsKey(key)) entries[xmlId(source, channel)]?.let { programmes ->
-                    count += programmes.size; require(count <= 200000) { "Guide has too many programmes" }
-                    put(key, programmes.map { if (it.channel == key) it else it.copy(channel = key) })
+                    val kept = if (total <= ProgrammeBudget.MAX) programmes else ProgrammeBudget.Window(quota, now).also { window -> programmes.forEach(window::add) }.entries()
+                    put(key, kept.map { if (it.channel == key) it else it.copy(channel = key) })
                 }
             }
         }

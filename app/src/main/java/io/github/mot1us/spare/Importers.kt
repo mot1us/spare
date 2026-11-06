@@ -145,7 +145,7 @@ object Importers {
         }
         return bounded.use { stream ->
             parser.setInput(stream, null)
-            val result = ArrayList<Programme>()
+            val result = ProgrammeBudget(channelIds.size, now)
             var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
             var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0
             while (true) {
@@ -180,14 +180,13 @@ object Importers {
                         "programme" -> {
                             inside = false; field = ""
                             if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
-                                require(result.size < 200000) { "Guide has too many programmes" }
                                 result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
                             }
                         }
                     }
                 }
             }
-            result.groupBy { it.channel }.mapValues { (_, list) -> list.distinctBy { it.start }.sortedBy { it.start } }
+            result.result()
         }
     }
     fun timestamp(value: String): Long = runCatching {

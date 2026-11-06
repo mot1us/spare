@@ -77,6 +77,12 @@ class MainActivity : Activity() {
     private val epgWorkers = Executors.newFixedThreadPool(2)
     private var epgActive = 0
     private var epgWanted = emptyList<Channel>()
+    private var epgPriority = emptySet<String>()
+    private val guidePrefetch = GuidePrefetch()
+    private var guideWarmLineup: List<Channel>? = null
+    private var guideWarmAt = 0L
+    private var guideWarmLogos = emptyList<Channel>()
+    private var guideWarmLogoIndex = 0
     private val epgInFlight = mutableSetOf<String>()
     private val epgCheckedAt = mutableMapOf<String, Long>()
     private val epgDepth = mutableMapOf<String, Int>()
@@ -103,6 +109,7 @@ class MainActivity : Activity() {
             val selected = source
             checkGameReminders()
             syncScoreStrip()
+            warmGuideAssets()
             if (sportsVisible && guideVisible) syncReplayDiscovery()
             enabledSources().filter { it.id != selected?.id }.forEach { refreshAdditional(it) }
             if (selected != null) {
@@ -250,7 +257,7 @@ class MainActivity : Activity() {
     private lateinit var favoriteFeedback: TextView
     private val hideFavoriteFeedback = Runnable { favoriteFeedback.animate().alpha(0f).setDuration(150).withEndAction { favoriteFeedback.visibility = View.GONE }.start() }
     private val guideTimeline = GuideTimeline()
-    private val logos = LogoLoader()
+    private lateinit var logos: LogoLoader
     private lateinit var metadata: LiveMetadata
     private lateinit var store: SecureStore
     private lateinit var updater: Updater
@@ -504,6 +511,7 @@ class MainActivity : Activity() {
         store = SecureStore(this)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
+        logos = LogoLoader(96, 8 * 1024 * 1024, GuideLogoFiles(this))
         configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
         buildUi()
         @Suppress("DEPRECATION")
@@ -1478,11 +1486,32 @@ class MainActivity : Activity() {
         if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
+    private fun guideWarmTargets() = guidePrefetch.targets(guide.channels, adapter.channels, (if (guideVisible && !sportsVisible) focused else current) ?: current, favorites)
+    private fun warmGuideAssets() {
+        if (!started || onDemand != null || multiview.active || guide.channels.isEmpty() || !backgroundPlaybackReady()) return
+        if (guideWarmLineup !== guide.channels) {
+            val snapshot = guide.channels; guideWarmLineup = snapshot
+            imports.execute { guidePrefetch.prepare(snapshot) }
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now >= guideWarmAt) {
+            guideWarmAt = now + 15000; guideWarmLogos = guideWarmTargets(); guideWarmLogoIndex = 0
+            collectVisibleEpg()
+        }
+        while (guideWarmLogoIndex < guideWarmLogos.size) {
+            val channel = guideWarmLogos[guideWarmLogoIndex]
+            val selected = owner(channel)
+            if (selected == null || !selected.enabled) { guideWarmLogoIndex++; continue }
+            if (!logos.prefetchWhenIdle(channel.logo, selected.allowHttp)) break
+            guideWarmLogoIndex++
+        }
+    }
     private fun collectVisibleEpg() {
-        if (!started || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
-        if (!guideVisible) { epgWanted = listOfNotNull(current); pumpEpg(); return }
+        if (!started || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
+        if (!guideVisible) { epgPriority = setOfNotNull(current?.id); epgWanted = (listOfNotNull(current) + if (backgroundPlaybackReady()) guideWarmTargets() else emptyList()).distinctBy { it.id }; pumpEpg(); return }
         if (sportsVisible && guideVisible) {
             epgWanted = (listOfNotNull(current) + sportsChannels).distinctBy { guide.key(it) }.take(5)
+            epgPriority = epgWanted.map { it.id }.toSet()
             pumpEpg(); return
         }
         val channels = adapter.channels
@@ -1493,11 +1522,12 @@ class MainActivity : Activity() {
         val canWarm = backgroundPlaybackReady()
         val nearby = if (canWarm) channels.subList((first - 12).coerceIn(0, channels.size), minOf(last + 33, channels.size)) else emptyList()
         val favoritesToWarm = if (canWarm) guide.channels.asSequence().filter { it.id in favorites }.take(24).toList() else emptyList()
-        epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible + nearby + favoritesToWarm).distinctBy { it.id }.take(80)
+        epgPriority = (listOfNotNull(current, focused) + visible).map { it.id }.toSet()
+        epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible + nearby + favoritesToWarm + if (canWarm) guideWarmTargets() else emptyList()).distinctBy { it.id }.take(96)
         pumpEpg()
     }
     private fun pumpEpg() {
-        if (closed || !started) return
+        if (closed || !started || onDemand != null || multiview.active) return
         val epoch = generation; val now = System.currentTimeMillis()
         if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
         fun depth(channel: Channel) = if (sportsVisible && guideVisible) 4 else if (guideVisible && guideTimeline.ahead(channel.id)) 72 else 24
@@ -1509,7 +1539,10 @@ class MainActivity : Activity() {
             return (channel.id in sportsForcedEpg || missing) && (now - (epgCheckedAt[channel.id] ?: 0) >= 5 * 60000L || depth(channel) > (epgDepth[channel.id] ?: 0))
         }
         while (epgActive < 2) {
-            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && needs(it) } ?: return
+            fun eligible(channel: Channel) = "$epoch:${channel.id}" !in epgInFlight && needs(channel)
+            val channel = epgWanted.firstOrNull { it.id in epgPriority && eligible(it) }
+                ?: if (epgActive == 0 && backgroundPlaybackReady()) epgWanted.firstOrNull { owner(it)?.let { selected -> !PlaylistRefresh.running(selected.id) } == true && eligible(it) } else null
+            if (channel == null) return
             val selected = owner(channel) ?: return
             val requestedDepth = depth(channel)
             val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
@@ -1556,6 +1589,7 @@ class MainActivity : Activity() {
         programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${enriched?.description?.ifBlank { it.description } ?: it.description}" } ?: "\n${epgErrors[channel.id] ?: if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
     }
     private fun applyFilter() {
+        guideWarmAt = 0L
         requestLocalMatches()
         val now = System.currentTimeMillis()
         val hidden = guide.channels.count { unavailable.contains(it.id, now) }

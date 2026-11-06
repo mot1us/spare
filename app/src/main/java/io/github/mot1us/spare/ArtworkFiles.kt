@@ -5,9 +5,9 @@ import android.util.AtomicFile
 import java.io.File
 
 /** Public Sports artwork only. Raw compressed files are shared by hero and thumbnail decoders. */
-class ArtworkFiles(context: Context) {
+class ArtworkFiles(context: Context) : ImageFiles {
     private val directory = File(context.cacheDir, "sports-images").apply { mkdirs() }
-    fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
+    override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
         require(Network.allowed(url, false))
         val key = Channel.stableId(url); val file = File(directory, "$key.img")
         return synchronized(locks[(key.hashCode() and Int.MAX_VALUE) % locks.size]) {

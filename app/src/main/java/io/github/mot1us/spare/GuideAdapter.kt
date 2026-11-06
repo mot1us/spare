@@ -40,7 +40,10 @@ class GuideAdapter(
     override fun onBindViewHolder(holder: Holder, position: Int) { holder.row.channel = channels[position]; holder.row.appearance(); if (holder.row.hasFocus()) focus(channels[position]) }
     class Holder(val row: Row) : RecyclerView.ViewHolder(row)
     inner class Row(context: Context) : View(context) {
+        private var logoBitmap: android.graphics.Bitmap? = null
+        private var logoHttp = false
         var channel: Channel? = null
+            set(value) { if (field?.logo != value?.logo) logoBitmap = null; field = value }
         private val rowDensity = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val logoBounds = RectF()
@@ -111,7 +114,9 @@ class GuideAdapter(
             val base = height / 2f + text.textSize * .35f
             val ink = if (hasFocus()) GuideTheme.focusText else if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE
             text.color = ink
-            val logo = logos.get(channel.logo, source(channel)?.allowHttp == true) { if (this.channel?.id == channel.id) invalidate() }
+            val http = source(channel)?.allowHttp == true
+            if (http != logoHttp) { logoBitmap = null; logoHttp = http }
+            val logo = logoBitmap ?: logos.get(channel.logo, http) { if (this.channel?.id == channel.id) invalidate() }.also { logoBitmap = it }
             if (logo != null) {
                 val size = 24 * rowDensity
                 val ratio = minOf(size / logo.width, size / logo.height)

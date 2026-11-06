@@ -306,6 +306,59 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun providerLogosAreEncryptedPersistBetweenLoadersAndRespectHttpConsent() {
+        FixtureServer().use { server ->
+            val url = "${server.base}/logo.png?synthetic-account=${System.nanoTime()}"
+            val files = GuideLogoFiles(context)
+            val first = LogoLoader(96, 1024 * 1024, files)
+            val second = LogoLoader(96, 1024 * 1024, GuideLogoFiles(context))
+            val name = "guide-logo-${Channel.stableId(url)}.enc"
+            try {
+                first.prefetch(url, true)
+                val deadline = System.currentTimeMillis() + 5000
+                while (first.get(url, true) {} == null && System.currentTimeMillis() < deadline) Thread.sleep(30)
+                assertNotNull(first.get(url, true) {}); assertNull("Cached HTTP still requires consent", first.get(url, false) {})
+                first.close(); second.prefetch(url, true)
+                while (second.get(url, true) {} == null && System.currentTimeMillis() < deadline) Thread.sleep(30)
+                assertNotNull(second.get(url, true) {}); assertEquals("Second loader uses encrypted disk bytes", 1, server.requests["/logo.png"])
+                val disk = File(context.filesDir, name).readBytes()
+                assertFalse(disk.copyOfRange(0, 8).contentEquals(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)))
+                assertFalse(disk.toString(Charsets.ISO_8859_1).contains("synthetic-account"))
+                assertNotNull(store.read(name))
+            } finally { first.close(); second.close(); store.delete(name) }
+        }
+    }
+
+    @Test fun fallbackGuideWarmsUnvisitedChannelsWhileFullscreenWithoutRetuning() {
+        FixtureServer(channelCount = 20, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Background guide", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var player: Player? = null; var media = ""
+                scenario.onActivity { activity ->
+                    player = find<PlayerView>(activity.window.decorView)!!.player; media = player!!.currentMediaItem!!.mediaId
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
+                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 21000, true, 6000)
+                }
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:20"]?.isNotEmpty() == true
+                }
+                scenario.onActivity { activity -> assertFalse(channelList(activity)!!.isShown); assertSame(player, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(media, player!!.currentMediaItem!!.mediaId) }
+                val reads = server.requestedEpgTargets.count { it.endsWith("stream_id=20") || it.contains("stream_id=20&") }
+                assertEquals(1, reads)
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("focusChannelAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, 19) }
+                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.nativeId == "xc:20" }
+                assertEquals(reads, server.requestedEpgTargets.count { it.endsWith("stream_id=20") || it.contains("stream_id=20&") })
+                waitFor(scenario) { store.cachedProgrammes(source)["xc:20"].orEmpty().isNotEmpty() }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
     @Test fun fullProviderEpgWarmsUnvisitedChannelsAndSurvivesRestart() {
         FixtureServer(channelCount = 96, fullGuide = true).use { server ->
             val source = Source(name = "Full guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
