@@ -1093,6 +1093,47 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun vodSharesCaptionAppearanceAndShowsMeasuredVideoQuality() {
+        FixtureServer(captionsMode = true).use { server ->
+            val source = Source(name = "VOD captions", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.captions = true
+            store.subtitleSize = "Medium"; store.subtitleStyle = "Shadow"
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                fun verifyAppearance(activity: MainActivity) {
+                    val view = find<PlayerView>(activity.window.decorView)!!.subtitleView!!
+                    val size = view.javaClass.getDeclaredField("defaultTextSize").apply { isAccessible = true }.getFloat(view)
+                    val style = view.javaClass.getDeclaredField("style").apply { isAccessible = true }.get(view) as androidx.media3.ui.CaptionStyleCompat
+                    assertEquals(SubtitleAppearance.sizes.getValue("Medium"), size, .001f)
+                    assertEquals(androidx.media3.ui.CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, style.edgeType)
+                }
+                scenario.onActivity { activity ->
+                    verifyAppearance(activity)
+                    MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, Long::class.javaPrimitiveType).apply { isAccessible = true }
+                        .invoke(activity, OnDemand("movie:captions", "VOD caption fixture", "", "${server.base}/channel1.m3u8", playlistId = source.id), 0L)
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.currentMediaItem?.mediaId?.startsWith("movie:captions:") == true && p.isPlaying && p.currentCues.cues.isNotEmpty() } == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("on-demand-quality")?.text?.contains("fps") == true }
+                scenario.onActivity { activity ->
+                    verifyAppearance(activity)
+                    // Image subtitles share size too, without mutating/reallocating the decoded image.
+                    val bitmap = Bitmap.createBitmap(100, 20, Bitmap.Config.ARGB_8888)
+                    try {
+                        val cue = androidx.media3.common.text.Cue.Builder().setBitmap(bitmap).setSize(.5f).setBitmapHeight(.1f).build()
+                        val playerView = PlayerView(activity)
+                        SubtitleAppearance.render(playerView, listOf(cue), "Small")
+                        @Suppress("UNCHECKED_CAST")
+                        val rendered = playerView.subtitleView!!.javaClass.getDeclaredField("cues").apply { isAccessible = true }.get(playerView.subtitleView) as List<androidx.media3.common.text.Cue>
+                        assertSame(bitmap, rendered.single().bitmap); assertTrue(rendered.single().size < cue.size)
+                        assertEquals(5f, rendered.single().size / rendered.single().bitmapHeight, .001f)
+                        playerView.subtitleView!!.setCues(emptyList())
+                    } finally { bitmap.recycle() }
+                }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
     @Test fun automaticSubtitlesRenderAndFpsBecomesKnown() {
         FixtureServer(captionsMode = true).use { server ->
             val source = Source(name = "Captions Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

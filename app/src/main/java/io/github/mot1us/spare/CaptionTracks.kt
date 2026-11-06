@@ -10,6 +10,7 @@ import androidx.media3.common.util.UnstableApi
 object CaptionTracks {
     const val AUTO = "auto"
     const val OFF = "off"
+    fun image(format: Format) = format.sampleMimeType in setOf(MimeTypes.APPLICATION_PGS, MimeTypes.APPLICATION_VOBSUB, MimeTypes.APPLICATION_DVBSUBS)
     // Fallback readers only. Real PMT/manifest caption descriptors take precedence.
     val compatibility = listOf(
         Format.Builder().setSampleMimeType(MimeTypes.APPLICATION_CEA608).setAccessibilityChannel(1).setLabel("CC1 · compatibility").build(),
@@ -20,11 +21,11 @@ object CaptionTracks {
         val key get() = key(format)
         val compatibility get() = format.label?.endsWith(" · compatibility") == true ||
             (format.label.isNullOrBlank() && format.language.isNullOrBlank() && format.accessibilityChannel == 1 && format.sampleMimeType in setOf(MimeTypes.APPLICATION_CEA608, MimeTypes.APPLICATION_CEA708))
-        fun label(): String = if (compatibility) { if (format.sampleMimeType == MimeTypes.APPLICATION_CEA708) "Digital 1 · compatibility" else "CC1 · compatibility" } else format.label ?: listOfNotNull(
+        fun label(): String = (if (compatibility) { if (format.sampleMimeType == MimeTypes.APPLICATION_CEA708) "Digital 1 · compatibility" else "CC1 · compatibility" } else format.label ?: listOfNotNull(
             format.language?.let { java.util.Locale.forLanguageTag(it).displayLanguage },
             format.sampleMimeType?.substringAfterLast('/'),
             format.accessibilityChannel.takeIf { it > 0 }?.let { "CC $it" },
-        ).joinToString(" · ").ifBlank { "Subtitle track" }
+        ).joinToString(" · ").ifBlank { "Subtitle track" }) + if (image(format)) " · Image" else ""
     }
     fun choices(tracks: Tracks) = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { group ->
         (0 until group.length).filter { group.isTrackSupported(it) }.map { Choice(group, it) }

@@ -77,6 +77,7 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         if (extras.size > 1) fourUp = true
         var alternate = false
         player.addListener(object : Player.Listener {
+            override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) { SubtitleAppearance.render(view, cueGroup.cues, store.subtitleSize) }
             override fun onPlaybackStateChanged(playbackState: Int) { if (visible) updateStatus() }
             override fun onPlayerError(error: PlaybackException) {
                 val next = if (!alternate && PlaybackErrors.httpFailure(error)?.responseCode in setOf(404, 415)) StreamUrls.alternate(url) else null

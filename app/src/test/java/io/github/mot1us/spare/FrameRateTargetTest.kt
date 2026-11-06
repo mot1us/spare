@@ -37,4 +37,27 @@ class FrameRateTargetTest {
         assertNull(target.observe(50f, 32499, true)); assertEquals(50f, target.observe(50f, 32500, true)!!, .001f)
     }
 
+    @Test fun vodCorrectsFractionalRatesOnlyAfterStableSourceTiming() {
+        for ((rounded, fractional) in listOf(24f to 23.976f, 30f to 29.97f, 60f to 59.94f)) {
+            val target = FrameRateTarget(); target.reset(rounded, exact = true)
+            // Rounded decoder/render samples cannot correct the display hint.
+            assertNull(target.observe(fractional, 0, false))
+            assertNull(target.observe(fractional, 10000, false))
+            for (now in 11000L..18500L step 500) assertNull(target.observe(fractional, now, true))
+            assertEquals(fractional, target.observe(fractional, 19000, true)!!, .001f)
+            assertNull(target.observe(fractional, 19500, true))
+            // A brief rounded sample must not switch back.
+            assertNull(target.observe(rounded, 20000, true))
+            assertNull(target.observe(fractional, 20500, true))
+        }
+    }
+
+    @Test fun vodCanStartWithoutARateAndReturningToLiveRestoresItsJitterTolerance() {
+        val target = FrameRateTarget(); target.reset(exact = true)
+        assertNull(target.observe(23.976f, 0, true))
+        assertEquals(23.976f, target.observe(23.976f, 1500, true)!!, .001f)
+        target.reset(59.94f)
+        for (now in 2000L..15000L step 500) assertNull(target.observe(60f, now, true))
+    }
+
 }

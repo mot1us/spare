@@ -573,8 +573,9 @@ class MainActivity : Activity() {
             }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) { syncPlaybackMonitoring() }
             override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) { syncPlaybackMonitoring() }
-            override fun onTracksChanged(tracks: Tracks) { reconcileCaptions() }
+            override fun onTracksChanged(tracks: Tracks) { applySubtitleAppearance(); reconcileCaptions() }
             override fun onCues(cueGroup: CueGroup) {
+                SubtitleAppearance.render(video, cueGroup.cues, store.subtitleSize)
                 if (cueGroup.cues.isNotEmpty()) { captionSawCue = true; cancelCaptionProbe() }
             }
             override fun onPlayerError(error: PlaybackException) {
@@ -959,7 +960,7 @@ class MainActivity : Activity() {
         hasPlayedChannel = false; firstFrame = false; lastVideoInfo = null; alternateUsed = false; reconnects = ReconnectBudget()
         playbackUrl = item.url; retryPanel.visibility = View.GONE
         player.volume = 1f
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverrides().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build(); applyCaptionPreference()
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverrides().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build(); applyCaptionPreference(); applySubtitleAppearance()
         showGuide(false); if (started) playAttempt(); showDemandControls()
         handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000)
     }
@@ -978,7 +979,7 @@ class MainActivity : Activity() {
     }
     private fun refreshDemandControls() {
         val item = onDemand ?: return
-        demandControls.update(item, player.currentPosition, player.duration, player.isPlaying, player.isCurrentMediaItemSeekable, library.next(item) != null, player.playbackState == Player.STATE_ENDED)
+        demandControls.update(item, player.currentPosition, player.duration, player.isPlaying, player.isCurrentMediaItemSeekable, library.next(item) != null, player.playbackState == Player.STATE_ENDED, lastVideoInfo?.label().orEmpty())
     }
     private fun showDemandControls() {
         if (onDemand == null || library.opened || settingsPanel?.opened == true) return
@@ -1349,7 +1350,7 @@ class MainActivity : Activity() {
             HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors()).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
-        if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
+        if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f, exact = onDemand?.kind in setOf("movie", "episode"))
         journal(PlaybackJournal.Event.OPEN)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
         handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
@@ -2690,7 +2691,7 @@ class MainActivity : Activity() {
                 panel.page(page, "Match the TV refresh rate to the current stream. Your TV may briefly go black when changing modes. Off leaves display timing to Android.")
                 listOf("On", "Off").forEachIndexed { index, label -> panel.action(label, selected = store.frameRateMatching == (index == 0)) {
                     store.frameRateMatching = index == 0; frameRates.enabled = store.frameRateMatching
-                    if (store.frameRateMatching && !multiview.active) videoInfo[current?.id]?.fps?.let(frameRates::request)
+                    if (store.frameRateMatching && !multiview.active) (if (onDemand != null) lastVideoInfo?.fps else videoInfo[current?.id]?.fps)?.let(frameRates::request)
                     refresh(label)
                 } }
             }
@@ -2840,7 +2841,7 @@ class MainActivity : Activity() {
     private fun renderSubtitleAppearance() {
         val panel = settingsPanel ?: return
         panel.onDetailBack { renderCaptionSettings(); panel.focusOption("Subtitle appearance") }
-        panel.page("Subtitle appearance", "Applies to live TV, movies and series. Embedded subtitle font sizes are overridden.")
+        panel.page("Subtitle appearance", "Shared by live TV, movies and series. Text tracks use your size and style; Image tracks are resized but retain their original lettering.")
         panel.note("Size")
         SubtitleAppearance.sizes.keys.forEach { size -> panel.action(size, selected = store.subtitleSize == size) { store.subtitleSize = size; applySubtitleAppearance(); renderSubtitleAppearance(); panel.focusOption(size) } }
         panel.note("Style")

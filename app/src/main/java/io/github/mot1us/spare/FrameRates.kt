@@ -14,23 +14,25 @@ class FrameRates(private val activity: Activity, private val view: SurfaceView) 
     private val handler = Handler(Looper.getMainLooper())
     private val target = FrameRateTarget()
     @Volatile private var rate = 0f
+    @Volatile private var exact = false
     @Volatile var enabled = true
         set(value) { field = value; if (!value) clear() }
     init { view.holder.addCallback(this) }
     /** Apply a known rate before prepare, while the opening overlay is still visible. */
-    fun begin(value: Float) {
-        target.reset(value)
+    fun begin(value: Float, exact: Boolean = false) {
+        this.exact = exact
+        target.reset(value, exact)
         if (value.isFinite() && value in 10f..120f) request(value)
     }
     fun observe(value: Float, reliable: Boolean) {
         if (!enabled) return
         val settled = target.observe(value, android.os.SystemClock.elapsedRealtime(), reliable) ?: return
-        if (abs(settled - rate) < .1f) return
+        if (abs(settled - rate) < if (exact) .005f else .1f) return
         rate = settled; handler.post { apply() }
     }
     fun request(value: Float) {
-        if (!enabled || !value.isFinite() || value !in 10f..120f || abs(value - rate) < .1f) return
-        target.reset(value); rate = value
+        if (!enabled || !value.isFinite() || value !in 10f..120f || abs(value - rate) < if (exact) .005f else .1f) return
+        target.reset(value, exact); rate = value
         handler.post { apply() }
     }
     private fun apply() {
@@ -46,7 +48,10 @@ class FrameRates(private val activity: Activity, private val view: SurfaceView) 
                 val match = display.supportedModes.filter {
                     it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight &&
                         abs(it.refreshRate / rate - round(it.refreshRate / rate)) < .025f
-                }.minByOrNull { it.refreshRate }
+                }.minWithOrNull(compareBy<android.view.Display.Mode> {
+                    // Prefer 23.976/47.952/71.928 over an integer-family mode.
+                    if (exact) abs(it.refreshRate / rate - round(it.refreshRate / rate)) else 0f
+                }.thenBy { it.refreshRate })
                 if (match != null) activity.window.attributes = activity.window.attributes.apply { preferredDisplayModeId = match.modeId }
             }
         }

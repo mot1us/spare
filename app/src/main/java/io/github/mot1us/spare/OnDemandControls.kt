@@ -15,6 +15,7 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private val title = TextView(context).apply { textSize = 19f; setTextColor(Color.WHITE); maxLines = 2; typeface = AppFont.face(true) }
     private val position = TextView(context).apply { textSize = 12f; setTextColor(Color.LTGRAY); typeface = AppFont.face() }
+    private val quality = TextView(context).apply { tag = "on-demand-quality"; textSize = 12f; setTextColor(Color.LTGRAY); typeface = AppFont.face(); visibility = GONE }
     private val timeline = SeekBar(context).apply { max = 1000; tag = "on-demand-seek"; keyProgressIncrement = 10 }
     val pause = button("Pause", toggle).apply { tag = "on-demand-pause" }
     private val nextButton = button("Next episode", next).apply { tag = "on-demand-next" }
@@ -22,7 +23,7 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
     private var dragging = false
     init {
         orientation = VERTICAL; visibility = GONE; tag = "on-demand-controls"; setPadding(dp(22), dp(16), dp(22), dp(16)); background = GuideTheme.glass(resources.displayMetrics.density)
-        addView(title); addView(position, LayoutParams(-1, -2).apply { topMargin = dp(8) }); addView(timeline, LayoutParams(-1, dp(32)))
+        addView(title); addView(quality, LayoutParams(-1, -2).apply { topMargin = dp(4) }); addView(position, LayoutParams(-1, -2).apply { topMargin = dp(8) }); addView(timeline, LayoutParams(-1, dp(32)))
         val actions = LinearLayout(context)
         listOf(pause, button("Start over", restart).apply { tag = "on-demand-restart" }, button("Subtitles", subtitles), button("Audio", audio), nextButton, button("Library", library).apply { tag = "on-demand-library" }, button("Stop", stop).apply { tag = "on-demand-stop" }, button("Live TV", live)).forEach(actions::addView)
         addView(android.widget.HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(actions) }, LayoutParams(-1, dp(36)))
@@ -32,7 +33,8 @@ class OnDemandControls(context: Context, button: (String, () -> Unit) -> Button,
             override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) { if (fromUser && !dragging) seek(duration * progress / 1000) }
         })
     }
-    fun update(item: OnDemand, current: Long, total: Long, playing: Boolean, seekable: Boolean, hasNext: Boolean, ended: Boolean) {
+    fun update(item: OnDemand, current: Long, total: Long, playing: Boolean, seekable: Boolean, hasNext: Boolean, ended: Boolean, videoInfo: String = "") {
+        quality.text = videoInfo; quality.visibility = if (videoInfo.isBlank()) GONE else VISIBLE
         val episode = if (item.kind == "episode" && item.episode > 0) " · S${item.season.toString().padStart(2, '0')}E${item.episode.toString().padStart(2, '0')}" else ""
         title.text = item.title + episode.takeUnless { it.isNotBlank() && item.title.contains(it.removePrefix(" · "), ignoreCase = true) }.orEmpty() + if (item.kind == "catchup") " · Catch-up" else ""
         duration = total.coerceAtLeast(0)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.1 — 2026-11-05
+
+- Preserve exact fractional display rates for VOD movies and episodes. Require stable source timing before fractional corrections, prefer precise compatible modes on older TVs, and use the current VOD rate when re-enabling matching. Retain live TV's existing timing policy.
+- Keep subtitle appearance shared across live TV and VOD, scale image-based subtitles with the saved size without copying decoded bitmaps, and identify Image tracks whose original lettering cannot be restyled.
+- Show measured resolution and FPS in VOD playback controls.
+
 ## 0.28.0 — 2026-11-05
 
 - Check known game feeds with advertised archives first, cache archive inventories, return the first verified replay promptly, and preserve progress across unrelated EPG updates. Keep catch-up status stable while scanning and publish confirmed cards without a full Sports redraw.
