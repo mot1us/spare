@@ -36,7 +36,7 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
     fun catalogStatus(selected: Source, kinds: Set<String>): CatalogStatus = synchronized(lock) {
         if (source != selected) return@synchronized CatalogStatus(false, false, false)
         val complete = kinds.all { mode -> repository.memory(selected, mode)?.let { it.complete && it.chunks.all { chunk -> chunk.titles.size == chunk.count } } == true }
-        CatalogStatus(restoring || kinds.any { it in loading } || warming, complete, kinds.any { it in failures })
+        CatalogStatus(!complete && (restoring || kinds.any { it in loading } || warming), complete, kinds.any { it in failures })
     }
     fun prepare(selected: Source) {
         synchronized(lock) {
@@ -199,7 +199,7 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         wanted.firstOrNull { candidate -> listOf("movie", "series").any { repository.memory(candidate, it)?.complete != true } }?.let { session(it).engine.prefetch(it) }
     }
     fun catalogStatus(source: Source, kinds: Set<String>): CatalogStatus {
-        val values = wanted(source).map { session(it).engine.catalogStatus(it, kinds) }
+        val values = wanted(source).filter { it.kind == "xtream" }.map { session(it).engine.catalogStatus(it, kinds) }
         return CatalogStatus(values.any { it.checking }, values.isNotEmpty() && values.all { it.complete }, values.any { it.failed })
     }
     fun refresh(source: Source, mode: String) { session(source).engine.refresh(source, mode) }

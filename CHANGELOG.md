@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.28.2 — 2026-11-06
+
+- Bound the live-channel VOD availability spinner to eight seconds per programme, keep it current without waiting for provider callbacks, and preserve its deadline when reopening details. Background catalog updates continue and late matches can still appear.
+- Distinguish titles absent from a complete library from unfinished imports and lookup failures. Use complete cached catalogs immediately and exclude live-only M3U playlists from VOD completeness checks; show Start VOD only for confirmed matches.
+
 ## 0.28.1 — 2026-11-05
 
 - Preserve exact fractional display rates for VOD movies and episodes. Require stable source timing before fractional corrections, prefer precise compatible modes on older TVs, and use the current VOD rate when re-enabling matching. Retain live TV's existing timing policy.

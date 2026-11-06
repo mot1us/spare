@@ -342,6 +342,10 @@ class MainActivity : Activity() {
     private var vodEpisodeResolving = false
     private var vodSeriesChoice: OnDemand? = null
     private lateinit var details: PlaybackDetails
+    private val vodAvailability = VodAvailability()
+    private val updateVodDetails = object : Runnable {
+        override fun run() { if (!closed && started && details.isVisible) refreshDetails() }
+    }
     private lateinit var retryPanel: LinearLayout
     private var sources = emptyList<Source>()
     private var source: Source? = null
@@ -2488,14 +2492,12 @@ class MainActivity : Activity() {
         val selected = owner(channel)
         val canVod = target != null && enabledSources().any { library.repository.matches(it, target).isNotEmpty() }
         val status = if (selected?.kind == "xtream" && target != null) playlistSearch.catalogStatus(selected, if (target.episode == null) setOf("movie", "series") else setOf("series")) else null
-        val checking = !canVod && status != null && (status.checking || vodWarmScheduled && !status.complete)
-        val message = if (canVod || status == null) "" else when {
-            checking -> "Checking for VOD…"
-            status.complete -> "No VOD match found"
-            status.failed -> "Could not check for VOD"
-            else -> "VOD check paused"
-        }
-        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + (if (enabledSources().size > 1) " · ${selected?.name.orEmpty()}" else ""), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), selected?.allowHttp == true, (if (watchingRedZone) "NFL RedZone" else playbackGame()?.game?.title), canVod, target?.let(VodStart::targetLabel).orEmpty(), checking, message)
+        val availability = if (status == null) VodAvailability.Status(false, "") else vodAvailability.update(
+            listOf(channel.id, programme?.start, programme?.end, target, sources), android.os.SystemClock.elapsedRealtime(),
+            canVod, status.complete, status.checking || vodWarmScheduled && !status.complete, status.failed)
+        details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + (if (enabledSources().size > 1) " · ${selected?.name.orEmpty()}" else ""), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), selected?.allowHttp == true, (if (watchingRedZone) "NFL RedZone" else playbackGame()?.game?.title), canVod, target?.let(VodStart::targetLabel).orEmpty(), availability.checking, availability.message)
+        handler.removeCallbacks(updateVodDetails)
+        if (details.isVisible && availability.checking) handler.postDelayed(updateVodDetails, 1000)
     }
     private fun playbackDiagnostics(): String {
         val format = player.videoFormat
@@ -2514,10 +2516,12 @@ class MainActivity : Activity() {
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
         suspendSportsOverlay()
         details.resumeImages(); refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.focusActions()
+        if (details.checkingVod) { handler.removeCallbacks(updateVodDetails); handler.postDelayed(updateVodDetails, 1000) }
         handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000)
     }
     private fun closeDetails() {
         handler.removeCallbacks(hideDetails)
+        handler.removeCallbacks(updateVodDetails)
         if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun configurePlaylists(next: List<Source>) {

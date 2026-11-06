@@ -1900,6 +1900,38 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun missingVodMatchStopsCheckingWithoutWaitingForTheCatalogOrRetuningLiveTv() {
+        FixtureServer(longVideo = true, programmeTitle = "Missing from the VOD fixture", slowVod = true, parallelClients = true).use { server ->
+            val source = Source(name = "Missing VOD", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val liveOnly = Source(name = "Live-only playlist", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source, liveOnly)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var liveId = ""
+                fun show(activity: MainActivity) { MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity) }
+                scenario.onActivity { activity -> liveId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId; show(activity) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-progress")?.isShown == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("still updating") == true }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
+                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    assertEquals("The foreground hint must stop before the background import finishes", 1L, server.finishVodCatalog.count)
+                    show(activity)
+                    assertFalse("Reopening the same programme must not restart its spinner", activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
+                }
+                server.finishVodCatalog.countDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("Not available in your VOD library") == true }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
+                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                }
+                assertEquals(0, server.archiveRequests.get())
+            }
+            store.saveSources(emptyList()); store.removeCache(source); store.removeCache(liveOnly)
+        }
+    }
+
     @Test fun liveProgrammeCanStartItsVodMovieOrIdentifiedEpisodeWithoutUsingCatchup() {
         listOf("Fixture movie (2025)" to "/movie/test/test-secret/101.mp4", "Fixture series S01E02" to "/series/test/test-secret/202.mp4").forEach { (title, path) ->
             FixtureServer(longVideo = true, programmeTitle = title, slowVod = title.startsWith("Fixture movie"), slowEpisodes = title.startsWith("Fixture series"), parallelClients = true).use { server ->
