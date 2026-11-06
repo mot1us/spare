@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.27.5 — 2026-11-05
+
+- Reuse confirmed Sports matches for the active game instead of expiring them every two minutes. Unrelated EPG updates, fresh scores and equivalent lineup snapshots keep the ready card; changed coverage, programme boundaries and playlist changes still invalidate it.
+- Open confirmed game cards directly without another provider-coverage check. Prefetch live games only, with room for all visible live matchups, and retain discovered streams when returning from playback.
+
 ## 0.27.4 — 2026-11-04
 
 - Cache Xtream providers’ full XMLTV guides in the background after playback settles, so unvisited categories already have programme listings. Preserve Xtream XMLTV IDs without changing existing channel or catch-up identities; upgrade old lineups once.

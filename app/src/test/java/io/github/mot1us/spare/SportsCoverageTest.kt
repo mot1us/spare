@@ -87,7 +87,7 @@ class SportsCoverageTest {
         assertEquals(listOf(hd), first.broadcasts.map { it.channel })
         assertTrue(uhd in SportsStreams.confirmationTargets(first, before, SportsStreams.rank(first, GuideFilters(), emptyMap()), emptySet(), emptyMap(), now))
         val after = before.copy(programmes = before.programmes + (uhd.id to listOf(programme.copy(channel = uhd.id))))
-        assertTrue("A previously unlisted UHD EPG match must invalidate the HD-only result", SportsStreamCache.Match(first).needsRefresh(before, after, now))
+        assertFalse("New UHD coverage can enrich the ready game without discarding its working HD result", SportsStreamCache.Match(first).needsRefresh(before, after, now))
         val matched = SportsSchedule.match(football, after, emptySet(), now)
         assertEquals(listOf(uhd, hd), SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), after, now))
     }

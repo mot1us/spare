@@ -14,7 +14,7 @@ class SportsStreamCacheTest {
         val current = Programme(c.id, game.title, now - 1000, now + 3600000)
         val original = Guide(listOf(c), mapOf(c.id to listOf(archived)))
         val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, current))), mapOf(c.id to listOf(current)))
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, original, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, original, emptySet())
         val (merged, retained) = match.mergeGuide(original, now)
         assertEquals(listOf(archived, current), merged.programmes[c.id])
         assertTrue(cache.put(token, retained, now))
@@ -33,13 +33,13 @@ class SportsStreamCacheTest {
         val missing = guide.copy(programmes = emptyMap())
         assertTrue("A newly arrived matching programme must still trigger a recheck", SportsStreamCache.Match(game.copy(candidates = listOf(c))).needsRefresh(missing, guide, now))
     }
-    @Test fun refreshDueKeepsDiscoveredCardsVisibleWithoutReusingStaleAutoPlayEvidence() {
+    @Test fun confirmedChannelTitlesRemainReadyForTheGameInsteadOfExpiringEveryTwoMinutes() {
         val c = channel("one"); val guide = Guide(listOf(c), emptyMap())
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, guide, emptySet())
         cache.put(token, SportsStreamCache.Match(game.copy(titleMatches = listOf(c))), now)
         val later = now + 120001
-        assertNull("A due refresh still blocks stale automatic playback", cache.get(token, game, later))
-        assertNull(cache.get(token, game, later, allowStale = true))
+        assertNotNull("A confirmed channel title remains playable for this game", cache.get(token, game, later))
+        assertNotNull(cache.get(token, game, later, forAuto = false))
         val updated = game.copy(scores = mapOf("nfl:SEA" to "14"))
         val card = cache.get(token, updated, later, forAuto = false, allowStale = true)!!
         assertEquals(listOf(c), card.game.titleMatches); assertEquals(updated.scores, card.game.scores)
@@ -49,7 +49,7 @@ class SportsStreamCacheTest {
     @Test fun staleCardsStillExpireAtProgrammeBoundariesAndInvalidateOnRelevantGuideChanges() {
         val c = channel("one"); val p = Programme(c.id, game.title, now - 1000, now + 300000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, guide, emptySet())
         val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p))))
         cache.put(token, match, now)
         val unrelated = cache.use("source", 1, guide.copy(programmes = guide.programmes + ("news" to listOf(p))), emptySet())
@@ -64,7 +64,7 @@ class SportsStreamCacheTest {
     @Test fun cachedEvidenceRetainsFreshScoresButExpiresAtProgrammeBoundaries() {
         val c = channel("one"); val programme = Programme(c.id, game.title, now - 1000, now + 5000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(programme)))
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, guide, emptySet())
         assertTrue(cache.put(token, SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, programme)))), now))
         assertEquals(mapOf("nfl:SEA" to "7"), cache.get(token, game.copy(scores = mapOf("nfl:SEA" to "7")), now + 10)!!.game.scores)
         assertNull(cache.get(token, game, now + 5000))
@@ -72,7 +72,7 @@ class SportsStreamCacheTest {
     @Test fun contextsRejectOldPlaylistWorkAndInvalidateChangedCoverageOnly() {
         val c = channel("one"); val p = Programme(c.id, game.title, now - 1000, now + 3600000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
-        val cache = SportsStreamCache(); val first = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val first = cache.use("source", 1, guide, emptySet())
         val match = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p))))
         cache.put(first, match, now)
         val unrelated = cache.use("source", 1, guide.copy(programmes = guide.programmes + ("news" to listOf(p))), emptySet())
@@ -84,7 +84,7 @@ class SportsStreamCacheTest {
         assertNull(cache.get(otherSource, game, now)); assertFalse(cache.put(changed, match, now))
     }
     @Test fun cachedWarmMetadataCanMergeWithoutThrowingAwayItsOwnMatch() {
-        val c = channel("one"); val guide = Guide(listOf(c), emptyMap()); val cache = SportsStreamCache()
+        val c = channel("one"); val guide = Guide(listOf(c), emptyMap()); val cache = SportsStreamCache(clock = { now })
         val token = cache.use("source", 1, guide, emptySet())
         val warm = mapOf(c.id to listOf(Programme(c.id, game.title, now - 1000, now + 3600000)))
         cache.put(token, SportsStreamCache.Match(game.copy(candidates = listOf(c)), warm), now)
@@ -94,7 +94,7 @@ class SportsStreamCacheTest {
         assertNull(cache.get(merged, game.copy(networks = listOf("CBS")), now))
     }
     @Test fun memoryIsBoundedAndIncompleteOrManualLookupsCannotBecomeAutoReady() {
-        val cache = SportsStreamCache(capacity = 2); val token = cache.use("source", 1, Guide.EMPTY, emptySet())
+        val cache = SportsStreamCache(capacity = 2, clock = { now }); val token = cache.use("source", 1, Guide.EMPTY, emptySet())
         assertFalse(cache.put(token, SportsStreamCache.Match(game.copy(coverageComplete = false)), now))
         cache.put(token, SportsStreamCache.Match(game, autoReady = false), now)
         assertNull(cache.get(token, game, now)); assertNotNull(cache.get(token, game, now, forAuto = false))
@@ -150,7 +150,7 @@ class SportsStreamCacheTest {
     @Test fun scheduledMatchesAreDisplayOnlyAndExpireAtKickoff() {
         val future = game.copy(state = "pre", start = now + 3600000L, end = now + 4 * 3600000L)
         val c = channel("scheduled"); val p = Programme(c.id, future.title, future.start, future.end)
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, Guide(listOf(c), mapOf(c.id to listOf(p))), emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, Guide(listOf(c), mapOf(c.id to listOf(p))), emptySet())
         assertTrue(cache.put(token, SportsStreamCache.Match(future.copy(broadcasts = listOf(SportsBroadcast(c, p)))), now))
         assertNotNull(cache.get(token, future, now, forAuto = false))
         assertNull("An upcoming match must not tune automatically", cache.get(token, future, now))
@@ -162,7 +162,7 @@ class SportsStreamCacheTest {
         val c = channel("known"); val candidate = channel("guess")
         val p = Programme(c.id, game.title, now - 1000, now + 3600000)
         val guide = Guide(listOf(c, candidate), mapOf(c.id to listOf(p)))
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, guide, emptySet())
         val matched = game.copy(broadcasts = listOf(SportsBroadcast(c, p)), candidates = listOf(candidate))
         cache.put(token, SportsStreamCache.Match(matched), now)
         val changed = guide.copy(programmes = guide.programmes + (candidate.id to listOf(p.copy(channel = candidate.id, title = "Headlines"))))
@@ -172,10 +172,10 @@ class SportsStreamCacheTest {
         assertNull(cache.get(updated, game, p.end))
     }
 
-    @Test fun publishedFastPathNeverWaitsForCacheWorkAndRejectsUnvalidatedGuideChanges() {
+    @Test fun publishedFastPathNeverWaitsForCacheWorkAndValidatesOnlyTheKnownFeeds() {
         val c = channel("ready"); val p = Programme(c.id, game.title, now - 1000, now + 3600000)
         val guide = Guide(listOf(c), mapOf(c.id to listOf(p)))
-        val cache = SportsStreamCache(); val token = cache.use("source", 1, guide, emptySet())
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, guide, emptySet())
         cache.put(token, SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(c, p)))), now)
         val locked = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
         val owner = java.util.concurrent.Executors.newSingleThreadExecutor(); val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -185,12 +185,30 @@ class SportsStreamCacheTest {
             val result = reader.submit<SportsStreamCache.Match?> { cache.peek("source", 1, guide, emptySet(), game, now) }
             assertNotNull(result.get(500, java.util.concurrent.TimeUnit.MILLISECONDS))
             val changed = guide.copy(programmes = guide.programmes + ("news" to listOf(p.copy(title = "Headlines"))))
-            assertNull(cache.peek("source", 1, changed, emptySet(), game, now))
+            assertNotNull("Unrelated EPG data must not send a confirmed card back to the search worker", cache.peek("source", 1, changed, emptySet(), game, now))
+            val conflict = guide.copy(programmes = mapOf(c.id to listOf(p.copy(title = "Other game"))))
+            assertNull(cache.peek("source", 1, conflict, emptySet(), game, now))
             assertNull(cache.peek("other", 1, guide, emptySet(), game, now))
         } finally { release.countDown(); owner.shutdownNow(); reader.shutdownNow() }
         assertNull(cache.get(token, game.copy(networks = listOf("CBS")), now))
         assertNull(cache.peek("source", 1, guide, emptySet(), game, now))
         cache.clear(); assertNull(cache.peek("source", 1, guide, emptySet(), game, now))
+    }
+
+    @Test fun aReadyGameSurvivesNewCoverageAndAnEquivalentLineupWithoutAnotherScan() {
+        val known = channel("known"); val better = channel("better")
+        val programme = Programme(known.id, game.title, now - 1000, now + 3600000)
+        val guide = Guide(listOf(known, better), mapOf(known.id to listOf(programme)))
+        val cache = SportsStreamCache(clock = { now }); val first = cache.use("source", 1, guide, emptySet())
+        val ready = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(known, programme))))
+        assertTrue(cache.put(first, ready, now))
+        val refreshed = guide.copy(channels = guide.channels.toList(), programmes = guide.programmes + (better.id to listOf(programme.copy(channel = better.id))))
+        assertFalse(ready.needsRefresh(guide, refreshed, now + 600000))
+        val next = cache.use("source", 1, refreshed, emptySet())
+        assertEquals(setOf(known.id, better.id), cache.get(next, game, now)!!.game.broadcasts.map { it.channel.id }.toSet())
+        assertNotNull(cache.get(next, game, now + 600000, forAuto = false))
+        assertNotNull(cache.peek("source", 1, refreshed, emptySet(), game, now + 600000))
+        assertTrue("Late completed work for an equivalent lineup stays reusable", cache.put(first, ready, now + 600000))
     }
 
 }

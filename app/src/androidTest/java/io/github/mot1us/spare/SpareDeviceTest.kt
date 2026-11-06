@@ -2694,6 +2694,53 @@ class SpareDeviceTest {
         } }
     }
 
+    @Test fun confirmedSportsCardsPlayFromSessionCacheWithoutWaitingForAnotherSearch() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports session cache", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val news = Channel("xc:1", "News", "News", "${server.base}/channel1.mp4")
+            val feed = Channel("xc:2", "Game feed 4K", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
+            val listing = Programme(feed.id, "NFL: Seahawks vs 49ers", now - 1800000, now + 7200000)
+            val scores = LiveSportsSnapshot(listOf(LiveEvent("session-cache", setOf("nfl:SEA", "nfl:SF"), now - 1200000, league = "NFL")), now, setOf("NFL"))
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsAutoPlay = true
+            store.cache(source, Guide(listOf(news, feed), mapOf(news.id to listOf(listing.copy(channel = news.id, title = "World News")), feed.id to listOf(listing)))); store.markPlaylistRefreshed(source)
+            val release = java.util.concurrent.CountDownLatch(1)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { activity ->
+                    activity.liveSportsLoader = { scores.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:session-cache")?.text?.contains(feed.name) == true }
+                scenario.onActivity { activity ->
+                    val field = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val guide = field.get(activity) as Guide
+                    val cache = MainActivity::class.java.getDeclaredField("sportsStreamCache").apply { isAccessible = true }.get(activity) as SportsStreamCache
+                    val generation = MainActivity::class.java.getDeclaredField("generation").apply { isAccessible = true }.getInt(activity)
+                    val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
+                    val token = cache.use(source.id, generation, guide, emptySet())
+                    val match = cache.get(token, game, now)!!
+                    assertTrue(cache.put(token, match, now - 600000))
+                    field.set(activity, guide.copy(programmes = guide.programmes + ("unrelated" to listOf(listing.copy(title = "Headlines")))))
+                    val worker = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    worker.submit { release.await(20, java.util.concurrent.TimeUnit.SECONDS) }
+                    activity.window.decorView.findViewWithTag<View>(game.key).performClick()
+                    assertFalse("A confirmed card opens playback in the same frame, without the search worker", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                    assertEquals("/channel2.mp4", find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.localConfiguration!!.uri.path)
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { activity -> MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:session-cache")?.text?.contains(feed.name) == true }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("NFL:session-cache").performClick()
+                    assertFalse("Returning to Sports and selecting again reuses the same discovered game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                }
+                assertTrue("Known guide coverage needs no provider re-confirmation", server.requestedEpgTargets.isEmpty())
+            } } finally { release.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sustainedSportsBufferingUsesAnotherMatchedProviderOnTheSamePlayer() {
         FixtureServer(stalled = true, stallSeconds = 30).use { first -> FixtureServer().use { second ->
             val a = Source(name = "Primary game", kind = "m3u", url = "${first.base}/playlist.m3u", allowHttp = true)
