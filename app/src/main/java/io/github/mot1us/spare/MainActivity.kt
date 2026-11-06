@@ -273,6 +273,14 @@ class MainActivity : Activity() {
     private lateinit var adapter: GuideAdapter
     private lateinit var sidebar: RecyclerView
     private lateinit var sidebarAdapter: SidebarAdapter
+    private var pendingCategory: GuideSection? = null
+    private val previewCategory = Runnable {
+        val section = pendingCategory
+        pendingCategory = null
+        if (section != null && store.guideAutoCategories && guideVisible && !sportsVisible && started &&
+            settingsPanel?.opened != true && !library.opened && !searchPanel.isVisible && sidebar.findFocus()?.tag == section.key)
+            selectGuideCategory(section, enter = false)
+    }
     private lateinit var filterInfo: TextView
     private lateinit var remoteHint: TextView
     private lateinit var emptyInfo: TextView
@@ -744,18 +752,10 @@ class MainActivity : Activity() {
         categoryHeading = text("CATEGORIES", 9f).apply { setTextColor(0xFF929FAF.toInt()); letterSpacing = .12f; setPadding(dp(10), dp(3), 0, dp(7)) }
         navigation.addView(categoryHeading)
         sidebar = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; setHasFixedSize(true); overScrollMode = View.OVER_SCROLL_NEVER; tag = "guide-categories" }
-        sidebarAdapter = SidebarAdapter(this, { section ->
-            if (section.header) { store.setPlaylistCollapsed(section.playlist, !store.playlistCollapsed(section.playlist)); updateGroups(); return@SidebarAdapter }
-            val hadSearch = guideSearch.isVisible
-            browsePlaylist = section.playlist.takeIf { it.isNotBlank() }
-            clearGuideSearch(); sportsVisible = false
-            localOnly = false
-            favoritesOnly = section.key == "favorites"
-            group = section.category ?: if (section.key.startsWith("group:")) section.key.removePrefix("group:") else null
-            focused = null; applyFilter()
-            if (hadSearch) showGuide(true)
-            focusChannelAt(0)
-        }, { focusChannel() }, { openNavigation() }, { if (localOnly) localTab.requestFocus() else allChannelsTab.requestFocus() }, ::focusCategoryAt)
+        sidebarAdapter = SidebarAdapter(this, { selectGuideCategory(it, enter = true) }, {
+            if (store.guideAutoCategories) sidebarAdapter.focusedSection()?.takeUnless { it.header }?.let { selectGuideCategory(it, enter = false) }
+            focusChannel()
+        }, { openNavigation() }, { if (localOnly) localTab.requestFocus() else allChannelsTab.requestFocus() }, ::focusCategoryAt, ::highlightGuideCategory)
         sidebar.adapter = sidebarAdapter
         navigation.addView(sidebar, LinearLayout.LayoutParams(-1, 0, 1f))
         body.addView(navigation, LinearLayout.LayoutParams(dp(160), -1))
@@ -796,12 +796,16 @@ class MainActivity : Activity() {
         content.addView(emptyInfo)
         list = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { owner(it) }, { guide }, { favorites }, { guideTimeline.start(it.id) },
-            { guideSearch.hideKeyboard(); if (::multiview.isInitialized && multiview.browsing) startMultiview(it) else { if (it.id != current?.id || !hasPlayedChannel || player.playerError != null) tune(it); showGuide(false) } }, { channel ->
+            { guideSearch.hideKeyboard(); if (::multiview.isInitialized && multiview.browsing) startMultiview(it) else {
+                val playing = it.id == current?.id && hasPlayedChannel && player.playerError == null
+                if (!playing) tune(it)
+                if (store.guideOpenFullscreen || playing) showGuide(false)
+            } }, { channel ->
                 toggleFavorite(channel)
             }, { channel -> focused = channel; showInfo(channel); updateTimes(); scheduleEpg() }, { channel, direction -> moveTime(channel, direction) }, { focusSidebar() }, { id, direction ->
                 val index = adapter.channels.indexOfFirst { it.id == id }
                 if (index == 0 && direction < 0 && guideTimeline.ahead(id)) { ++focusEpoch; nowButton.requestFocus() }
-                else if (index >= 0 && adapter.channels.isNotEmpty()) focusChannelAt(Math.floorMod(index + direction, adapter.channels.size))
+                else if (index >= 0 && adapter.channels.isNotEmpty()) focusChannelAt(if (store.guideLoopChannels) Math.floorMod(index + direction, adapter.channels.size) else (index + direction).coerceIn(adapter.channels.indices))
             })
         list.adapter = adapter
         list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -1123,7 +1127,28 @@ class MainActivity : Activity() {
         dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded && !navigationRail.moving
         if (dockHint.isVisible) root.bringChildToFront(dockHint)
     }
-    private fun openNavigation() { ++focusEpoch; pendingFocusList = null; root.bringChildToFront(navigationRail); navigationRail.focusCurrent() }
+    private fun cancelCategoryPreview() { handler.removeCallbacks(previewCategory); pendingCategory = null }
+    private fun highlightGuideCategory(section: GuideSection, hasFocus: Boolean) {
+        if (!hasFocus) { if (pendingCategory?.key == section.key) cancelCategoryPreview(); return }
+        cancelCategoryPreview()
+        // Playlist headers expand/collapse only on OK; browsing never changes playback.
+        if (store.guideAutoCategories && !section.header) { pendingCategory = section; handler.postDelayed(previewCategory, 140) }
+    }
+    private fun selectGuideCategory(section: GuideSection, enter: Boolean) {
+        cancelCategoryPreview()
+        if (section.header) { if (enter) { store.setPlaylistCollapsed(section.playlist, !store.playlistCollapsed(section.playlist)); updateGroups() }; return }
+        val playlist = section.playlist.takeIf { it.isNotBlank() }
+        val category = section.category ?: section.key.takeIf { it.startsWith("group:") }?.removePrefix("group:")
+        val favorite = section.key == "favorites"
+        if (!enter && !localOnly && !sportsVisible && !guideSearch.isVisible && browsePlaylist == playlist && group == category && favoritesOnly == favorite) return
+        val hadSearch = guideSearch.isVisible
+        browsePlaylist = playlist; clearGuideSearch(); sportsVisible = false; localOnly = false; favoritesOnly = favorite; group = category
+        focused = null; list.stopScroll(); (list.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+        applyFilter(); focused = adapter.channels.firstOrNull(); focused?.let(::showInfo); updateTimes()
+        if (hadSearch) showGuide(true)
+        if (enter) focusChannelAt(0)
+    }
+    private fun openNavigation() { cancelCategoryPreview(); ++focusEpoch; pendingFocusList = null; root.bringChildToFront(navigationRail); navigationRail.focusCurrent() }
     private fun focusSidebar(remember: Boolean = true) {
         if (sportsVisible) { ++focusEpoch; navigationRail.focusCurrent(); return }
         focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
@@ -1567,7 +1592,7 @@ class MainActivity : Activity() {
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             remoteHint.text = if (sportsVisible) "← Main navigation    OK Select game    Hold Back Full screen"
-                else "← Earlier / categories    → Later on this channel    Back Live now    Left categories, then Left main controls    Hold OK Favorite"
+                else "← Earlier / categories    → Later on this channel    Back Categories, then main menu    Hold Back Full screen    Hold OK Favorite"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }
     }
@@ -2676,12 +2701,21 @@ class MainActivity : Activity() {
                 panel.note(playbackJournal.report(BuildConfig.VERSION_NAME))
             }
             "Guide" -> {
-                panel.page(page, "Guide navigation and clock. Appearance, fonts, spacing, opacity and preview mode are in Theme.")
+                panel.page(page, "Browsing preferences. Appearance, fonts, spacing, opacity and preview layout are in Theme.")
+                panel.action("Switch categories on highlight", if (store.guideAutoCategories) "On · show channels as you browse" else "Off · press OK to select", store.guideAutoCategories) {
+                    store.guideAutoCategories = !store.guideAutoCategories; cancelCategoryPreview(); refresh("Switch categories on highlight")
+                }
+                panel.action("Open channels full screen", if (store.guideOpenFullscreen) "On · OK plays full screen" else "Off · preview first; select again for full screen", store.guideOpenFullscreen) {
+                    store.guideOpenFullscreen = !store.guideOpenFullscreen; refresh("Open channels full screen")
+                }
+                panel.action("Loop guide channels", if (store.guideLoopChannels) "On · last channel wraps to first" else "Off · stop at either end", store.guideLoopChannels) {
+                    store.guideLoopChannels = !store.guideLoopChannels; refresh("Loop guide channels")
+                }
                 listOf("Navigation dock", "Time format").forEach { label -> panel.action(label) { renderSettingsPage(label); panel.focusContent() } }
                 panel.action("Theme editor") { panel.selectSetting("Theme") }
             }
             "Navigation dock" -> {
-                panel.page(page, "Hidden dock slides in when you move Left from categories. Right returns to your current screen; OK opens an item.")
+                panel.page(page, "Left or Back from categories opens the main menu. Right returns to your current screen; OK opens an item.")
                 listOf("Hidden dock", "Always open").forEachIndexed { index, label -> panel.action(label, selected = store.hiddenDock == (index == 0)) {
                     store.hiddenDock = index == 0; applyDockPreference(); refresh(label)
                 } }
@@ -3084,6 +3118,8 @@ class MainActivity : Activity() {
         else if (list.hasFocus() && guideTimeline.ahead((focused ?: current)?.id)) resetTime()
         else if (sportsVisible && sportsPanel.back()) return
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
+        else if (sidebar.hasFocus()) openNavigation()
+        else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
     override fun onStart() { super.onStart(); started = true; if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }

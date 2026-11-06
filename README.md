@@ -23,7 +23,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 
 Spare includes no channels or subscriptions. Provider features and device support vary.
 
-Search, Guide, Sports, Library and Settings share a left dock. Right returns to current content; OK opens an item. Settings offers a hidden or always-open dock.
+Search, Guide, Sports, Library and Settings share a left dock. Right returns to current content; OK opens an item. Settings → Guide controls category highlighting, preview-first playback, list looping and the hidden/always-open dock.
 
 ## Remote controls
 
@@ -33,11 +33,12 @@ Search, Guide, Sports, Library and Settings share a left dock. Right returns to 
 | Watching live | OK | One row of icon actions, programme details, and recent channels |
 | Watching live | Left | Previous watched channel |
 | Watching live | Back | Open guide |
-| Guide | OK | Watch selected channel full screen |
+| Guide | OK | Full screen, or preview first when configured |
+| Guide | Back | Categories, then main menu, then full screen |
 | Guide | Hold OK | Toggle favorite |
 | Guide | Hold Back | Full screen |
 | Guide | Left / Right | Categories or programme times |
-| Category sidebar | Left | Jump to Search / Settings |
+| Category sidebar | Left / Back | Open main menu |
 | Movie / episode | Back / Stop | Stop and return to Library |
 | Catch-up | Back | Return to the live channel |
 | Library | Library action during playback | Pause and browse |

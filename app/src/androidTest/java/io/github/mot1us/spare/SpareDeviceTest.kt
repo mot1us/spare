@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -1164,6 +1164,53 @@ class SpareDeviceTest {
                 assertTrue(device.wait(Until.hasObject(By.text("Off")), 5000)); activateSetting(scenario, "Off"); leaveSettings(scenario)
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentCues?.cues?.isEmpty() == true }
                 assertEquals(CaptionTracks.OFF, SecureStore(context).channelCaptions(source, store.cached(source)!!.channels[1]))
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun guideBackHierarchyAndBrowsingPreferencesKeepFocusAndPlayback() {
+        FixtureServer(channelCount = 8).use { server ->
+            val source = Source(name = "Guide browsing", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.hiddenDock = true
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var liveId = ""
+                scenario.onActivity { liveId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").hasFocus() }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-mode").hasFocus() }
+                device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").hasFocus() }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(2)!!.itemView.requestFocus()
+                }
+                waitFor(scenario) { (channelList(it)?.adapter as? GuideAdapter)?.channels?.let { c -> c.size == 4 && c.all { channel -> channel.group == "News" } } == true }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories").hasFocus())
+                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    activity.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(3)!!.itemView.requestFocus()
+                }
+                // Right before the debounce expires must enter the highlighted category, not the old rows.
+                device.pressDPadRight()
+                waitFor(scenario) { channelList(it)?.hasFocus() == true && (channelList(it)?.adapter as? GuideAdapter)?.channels?.all { c -> c.group == "Culture" } == true }
+                device.pressBack(); device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-mode").hasFocus() }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == false }
+                device.pressMenu(); activateSetting(scenario, "Switch categories on highlight"); activateSetting(scenario, "Open channels full screen"); activateSetting(scenario, "Loop guide channels")
+                scenario.onActivity { assertFalse(store.guideAutoCategories); assertFalse(store.guideOpenFullscreen); assertFalse(store.guideLoopChannels) }
+                leaveSettings(scenario); device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").hasFocus() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(2)!!.itemView.requestFocus() }
+                instrumentation.waitForIdleSync()
+                scenario.onActivity { assertTrue((channelList(it)!!.adapter as GuideAdapter).channels.all { c -> c.group == "Culture" }) }
+                device.pressDPadCenter(); waitFor(scenario) { channelList(it)?.hasFocus() == true && (channelList(it)?.adapter as? GuideAdapter)?.channels?.all { c -> c.group == "News" } == true }
+                device.pressDPadUp(); scenario.onActivity { assertEquals(0, channelList(it)!!.getChildAdapterPosition(channelList(it)!!.focusedChild)) }
+                device.pressDPadDown(); device.pressDPadCenter()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.mediaId != liveId && channelList(it)?.hasFocus() == true }
+                var previewId = ""; scenario.onActivity { previewId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && MainActivity::class.java.getDeclaredField("hasPlayedChannel").apply { isAccessible = true }.getBoolean(it) }
+                device.pressDPadCenter(); waitFor(scenario) { channelList(it)?.isShown == false }
+                scenario.onActivity { assertEquals(previewId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -2383,6 +2430,11 @@ class SpareDeviceTest {
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "held-categories.png"))
                 device.pressDPadRight(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    assertEquals("Highlighted categories update the guide without OK", 1, channelList(activity)!!.adapter!!.itemCount)
+                    activity.window.decorView.findViewWithTag<View>("guide-all").performClick()
+                }
+                waitFor(scenario) { channelList(it)?.hasFocus() == true && channelList(it)?.adapter?.itemCount == 120 }
                 fastRemote(android.view.KeyEvent.KEYCODE_DPAD_DOWN, 50)
                 fastRemote(android.view.KeyEvent.KEYCODE_DPAD_UP, 100)
                 waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel != null }
@@ -2548,7 +2600,7 @@ class SpareDeviceTest {
     private fun activateSetting(scenario: ActivityScenario<MainActivity>, label: String) {
         val parent = when (label) {
             "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
-            "Navigation dock", "Time format" -> "Guide"
+            "Navigation dock", "Time format", "Switch categories on highlight", "Open channels full screen", "Loop guide channels" -> "Guide"
             "Category order" -> "Categories"
             else -> null
         }

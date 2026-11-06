@@ -16,7 +16,8 @@ data class GuideSection(val title: String, val key: String, val active: Boolean 
     val rowId: Long by lazy { Channel.stableLongId(key) }
 }
 
-class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val openModes: () -> Unit, private val move: (Int) -> Unit) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
+class SidebarAdapter(private val context: Context, private val select: (GuideSection) -> Unit, private val enterGuide: () -> Unit, private val openToolbar: () -> Unit, private val openModes: () -> Unit, private val move: (Int) -> Unit,
+    private val highlight: (GuideSection, Boolean) -> Unit = { _, _ -> }) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
     private var focusedKey: String? = null
     init { setHasStableIds(true) }
@@ -34,6 +35,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
     override fun getItemId(position: Int) = items[position].rowId
     fun rememberedPosition() = items.indexOfFirst { it.key == focusedKey }.takeIf { it >= 0 } ?: activePosition()
     fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
+    fun focusedSection() = items.firstOrNull { it.key == focusedKey }
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val d = context.resources.displayMetrics.density
@@ -64,7 +66,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         holder.label.tag = item.key; holder.label.text = item.title; holder.label.contentDescription = item.title
         holder.label.isSelected = item.active
         holder.label.typeface = AppFont.face(item.active || item.header)
-        holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key }
+        holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key; highlight(item, focused) }
         holder.label.setOnClickListener { select(item) }
     }
     class Holder(val label: TextView) : RecyclerView.ViewHolder(label)

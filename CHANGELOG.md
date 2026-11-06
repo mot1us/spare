@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.3 — 2026-11-06
+
+- Back moves from guide channels to categories, then to the main menu; Back from that menu returns to live playback. Left remains available for moving between columns.
+- Switch the guide's channels as a category is highlighted, with a short delay during fast scrolling and no playback changes. Keep focus in categories, apply the highlighted category immediately on Right/OK, and expand playlist headers only on OK.
+- Add Guide browsing preferences for highlight/OK category selection, full-screen/preview-first channel selection, and channel-list looping. Highlight switching is enabled by default; preview-first enters full screen when the playing channel is selected again.
+
 ## 0.28.2 — 2026-11-06
 
 - Bound the live-channel VOD availability spinner to eight seconds per programme, keep it current without waiting for provider callbacks, and preserve its deadline when reopening details. Background catalog updates continue and late matches can still appear.

@@ -281,6 +281,15 @@ class SecureStore(private val context: Context) {
     var hiddenDock: Boolean
         get() = preferences.getBoolean("hidden-dock", true)
         set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
+    var guideAutoCategories: Boolean
+        get() = preferences.getBoolean("guide-auto-categories", true)
+        set(value) { preferences.edit { putBoolean("guide-auto-categories", value) } }
+    var guideOpenFullscreen: Boolean
+        get() = preferences.getBoolean("guide-open-fullscreen", true)
+        set(value) { preferences.edit { putBoolean("guide-open-fullscreen", value) } }
+    var guideLoopChannels: Boolean
+        get() = preferences.getBoolean("guide-loop-channels", true)
+        set(value) { preferences.edit { putBoolean("guide-loop-channels", value) } }
     var scoreOverlayPinned: Boolean
         get() = preferences.getBoolean("score-overlay-pinned", false)
         set(value) { preferences.edit { putBoolean("score-overlay-pinned", value) } }
