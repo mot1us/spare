@@ -211,4 +211,14 @@ class SportsStreamCacheTest {
         assertTrue("Late completed work for an equivalent lineup stays reusable", cache.put(first, ready, now + 600000))
     }
 
+    @Test fun completedGameArchiveHintsReuseOnlyConfirmedFeedsFromTheSameSession() {
+        val feed = channel("known"); val guess = channel("guess")
+        val listing = Programme(feed.id, game.title, now - 1000, now + 3600000)
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, Guide(listOf(feed, guess), emptyMap()), emptySet())
+        cache.put(token, SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(feed, listing)), candidates = listOf(guess))), now)
+        val final = game.copy(state = "post")
+        assertEquals(setOf(feed.id), cache.replayFeeds("source", 1, final))
+        assertTrue(cache.replayFeeds("other", 1, final).isEmpty()); assertTrue(cache.replayFeeds("source", 2, final).isEmpty())
+    }
+
 }

@@ -85,10 +85,11 @@ class SportsReplayDiscoveryTest {
             discovery.update(source, 1, guide, listOf(game), game, true)
             main.await { results.size == 1 }
             assertEquals(listOf("xc:2"), results.single().replays.map { it.channel.id }); assertTrue(results.single().checked)
+            val completedCalls = calls.get(); assertTrue(completedCalls in 1..2)
             val next = game.copy(eventId = "another-final")
             discovery.update(source, 1, guide, listOf(next), next, true)
             main.await { results.size == 2 }
-            assertEquals(listOf("xc:2"), results.last().replays.map { it.channel.id }); assertEquals(2, calls.get())
+            assertEquals(listOf("xc:2"), results.last().replays.map { it.channel.id }); assertEquals(completedCalls, calls.get())
         } finally { discovery.close() }
     }
 
@@ -102,8 +103,9 @@ class SportsReplayDiscoveryTest {
             discovery.update(source, 1, guide, listOf(game), game, true)
             main.await { results.any { it.replays.isNotEmpty() } }
             assertEquals("xc:9", results.last().replays.single().channel.id)
-            assertEquals(9, calls.get()); assertTrue(results.last().checked)
-            assertEquals(9, discovery.cachedListings(source, 1).size)
+            assertTrue(calls.get() in 8..9); assertTrue(results.last().checked)
+            assertTrue(discovery.cachedListings(source, 1).size in 8..9)
+            assertTrue(discovery.cachedListings(source, 1).containsKey("xc:9"))
         } finally { discovery.close() }
     }
 
@@ -140,7 +142,7 @@ class SportsReplayDiscoveryTest {
         try {
             discovery.update(source, 1, Guide(variants, emptyMap()), listOf(game), game, true)
             main.await { results.any { it.replays.isNotEmpty() } }
-            assertEquals("xc:30", results.last().replays.single().channel.id); assertEquals(30, calls.get())
+            assertEquals("xc:30", results.last().replays.single().channel.id); assertTrue(calls.get() in 29..30)
             assertTrue(results.last().checked)
         } finally { discovery.close() }
     }
@@ -153,6 +155,8 @@ class SportsReplayDiscoveryTest {
         try {
             discovery.update(source, 1, guide, listOf(game), game, true); main.await { results.size == 1 }
             assertFalse(results.single().checked); assertTrue(discovery.checkedKeys.isEmpty())
+            discovery.update(source, 1, guide.copy(programmes = mapOf("news" to listOf(listing().copy(title = "Headlines")))), listOf(game), game, true); main.drain()
+            assertEquals("Unrelated EPG updates must not bypass provider-error backoff", 1, calls.get())
             clock += 59999; discovery.update(source, 1, guide, listOf(game), game, true); main.drain()
             assertEquals(1, calls.get())
             clock += 2; discovery.update(source, 1, guide, listOf(game), game, true); main.await { results.size == 2 }
@@ -198,4 +202,34 @@ class SportsReplayDiscoveryTest {
             assertEquals(third.channels.single(), results.last().replays.single().channel); assertEquals(3, calls.get())
         } finally { release.countDown(); discovery.close() }
     }
+    @Test fun knownArchiveFeedIsCheckedBeforeUnrelatedInventoryAndReturnsImmediately() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = ConcurrentLinkedQueue<String>()
+        val others = (1..40).map { channel.copy(id = "xc:$it", name = "ESPN $it") }
+        val known = channel.copy(id = "xc:99", name = "Event feed", reportedQuality = VideoInfo(1280, 720, 30f))
+        val noArchive = channel.copy(id = "xc:100", catchupDays = 0)
+        val discovery = SportsReplayDiscovery({ _, generation, game, replay, checked -> results.add(Result(generation, game, replay, checked)) }, {},
+            main::post, { initial }, { _, candidate, _ -> calls.add(candidate.id); listOf(listing()) }, knownFeeds = { setOf(known.id, noArchive.id) })
+        try {
+            discovery.update(source, 1, Guide(others + known + noArchive, emptyMap()), listOf(game), game, true)
+            main.await { results.any { it.replays.isNotEmpty() } }
+            assertEquals(listOf(known.id), calls.toList()); assertEquals(known, results.last().replays.single().channel)
+        } finally { discovery.close() }
+    }
+    @Test fun unrelatedEpgUpdatesKeepProgressAndOneCheckingStateAcrossArchiveBatches() {
+        val main = MainQueue(); val results = mutableListOf<Result>(); val calls = ConcurrentLinkedQueue<String>(); val checking = mutableListOf<String?>()
+        val channels = (1..18).map { channel.copy(id = "xc:$it", url = "https://example.com/live/user/pass/$it.ts") }
+        var guide = Guide(channels, emptyMap()); var discovery: SportsReplayDiscovery? = null
+        val unrelated = listing().copy(title = "Other programme", start = game.start - 4 * 3600000, end = game.start - 3 * 3600000)
+        discovery = SportsReplayDiscovery({ _, generation, checkedGame, replay, checked ->
+            results.add(Result(generation, checkedGame, replay, checked))
+            if (!checked) { guide = guide.copy(programmes = guide.programmes + ("news:${results.size}" to listOf(unrelated))); discovery!!.update(source, 1, guide, listOf(game), game, true) }
+        }, checking::add, main::post, { initial }, { _, candidate, _ -> calls.add(candidate.id); if (candidate.id == "xc:18") listOf(listing()) else List(2000) { unrelated } })
+        try {
+            discovery.update(source, 1, guide, listOf(game), game, true)
+            main.await { results.any { it.replays.isNotEmpty() } }
+            assertTrue(calls.size in 17..18); assertEquals(calls.size, calls.toSet().size)
+            assertEquals(1, checking.count { it == game.key }); assertNull(checking.last())
+        } finally { discovery.close() }
+    }
+
 }

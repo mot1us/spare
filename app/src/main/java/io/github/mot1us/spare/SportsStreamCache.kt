@@ -41,6 +41,14 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
     private data class Published(val context: Context?, val entries: Map<String, Entry>)
     @Volatile private var published = Published(null, emptyMap())
     private fun publish() { published = Published(context, LinkedHashMap(entries)) }
+    /** Historical coverage is a hint for archive lookup, never proof that a replay exists. */
+    fun replayFeeds(source: String, generation: Int, game: SportsGame): Set<String> {
+        val saved = published; val owner = saved.context ?: return emptySet()
+        if (owner.source != source || owner.generation != generation) return emptySet()
+        val match = saved.entries[game.key]?.match?.game ?: return emptySet()
+        if (match.teams.map { it.id }.toSet() != game.teams.map { it.id }.toSet() || match.start != game.start) return emptySet()
+        return (match.broadcasts.map { it.channel.id } + match.titleMatches.map { it.id }).toSet()
+    }
     /** Read-only fast path: validate only known feeds; never wait on a background scan. */
     fun peek(source: String, generation: Int, guide: Guide, favorites: Set<String>, game: SportsGame, now: Long, forAuto: Boolean = true): Match? {
         val saved = published; val owner = saved.context ?: return null

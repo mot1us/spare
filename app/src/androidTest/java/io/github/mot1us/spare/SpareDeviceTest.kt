@@ -2325,6 +2325,35 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun startupUpdatePromptOffersInstallOrLaterWithoutInterruptingPlayback() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Startup update fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            var updater: Updater? = null; val checks = java.util.concurrent.atomic.AtomicInteger()
+            val update = Release("99.0.0", 999999, "https://github.com/mot1us/spare/releases/download/v99.0.0/spare.apk", "a".repeat(64))
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null; var media = ""
+                waitFor(scenario) { player = find<PlayerView>(it.window.decorView)?.player; player?.repeatMode = Player.REPEAT_MODE_ONE; player?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    media = player!!.currentMediaItem!!.mediaId
+                    updater = Updater(activity, store, lookup = { checks.incrementAndGet(); update }, enabled = true) { }
+                    updater!!.check(startup = true)
+                }
+                waitFor(scenario) { checks.get() == 1 }
+                instrumentation.waitForIdleSync()
+                assertFalse("A backgrounded update check must not open a dialog", device.hasObject(By.text("Install now")))
+                scenario.onActivity { updater!!.resume() }
+                assertTrue(device.wait(Until.hasObject(By.text("Install now")), 5000))
+                scenario.onActivity { assertEquals(media, player!!.currentMediaItem!!.mediaId); assertTrue(player!!.isPlaying) }
+                device.findObject(By.text("Later")).click()
+                assertTrue(device.wait(Until.gone(By.text("Install now")), 5000))
+                scenario.onActivity { updater!!.check(startup = true); updater!!.pause(); updater!!.resume() }
+                instrumentation.waitForIdleSync(); assertEquals(1, checks.get())
+                assertFalse("Later dismisses this launch's offer", device.hasObject(By.text("Install now")))
+            } } finally { updater?.close(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun twoPaneSettingsKeepsFullscreenVideoAndLauncherUsesWordmarkBanner() {
         FixtureServer().use { server ->
             val source = Source(name = "Settings fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -2345,7 +2374,18 @@ class SpareDeviceTest {
                     assertEquals("Rapid menu movement does not build skipped pages", "Playlists", activity.window.decorView.findViewWithTag<TextView>("settings-page-title").text.toString())
                     activity.window.decorView.findViewWithTag<View>("settings-nav:Theme").requestFocus()
                 }
-                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-mode:Presets")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("theme-preset:Classic").isShown)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("theme-tab:Look").isShown)
+                    activity.window.decorView.findViewWithTag<View>("theme-preset:Nostalgia").performClick()
+                    assertEquals("Nostalgia", store.themeStyle); assertEquals("Monospace", store.font)
+                    activity.window.decorView.findViewWithTag<View>("theme-preset:Glass").performClick()
+                }
+                waitFor(scenario) { GuideTheme.style == "Glass" && GuideTheme.current.name == "Monochrome" }
+                device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "theme-presets.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("theme-mode:Advanced").requestFocus() }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
                 var samePalette: View? = null; var samePreview: View? = null; var previousPreview: Bitmap? = null
                 scenario.onActivity { activity ->
@@ -2364,10 +2404,12 @@ class SpareDeviceTest {
                     previousPreview!!.recycle(); changed.recycle()
                     assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId)
                 }
-                device.pressDPadUp(); device.pressDPadLeft()
+                device.pressDPadUp(); device.pressDPadLeft(); device.pressDPadLeft(); device.pressDPadLeft()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-nav:Theme").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && it.window.decorView.findViewWithTag<View>("settings").hasFocus() }
                 device.pressDPadRight(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-mode:Presets")?.hasFocus() == true }
+                device.pressDPadRight(); device.pressDPadDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
                 device.pressDPadDown(); device.pressDPadLeft()
                 waitFor(scenario) { store.theme == "Monochrome" && it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }
@@ -2378,6 +2420,7 @@ class SpareDeviceTest {
                 setThemeControl(scenario, "Look", "Corners", "12 dp"); setThemeControl(scenario, "Look", "Borders", "2 dp")
                 activateSetting(scenario, "Theme")
                 scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("theme-mode:Advanced").performClick()
                     activity.window.decorView.findViewWithTag<View>("theme-tab:Colors").performClick()
                     val accent = activity.window.decorView.findViewWithTag<EditText>("theme-control:Accent hex")
                     val background = activity.window.decorView.findViewWithTag<EditText>("theme-control:Background hex")
@@ -2447,7 +2490,10 @@ class SpareDeviceTest {
     }
     private fun setThemeControl(scenario: ActivityScenario<MainActivity>, tab: String, title: String, value: String) {
         activateSetting(scenario, "Theme")
-        scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<View>("theme-tab:$tab").apply { requestFocus(); performClick() } }
+        scenario.onActivity { activity ->
+            activity.window.decorView.findViewWithTag<View>("theme-mode:Advanced").performClick()
+            activity.window.decorView.findViewWithTag<View>("theme-tab:$tab").apply { requestFocus(); performClick() }
+        }
         scenario.onActivity { activity ->
             val control = activity.window.decorView.findViewWithTag<View>("theme-control:$title")
             control.requestFocus()

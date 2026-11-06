@@ -79,6 +79,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (cardReplays == replays) return
         cardReplays = replays.toMap(); refreshCardStreams(); featured?.let(::refreshHeroBadge)
     }
+    fun confirmReplay(game: SportsGame, replay: SportsReplay) = updateCardReplays(cardReplays + (game.key to replay))
     private fun refreshCardStreams() {
         for (i in 0 until rows.childCount) {
             val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard ?: continue

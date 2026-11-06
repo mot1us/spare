@@ -17,6 +17,7 @@ class SportsReplayDiscovery internal constructor(
     private val load: (Source, Channel, Int) -> List<Programme> = Catchup::load,
     private val budgetMs: Long = 3500,
     private val canLoad: (Source, Channel) -> Boolean = { selected, channel -> selected.kind == "xtream" && channel.nativeId.matches(XTREAM_ID) },
+    private val knownFeeds: (SportsGame) -> Set<String> = { emptySet() },
 ) {
     private val handler = if (post == null) Handler(Looper.getMainLooper()) else null
     private fun main(block: () -> Unit) { if (post != null) post.invoke(block) else handler!!.post(block) }
@@ -27,8 +28,10 @@ class SportsReplayDiscovery internal constructor(
     private val metadata = pool(2, "spare-replay-metadata")
     private data class ArchiveKey(val source: String, val channel: String, val guide: String, val url: String)
     private data class History(val at: Long, val entries: List<Programme>)
-    private data class Checked(val at: Long, val signature: String, val complete: Boolean, val found: Boolean, val progressed: Boolean, val seen: Set<String>)
-    private data class Outcome(val replays: List<SportsReplay>, val complete: Boolean, val history: Map<ArchiveKey, History> = emptyMap(), val progressed: Boolean = false, val seen: Set<String> = emptySet())
+    private data class Checked(val at: Long, val signature: String, val complete: Boolean, val found: Boolean, val progressed: Boolean, val seen: Set<String>, val programmes: Map<String, List<Programme>>)
+    private data class Inventory(val signature: String, val known: Set<String>, val channels: List<Channel>)
+    private val inventories = linkedMapOf<String, Inventory>()
+    private data class Outcome(val replays: List<SportsReplay>, val complete: Boolean, val history: Map<ArchiveKey, History> = emptyMap(), val progressed: Boolean = false, val seen: Set<String> = emptySet(), val inventory: Inventory? = null)
     private data class Loaded(val channel: Channel, val history: History?)
     private val history = linkedMapOf<ArchiveKey, History>()
     private val checked = linkedMapOf<String, Checked>()
@@ -54,11 +57,10 @@ class SportsReplayDiscovery internal constructor(
         // Guide programme refreshes reuse the lineup. A replaced lineup/source rejects
         // in-flight callbacks and old negative results before the next check starts.
         if (this.source != source || this.generation != generation || lineup !== guide.channels) {
-            cancel(); history.clear(); checked.clear()
+            cancel(); history.clear(); checked.clear(); inventories.clear()
             this.source = source; this.generation = generation; lineup = guide.channels
             publishChecking(null, force = true)
         }
-        if (this.guide.programmes !== guide.programmes) checked.entries.removeAll { !it.value.found }
         this.guide = guide
         this.games = targets(games, focused, now())
         this.active = active && source != null
@@ -72,7 +74,8 @@ class SportsReplayDiscovery internal constructor(
     private fun due(game: SportsGame): Boolean {
         val previous = checked[game.key] ?: return true
         val age = now() - previous.at
-        return previous.signature != signature(game) || age !in 0 until if (previous.complete) HISTORY_MS else if (previous.progressed) 0L else RETRY_MS
+        return previous.signature != signature(game) || !previous.found && previous.complete && previous.programmes !== guide.programmes ||
+            age !in 0 until if (previous.complete && previous.found) HISTORY_MS else if (previous.progressed && !previous.complete) 0L else RETRY_MS
     }
     private fun publishChecking(key: String?, force: Boolean = false) {
         if (!force && checkingKey == key) return
@@ -84,11 +87,12 @@ class SportsReplayDiscovery internal constructor(
         if (!active || closed || running != null) return
         val selected = source ?: return
         val game = games.firstOrNull(::due) ?: run { publishChecking(null); return }
-        val token = epoch; val sourceGeneration = generation; val snapshot = guide; val saved = history.toMap()
+        val token = epoch; val sourceGeneration = generation; val snapshot = guide; val saved = history.toMap(); val inventory = inventories[game.key]
         val seen = checked[game.key]?.takeIf { it.signature == signature(game) && now() - it.at in 0 until HISTORY_MS }?.seen.orEmpty()
-        running = game; publishChecking(game.key)
+        val quiet = checked[game.key]?.let { it.complete && !it.found && now() - it.at in 0 until HISTORY_MS } == true
+        running = game; if (!quiet) publishChecking(game.key)
         task = worker.submit {
-            val outcome = try { discover(selected, snapshot, game, saved, seen) }
+            val outcome = try { discover(selected, snapshot, game, saved, seen, inventory) }
             catch (_: InterruptedException) { Thread.currentThread().interrupt(); return@submit }
             catch (_: Exception) { Outcome(emptyList(), false) }
             if (Thread.currentThread().isInterrupted) return@submit
@@ -97,24 +101,28 @@ class SportsReplayDiscovery internal constructor(
                 running = null; task = null
                 history.putAll(outcome.history)
                 while (history.size > 128 || history.values.sumOf { it.entries.size } > 16000) history.remove(history.keys.first())
-                checked.remove(game.key)
-                val freshGuide = this.guide.programmes === snapshot.programmes
-                if (outcome.replays.isNotEmpty() || freshGuide) checked[game.key] = Checked(now(), signature(game), outcome.complete, outcome.replays.isNotEmpty(), outcome.progressed, outcome.seen)
+                outcome.inventory?.let { inventories[game.key] = it }
+                while (inventories.size > 8 || inventories.size > 1 && inventories.values.sumOf { it.channels.size } > 32000) inventories.remove(inventories.keys.first())
+                checked[game.key] = Checked(now(), signature(game), outcome.complete, outcome.replays.isNotEmpty(), outcome.progressed, seen + outcome.seen, snapshot.programmes)
                 while (checked.size > 256) checked.remove(checked.keys.first())
-                publishChecking(null)
+                if (games.firstOrNull(::due)?.key != game.key) publishChecking(null)
                 onResult(selected.id, sourceGeneration, game, outcome.replays, outcome.complete)
                 advance()
             }
         }
     }
 
-    private fun discover(source: Source, guide: Guide, game: SportsGame, saved: Map<ArchiveKey, History>, seen: Set<String>): Outcome {
+    private fun discover(source: Source, guide: Guide, game: SportsGame, saved: Map<ArchiveKey, History>, seen: Set<String>, previous: Inventory?): Outcome {
         val at = now()
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
-        val local = SportsReplays.find(game, guide, at)
+        val known = knownFeeds(game)
+        val inventory = previous?.takeIf { it.signature == signature(game) && it.known == known }
+            ?: Inventory(signature(game), known, SportsReplays.candidates(game, guide, emptySet(), at, limit = Importers.MAX_CHANNELS, knownFeeds = known))
+        val archiveGuide = guide.copy(channels = inventory.channels)
+        val local = SportsReplays.find(game, archiveGuide, at)
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
-        if (local.isNotEmpty()) return Outcome(local, true)
-        val candidates = SportsReplays.candidates(game, guide, emptySet(), at, limit = Importers.MAX_CHANNELS).filter { canLoad(source, it) }
+        if (local.isNotEmpty()) return Outcome(local, true, inventory = inventory)
+        val candidates = inventory.channels.filter { canLoad(source, it) }
         val listings = linkedMapOf<Channel, List<Programme>>()
         val fresh = linkedMapOf<ArchiveKey, History>()
         val missing = candidates.filter { channel ->
@@ -122,13 +130,14 @@ class SportsReplayDiscovery internal constructor(
             if (cached != null) listings[channel] = cached.entries
             cached == null && channel.id !in seen
         }
-        val cached = SportsReplays.findListings(game, guide, listings.mapKeys { it.key.id }, at)
-        if (cached.isNotEmpty()) return Outcome(cached, true)
-        var complete = missing.size <= 6
+        val cached = SportsReplays.findListings(game, archiveGuide, listings.mapKeys { it.key.id }, at)
+        if (cached.isNotEmpty()) return Outcome(cached, true, inventory = inventory)
+        val targets = missing.filter { it.id in known }.takeIf { it.isNotEmpty() }?.take(6) ?: missing.take(6)
+        var complete = missing.size <= targets.size
         val completion = ExecutorCompletionService<Loaded>(metadata)
         val jobs = mutableListOf<Future<Loaded>>()
         try {
-            for (channel in missing.take(6)) jobs.add(completion.submit(java.util.concurrent.Callable {
+            for (channel in targets) jobs.add(completion.submit(java.util.concurrent.Callable {
                 val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
                 if (left <= 0 || Thread.currentThread().isInterrupted) return@Callable Loaded(channel, null)
                 val entries = runCatching { load(source, channel, minOf(1200L, left).toInt().coerceAtLeast(1)) }.getOrNull()
@@ -144,6 +153,16 @@ class SportsReplayDiscovery internal constructor(
                 if (result.history == null) complete = false else {
                     listings[result.channel] = result.history.entries
                     fresh[key(source, result.channel)] = result.history
+                    val ready = SportsReplays.find(game, Guide(listOf(result.channel), mapOf(guide.key(result.channel) to result.history.entries)), at)
+                    if (ready.isNotEmpty()) {
+                        // Keep replies that already completed, without waiting for slower feeds.
+                        jobs.filter { it.isDone && !it.isCancelled }.forEach { finished ->
+                            runCatching { finished.get() }.getOrNull()?.let { loaded -> loaded.history?.let { value ->
+                                listings[loaded.channel] = value.entries; fresh[key(source, loaded.channel)] = value
+                            } }
+                        }
+                        return Outcome(ready, true, fresh, seen = seen + listings.keys.map { it.id }, inventory = inventory)
+                    }
                 }
             }
         } finally { jobs.forEach { it.cancel(true) }; metadata.purge() }
@@ -154,13 +173,13 @@ class SportsReplayDiscovery internal constructor(
             SportsReplays.find(game, Guide(listOf(channel), mapOf(guide.key(channel) to entries)), at)
         }
         return Outcome(SportsReplays.rank(found), complete || found.isNotEmpty(), fresh,
-            found.isEmpty() && missing.size > jobs.size && fresh.isNotEmpty(), seen + listings.keys.map { it.id })
+            found.isEmpty() && missing.size > jobs.size && fresh.isNotEmpty(), seen + listings.keys.map { it.id }, inventory)
     }
     fun remember(selected: Source, sourceGeneration: Int, snapshot: Guide, listings: Map<String, List<Programme>>) {
         if (closed || source != selected || generation != sourceGeneration || lineup !== snapshot.channels) return
         snapshot.channels.filter { listings.containsKey(it.id) }.forEach { channel -> history[key(selected, channel)] = History(now(), listings.getValue(channel.id).take(2000)) }
         while (history.size > 128 || history.values.sumOf { it.entries.size } > 16000) history.remove(history.keys.first())
-        checked.entries.removeAll { !it.value.found }
+        checked.replaceAll { _, value -> if (value.found) value else value.copy(complete = false, progressed = true) }
     }
     fun cachedListings(selected: Source, sourceGeneration: Int): Map<String, List<Programme>> {
         if (closed || source != selected || generation != sourceGeneration) return emptyMap()
@@ -174,7 +193,7 @@ class SportsReplayDiscovery internal constructor(
         worker.purge(); metadata.purge(); publishChecking(null)
     }
     fun pause() { active = false; cancel() }
-    fun close() { if (closed) return; pause(); closed = true; worker.shutdownNow(); metadata.shutdownNow(); handler?.removeCallbacksAndMessages(null); history.clear(); checked.clear() }
+    fun close() { if (closed) return; pause(); closed = true; worker.shutdownNow(); metadata.shutdownNow(); handler?.removeCallbacksAndMessages(null); history.clear(); checked.clear(); inventories.clear() }
     companion object {
         internal const val HISTORY_MS = 10 * 60000L
         private const val RETRY_MS = 60000L

@@ -10,13 +10,15 @@ import android.os.Looper
 import android.provider.Settings
 import androidx.core.content.edit
 import androidx.core.net.toUri
-import org.json.JSONObject
-import org.json.JSONArray
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 
-class Updater(private val activity: Activity, private val store: SecureStore, private val badge: (Release?) -> Unit) {
+class Updater(private val activity: Activity, private val store: SecureStore,
+    private val lookup: () -> Release? = { UpdateLookup.latest(BuildConfig.PRERELEASE_UPDATES) },
+    private val enabled: Boolean = !BuildConfig.DEBUG,
+    private val currentCode: Long = BuildConfig.VERSION_CODE.toLong(),
+    private val badge: (Release?) -> Unit) {
     private val worker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private var release: Release? = null
@@ -24,41 +26,47 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
     @Volatile private var closed = false
     private var busy = false
     private var progress: AlertDialog? = null
-    fun check(manual: Boolean = false) {
+    private var offerDialog: AlertDialog? = null
+    private var foreground = false
+    private var startupChecked = false
+    private var pendingOffer = false
+    fun check(manual: Boolean = false, startup: Boolean = false) {
         if (busy) return
-        if (BuildConfig.DEBUG) {
+        if (!enabled) {
             if (manual) message("Development build", "Automatic updates are enabled in signed release builds.")
             return
         }
-        if (!manual && System.currentTimeMillis() - store.lastUpdateCheck < 86400000) return
+        if (startup && startupChecked) return
+        if (!manual && !startup && System.currentTimeMillis() - store.lastUpdateCheck < 86400000) return
+        if (startup) startupChecked = true
         busy = true
         worker.execute {
             val result = runCatching {
-                val metadata = if (BuildConfig.PRERELEASE_UPDATES) {
-                    val releases = JSONArray(Network.get("https://api.github.com/repos/mot1us/spare/releases?per_page=10", limit = 256 * 1024).toString(Charsets.UTF_8))
-                    Release.testingManifest(releases)
-                } else "https://github.com/mot1us/spare/releases/latest/download/update.json"
-                metadata?.let { url ->
-                    val j = JSONObject(Network.get(url, limit = 16384).toString(Charsets.UTF_8))
-                    Release.parse(j).takeIf { it.code > BuildConfig.VERSION_CODE }
-                }
+                lookup()?.takeIf { it.code > currentCode }
             }
             if (!closed) handler.post {
                 busy = false
                 result.onSuccess {
                     store.lastUpdateCheck = System.currentTimeMillis(); release = it; badge(it)
                     if (manual) { if (it == null) message("Up to date", "You have the latest release.") else offer() }
-                }.onFailure { if (manual) message("Update check unavailable", "Could not check GitHub Releases. Try again later.") }
+                    else if (startup && it != null) { pendingOffer = true; showPendingOffer() }
+                }.onFailure { if (manual) message("Update check unavailable", UpdateLookup.error(it)) }
             }
         }
     }
     fun offer() {
         val candidate = release ?: return check(true)
-        if (busy) return
-        AlertDialog.Builder(activity).setTitle("Update to ${candidate.version}")
+        if (!foreground) { pendingOffer = true; return }
+        if (busy || offerDialog?.isShowing == true) return
+        offerDialog = AlertDialog.Builder(activity).setTitle("Spare ${candidate.version} is available")
             .setMessage("Download and install the signed Spare update? Installation stays in Spare when Android allows it. Android may still require a one-time install permission or confirmation. Android closes Spare to finish installation; reopen it from your apps.")
-            .setPositiveButton("Update") { _, _ -> download(candidate) }.setNegativeButton("Later", null).show()
+            .setPositiveButton("Install now") { _, _ -> download(candidate) }.setNegativeButton("Later", null).create().also { dialog ->
+                dialog.setOnDismissListener { offerDialog = null }; dialog.show()
+                dialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
+            }
     }
+    private fun showPendingOffer() { if (pendingOffer && foreground && !busy && !activity.isFinishing) { pendingOffer = false; offer() } }
+    fun pause() { foreground = false; if (offerDialog?.isShowing == true) { pendingOffer = true; offerDialog?.dismiss() } }
     private fun download(candidate: Release) {
         busy = true
         progress = AlertDialog.Builder(activity).setTitle("Spare update").setMessage("Downloading and verifying…").setCancelable(false).show()
@@ -95,11 +103,13 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
             !theirs.isNullOrEmpty() && !ours.isNullOrEmpty() && theirs.map { it.toCharsString() }.toSet() == ours.map { it.toCharsString() }.toSet()
     }
     fun resume() {
+        foreground = true
         val result = activity.getSharedPreferences("update-install", Activity.MODE_PRIVATE)
         result.getString("result", null)?.let { detail ->
             result.edit { remove("result"); remove("session") }; message("Update not installed", detail)
         }
         if (pending != null && activity.packageManager.canRequestPackageInstalls()) install()
+        showPendingOffer()
     }
     private fun install() {
         if (pending == null) return
@@ -116,5 +126,5 @@ class Updater(private val activity: Activity, private val store: SecureStore, pr
     private fun message(title: String, text: String) {
         if (!activity.isFinishing && !closed) AlertDialog.Builder(activity).setTitle(title).setMessage(text).setPositiveButton("OK", null).show()
     }
-    fun close() { closed = true; progress?.dismiss(); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun close() { closed = true; offerDialog?.dismiss(); progress?.dismiss(); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
 }

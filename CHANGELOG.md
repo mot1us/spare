@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.0 — 2026-11-05
+
+- Check known game feeds with advertised archives first, cache archive inventories, return the first verified replay promptly, and preserve progress across unrelated EPG updates. Keep catch-up status stable while scanning and publish confirmed cards without a full Sports redraw.
+- Refresh the theme editor with six quick presets, a live preview, and a separate Advanced section retaining every existing color, font, style and guide control. Coalesce rapid adjustments without restarting playback.
+- Check for updates on launch and offer Install now or Later once per launch; defer the offer while backgrounded. Use GitHub’s release feed with API fallback and keep checksum/package/signing verification.
+
 ## 0.27.5 — 2026-11-05
 
 - Reuse confirmed Sports matches for the active game instead of expiring them every two minutes. Unrelated EPG updates, fresh scores and equivalent lineup snapshots keep the ready card; changed coverage, programme boundaries and playlist changes still invalidate it.

@@ -176,10 +176,11 @@ class MainActivity : Activity() {
         val discovery = replayDiscovery ?: SportsReplayDiscovery({ sourceId, epoch, game, choices, _ ->
             if (!closed && source?.id == sourceId && generation == epoch) {
                 rememberSportsReplays(game, choices)
+                SportsReplays.best(choices, videoInfo, favorites)?.let { sportsPanel.confirmReplay(game, it) }
                 replayDiscovery?.let { sportsPanel.updateReplayDiscovery(it.checkingKey, it.checkedKeys) }
-                scheduleSports()
+                if (choices.isNotEmpty()) scheduleSports()
             }
-        }, { checking -> if (!closed) sportsPanel.updateReplayDiscovery(checking, replayDiscovery?.checkedKeys.orEmpty()) }, load = { fallback, channel, timeout -> Catchup.load(owner(channel) ?: fallback, channel, timeout) }, canLoad = { _, channel -> owner(channel)?.let { it.enabled && it.kind == "xtream" } == true }).also { replayDiscovery = it }
+        }, { checking -> if (!closed) sportsPanel.updateReplayDiscovery(checking, replayDiscovery?.checkedKeys.orEmpty()) }, load = { fallback, channel, timeout -> Catchup.load(owner(channel) ?: fallback, channel, timeout) }, canLoad = { _, channel -> owner(channel)?.let { it.enabled && it.kind == "xtream" } == true }, knownFeeds = { game -> source?.let { sportsStreamCache.replayFeeds(it.id, generation, game) }.orEmpty() }).also { replayDiscovery = it }
         discovery.update(source, generation, guide, replayGames, selectedGame, active)
     }
 
@@ -652,7 +653,7 @@ class MainActivity : Activity() {
         }
         RefreshJobs.configure(this, sources); handler.post(refreshTick)
         handler.post(minuteTick)
-        updater.check()
+        updater.check(startup = true)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -1908,7 +1909,12 @@ class MainActivity : Activity() {
             if (Thread.currentThread().isInterrupted) return@submit
             handler.post {
                 if (!closed && generation == sourceEpoch && epoch == sportsEpoch && sportsVisible) {
-                    sportsPanel.archiveWindowDays = archiveDays; sportsPanel.updateCardReplays(confirmed)
+                    val latest = confirmed.toMutableMap()
+                    games.forEach { game ->
+                        val ready = SportsReplays.retained(replayCache["$selectedId:$sourceEpoch:${game.key}"]?.second.orEmpty(), archiveChannels, System.currentTimeMillis())
+                        SportsReplays.best(ready, quality, favorites)?.let { latest[game.key] = it }
+                    }
+                    sportsPanel.archiveWindowDays = archiveDays; sportsPanel.updateCardReplays(latest)
                     replayGames = games.filter { SportsReplays.eligible(it, archiveDays, now) }; syncReplayDiscovery()
                 }
             }
@@ -2122,7 +2128,8 @@ class MainActivity : Activity() {
             val listings = savedArchives.toMutableMap()
             var choices = SportsReplays.rank(SportsReplays.find(game, snapshot, System.currentTimeMillis()) + SportsReplays.findListings(game, snapshot, listings, System.currentTimeMillis()))
             if (choices.isEmpty() && enabledSources().any { it.kind == "xtream" } && !Thread.currentThread().isInterrupted) {
-                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis(), limit = Importers.MAX_CHANNELS).filter { it.id !in listings && owner(it)?.kind == "xtream" }.take(8)
+                val known = sportsStreamCache.replayFeeds(selected.id, sourceEpoch, game)
+                val targets = SportsReplays.candidates(game, snapshot, favoriteSnapshot, System.currentTimeMillis(), limit = Importers.MAX_CHANNELS, knownFeeds = known).filter { it.id !in listings && owner(it)?.kind == "xtream" }.take(8)
                 val requests = targets.associateWith { channel -> sportsLookupWorkers.submit<List<Programme>> { Catchup.load(owner(channel) ?: selected, channel, 1200) } }
                 val deadline = System.nanoTime() + 4_000_000_000L
                 try {
@@ -2701,8 +2708,8 @@ class MainActivity : Activity() {
                 if (selected == null) panel.note("Add a playlist first.") else listOf("Provider order", "USA first").forEachIndexed { index, label -> panel.action(label, selected = store.usaFirst(selected) == (index == 1)) { store.setUsaFirst(selected, index == 1); groupsForChannels = null; updateGroups(); refresh(label) } }
             }
             "Theme" -> {
-                panel.page("Theme editor", "Live preview · changes save automatically · Left/Right changes a value")
-                val editor = ThemeEditor(this, store, ::appearanceChanged, { panel.focusNavigation() })
+                panel.page("Theme studio", "Choose a quick preset, or open Advanced to edit every detail. Changes save automatically.")
+                val editor = ThemeEditor(this, store, { if (!closed) appearanceChanged() }, { panel.focusNavigation() })
                 themeEditor = editor; panel.custom(editor, 390)
             }
             "Metadata" -> {
@@ -3088,6 +3095,7 @@ class MainActivity : Activity() {
         if (::updater.isInitialized) updater.resume()
     }
     override fun onPause() {
+        if (::updater.isInitialized) updater.pause()
         // Stop audio before any cache, image or lifecycle cleanup. A paused TV app
         // must never continue playing over the launcher or another app.
         if (::player.isInitialized) { pausedPlayback = player.playWhenReady; if (onDemand != null) demandPaused = !player.playWhenReady; player.pause(); saveDemandProgress() }

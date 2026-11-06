@@ -54,7 +54,7 @@ object SportsReplays {
             ?.let { SportsReplay(it, replay.programme) }
     }
     /** Search the archive inventory, prioritizing broadcasters/teams without excluding other feeds. */
-    fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, limit: Int = 6): List<Channel> {
+    fun candidates(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, limit: Int = 6, knownFeeds: Set<String> = emptySet()): List<Channel> {
         data class Candidate(val channel: Channel, val score: Int, val family: String)
         val teamHints = game.teams.associateWith { team -> team.aliases.map(SportsCatalog::normalize).filter { it.length >= 3 }.map { " $it " } }
         val networkKeys = game.networks.associateWith(SportsStreams::broadcasterKey)
@@ -65,7 +65,7 @@ object SportsReplays {
             val teams = game.teams.filter { team -> teamHints.getValue(team).any { it in name } }
             val networks = game.networks.filter { SportsStreams.broadcasterMatchesKey(networkKeys.getValue(it), channel) }
             val context = groupKeys.getOrPut(channel.group) { SportsCatalog.normalize(channel.group) } + " " + name.trim()
-            val score = teams.size * 4 + (if (networks.isNotEmpty()) 2 else 0) + (if (" $league " in " $context ") 1 else 0)
+            val score = (if (channel.id in knownFeeds) 1000 else 0) + teams.size * 4 + (if (networks.isNotEmpty()) 2 else 0) + (if (" $league " in " $context ") 1 else 0)
             val family = networks.firstOrNull()?.let(SportsCatalog::normalize) ?: teams.joinToString { it.id }.ifBlank { context }
             return Candidate(channel, score, family)
         }

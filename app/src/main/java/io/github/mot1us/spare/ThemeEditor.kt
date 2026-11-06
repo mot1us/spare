@@ -27,6 +27,21 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private val pages = listOf("Look", "Colors", "Type", "Guide")
     private var page = "Look"
+    private var advanced = false
+    private val modes = linkedMapOf<String, TextView>()
+    private val tabRow = LinearLayout(context)
+    private val help = TextView(context)
+    private var pendingChange = false
+    private val applyChange = Runnable { if (pendingChange) { pendingChange = false; changed() } }
+    private data class Preset(val name: String, val palette: String, val style: String, val font: String, val description: String)
+    private val presets = listOf(
+        Preset("Classic", "Monochrome", "Flat", "Default", "Black and white · square edges"),
+        Preset("Glass", "Monochrome", "Glass", "Default", "Soft translucent panels"),
+        Preset("Midnight", "Ocean", "Cinema", "Compact", "Deep blue · compact lettering"),
+        Preset("Arena", "Mint", "Broadcast", "Condensed bold", "Clean sports broadcast"),
+        Preset("Warm", "Amber", "Soft", "Serif", "Warm colors · rounded panels"),
+        Preset("Nostalgia", "Phosphor", "Nostalgia", "Monospace", "Retro green · pixel-inspired guide"),
+    )
     private val tabs = linkedMapOf<String, TextView>()
     private val controls = mutableListOf<View>()
     private val updates = mutableListOf<() -> Unit>()
@@ -38,17 +53,34 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     init {
         orientation = HORIZONTAL; tag = "theme-editor"; clipChildren = false
         val editor = LinearLayout(context).apply { orientation = VERTICAL }
-        val tabRow = LinearLayout(context).apply { orientation = HORIZONTAL }
+        val modeRow = LinearLayout(context).apply { isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL }
+        listOf("Presets", "Advanced").forEachIndexed { index, title ->
+            val mode = text(title, 14f).apply {
+                tag = "theme-mode:$title"; gravity = Gravity.CENTER; isFocusableInTouchMode = true; isClickable = true
+                setOnFocusChangeListener { _, active -> if (active) selectMode(title == "Advanced"); refreshPreview() }
+                setOnClickListener { selectMode(title == "Advanced"); if (advanced) tabs[page]?.requestFocus() else controls.firstOrNull()?.requestFocus() }
+                setOnKeyListener { _, key, event -> when (key) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (index == 0) leave() else modes["Presets"]?.requestFocus() }; true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && index == 0) modes["Advanced"]?.requestFocus(); true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { if (advanced) tabs[page]?.requestFocus() else controls.firstOrNull()?.requestFocus() }; true }
+                    KeyEvent.KEYCODE_DPAD_UP -> true
+                    else -> false
+                } }
+            }
+            modes[title] = mode; modeRow.addView(mode, LayoutParams(0, dp(38), 1f).apply { if (index == 0) marginEnd = dp(6) })
+        }
+        editor.addView(modeRow, LayoutParams(-1, dp(38)).apply { bottomMargin = dp(6) })
+        tabRow.orientation = HORIZONTAL; tabRow.isBaselineAligned = false
         pages.forEachIndexed { index, title ->
             val tab = text(title, 12f).apply {
                 tag = "theme-tab:$title"; gravity = Gravity.CENTER; isFocusableInTouchMode = true; isClickable = true
-                setOnFocusChangeListener { _, active -> if (active) selectPage(title) }
+                setOnFocusChangeListener { _, active -> if (active) selectPage(title); refreshPreview() }
                 setOnClickListener { selectPage(title); controls.firstOrNull()?.requestFocus() }
                 setOnKeyListener { _, key, event -> when (key) {
                     KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             val next = index + if (key == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
-                            if (next < 0) leave() else tabs[pages[next.coerceAtMost(pages.lastIndex)]]?.requestFocus()
+                            if (next < 0) modes["Advanced"]?.requestFocus() else tabs[pages[next.coerceAtMost(pages.lastIndex)]]?.requestFocus()
                         }; true
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) controls.firstOrNull()?.requestFocus(); true }
@@ -61,19 +93,45 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         }
         editor.addView(tabRow, LayoutParams(-1, dp(38)))
         editor.addView(rows, LayoutParams(-1, 0, 1f).apply { topMargin = dp(10) })
-        editor.addView(text("← → adjust    OK next\nSaved automatically", 10f).apply { setTextColor(0xFFBAC8DC.toInt()); setPadding(dp(6), dp(4), 0, 0) }, LayoutParams(-1, dp(38)))
+        editor.addView(help.apply { textSize = 10f; setTextColor(0xFFBAC8DC.toInt()); setPadding(dp(6), dp(4), 0, 0) }, LayoutParams(-1, dp(32)))
         addView(editor, LayoutParams(0, -1, 1.1f))
         addView(preview, LayoutParams(0, -1, 1f).apply { leftMargin = dp(16) })
-        selectPage(page, true)
+        selectMode(false)
     }
 
     override fun focusContent(): Boolean = focusEditor()
-    fun focusEditor(): Boolean = tabs[page]?.requestFocus() == true
+    fun focusEditor(): Boolean = modes[if (advanced) "Advanced" else "Presets"]?.requestFocus() == true
     override fun handlesLeft(focused: View?): Boolean {
         var view = focused
         while (view != null) { if (view === this) return true; view = view.parent as? View }
         return false
     }
+
+    private fun selectMode(next: Boolean) {
+        if (advanced == next && controls.isNotEmpty()) return
+        advanced = next; tabRow.visibility = if (advanced) VISIBLE else GONE
+        help.text = if (advanced) "← → adjust · OK next · Saved automatically" else "OK applies a preset · Advanced keeps every individual control"
+        if (advanced) selectPage(page, true) else {
+            controls.clear(); updates.clear(); rows.removeAllViews()
+            presets.forEach { preset ->
+                val row = action("${preset.name}\n${preset.description}") {
+                    store.theme = preset.palette; store.themeStyle = preset.style; store.font = preset.font
+                    store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
+                    store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1
+                }.apply { tag = "theme-preset:${preset.name}"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(8), 0); maxLines = 2 }
+                val swatch = GradientDrawable().apply { setColor(GuideTheme.palettes.first { it.name == preset.palette }.accent); cornerRadius = dp(3).toFloat(); setBounds(0, 0, dp(14), dp(22)) }
+                row.setCompoundDrawables(swatch, null, null, null); row.compoundDrawablePadding = dp(12)
+                updates.add {
+                    val selected = store.theme == preset.palette && store.themeStyle == preset.style && store.font == preset.font && store.customAccent == 0 && store.customBackground == -1 && store.cornerRadius == -1 && store.borderWidth == -1 && store.guideTextScale == 100 && store.guideRowHeight == 32 && store.guideRowGap == 3 && store.guideOpacity == -1
+                    row.text = "${preset.name}${if (selected) "  ✓" else ""}\n${preset.description}"
+                    row.contentDescription = "${preset.name}, ${preset.description}${if (selected) ", applied" else ""}. OK to apply."
+                }
+                rows.addView(row, LayoutParams(-1, dp(43)).apply { bottomMargin = dp(4) })
+            }
+            refreshPreview()
+        }
+    }
+    override fun onDetachedFromWindow() { removeCallbacks(applyChange); if (pendingChange) { pendingChange = false; changed() }; super.onDetachedFromWindow() }
 
     private fun text(value: String, size: Float) = TextView(context).apply {
         text = value; textSize = size; setTextColor(Color.WHITE); gravity = Gravity.CENTER_VERTICAL; typeface = AppFont.faceFor(store.font)
@@ -112,7 +170,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         val at = values.indexOf(current).takeIf { it >= 0 } ?: 0
         return values[Math.floorMod(at + step, values.size)]
     }
-    private fun save() { refreshPreview(); changed() }
+    private fun save() { refreshPreview(); pendingChange = true; removeCallbacks(applyChange); postDelayed(applyChange, 60) }
     private fun choice(title: String, value: () -> String, adjust: (Int) -> Unit, swatch: (() -> Int)? = null) {
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; isFocusableInTouchMode = true; isClickable = true
@@ -197,7 +255,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     }
     private fun move(view: View, step: Int) {
         val next = controls.indexOf(view) + step
-        if (next < 0) tabs[page]?.requestFocus() else controls[next.coerceAtMost(controls.lastIndex)].requestFocus()
+        if (next < 0) { if (advanced) tabs[page]?.requestFocus() else modes["Presets"]?.requestFocus() } else controls[next.coerceAtMost(controls.lastIndex)].requestFocus()
     }
     private fun reset() {
         store.theme = GuideTheme.palettes.first().name
@@ -206,9 +264,15 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = true
     }
     fun refreshPreview() {
+        modes.forEach { (name, view) ->
+            val selected = advanced == (name == "Advanced")
+            view.isSelected = selected; view.background = controlBackground(view.hasFocus()).apply { if (selected && !view.hasFocus()) setStroke(dp(1).coerceAtLeast(1), accent()) }
+            view.setTextColor(if (view.hasFocus()) contrastingInk(accent()) else if (selected) accent() else Color.WHITE)
+            view.typeface = AppFont.faceFor(store.font, selected)
+        }
         tabs.forEach { (title, tab) ->
-            tab.isSelected = title == page; tab.background = controlBackground(title == page)
-            tab.setTextColor(if (title == page) contrastingInk(accent()) else Color.WHITE); tab.typeface = AppFont.faceFor(store.font, title == page)
+            tab.isSelected = title == page; tab.background = controlBackground(tab.hasFocus()).apply { if (title == page && !tab.hasFocus()) setStroke(dp(1).coerceAtLeast(1), accent()) }
+            tab.setTextColor(if (tab.hasFocus()) contrastingInk(accent()) else if (title == page) accent() else Color.WHITE); tab.typeface = AppFont.faceFor(store.font, title == page)
             tab.contentDescription = "$title tab${if (title == page) ", selected" else ""}"
         }
         updates.forEach { it() }; preview.invalidate()
