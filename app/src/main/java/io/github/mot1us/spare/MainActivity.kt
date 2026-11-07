@@ -635,8 +635,7 @@ class MainActivity : Activity() {
                 }
                 if (statusCode in setOf(401, 403, 429)) sportsPlaybackPlan?.accepted = true
                 if (!hasPlayedChannel && onDemand == null && sportsPlaybackPlan != null) { showPlaybackFailure(PlaybackErrors.message(error)); return }
-                val hls = player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest || playbackUrl.substringBefore('?').endsWith(".m3u8", true)
-                if (onDemand == null && hasPlayedChannel && StartupFailures.expiredSegment(statusCode, http?.dataSpec?.uri?.toString(), playbackUrl, hls)) reconnectOrFail(PlaybackErrors.message(error))
+                if (StartupFailures.retryMissingLive(statusCode, hasPlayedChannel, onDemand == null)) reconnectOrFail(PlaybackErrors.message(error))
                 else if (statusCode != null && statusCode in 400..499 && statusCode !in setOf(408, 429)) showPlaybackFailure(PlaybackErrors.message(error))
                 else if (statusCode == 429) showPlaybackFailure(PlaybackErrors.message(error))
                 else reconnectOrFail(PlaybackErrors.message(error))

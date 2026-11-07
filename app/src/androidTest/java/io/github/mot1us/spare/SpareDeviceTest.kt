@@ -1010,6 +1010,36 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun previouslyPlayingLiveEndpointRecoversFromTemporaryProvider404WithoutRetuning() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Temporary live outage", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && MainActivity::class.java.getDeclaredField("hasPlayedChannel").apply { isAccessible = true }.getBoolean(it) }
+                var original: Player? = null
+                val requestsBefore = server.requests["/channel1.ts"] ?: 0
+                server.transientLiveFailures.set(2)
+                scenario.onActivity { activity ->
+                    original = find<PlayerView>(activity.window.decorView)!!.player!!
+                    // Exercise real HTTP errors after proven playback, without a channel change.
+                    original!!.setMediaItem(original!!.currentMediaItem!!); original!!.prepare(); original!!.play()
+                }
+                waitFor(scenario) { activity ->
+                    val player = find<PlayerView>(activity.window.decorView)!!.player!!
+                    (server.requests["/channel1.ts"] ?: 0) >= requestsBefore + 3 && player.isPlaying &&
+                        MainActivity::class.java.getDeclaredField("firstFrame").apply { isAccessible = true }.getBoolean(activity)
+                }
+                scenario.onActivity { activity ->
+                    val player = find<PlayerView>(activity.window.decorView)!!.player!!
+                    assertSame(original, player); assertEquals("/channel1.ts", player.currentMediaItem!!.localConfiguration!!.uri.path)
+                    assertEquals(2, MainActivity::class.java.getDeclaredField("playbackReconnects").apply { isAccessible = true }.getInt(activity))
+                    assertFalse((MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View).isShown)
+                }
+            }
+            store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
     @Test fun actualStreamStallUsesBufferingAndResumesWithoutReconnect() {
         FixtureServer(stalled = true).use { server ->
             val source = Source(name = "Stall Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -3418,6 +3448,7 @@ class SpareDeviceTest {
         private val connections = if (parallelClients) Executors.newFixedThreadPool(4) else null
         private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<java.net.Socket>()
         val requests = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        val transientLiveFailures = java.util.concurrent.atomic.AtomicInteger()
         val resumeStream = java.util.concurrent.CountDownLatch(1)
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
         private val transport = instrumentation.context.assets.open("no-aud.ts").use { it.readBytes() }
@@ -3516,6 +3547,9 @@ class SpareDeviceTest {
                             else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (longVideo && path.endsWith(".ts")) longTransport to "video/mp2t" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
+                        if (path == "/channel1.ts" && transientLiveFailures.getAndUpdate { count -> (count - 1).coerceAtLeast(0) } > 0) {
+                            output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); output.flush(); return@use
+                        }
                         val status = if (path == "/segment.ts" && (requests[path] ?: 0) <= transientSegmentErrors) "503 Service Unavailable" else if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
                         val length = if (stalled && path == "/channel1.ts") "" else "Content-Length: ${body.size}\r\n"
                         output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\n${length}Connection: close\r\n\r\n".toByteArray())

@@ -11,11 +11,9 @@ class StartupFailures {
     }
     fun allEndpointsMissing() = missing.isNotEmpty() && missing.all { it }
     companion object {
-        /** Refresh a live HLS playlist for expired child resources; never mask endpoint/account errors. */
-        fun expiredSegment(status: Int?, failedUrl: String?, channelUrl: String, hls: Boolean): Boolean = hls && status in setOf(404, 410) && runCatching {
-            val child = URI(failedUrl.orEmpty()).normalize(); val endpoint = URI(channelUrl).normalize()
-            child.host != null && child.scheme in setOf("http", "https") && child != endpoint
-        }.getOrDefault(false)
+        /** A formerly working live endpoint can disappear temporarily, just like an expired HLS segment. */
+        fun retryMissingLive(status: Int?, previouslyPlayed: Boolean, live: Boolean): Boolean =
+            live && previouslyPlayed && status in setOf(404, 410)
     }
 
 }

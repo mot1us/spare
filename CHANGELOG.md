@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.29.1 — 2026-11-06
+
+- Reopen a previously playing live channel after a temporary provider 404/410, including the main stream endpoint and direct TS streams. Preserve the existing two-reconnects-per-two-minutes limit and Retry controls for persistent failures; missing VOD, initial missing channels, account errors, and rate limits remain separate.
+
 ## 0.29.0 — 2026-11-06
 
 - Add NCAA football (FBS/FCS), men's basketball, women's basketball, and baseball to Sports leagues and followed teams. College games share scores, records, artwork, calendar, reminders, live stream matching, and provider catch-up.
