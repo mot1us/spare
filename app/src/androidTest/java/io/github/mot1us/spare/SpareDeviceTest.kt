@@ -1456,6 +1456,69 @@ class SpareDeviceTest {
         } }
     }
 
+    @Test fun sportsLeagueFilterCombinesWithLiveAndCalendarWithoutChangingPreferences() {
+        FixtureServer().use { server ->
+            val source = Source(name = "League filter fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("league-feed", "News", "News", "${server.base}/channel1.mp4")
+            val now = System.currentTimeMillis()
+            val snapshot = LiveSportsSnapshot(listOf(
+                LiveEvent("filter-nba", setOf("nba:POR", "nba:LAL"), now - 60000, league = "NBA"),
+                LiveEvent("filter-nfl", setOf("nfl:SEA", "nfl:SF"), now + 3600000, "pre", league = "NFL")
+            ), now, setOf("NBA", "NFL"))
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = snapshot.leagues
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { snapshot }; activity.calendarSportsLoader = { _, _ -> snapshot }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var playing: Player? = null
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> playing = p; p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league-filter").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:all")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    assertNull("Disabled leagues are not filter choices", activity.window.decorView.findViewWithTag<View>("sports-league:MLB"))
+                    activity.window.decorView.findViewWithTag<View>("sports-league:NBA").apply { requestFocus(); performClick() }
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                scenario.onActivity { activity ->
+                    assertEquals("NBA", activity.window.decorView.findViewWithTag<android.widget.Button>("sports-league-filter").text.toString())
+                    assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus())
+                    val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView as ViewGroup
+                    val poster = card.getChildAt(0) as ViewGroup
+                    assertEquals("Cards contain the two team crests and RedZone label, without an editorial photo layer", 2, poster.childCount)
+                    assertEquals(2, (poster.getChildAt(0) as ViewGroup).childCount)
+                    activity.window.decorView.findViewWithTag<View>("sports-live").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NBA:filter-nba")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league-filter").performClick() }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("calendar-games")?.adapter?.itemCount == 1 }
+                device.pressBack()
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("sports-league-filter").performClick()
+                    activity.window.decorView.findViewWithTag<View>("sports-league:all").apply { requestFocus(); performClick() }
+                    activity.window.decorView.findViewWithTag<View>("sports-today").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                scenario.onActivity { activity ->
+                    assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
+                    assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
+                    activity.window.decorView.findViewWithTag<View>("sports-league-filter").performClick()
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-league-filter.png"))
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys }
+        }
+    }
+
     @Test fun sportsFindsFollowedGamesSelectsPreviewAndPreservesRemoteFocus() {
         FixtureServer(channelCount = 4).use { server ->
             val source = Source(name = "Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

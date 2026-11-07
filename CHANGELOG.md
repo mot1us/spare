@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.30.1 — 2026-11-06
+
+- Add a league filter beside Today, Live and Calendar. Browse one enabled league or all leagues without changing Sports settings; the filter also applies to the calendar.
+- Keep team-versus-team logos on every matchup card; reserve editorial photography for the hero. Remove card-photo downloads and whole-grid redraws when hero artwork arrives.
+- Keep remote highlights immediate while coalescing hero and background matching work until focus settles. Avoid restyling unchanged badges and refreshing every visible stream label on each card move.
+
 ## 0.30.0 — 2026-11-06
 
 - Confirm higher-resolution Sports candidates even after finding a playable lower-resolution feed. Promote newly available candidate guide data without scanning the playlist again, retain ready results during upgrade checks, and recognize Blazers/Trailblazers aliases.
