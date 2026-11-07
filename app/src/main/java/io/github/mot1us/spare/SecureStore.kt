@@ -277,6 +277,12 @@ class SecureStore(private val context: Context) {
     var sportsLeagues: Set<String>
         get() = preferences.getStringSet("sports-leagues", SportsLeagues.byId.keys).orEmpty().filter { it in SportsLeagues.byId }.toSet().ifEmpty { SportsLeagues.byId.keys }
         set(value) { val valid = value.filter { it in SportsLeagues.byId }.toSet(); require(valid.isNotEmpty()); preferences.edit { putStringSet("sports-leagues", valid) } }
+    var sportsScoreDelay: Int
+        get() = preferences.getInt("sports-score-delay", 0).coerceIn(0, SportsScoreDelay.MAX_SECONDS)
+        set(value) { preferences.edit { putInt("sports-score-delay", value.coerceIn(0, SportsScoreDelay.MAX_SECONDS)) } }
+    fun channelScoreDelay(id: String): Int? = "sports-score-delay-${Channel.stableId(id)}".let { key -> if (preferences.contains(key)) preferences.getInt(key, 0).coerceIn(0, SportsScoreDelay.MAX_SECONDS) else null }
+    fun setChannelScoreDelay(id: String, seconds: Int?) { preferences.edit { val key = "sports-score-delay-${Channel.stableId(id)}"; if (seconds == null) remove(key) else putInt(key, seconds.coerceIn(0, SportsScoreDelay.MAX_SECONDS)) } }
+    fun resetScoreDelays() { preferences.edit { preferences.all.keys.filter { it == "sports-score-delay" || it.startsWith("sports-score-delay-") }.forEach(::remove) } }
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }

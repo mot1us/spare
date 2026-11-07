@@ -68,7 +68,7 @@ class Multiview(private val root: FrameLayout, private val primary: PlayerView, 
         val streamFactory = if (provider == null) factory else DataSource.Factory { LiveProviderDataSource { provider.allowHttp } }
         val player = ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableDecoderFallback(true))
             .setMediaSourceFactory(DefaultMediaSourceFactory(streamFactory, DefaultExtractorsFactory().setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors()))
-            .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(25000, 45000, 1500, 8000).setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(true).build())
+            .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(25000, 45000, 1500, 8000).setTargetBufferBytes(PlaybackLoadControl.bufferBytes(multiview = true)).setPrioritizeTimeOverSizeThresholds(false).build())
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
         player.volume = 0f
         val view = PlayerView(context).apply { useController = false; setKeepContentOnPlayerReset(true); this.player = player; tag = when (extras.size) { 0 -> "multiview-second"; 1 -> "multiview-third"; else -> "multiview-fourth" } }

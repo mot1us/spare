@@ -8,6 +8,31 @@ class SportsStreamCacheTest {
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000,
         emptyList(), "cache-game", "in", listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, fps: Float = 60f) = Channel(id, "ESPN $id", "NFL", "https://example.com/$id", reportedQuality = VideoInfo(3840, 2160, fps))
+    @Test fun fastClickPromotesKnownHigherResolutionCandidateFromNewEpgWithoutReadingTheLineup() {
+        val hd = channel("hd").copy(reportedQuality = VideoInfo(1280, 720, 60f))
+        val fhd = channel("fhd").copy(reportedQuality = VideoInfo(1920, 1080, 0f))
+        var reads = 0
+        val backing = listOf(hd, fhd) + (1..26000).map { channel("unrelated$it") }
+        val channels = object : AbstractList<Channel>() {
+            override val size get() = backing.size
+            override fun get(index: Int): Channel { reads++; return backing[index] }
+        }
+        val listing = Programme(hd.id, game.title, now - 1000, now + 3600000)
+        val before = Guide(channels, mapOf(hd.id to listOf(listing)))
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, before, emptySet())
+        val known = SportsStreamCache.Match(game.copy(broadcasts = listOf(SportsBroadcast(hd, listing)), candidates = listOf(fhd)))
+        cache.put(token, known, now)
+        val after = before.copy(programmes = before.programmes + (fhd.id to listOf(listing.copy(channel = fhd.id))))
+        reads = 0
+        val clicked = cache.peek("source", 1, after, emptySet(), game, now)!!
+        assertEquals(listOf(fhd, hd), SportsStreams.automaticChoices(clicked.game, GuideFilters(), emptyMap(), after, now))
+        assertEquals("Known candidate EPG enrichment must not scan 26,000 channels on the UI thread", 0, reads)
+        assertEquals(listOf(hd), cache.get(token, game, now)!!.game.broadcasts.map { it.channel })
+        val refreshed = cache.use("source", 1, after, emptySet())
+        assertEquals(setOf(hd, fhd), cache.get(refreshed, game, now)!!.game.broadcasts.map { it.channel }.toSet())
+        assertTrue(cache.put(token, known, now + 1))
+        assertEquals("A late local pass cannot erase the promoted FHD result", setOf(hd, fhd), cache.get(refreshed, game, now + 1)!!.game.broadcasts.map { it.channel }.toSet())
+    }
     @Test fun mergingLiveLookupPreservesArchiveHistoryAndDoesNotInvalidateItsOwnCachedResult() {
         val c = channel("one").copy(catchupDays = 2)
         val archived = Programme(c.id, "Yesterday's game", now - 86400000L, now - 80000000L)

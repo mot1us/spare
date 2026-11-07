@@ -7,6 +7,34 @@ class SportsCoverageTest {
     private val now = java.time.Instant.parse("2026-10-26T23:00:00Z").toEpochMilli()
     private val game = SportsGame(listOf("nfl:SEA", "nfl:SF").map { SportsCatalog.byId.getValue(it) }, now - 60000, now + 3600000, emptyList(), "game", "in", networks = listOf("ESPN"), competition = "NFL")
     private fun channel(id: String, name: String) = Channel(id, name, "NFL", "https://example.com/$id")
+    @Test fun blazersGuideAliasesPromoteTheOtherProvidersFhdGameAboveHdCoverage() {
+        val basketball = game.copy(teams = listOf("nba:POR", "nba:MIN").map { SportsCatalog.byId.getValue(it) }, competition = "NBA")
+        val hd = channel("hd", "NBA Event 01 HD").copy(playlistId = "main", group = "NBA", reportedQuality = VideoInfo(1280, 720, 60f))
+        val fhd = channel("fhd", "NBA Event 02 FHD").copy(playlistId = "other", group = "NBA", reportedQuality = VideoInfo(1920, 1080, 0f))
+        for (title in listOf("NBA: Timberwolves at Blazers", "NBA: Minnesota Timberwolves vs Portland Trailblazers")) {
+            val guide = Guide(listOf(hd, fhd), mapOf(hd.id to listOf(Programme(hd.id, basketball.title, game.start, game.end)),
+                fhd.id to listOf(Programme(fhd.id, title, game.start, game.end))))
+            val matched = SportsSchedule.match(basketball, guide, emptySet(), now)
+            assertEquals(setOf(hd.id, fhd.id), matched.broadcasts.map { it.channel.id }.toSet())
+            assertEquals(listOf(fhd, hd), SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), guide, now))
+        }
+    }
+    @Test fun confirmedHdCoverageStillChecksOnlyHigherResolutionMetadataOnce() {
+        val hd = channel("hd", "NFL 01 HD").copy(reportedQuality = VideoInfo(1280, 720, 60f))
+        val equal = channel("equal", "NFL 02 HD").copy(reportedQuality = VideoInfo(1280, 720, 60f))
+        val fhd = channel("fhd", "ESPN FHD").copy(reportedQuality = VideoInfo(1920, 1080, 0f))
+        val wrong = channel("wrong", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 60f))
+        val listing = Programme(hd.id, game.title, game.start, game.end)
+        val ready = game.copy(broadcasts = listOf(SportsBroadcast(hd, listing)), candidates = listOf(equal, fhd, wrong))
+        val guide = Guide(listOf(hd, equal, fhd, wrong), mapOf(hd.id to listOf(listing), wrong.id to listOf(listing.copy(channel = wrong.id, title = "NFL: Buffalo Bills at Kansas City Chiefs"))))
+        assertEquals(720, SportsStreams.confirmationFloor(ready, GuideFilters(), emptyMap(), now))
+        assertEquals(listOf(fhd), SportsStreams.confirmationTargets(ready, guide, ready.candidates, emptySet(), emptyMap(), now, betterThanHeight = 720))
+        val cached = SportsStreamCache.Match(ready)
+        assertTrue(cached.needsUpgrade(GuideFilters(), emptyMap(), now))
+        assertFalse("A completed metadata upgrade check must not run on every card visit", cached.copy(upgradeChecked = true).needsUpgrade(GuideFilters(), emptyMap(), now))
+        assertFalse(cached.needsUpgrade(GuideFilters(groups = setOf("Hidden")), emptyMap(), now))
+        assertNull(SportsStreams.confirmationFloor(ready.copy(candidates = listOf(equal)), GuideFilters(), emptyMap(), now))
+    }
     @Test fun basketballFindsTheOtherProvidersLateEpgAndExcludesRadio() {
         val basketball = game.copy(teams = listOf("nba:BOS", "nba:MIL").map { SportsCatalog.byId.getValue(it) }, competition = "NBA", networks = listOf("ESPN"))
         val filler = (1..26000).map { channel("filler$it", "Local news $it").copy(playlistId = if (it % 2 == 0) "main" else "other") }

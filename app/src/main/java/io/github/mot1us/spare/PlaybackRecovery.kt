@@ -35,20 +35,27 @@ class PlaybackProgress {
     private var frame: Long? = null
     private var frameAt = 0L
     private var readyAt = 0L
+    private var buffered = 0L
+    private var bufferAt = 0L
     private var wasBuffering = false
     fun reset() { owner = null }
-    fun stalled(token: Int, now: Long, positionMs: Long, frameUs: Long?, buffering: Boolean, active: Boolean): Boolean {
+    fun stalled(token: Int, now: Long, positionMs: Long, frameUs: Long?, buffering: Boolean, active: Boolean, bufferedMs: Long = 0): Boolean {
         if (!active) { reset(); return false }
         if (owner != token) {
             owner = token; position = positionMs; positionAt = now; frame = frameUs; frameAt = now; readyAt = now; wasBuffering = buffering
+            buffered = bufferedMs; bufferAt = now
             return false
         }
         if (kotlin.math.abs(positionMs - position) >= 250) { position = positionMs; positionAt = now }
         if (frameUs == null || frameUs != frame) { frame = frameUs; frameAt = now }
+        if (bufferedMs < buffered) buffered = bufferedMs
+        if (bufferedMs - buffered >= 250) { buffered = bufferedMs; bufferAt = now }
         if (buffering || wasBuffering) readyAt = now
         wasBuffering = buffering
         // Keep an absolute no-position deadline even if READY and BUFFERING flap.
-        if (now - positionAt >= 45000) return true
+        // An actively filling rebuffer is recovering. Do not replace its connection
+        // (and discard queued media) simply because presentation has not resumed yet.
+        if (now - positionAt >= 90000 || now - positionAt >= 45000 && (!buffering || now - bufferAt >= 10000)) return true
         // A rebuffer can leave the last video timestamp old while position resumes.
         // Give READY its full observation window instead of counting buffer time
         // toward the frozen-video deadline and reopening a recovering connection.

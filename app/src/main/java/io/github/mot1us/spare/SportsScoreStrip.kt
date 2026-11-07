@@ -35,6 +35,7 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
     private var message = ""
     private var selected: String? = null
     private var hideFinalScores = false
+    var scorePresentation: (SportsGame) -> SportsGame = { it }
     private var focusEpoch = 0
     private val checking = ProgressBar(context).apply { isIndeterminate = true; tag = "sports-overlay-loading"; visibility = INVISIBLE }
     var interactive = false; private set
@@ -73,14 +74,8 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
                 fun ink(active: Boolean) { holder.scores.forEach { it.setTextColor(if (active) GuideTheme.focusText else Color.WHITE) }; holder.status.setTextColor(if (active) GuideTheme.focusText else 0xFFC8D4D8.toInt()) }
                 game.teams.forEachIndexed { i, team ->
                     logos.bind(holder.icons[i], game.logos[team.id].orEmpty().ifBlank { team.logo })
-                    holder.scores[i].text = "${team.id.substringAfter(':').take(4).uppercase(java.util.Locale.ROOT)} ${if (game.state == "post" && hideFinalScores) "–" else game.scores[team.id] ?: "–"}"
                 }
-                holder.status.text = if (game.key == busy) message.ifBlank { "Finding stream…" } else when (game.state) {
-                    "post" -> "FINAL · ${SportsLeagues.label(game.leagueId)}" + if (hideFinalScores) " · Scores hidden" else ""
-                    "hold" -> "${SportsLeagues.label(game.leagueId)} · Checking live status"
-                    else -> "● ${SportsLeagues.label(game.leagueId)} · ${game.status.ifBlank { "Live" }}"
-                }
-                holder.box.contentDescription = "${game.title}. ${if (game.state == "post" && hideFinalScores) "Scores hidden" else game.scoreLine}. ${holder.status.text}"
+                renderScore(holder, game)
                 ink(focused); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { selected = game.key; armIdle() } }
                 holder.box.setOnClickListener { choose(game) }
                 holder.box.setOnKeyListener { _, key, event ->
@@ -110,6 +105,17 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
         appearance()
     }
     private class Tile(val box: LinearLayout, val icons: List<ImageView>, val scores: List<TextView>, val status: TextView) : RecyclerView.ViewHolder(box)
+    private fun renderScore(holder: Tile, game: SportsGame) {
+        val display = scorePresentation(game); val hidden = display.state == "post" && hideFinalScores
+        display.teams.forEachIndexed { index, team -> holder.scores[index].text = "${team.id.substringAfter(':').take(4).uppercase(java.util.Locale.ROOT)} ${if (hidden) "–" else display.scores[team.id] ?: "–"}" }
+        holder.status.text = if (game.key == busy) message.ifBlank { "Finding stream…" } else if (display.status == SportsScoreDelay.WAITING) "Score delayed · syncing…" else when (display.state) {
+            "post" -> "FINAL · ${SportsLeagues.label(game.leagueId)}" + if (hidden) " · Scores hidden" else ""
+            "hold" -> "${SportsLeagues.label(game.leagueId)} · Checking live status"
+            else -> "● ${SportsLeagues.label(game.leagueId)} · ${display.status.ifBlank { "Live" }}"
+        }
+        holder.box.contentDescription = "${game.title}. ${if (hidden) "Scores hidden" else display.scoreLine}. ${holder.status.text}"
+    }
+    fun refreshScores() { for (i in 0 until rows.childCount) { val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? Tile ?: continue; games.getOrNull(holder.bindingAdapterPosition)?.let { renderScore(holder, it) } } }
     override fun focusSearch(focused: View, direction: Int): View? = FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
     override fun dispatchKeyEvent(event: KeyEvent): Boolean { if (event.action == KeyEvent.ACTION_DOWN) armIdle(); return super.dispatchKeyEvent(event) }
     private fun focusTile(position: Int) {

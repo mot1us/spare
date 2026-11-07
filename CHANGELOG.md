@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.30.0 — 2026-11-06
+
+- Confirm higher-resolution Sports candidates even after finding a playable lower-resolution feed. Promote newly available candidate guide data without scanning the playlist again, retain ready results during upgrade checks, and recognize Blazers/Trailblazers aliases.
+- Give Sports cards one cancellable vertical scroll animation in both directions, retain focus through fast remote repeats, show a glimpse of the next row, and avoid fading unchanged cached crests on refresh.
+- Add Sports score delay (0–300 seconds), a default and per-channel overrides. Cards, hero, calendar and Sports overlay use bounded timestamped score/status history; newly enabled delays wait for history instead of exposing newer scores. Fixtures, reminders and video timing stay current.
+- Retry temporarily missing live HLS child resources before resetting the source, preserve recovering buffered media, and use heap-scaled byte targets for main/multiview playback. Keep bounded source recovery and add local numeric retry, discontinuity, live-offset and buffering diagnostics.
+
 ## 0.29.1 — 2026-11-06
 
 - Reopen a previously playing live channel after a temporary provider 404/410, including the main stream endpoint and direct TS streams. Preserve the existing two-reconnects-per-two-minutes limit and Retry controls for persistent failures; missing VOD, initial missing channels, account errors, and rate limits remain separate.

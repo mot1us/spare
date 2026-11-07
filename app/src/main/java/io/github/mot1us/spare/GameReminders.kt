@@ -84,6 +84,14 @@ object SportsStreams {
         compareByDescending<Channel> { it.quality(quality[it.id])?.height ?: 0 }
             .thenByDescending { preferenceRank(it, quality[it.id], filters) }
             .thenByDescending { it.quality(quality[it.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
+    /** -1 checks unresolved coverage; an existing game feed only needs higher-resolution checks. */
+    internal fun confirmationFloor(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, now: Long): Int? {
+        val exact = (game.broadcasts.filter { game.upcoming(now) || now in it.programme.start until it.programme.end }.map { it.channel } + game.titleMatches)
+            .filter { video(it) && matchingCategory(it, filters) }
+        if (exact.isEmpty()) return -1
+        val best = exact.maxOf { it.quality(quality[it.id])?.height ?: 0 }
+        return best.takeIf { game.candidates.any { video(it) && matchingCategory(it, filters) && (it.quality(quality[it.id])?.height ?: 0) > best } }
+    }
     fun rank(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, available: (Channel) -> Boolean = { true }): List<Channel> {
         val epg = game.broadcasts.map { it.channel.id }.toSet()
         val confirmed = epg + game.titleMatches.map { it.id }
@@ -117,7 +125,7 @@ object SportsStreams {
             ?.let { it != game.teams.map { team -> team.id }.toSet() } == true
     }
     /** A small, varied guide-only lookup; generic broadcaster names never prove a game match. */
-    fun confirmationTargets(game: SportsGame, guide: Guide, candidates: List<Channel>, favorites: Set<String>, quality: Map<String, VideoInfo>, now: Long): List<Channel> {
+    fun confirmationTargets(game: SportsGame, guide: Guide, candidates: List<Channel>, favorites: Set<String>, quality: Map<String, VideoInfo>, now: Long, betterThanHeight: Int = -1): List<Channel> {
         val at = if (game.state == "pre") game.start else now
         val target = game.teams.map { it.id }.toSet()
         val league = game.teams.first().league
@@ -130,6 +138,7 @@ object SportsStreams {
         }).map { " ${SportsCatalog.normalize(it)} " }.distinct()
         fun eligible(channel: Channel): Boolean {
             if (!speculative(channel) || SportsGuide.excludedTitle(channel.sportsKey)) return false
+            if ((channel.quality(quality[channel.id])?.height ?: 0) <= betterThanHeight) return false
             val programme = guide.at(channel, at)
             if (programme != null && (game.state != "pre" && SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title)) ||
                 SportsGuide.teams(programme, league)?.map { it.id }?.toSet()?.let { it != target } == true)) return false

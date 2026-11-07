@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -571,7 +571,7 @@ class SpareDeviceTest {
     }
 
     @Test fun xtreamRetriesHlsWhenTsEndpointFails() {
-        FixtureServer(fallbackHls = true, transientSegmentErrors = 2).use { server ->
+        listOf(503, 404, 410).forEach { segmentStatus -> FixtureServer(fallbackHls = true, transientSegmentErrors = 2, transientSegmentStatus = segmentStatus).use { server ->
             val source = Source(name = "Fallback Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -587,6 +587,7 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
         }
     }
 
@@ -1617,6 +1618,69 @@ class SpareDeviceTest {
         } finally { instrumentation.runOnMainSync { loader.close() } }
     }
 
+    @Test fun sportsScoreDelayWithholdsNewScoresAcrossCardsHeroOverlayAndCalendar() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Delayed score fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis(); val ids = setOf("nba:POR", "nba:LAL")
+            val first = LiveEvent("delayed-fixture", ids, now - 60000, scores = mapOf("nba:POR" to "11", "nba:LAL" to "22"), status = "Q1", league = "NBA")
+            val initial = LiveSportsSnapshot(listOf(first), now, setOf("NBA"))
+            var latest = initial
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { latest }; activity.calendarSportsLoader = { _, _ -> latest }
+                }
+            }
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA"); store.sportsScoreDelay = 30
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    var playing: Player? = null
+                    scenario.onActivity { activity ->
+                        playing = find<PlayerView>(activity.window.decorView)!!.player
+                        MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-score")?.text?.toString() == "Score delayed" }
+                    scenario.onActivity { activity ->
+                        val history = MainActivity::class.java.getDeclaredField("delayedScores").apply { isAccessible = true }.get(activity) as SportsScoreDelay
+                        val tick = android.os.SystemClock.elapsedRealtime(); history.clear(); history.observe(initial, tick - 31000)
+                        latest = initial.copy(events = listOf(first.copy(state = "post", scores = mapOf("nba:POR" to "44", "nba:LAL" to "22"), status = "Final")))
+                        history.observe(latest, tick)
+                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, latest)
+                        MainActivity::class.java.getDeclaredMethod("scheduleSports").apply { isAccessible = true }.invoke(activity)
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-score")?.text?.contains("11") == true }
+                    scenario.onActivity { activity ->
+                        assertFalse(activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:NBA:delayed-fixture").text.contains("44"))
+                        assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-badge").text.contains("LIVE"))
+                        assertFalse(activity.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:delayed-fixture").text.contains("catch-up", true))
+                        MainActivity::class.java.getDeclaredMethod("openSportsScoreDelay").apply { isAccessible = true }.invoke(activity)
+                        val manager = activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager")
+                        manager.findViewWithTag<View>("settings-option:Current channel").performClick()
+                        manager.findViewWithTag<View>("settings-option:15 seconds").performClick()
+                        val channel = MainActivity::class.java.getDeclaredField("current").apply { isAccessible = true }.get(activity) as Channel
+                        assertEquals(15, store.channelScoreDelay("${source.id}:${channel.nativeId}")); assertEquals(30, store.sportsScoreDelay); assertTrue(manager.opened)
+                        manager.selectSetting("Score delay"); manager.findViewWithTag<View>("settings-option:Off · immediate scores").performClick()
+                        assertEquals(0, store.sportsScoreDelay)
+                        manager.findViewWithTag<View>("settings-option:30 seconds").performClick()
+                        MainActivity::class.java.getDeclaredMethod("closeSportsManager").apply { isAccessible = true }.invoke(activity)
+                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                        MainActivity::class.java.getDeclaredMethod("openScoreStrip").apply { isAccessible = true }.invoke(activity)
+                    }
+                    waitFor(scenario) { device.hasObject(By.textContains("POR 11")) }
+                    scenario.onActivity { activity -> MainActivity::class.java.getDeclaredMethod("openSportsCalendar").apply { isAccessible = true }.invoke(activity) }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NBA:delayed-fixture")?.isShown == true }
+                    scenario.onActivity { activity ->
+                        val row = activity.window.decorView.findViewWithTag<ViewGroup>("calendar-game:NBA:delayed-fixture")
+                        assertTrue((row.getChildAt(0) as TextView).text.contains("11")); assertFalse((row.getChildAt(0) as TextView).text.contains("44"))
+                        assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
+                    }
+                }
+            } finally { lifecycle.removeLifecycleCallback(fixture); store.resetScoreDelays(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsHeroRailAndFullScreenTeamManagerKeepFocusAndLeaguePreferences() {
         FixtureServer().use { server ->
             val artFiles = ArtworkFiles(context)
@@ -2359,7 +2423,7 @@ class SpareDeviceTest {
                     val progress = MainActivity::class.java.getDeclaredField("playbackProgress").apply { isAccessible = true }.get(activity) as PlaybackProgress
                     val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
                     beforeRecovery = samePlayer!!.currentMediaItem!!.mediaId
-                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, samePlayer!!.currentPosition, null, true, true)
+                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, samePlayer!!.currentPosition, null, true, true, bufferedMs = samePlayer!!.totalBufferedDuration)
                     (MainActivity::class.java.getDeclaredField("monitorPlayback").apply { isAccessible = true }.get(activity) as Runnable).run()
                     assertEquals("A paused episode must never reconnect", beforeRecovery, samePlayer!!.currentMediaItem!!.mediaId)
                     samePlayer!!.play()
@@ -2369,7 +2433,7 @@ class SpareDeviceTest {
                     val progress = MainActivity::class.java.getDeclaredField("playbackProgress").apply { isAccessible = true }.get(activity) as PlaybackProgress
                     val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
                     resumePosition = samePlayer!!.currentPosition
-                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, resumePosition, null, true, true)
+                    progress.reset(); progress.stalled(token, android.os.SystemClock.elapsedRealtime() - 46000, resumePosition, null, true, true, bufferedMs = samePlayer!!.totalBufferedDuration)
                     (MainActivity::class.java.getDeclaredField("monitorPlayback").apply { isAccessible = true }.get(activity) as Runnable).run()
                     assertEquals("Recovery must save the exact VOD position before stopping", resumePosition, MainActivity::class.java.getDeclaredField("demandPosition").apply { isAccessible = true }.getLong(activity))
                 }
@@ -3453,7 +3517,7 @@ class SpareDeviceTest {
         return null
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -3562,7 +3626,7 @@ class SpareDeviceTest {
                         if (path == "/channel1.ts" && transientLiveFailures.getAndUpdate { count -> (count - 1).coerceAtLeast(0) } > 0) {
                             output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); output.flush(); return@use
                         }
-                        val status = if (path == "/segment.ts" && (requests[path] ?: 0) <= transientSegmentErrors) "503 Service Unavailable" else if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
+                        val status = if (path == "/segment.ts" && (requests[path] ?: 0) <= transientSegmentErrors) "$transientSegmentStatus Temporary" else if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
                         val length = if (stalled && path == "/channel1.ts") "" else "Content-Length: ${body.size}\r\n"
                         output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\n${length}Connection: close\r\n\r\n".toByteArray())
                         if (stalled && path == "/channel1.ts") {

@@ -3,10 +3,37 @@ package io.github.mot1us.spare
 /** Session-only coverage evidence. Never stores a player or assumes that a stream is online. */
 class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs: Long = 120000, private val clock: () -> Long = System::currentTimeMillis) {
     class Context(val source: String, val generation: Int, val guide: Guide, val favorites: Set<String>)
-    data class Match(val game: SportsGame, val warmed: Map<String, List<Programme>> = emptyMap(), val autoReady: Boolean = true) {
+    data class Match(val game: SportsGame, val warmed: Map<String, List<Programme>> = emptyMap(), val autoReady: Boolean = true, val upgradeChecked: Boolean = false) {
         fun current(game: SportsGame) = copy(game = game.copy(broadcasts = this.game.broadcasts,
             candidates = this.game.candidates, titleMatches = this.game.titleMatches, coverageComplete = this.game.coverageComplete))
         fun confirmed(now: Long) = game.titleMatches.isNotEmpty() || game.broadcasts.any { game.upcoming(now) || now in it.programme.start until it.programme.end }
+        fun needsUpgrade(filters: GuideFilters, quality: Map<String, VideoInfo>, now: Long): Boolean =
+            !upgradeChecked && confirmed(now) && SportsStreams.confirmationFloor(game, filters, quality, now)?.let { it >= 0 } == true
+
+        /** A click can use new EPG for already-known alternatives without scanning the lineup. */
+        fun withCandidateGuide(previous: Guide, current: Guide, now: Long): Match {
+            if (previous.programmes === current.programmes || game.candidates.isEmpty()) return this
+            val changed = game.candidates.filter { channel ->
+                val key = current.key(channel)
+                current.programmes[key] != previous.programmes[key]
+            }
+            if (changed.isEmpty()) return this
+            val entries = changed.associate { current.key(it) to current.programmes[current.key(it)].orEmpty() }
+            val extra = SportsSchedule.match(game, Guide(changed, entries), emptySet(), now)
+            if (extra.broadcasts.isEmpty() && extra.titleMatches.isEmpty()) return this
+            return retainCoverage(copy(game = extra))
+        }
+
+        /** Keep already-found coverage when an older/local-only worker finishes later. */
+        fun retainCoverage(other: Match): Match {
+            val broadcasts = (game.broadcasts + other.game.broadcasts).distinctBy { it.channel.id }
+            val broadcastIds = broadcasts.mapTo(hashSetOf()) { it.channel.id }
+            val titles = (game.titleMatches + other.game.titleMatches).distinctBy { it.id }.filterNot { it.id in broadcastIds }
+            val ids = broadcastIds + titles.map { it.id }
+            return copy(game = game.copy(broadcasts = broadcasts, titleMatches = titles,
+                candidates = (game.candidates + other.game.candidates).distinctBy { it.id }.filterNot { it.id in ids }),
+                warmed = other.warmed + warmed, autoReady = autoReady || other.autoReady, upgradeChecked = upgradeChecked || other.upgradeChecked)
+        }
         fun needsRefresh(previous: Guide, current: Guide, now: Long): Boolean {
             if (previous.channels !== current.channels && previous.channels != current.channels) return true
             if (previous.programmes === current.programmes) return false
@@ -60,7 +87,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         if (owner.guide.programmes !== guide.programmes && (!confirmed || entry.match.needsRefresh(owner.guide, guide, now))) return null
         if (entry.match.game.broadcasts.isNotEmpty() && !confirmed) return null
         if (entry.expires <= now && !confirmed) return null
-        return entry.match.takeIf { !forAuto || it.autoReady }?.current(game)
+        return entry.match.takeIf { !forAuto || it.autoReady }?.withCandidateGuide(owner.guide, guide, now)?.current(game)
     }
 
     private fun signature(game: SportsGame) = Signature(game.key, game.state, game.start, game.end, game.teams.map { it.id }, game.networks)
@@ -114,7 +141,8 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         val boundary = if (match.game.upcoming(now)) match.game.start else match.game.end
         val expires = minOf(now + lifetimeMs, boundary)
         val found = match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty() || match.game.candidates.isNotEmpty()
-        entries[match.game.key] = Entry(signature(match.game), match, expires, if (found) boundary else expires)
+        val retained = existing?.takeIf { it.signature == signature(match.game) && it.match.confirmed(now) }?.let { match.retainCoverage(it.match) } ?: match
+        entries[match.game.key] = Entry(signature(match.game), retained, expires, if (found || retained.confirmed(now)) boundary else expires)
         while (entries.size > capacity) entries.remove(entries.keys.first())
         publish(); return true
     }

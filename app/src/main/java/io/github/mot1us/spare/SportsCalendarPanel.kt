@@ -42,6 +42,7 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
     private var pendingGames: Int? = null
     private var games = emptyList<SportsGame>()
     private var hideScores = false
+    var scorePresentation: (SportsGame) -> SportsGame = { it }
     private val counts = linkedMapOf<LocalDate, Int>()
     private var dates = emptyList<LocalDate>()
     private val days = mutableListOf<Button>()
@@ -58,6 +59,14 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
     private val refresh = button("Refresh") { preview(activeDate, true) }.apply { tag = "calendar-refresh" }
     private val agenda = RecyclerView(context).apply { layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "calendar-games" }
     private class GameRow(val box: LinearLayout, val title: TextView, val detail: TextView) : RecyclerView.ViewHolder(box)
+    private fun renderScore(holder: GameRow, game: SportsGame) {
+        val display = scorePresentation(game); val hidden = hideScores && display.state == "post"
+        holder.title.text = if (hidden) game.title else SportsText.score(display, false)
+        val now = System.currentTimeMillis()
+        holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + when { hidden -> "Completed"; display.status == SportsScoreDelay.WAITING -> display.status; display.live(now) -> "● LIVE · ${display.status.ifBlank { GuideClock.time(game.start) }}"; display.state == "pre" -> GuideClock.time(game.start); else -> SportsText.status(display, false, now) }
+        holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
+    }
+    fun refreshScores() { for (i in 0 until agenda.childCount) { val holder = agenda.getChildViewHolder(agenda.getChildAt(i)) as? GameRow ?: continue; games.getOrNull(holder.bindingAdapterPosition)?.let { renderScore(holder, it) } } }
     private val gameAdapter = object : RecyclerView.Adapter<GameRow>() {
         init { setHasStableIds(true) }
         override fun getItemCount() = games.size
@@ -72,10 +81,7 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
         override fun onBindViewHolder(holder: GameRow, position: Int) {
             val game = games[position]
             holder.box.tag = "calendar-game:${game.key}"
-            holder.title.text = SportsText.score(game, hideScores)
-            val now = System.currentTimeMillis()
-            holder.detail.text = SportsLeagues.label(game.leagueId) + " · " + when { game.live(now) -> "● LIVE · ${GuideClock.time(game.start)}"; game.state == "pre" -> GuideClock.time(game.start); else -> SportsText.status(game, hideScores, now) }
-            holder.box.contentDescription = holder.title.text.toString() + ". " + holder.detail.text
+            renderScore(holder, game)
             fun ink(active: Boolean) { holder.title.setTextColor(if (active) Color.BLACK else Color.WHITE); holder.detail.setTextColor(if (active) Color.BLACK else Color.LTGRAY) }
             ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) TvFocus.center(agenda, holder.box) }
             holder.box.setOnClickListener { gameSelected(activeDate, game) }

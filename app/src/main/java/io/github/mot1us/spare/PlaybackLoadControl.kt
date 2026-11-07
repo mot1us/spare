@@ -12,9 +12,9 @@ import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 
 /** One allocator/player, with a steadier startup cushion for on-demand files. */
 @UnstableApi
-class PlaybackLoadControl(private val base: LoadControl = DefaultLoadControl.Builder()
+class PlaybackLoadControl(private val targetBytes: Int = bufferBytes(), private val base: LoadControl = DefaultLoadControl.Builder()
     .setBufferDurationsMs(60000, 90000, 1500, 10000)
-    .setTargetBufferBytes(96 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(true).build()) : LoadControl {
+    .setTargetBufferBytes(targetBytes).setPrioritizeTimeOverSizeThresholds(false).build()) : LoadControl {
     private val period = Timeline.Period()
     private val window = Timeline.Window()
 
@@ -35,10 +35,20 @@ class PlaybackLoadControl(private val base: LoadControl = DefaultLoadControl.Bui
         if (index < 0 || timeline.getWindow(timeline.getPeriod(index, period).windowIndex, window)
                 .mediaItem.localConfiguration?.tag != VOD) return base.shouldStartPlayback(parameters)
         // ExoPlayer handles fully loaded short files/the end of a file separately.
-        // Keep the existing 60–90 second read-ahead and allocator limits.
+        // High-bitrate files may reach the byte budget before the time cushion.
+        // Resume with those queued bytes rather than waiting for data we cannot allocate.
         val cushionUs = if (parameters.rebuffering) 12000000L else 5000000L
-        return Util.getPlayoutDurationForMediaDuration(parameters.bufferedDurationUs, parameters.playbackSpeed) >= cushionUs
+        return Util.getPlayoutDurationForMediaDuration(parameters.bufferedDurationUs, parameters.playbackSpeed) >= cushionUs ||
+            parameters.bufferedDurationUs > 0 && base.getAllocator(parameters.playerId).totalBytesAllocated >= targetBytes
     }
 
-    companion object { const val VOD = "spare-vod" }
+    companion object {
+        const val VOD = "spare-vod"
+        /** A byte target, not a whole-app memory limit; leave room for guide/decoders. */
+        fun bufferBytes(maxHeapBytes: Long = Runtime.getRuntime().maxMemory(), multiview: Boolean = false): Int {
+            val mib = 1024 * 1024
+            return (maxHeapBytes / if (multiview) 16 else 4).coerceIn(
+                (if (multiview) 8L else 32L) * mib, (if (multiview) 24L else 96L) * mib).toInt()
+        }
+    }
 }

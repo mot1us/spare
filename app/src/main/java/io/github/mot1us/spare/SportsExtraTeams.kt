@@ -27,7 +27,7 @@ internal object SportsExtraTeams {
         SportsTeam("nba:ORL", "NBA", "Orlando Magic", listOf("Magic", "ORL", "Orlando Magic"), "19", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/orl.png"),
         SportsTeam("nba:PHI", "NBA", "Philadelphia 76ers", listOf("76ers", "PHI", "Philadelphia 76ers"), "20", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/phi.png"),
         SportsTeam("nba:PHX", "NBA", "Phoenix Suns", listOf("PHX", "Phoenix Suns", "Suns"), "21", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/phx.png"),
-        SportsTeam("nba:POR", "NBA", "Portland Trail Blazers", listOf("POR", "Portland Trail Blazers", "Trail Blazers"), "22", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/por.png"),
+        SportsTeam("nba:POR", "NBA", "Portland Trail Blazers", listOf("POR", "Portland Trail Blazers", "Portland Trailblazers", "Trail Blazers", "Trailblazers", "Blazers"), "22", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/por.png"),
         SportsTeam("nba:SAC", "NBA", "Sacramento Kings", listOf("Kings", "SAC", "Sacramento Kings"), "23", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/sac.png"),
         SportsTeam("nba:SA", "NBA", "San Antonio Spurs", listOf("SA", "San Antonio Spurs", "Spurs"), "24", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/sa.png"),
         SportsTeam("nba:TOR", "NBA", "Toronto Raptors", listOf("Raptors", "TOR", "Toronto Raptors"), "28", setOf("NBA"), "https://a.espncdn.com/i/teamlogos/nba/500/tor.png"),

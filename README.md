@@ -14,6 +14,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Sports overlay through OK → Sports overlay, showing today’s live and final scores, automatically pinned until closed, with top/bottom placement; Up focuses the bar, Left/Right browses, and OK tunes a game. RedZone tiles autoplay; hold OK for stream choices.
 - Optional automatic recovery switches a buffering game to another matched feed; configure it under Playback.
 - Sports stream selection by resolution first, with known FPS as a tie-breaker. FPS is learned during playback without extra stream probes; all qualities remain playable.
+- Adjustable Sports score delay with per-channel overrides, so scoreboard updates can follow your stream’s latency.
 - Sports hub with Today/Live/calendar, scores, followed teams, reminders, best-stream playback and provider catch-up. NFL, MLB, NBA, NHL, Premier League, MLS, Champions League, NCAA football (FBS/FCS), men's/women's basketball, and college baseball.
 - Provider movies and series, a Watchlist with new/unwatched episodes, and Continue watching. Channel catch-up is in the Guide.
 - Watch VOD from beginning from a live programme's details; movies and identified episodes start from zero.
