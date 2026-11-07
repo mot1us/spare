@@ -22,7 +22,6 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     @Volatile private var closed = false
     @Volatile private var paused = false
     @Volatile private var generation = 0
-    private var warming = false
     fun get(url: String, http: Boolean, redraw: () -> Unit): Bitmap? = request(url, http, { redraw() })
 
     /** Deliver the decoded bitmap to this binding, even if the memory cache evicts it.
@@ -86,17 +85,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     }
     fun unavailable(url: String): Boolean { val until = failed[url] ?: return false; if (System.currentTimeMillis() < until) return true; failed.remove(url); return false }
     fun prefetch(url: String, http: Boolean = false) { get(url, http) {} }
-    /** Only one speculative image at a time, behind every visible request. */
-    fun prefetchWhenIdle(url: String, http: Boolean): Boolean {
-        if (url.isBlank() || !Network.allowed(url, http) || cache.get(url) != null || unavailable(url)) return true
-        synchronized(pending) { if (url in pending) return true }
-        if (warming || workers.activeCount > 0 || workers.queue.isNotEmpty()) return false
-        warming = true; var queued = false
-        request(url, http, { warming = false }) { queued = true }
-        if (!queued) warming = false
-        return true
-    }
-    fun pause() { bindings.clear(); paused = true; warming = false; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null) }
+    fun pause() { bindings.clear(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null) }
     fun resume() { paused = false }
     fun close() { bindings.clear(); closed = true; workers.shutdownNow(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); cache.evictAll() }
 }

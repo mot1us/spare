@@ -18,7 +18,7 @@ A minimal, free, open-source IPTV player for Android TV. Native, lightweight, an
 - Provider movies and series, a Watchlist with new/unwatched episodes, and Continue watching. Channel catch-up is in the Guide.
 - Watch VOD from beginning from a live programme's details; movies and identified episodes start from zero.
 - Live theme editor with a guide preview, custom colors, offline fonts, layout styles, density, spacing and opacity; a retro Nostalgia style, 12/24-hour time, and optional AIO Metadata.
-- Saved startup, background playlist/EPG refresh schedules, and cached Sports artwork.
+- Cached startup, playback-aware playlist/EPG refresh, and cached logos/artwork. VOD catalogs load when opening Library/Search.
 - In-app signed updates. No ads, analytics, or Spare account.
 
 Spare includes no channels or subscriptions. Provider features and device support vary.

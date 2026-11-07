@@ -35,9 +35,10 @@ object PlaylistRefresh {
                         // Source edits/removal must invalidate an in-flight response.
                         require(store.sources().any { it == source })
                         cached = Guide(lineup.channels, emptyMap(), lineup.categoryOrder)
-                        store.saveLineup(source, cached, source.epgUrl.ifBlank { lineup.epgUrl }); store.markPlaylistRefreshed(source); changed = true
+                        store.saveLineup(source, cached, source.epgUrl.ifBlank { lineup.epgUrl }); store.markArchiveMetadataAttempted(source); store.markPlaylistRefreshed(source); changed = true
                     }.onFailure { errors.add("Playlist: ${SourceErrors.message(it)}") }
                 }
+                val savedStamp = store.programmesStamp(source)
                 val saved = runCatching { store.cachedProgrammes(source) }.getOrDefault(emptyMap())
                 var programmes = saved
                 if (epg && cached.channels.isNotEmpty()) {
@@ -63,9 +64,10 @@ object PlaylistRefresh {
                             programmes = saved + updated
                         } else if (fullFailure != null) throw fullFailure!!
                         // Retain archive history and any visible-channel data saved during the download.
-                        val latest = runCatching { store.cachedProgrammes(source) }.getOrDefault(saved)
+                        val latest = if (store.programmesStamp(source) == savedStamp) saved else runCatching { store.cachedProgrammes(source) }.getOrDefault(saved)
                         val now = System.currentTimeMillis()
-                        val days = cached.channels.groupBy { it.guideId.ifBlank { it.id } }.mapValues { (_, feeds) -> feeds.maxOf { it.catchupDays } }
+                        val days = HashMap<String, Int>()
+                        cached.channels.forEach { channel -> val key = channel.guideId.ifBlank { channel.id }; days[key] = maxOf(days[key] ?: 0, channel.catchupDays) }
                         programmes = latest + programmes.mapValues { (key, entries) -> GuideHistory.merge(latest[key].orEmpty(), entries, days[key] ?: 0, now) }
                         require(store.sources().any { it == source })
                         store.cacheProgrammes(source, programmes, System.currentTimeMillis()); store.markEpgRefreshed(source)

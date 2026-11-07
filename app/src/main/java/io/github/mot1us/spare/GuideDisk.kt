@@ -3,9 +3,45 @@ package io.github.mot1us.spare
 import android.util.JsonReader
 import android.util.JsonToken
 import org.json.JSONObject
+import android.util.JsonWriter
 
 /** Migrate old combined caches without allocating their complete EPG before playback. */
 object GuideDisk {
+    /** Avoid a second object tree for a large, already authenticated local guide. */
+    fun programmes(bytes: ByteArray): Map<String, List<Programme>> {
+        val entries = linkedMapOf<String, MutableList<Programme>>()
+        var count = 0; var bounded: ProgrammeBudget? = null
+        JsonReader(bytes.inputStream().reader()).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) if (reader.nextName() != "programmes") reader.skipValue() else {
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    reader.beginArray()
+                    val channel = reader.nextString(); val title = reader.nextString(); val start = reader.nextLong(); val end = reader.nextLong()
+                    val description = if (reader.hasNext()) reader.nextString() else ""
+                    val artwork = if (reader.hasNext()) reader.nextString() else ""
+                    while (reader.hasNext()) reader.skipValue()
+                    reader.endArray()
+                    require(channel.length <= 512 && title.length <= 512 && description.length <= 2048 && artwork.length <= 4096)
+                    val programme = Programme(channel, title, start, end, description, artwork)
+                    if (count++ < ProgrammeBudget.MAX) entries.getOrPut(channel) { arrayListOf() }.add(programme) else {
+                        if (bounded == null) { bounded = ProgrammeBudget(Importers.MAX_CHANNELS, System.currentTimeMillis()); entries.values.forEach { values -> values.forEach(bounded!!::add) }; entries.clear() }
+                        bounded!!.add(programme)
+                    }
+                }
+                reader.endArray()
+            }
+            reader.endObject()
+        }
+        return bounded?.result() ?: entries
+    }
+    fun writeProgrammes(writer: JsonWriter, programmes: Map<String, List<Programme>>) {
+        writer.beginObject().name("channels").beginArray().endArray().name("programmes").beginArray()
+        programmes.values.forEach { values -> values.forEach { programme ->
+            writer.beginArray().value(programme.channel).value(programme.title).value(programme.start).value(programme.end).value(programme.description).value(programme.artwork).endArray()
+        } }
+        writer.endArray().name("categories").beginArray().endArray().endObject()
+    }
     fun lineup(bytes: ByteArray): Guide {
         val channels = mutableListOf<Channel>(); val categories = mutableListOf<String>()
         JsonReader(bytes.inputStream().reader()).use { reader ->

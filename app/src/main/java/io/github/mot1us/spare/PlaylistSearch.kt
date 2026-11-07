@@ -28,7 +28,6 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
     private var readEpoch = 0
     private var reading = false
     private var publishPending = false
-    private var warming = false
     private var restoring = false
     var serialImports = false
     var stateChanged: (() -> Unit)? = null
@@ -36,12 +35,12 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
     fun catalogStatus(selected: Source, kinds: Set<String>): CatalogStatus = synchronized(lock) {
         if (source != selected) return@synchronized CatalogStatus(false, false, false)
         val complete = kinds.all { mode -> repository.memory(selected, mode)?.let { it.complete && it.chunks.all { chunk -> chunk.titles.size == chunk.count } } == true }
-        CatalogStatus(!complete && (restoring || kinds.any { it in loading } || warming), complete, kinds.any { it in failures })
+        CatalogStatus(!complete && (restoring || kinds.any { it in loading }), complete, kinds.any { it in failures })
     }
     fun prepare(selected: Source) {
         synchronized(lock) {
             if (closed || source == selected) return
-            cancelLoads(); warming = false; catalogs.clear(); failures.clear(); source = selected; ++context
+            cancelLoads(); catalogs.clear(); failures.clear(); source = selected; ++context
             val token = context
             restoring = true; publish()
             reader.submit {
@@ -52,17 +51,6 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
             }
         }
     }
-    /** One metadata import at a time while idle. Does not open any playback connection. */
-    fun prefetch(selected: Source) {
-        prepare(selected)
-        synchronized(lock) {
-            if (closed || active || selected.kind != "xtream") return
-            val next = listOf("movie", "series").firstOrNull { it !in loads && it !in failures } ?: return
-            warming = true; query = ""
-            load(selected, next, context)
-        }
-    }
-    fun pausePrefetch() { synchronized(lock) { if (warming && !active) { warming = false; ++context; cancelLoads(); publish() } } }
     fun refresh(selected: Source, mode: String) {
         prepare(selected)
         synchronized(lock) { if (!closed) { ++context; cancelLoads(); failures.clear(); load(selected, mode, context, force = true) } }
@@ -82,7 +70,6 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
         require(kinds.isNotEmpty() && kinds.all { it in setOf("movie", "series") })
         synchronized(lock) {
             if (closed) return
-            warming = false
             if (source != selected) { cancelLoads(); catalogs.clear(); failures.clear(); source = selected; ++context }
             if (modes != kinds) { cancelLoads(); failures.clear(); modes = kinds.toSet(); ++context }
             active = true; query = ChannelSearch.key(text); extras = knownEpisodes
@@ -141,9 +128,7 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
             finally { synchronized(lock) {
                 if (token == context) {
                     loading.remove(mode); publish()
-                    if (warming && !active && mode == "movie" && "series" !in loads && "series" !in failures) load(selected, "series", token)
                     if (active && serialImports && loading.isEmpty()) modes.firstOrNull { it !in loads && it !in failures }?.let { load(selected, it, context) }
-                    if (loading.isEmpty()) warming = false
                 }
             } }
         }
@@ -152,7 +137,7 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
     // Leaving the search surface must not throw away a nearly finished metadata-only import.
     fun pause(cancel: Boolean = false) { synchronized(lock) {
         active = false; ++readEpoch; reading = false; readTask?.cancel(true)
-        if (cancel) { warming = false; ++context; cancelLoads() }
+        if (cancel) { ++context; cancelLoads() }
         handler.removeCallbacks(publish); publishPending = false
     } }
     fun close() { pause(cancel = true); closed = true }
@@ -193,11 +178,6 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         deliver(states.flatMap { it.items }.distinctBy { it.playlistId to it.id }.take(120), states.any { it.busy }, states.map { it.warning }.filter { it.isNotBlank() }.distinct().joinToString(" · "))
     }
     fun prepare(source: Source) { configure(source).forEach { session(it).engine.prepare(it) } }
-    fun prefetch(source: Source) {
-        val wanted = configure(source)
-        wanted.forEach { session(it).engine.prepare(it) }
-        wanted.firstOrNull { candidate -> listOf("movie", "series").any { repository.memory(candidate, it)?.complete != true } }?.let { session(it).engine.prefetch(it) }
-    }
     fun catalogStatus(source: Source, kinds: Set<String>): CatalogStatus {
         val values = wanted(source).filter { it.kind == "xtream" }.map { session(it).engine.catalogStatus(it, kinds) }
         return CatalogStatus(values.any { it.checking }, values.isNotEmpty() && values.all { it.complete }, values.any { it.failed })
@@ -208,7 +188,6 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         wanted.forEach { selected -> val state = session(selected); state.items = emptyList(); state.busy = query.isNotBlank(); state.engine.serialImports = wanted.size > 1; state.engine.prepare(selected); state.engine.search(selected, query, known.filter { it.playlistId.isBlank() && selected.id == source.id || it.playlistId == selected.id }, kinds) }
         active = true; publish()
     }
-    fun pausePrefetch() { sessions.values.forEach { it.engine.pausePrefetch() } }
     fun pause(cancel: Boolean = false) { active = false; sessions.values.forEach { it.engine.pause(cancel) } }
     fun close() { pause(true); sessions.values.forEach { it.engine.close() }; sessions.clear(); io.shutdownNow(); reader.shutdownNow() }
 }

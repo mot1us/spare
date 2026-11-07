@@ -160,6 +160,14 @@ class SpareDeviceTest {
                 assertEquals("Saved launch must not request the playlist", 0, server.requests["/playlist.m3u"] ?: 0)
                 var samePlayer: Player? = null; var item = ""
                 scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player; item = samePlayer!!.currentMediaItem!!.mediaId }
+                scenario.onActivity { activity ->
+                    store.markFullEpgAttempted(source); store.markEpgRefreshed(source)
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
+                    warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 61000, true, 6000)
+                    MainActivity::class.java.getDeclaredMethod("autoRefresh", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, source, false)
+                    assertFalse("Missing Xtream archive flags must not repeatedly refresh an M3U playlist", PlaylistRefresh.running(source.id))
+                }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 device.pressDPadDown(); waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.id == channels[1].id }
                 val refreshDone = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -210,7 +218,14 @@ class SpareDeviceTest {
                 waitFor(scenario) { android.os.SystemClock.elapsedRealtime() - playingAt >= 2500 }
                 assertEquals("Cached startup must not immediately redownload catalogs or launch-refresh metadata", 0, server.requests["/player_api.php"] ?: 0)
                 assertTrue("Fullscreen playback must not query neighboring or favorite channel guides", server.epgTargets.isEmpty())
-                waitFor(scenario) { server.catalogTargets.isNotEmpty() && store.playlistRefreshed(source) > stamp }
+                scenario.onActivity { activity ->
+                    val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
+                    warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 61000, true, 6000)
+                    MainActivity::class.java.getDeclaredMethod("autoRefresh", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, source, true)
+                }
+                waitFor(scenario) { store.playlistRefreshed(source) > stamp }
+                assertTrue("Scheduled live refresh must not import VOD", server.catalogTargets.isEmpty())
                 scenario.onActivity { activity ->
                     val player = find<PlayerView>(activity.window.decorView)!!.player!!
                     assertEquals("Background refresh must not replace the resumed stream", item, player.currentMediaItem!!.mediaId)
@@ -306,6 +321,31 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun largeEncryptedProgrammeCacheStreamsAndReadsLegacyJson() {
+        val source = Source(name = "Streaming cache", kind = "m3u", url = "https://example.test/playlist")
+        store.saveSources(listOf(source)); store.active = source.id
+        try {
+            val channels = (1..6000).map { Channel("cache:$it", "Cached station", "Group ${it / 100}", "https://example.test/$it") }
+            store.saveLineup(source, Guide(channels, emptyMap()))
+            val legacy = mapOf(channels.first().id to listOf(Programme(channels.first().id, "Legacy", 1, 2, "Description", "https://example.test/art")))
+            store.write("epg-${source.id}.enc", Guide(emptyList(), legacy).json().toString().toByteArray())
+            assertEquals(legacy, store.cachedProgrammes(source))
+            store.cacheProgrammes(source, legacy, System.currentTimeMillis())
+            assertEquals(legacy, Guide.from(org.json.JSONObject(store.read("epg-${source.id}.enc")!!.toString(Charsets.UTF_8))).programmes)
+            val now = System.currentTimeMillis()
+            val programmes = channels.associate { channel -> channel.id to (0..11).map { slot -> Programme(channel.id, "Slot $slot", now + slot * 3600000L, now + (slot + 1) * 3600000L, "Cached description") } }
+            store.cacheProgrammes(source, programmes, now + 1)
+            val restored = store.cachedProgrammes(source)
+            assertEquals(72000, restored.values.sumOf { it.size }); assertEquals(programmes["cache:6000"], restored["cache:6000"])
+            val lineup = store.cachedLineup(source)!!.channels
+            assertEquals(channels.size, lineup.size)
+            channels.zip(lineup).forEach { (expected, actual) -> assertEquals(expected.id, expected, actual) }
+            val file = File(context.filesDir, "epg-${source.id}.enc"); val bytes = file.readBytes()
+            assertEquals(1, bytes.first().toInt()); bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte(); file.writeBytes(bytes)
+            assertTrue("Streaming writes keep authenticated encryption", runCatching { store.cachedProgrammes(source) }.isFailure)
+        } finally { store.saveSources(emptyList()); store.removeCache(source) }
+    }
+
     @Test fun providerLogosAreEncryptedPersistBetweenLoadersAndRespectHttpConsent() {
         FixtureServer().use { server ->
             val url = "${server.base}/logo.png?synthetic-account=${System.nanoTime()}"
@@ -329,10 +369,13 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun fallbackGuideWarmsUnvisitedChannelsWhileFullscreenWithoutRetuning() {
+    @Test fun cachedStartupDoesNotDownloadVodOrSweepUnvisitedChannels() {
         FixtureServer(channelCount = 20, longVideo = true, parallelClients = true).use { server ->
-            val source = Source(name = "Background guide", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val source = Source(name = "Quiet startup", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
+            val lineup = Importers.xtream(source); val now = System.currentTimeMillis()
+            store.cache(source, Guide(lineup.channels, mapOf("xc:1" to listOf(Programme("xc:1", "Cached programme", now - 60000, now + 7200000)))))
+            store.markPlaylistRefreshed(source); store.markEpgRefreshed(source); store.markFullEpgAttempted(source); store.setRefreshPolicy(source, RefreshPolicy())
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var player: Player? = null; var media = ""
@@ -340,20 +383,27 @@ class SpareDeviceTest {
                     player = find<PlayerView>(activity.window.decorView)!!.player; media = player!!.currentMediaItem!!.mediaId
                     val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
                     val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
-                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 21000, true, 6000)
+                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 61000, true, 6000)
                 }
+                Thread.sleep(3500)
+                scenario.onActivity { activity ->
+                    assertSame(player, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(media, player!!.currentMediaItem!!.mediaId)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("background-refresh").isShown)
+                }
+                assertTrue("Live startup must not import VOD catalogs", server.catalogTargets.isEmpty())
+                assertTrue("Watching a cached channel must not sweep other channels", server.requestedEpgTargets.isEmpty())
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:2"]?.isNotEmpty() == true
+                }
+                assertFalse(server.requestedEpgTargets.any { it.endsWith("stream_id=20") || it.contains("stream_id=20&") })
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("focusChannelAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, 19) }
                 waitFor(scenario) { activity ->
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
                     guide.programmes["xc:20"]?.isNotEmpty() == true
                 }
-                scenario.onActivity { activity -> assertFalse(channelList(activity)!!.isShown); assertSame(player, find<PlayerView>(activity.window.decorView)!!.player); assertEquals(media, player!!.currentMediaItem!!.mediaId) }
-                val reads = server.requestedEpgTargets.count { it.endsWith("stream_id=20") || it.contains("stream_id=20&") }
-                assertEquals(1, reads)
-                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
-                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("focusChannelAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, 19) }
-                waitFor(scenario) { (channelList(it)?.findFocus() as? GuideAdapter.Row)?.channel?.nativeId == "xc:20" }
-                assertEquals(reads, server.requestedEpgTargets.count { it.endsWith("stream_id=20") || it.contains("stream_id=20&") })
-                waitFor(scenario) { store.cachedProgrammes(source)["xc:20"].orEmpty().isNotEmpty() }
+                scenario.onActivity { assertEquals(media, player!!.currentMediaItem!!.mediaId) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
         }
@@ -375,7 +425,8 @@ class SpareDeviceTest {
                     media = player!!.currentMediaItem!!.mediaId
                     val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
                     val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity) as PlaybackWarmup
-                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 21000, true, 6000)
+                    warmup.reset(); warmup.ready(token, android.os.SystemClock.elapsedRealtime() - 61000, true, 6000)
+                    MainActivity::class.java.getDeclaredMethod("autoRefresh", Source::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, source, false)
                 }
                 try { waitFor(scenario) { activity ->
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
@@ -2000,35 +2051,40 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun missingVodMatchStopsCheckingWithoutWaitingForTheCatalogOrRetuningLiveTv() {
+    @Test fun missingVodMatchDoesNotStartAnAutomaticCatalogDownload() {
         FixtureServer(longVideo = true, programmeTitle = "Missing from the VOD fixture", slowVod = true, parallelClients = true).use { server ->
             val source = Source(name = "Missing VOD", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
-            val liveOnly = Source(name = "Live-only playlist", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
-            store.saveSources(listOf(source, liveOnly)); store.active = source.id
+            store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
-                var liveId = ""
-                fun show(activity: MainActivity) { MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity) }
-                scenario.onActivity { activity -> liveId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId; show(activity) }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-progress")?.isShown == true }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("still updating") == true }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                var media = ""
+                scenario.onActivity { activity ->
+                    media = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                    MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("Open Library or Search") == true }
                 scenario.onActivity { activity ->
                     assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
                     assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
-                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
-                    assertEquals("The foreground hint must stop before the background import finishes", 1L, server.finishVodCatalog.count)
-                    show(activity)
-                    assertFalse("Reopening the same programme must not restart its spinner", activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
+                    assertEquals(media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                 }
+                assertTrue("OK only checks saved titles", server.catalogTargets.isEmpty())
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, "Missing from the VOD fixture", false) }
+                waitFor(scenario) { server.catalogTargets.isNotEmpty() }
                 server.finishVodCatalog.countDown()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("Not available in your VOD library") == true }
-                scenario.onActivity { activity ->
-                    assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
-                    assertEquals(liveId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                waitFor(scenario) { activity ->
+                    val search = MainActivity::class.java.getDeclaredField("playlistSearch").apply { isAccessible = true }.get(activity) as PlaylistSearch
+                    search.catalogStatus(source, setOf("movie", "series")).complete
                 }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("clearGuideSearch").apply { isAccessible = true }.invoke(activity)
+                    MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                    MainActivity::class.java.getDeclaredMethod("showDetails").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-status")?.contentDescription?.contains("Not available in your VOD library") == true }
                 assertEquals(0, server.archiveRequests.get())
             }
-            store.saveSources(emptyList()); store.removeCache(source); store.removeCache(liveOnly)
+            store.saveSources(emptyList()); store.removeCache(source)
         }
     }
 
@@ -2039,6 +2095,7 @@ class SpareDeviceTest {
                 store.saveSources(listOf(source)); store.active = source.id
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                    importVodForProgramme(scenario, source, title)
                     device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains(title)) }
                     holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
@@ -2087,15 +2144,11 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                server.finishVodCatalog.countDown(); importVodForProgramme(scenario, source, "Other movie 16")
+                var liveId = ""
+                scenario.onActivity { liveId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains("Other movie 16")) }
                 holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }; device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("vod-match-progress")?.isShown == true }
-                var liveId = ""
-                scenario.onActivity { activity ->
-                    assertFalse(activity.window.decorView.findViewWithTag<View>("channel-vod-start").isShown)
-                    liveId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
-                }
-                server.finishVodCatalog.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("channel-vod-start")?.isShown == true }
                 scenario.onActivity { activity ->
                     assertFalse(activity.window.decorView.findViewWithTag<View>("vod-match-progress").isShown)
@@ -2110,6 +2163,7 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                server.finishVodCatalog.countDown(); importVodForProgramme(scenario, source, "Fixture movie", 2)
                 device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true && device.hasObject(By.textContains("Fixture movie")) }
                 holdBack(); waitFor(scenario) { channelList(it)?.isShown == false }
                 device.pressDPadCenter()
@@ -2647,6 +2701,20 @@ class SpareDeviceTest {
                 leaveSettings(scenario); scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player) }
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    private fun importVodForProgramme(scenario: ActivityScenario<MainActivity>, source: Source, title: String, count: Int = 1) {
+        val target = VodStart.request(Programme("fixture", title, 1, 2))!!
+        scenario.onActivity { MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, target.query, false) }
+        waitFor(scenario) { activity ->
+            val library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
+            library.repository.matches(source, target).size >= count
+        }
+        scenario.onActivity { activity ->
+            MainActivity::class.java.getDeclaredMethod("clearGuideSearch").apply { isAccessible = true }.invoke(activity)
+            MainActivity::class.java.getDeclaredMethod("applyFilter").apply { isAccessible = true }.invoke(activity)
+            MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
         }
     }
 

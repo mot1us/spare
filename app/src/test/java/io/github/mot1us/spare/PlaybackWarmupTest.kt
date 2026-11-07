@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlaybackWarmupTest {
+    @org.junit.Test fun bulkMaintenanceWaitsForLongerStablePlaybackAndAUsefulBuffer() {
+        val warmup = PlaybackWarmup()
+        assertFalse(warmup.ready(1, 0, true, 20000, 30000, 15000, 60000))
+        assertFalse(warmup.ready(1, 29999, true, 20000, 30000, 15000, 60000))
+        assertTrue(warmup.ready(1, 30000, true, 20000, 30000, 15000, 60000))
+        assertFalse(warmup.ready(1, 31000, false, 20000, 30000, 15000, 60000))
+        assertFalse(warmup.ready(1, 32000, true, 2000, 30000, 15000, 60000))
+        assertFalse(warmup.ready(1, 91999, true, 2000, 30000, 15000, 60000))
+        assertTrue(warmup.ready(1, 92000, true, 2000, 30000, 15000, 60000))
+    }
     @Test fun bulkMetadataWaitsForStablePlaybackAndReadAhead() {
         val warmup = PlaybackWarmup()
         assertFalse(warmup.ready(1, 100, false, 60000))

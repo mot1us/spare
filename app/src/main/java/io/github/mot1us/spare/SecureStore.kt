@@ -53,10 +53,25 @@ class SecureStore(private val context: Context) {
     fun write(name: String, bytes: ByteArray) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+        val file = AtomicFile(File(context.filesDir, name)); val output = file.startWrite()
+        try { output.write(byteArrayOf(1)); output.write(cipher.iv); output.write(cipher.doFinal(bytes)); file.finishWrite(output) }
+        catch (e: Exception) { file.failWrite(output); throw e }
+    }
+    private fun writeEncrypted(name: String, body: (java.io.OutputStream) -> Unit) = synchronized(fileLock(name)) {
+        require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
         val file = AtomicFile(File(context.filesDir, name))
         val output = file.startWrite()
         try {
-            output.write(byteArrayOf(1)); output.write(cipher.iv); output.write(cipher.doFinal(bytes)); file.finishWrite(output)
+            output.write(byteArrayOf(1)); output.write(cipher.iv)
+            val sink = object : java.io.OutputStream() {
+                override fun write(value: Int) = write(byteArrayOf(value.toByte()), 0, 1)
+                override fun write(bytes: ByteArray, offset: Int, length: Int) { cipher.update(bytes, offset, length)?.let(output::write) }
+                override fun flush() = output.flush()
+            }
+            body(sink)
+            output.write(cipher.doFinal())
+            file.finishWrite(output)
         } catch (e: Exception) { file.failWrite(output); throw e }
     }
     fun read(name: String): ByteArray? = synchronized(fileLock(name)) {
@@ -94,21 +109,26 @@ class SecureStore(private val context: Context) {
         if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
             }
     }
-    fun archiveMetadataReady(source: Source) = preferences.getBoolean("archive-metadata-${source.id}", false)
+    fun archiveMetadataReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("archive-metadata-${source.id}", false)
+    fun markArchiveMetadataAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("archive-metadata-${source.id}", true) } }
     fun guideUrl(source: Source) = runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
-    fun cachedLineup(source: Source): Guide? = if (!providerCurrent(source)) null else read("lineup-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))) }
+    fun cachedLineup(source: Source): Guide? = if (!providerCurrent(source)) null else read("lineup-${source.id}.enc")?.let(GuideDisk::lineup)
         ?: read("cache-${source.id}.enc")?.let { GuideDisk.lineup(it).also { guide -> saveLineup(source, guide) } }
-    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = if (!providerCurrent(source)) emptyMap() else read("epg-${source.id}.enc")?.let { Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes }
+    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = if (!providerCurrent(source)) emptyMap() else read("epg-${source.id}.enc")?.let(GuideDisk::programmes)
         ?: read("cache-${source.id}.enc")?.let {
-            val entries = Guide.from(JSONObject(it.toString(Charsets.UTF_8))).programmes
+            val entries = GuideDisk.programmes(it)
             cacheProgrammes(source, entries, System.currentTimeMillis())
             if (java.io.File(context.filesDir, "lineup-${source.id}.enc").exists()) delete("cache-${source.id}.enc")
             entries
         }.orEmpty()
+    fun programmesStamp(source: Source) = preferences.getLong("epg-cache-${source.id}", 0)
     fun cacheProgrammes(source: Source, programmes: Map<String, List<Programme>>, observedAt: Long) = synchronized(cacheLock) {
         if (!providerCurrent(source)) return@synchronized
         if (observedAt >= preferences.getLong("epg-cache-${source.id}", 0)) {
-            write("epg-${source.id}.enc", Guide(emptyList(), programmes).json().toString().toByteArray())
+            writeEncrypted("epg-${source.id}.enc") { output ->
+                val writer = android.util.JsonWriter(java.io.BufferedWriter(java.io.OutputStreamWriter(output, Charsets.UTF_8), 16384))
+                GuideDisk.writeProgrammes(writer, programmes); writer.flush()
+            }
             preferences.edit { putLong("epg-cache-${source.id}", observedAt) }
         }
     }
@@ -120,8 +140,8 @@ class SecureStore(private val context: Context) {
     } }
     fun epgRefreshed(source: Source) = preferences.getLong("epg-refreshed-${source.id}", 0)
     fun epgMappingReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("epg-mapping-${source.id}", false)
-    fun fullEpgAttempted(source: Source) = preferences.getBoolean("epg-full-attempt-${source.id}", false) && preferences.getInt("epg-full-window-${source.id}", 0) == 1
-    fun markFullEpgAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("epg-full-attempt-${source.id}", true); putInt("epg-full-window-${source.id}", 1) } }
+    fun fullEpgAttempted(source: Source) = preferences.getBoolean("epg-full-attempt-${source.id}", false)
+    fun markFullEpgAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("epg-full-attempt-${source.id}", true) } }
     fun markEpgRefreshed(source: Source) { preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
     fun refreshError(source: Source, value: String) { preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }

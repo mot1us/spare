@@ -20,6 +20,8 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
     private val highlight: (GuideSection, Boolean) -> Unit = { _, _ -> }) : RecyclerView.Adapter<SidebarAdapter.Holder>() {
     private var items = emptyList<GuideSection>()
     private var focusedKey: String? = null
+    private var activeKey: String? = null
+    private var positions = emptyMap<String, Int>()
     init { setHasStableIds(true) }
     fun submit(next: List<GuideSection>) {
         if (items == next) return
@@ -30,12 +32,17 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
             override fun areItemsTheSame(old: Int, new: Int) = previous[old].key == next[new].key
             override fun areContentsTheSame(old: Int, new: Int) = previous[old] == next[new]
         })
-        items = next; diff.dispatchUpdatesTo(this)
+        items = next; positions = next.withIndex().associate { it.value.key to it.index }; activeKey = next.firstOrNull { it.active }?.key; diff.dispatchUpdatesTo(this)
+    }
+    fun activate(key: String?) {
+        if (activeKey == key) return
+        val before = activeKey; activeKey = key
+        listOfNotNull(positions[before], positions[key]).distinct().forEach { notifyItemChanged(it, "active") }
     }
     override fun getItemId(position: Int) = items[position].rowId
-    fun rememberedPosition() = items.indexOfFirst { it.key == focusedKey }.takeIf { it >= 0 } ?: activePosition()
-    fun activePosition() = items.indexOfFirst { it.active }.coerceAtLeast(0)
-    fun focusedSection() = items.firstOrNull { it.key == focusedKey }
+    fun rememberedPosition() = positions[focusedKey] ?: activePosition()
+    fun activePosition() = positions[activeKey] ?: 0
+    fun focusedSection() = positions[focusedKey]?.let(items::get)
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
         val d = context.resources.displayMetrics.density
@@ -64,10 +71,16 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
         holder.label.background = GuideTheme.background(context.resources.displayMetrics.density)
         val item = items[position]
         holder.label.tag = item.key; holder.label.text = item.title; holder.label.contentDescription = item.title
-        holder.label.isSelected = item.active
-        holder.label.typeface = AppFont.face(item.active || item.header)
+        holder.label.isSelected = item.key == activeKey
+        holder.label.typeface = AppFont.face(item.key == activeKey || item.header)
         holder.label.setOnFocusChangeListener { _, focused -> if (focused) focusedKey = item.key; highlight(item, focused) }
         holder.label.setOnClickListener { select(item) }
+    }
+    override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.isEmpty()) onBindViewHolder(holder, position) else {
+            val item = items[position]; holder.label.isSelected = item.key == activeKey
+            holder.label.typeface = AppFont.face(item.key == activeKey || item.header)
+        }
     }
     class Holder(val label: TextView) : RecyclerView.ViewHolder(label)
 }

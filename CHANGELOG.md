@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.5 — 2026-11-06
+
+- Remove speculative category/EPG/image sweeps and automatic VOD catalog downloads during live TV. Library/Search imports VOD on demand; live details check saved titles. Keep persistent logos and load uncached guide rows when needed.
+- Stream encrypted EPG cache reads/writes without constructing whole JSON object trees or flattening every programme into temporary arrays. Coalesce snapshots, save less frequently while active, and never overwrite a saved guide with the startup's temporarily empty EPG.
+- Batch per-channel EPG updates off the main thread, reuse unchanged lineups, index channel categories, and update only the sidebar's changed selection instead of rebuilding/diffing its whole list on every move.
+- Defer automatic bulk refresh until playback has settled and remote input is quiet. Stop repeated archive-metadata refresh attempts for M3U/providers without those flags; remove forced refresh migration. Show blocking guide progress only without saved channels, with background status in playlist settings.
+
 ## 0.28.4 — 2026-11-06
 
 - Keep channel logos in an encrypted, size-limited disk cache; decode guide-size thumbnails, retain each visible row's bitmap, and warm nearby category logos one at a time after playback settles. HTTP images still require playlist consent.

@@ -59,6 +59,9 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val imports = Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-import") }
     private val cacheWrites = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-cache") }
+    private data class EpgSave(val guide: Guide, val catalog: PlaylistCatalog, val owners: List<Source>, val at: Long)
+    private val epgWriter by lazy { LatestTask<EpgSave>(cacheWrites) { save -> save.owners.forEach { selected -> runCatching { store.cacheProgrammes(selected, save.catalog.extract(selected, save.guide).programmes, save.at) } } } }
+    private var lastInputAt = 0L
     private val cadence = FrameCadence()
     private lateinit var sourceVideoFrames: SourceVideoFrames
     private lateinit var reminders: GameReminders
@@ -77,12 +80,6 @@ class MainActivity : Activity() {
     private val epgWorkers = Executors.newFixedThreadPool(2)
     private var epgActive = 0
     private var epgWanted = emptyList<Channel>()
-    private var epgPriority = emptySet<String>()
-    private val guidePrefetch = GuidePrefetch()
-    private var guideWarmLineup: List<Channel>? = null
-    private var guideWarmAt = 0L
-    private var guideWarmLogos = emptyList<Channel>()
-    private var guideWarmLogoIndex = 0
     private val epgInFlight = mutableSetOf<String>()
     private val epgCheckedAt = mutableMapOf<String, Long>()
     private val epgDepth = mutableMapOf<String, Int>()
@@ -90,14 +87,51 @@ class MainActivity : Activity() {
     private val fetchVisibleEpg = Runnable { collectVisibleEpg() }
     private val cacheEpg = Runnable {
         val snapshot = guide; val observedAt = System.currentTimeMillis(); val owners = enabledSources()
-        if (::playlists.isInitialized && snapshot.channels.isNotEmpty()) cacheWrites.execute { owners.forEach { selected -> runCatching { store.cacheProgrammes(selected, playlists.extract(selected, snapshot).programmes, observedAt) } } }
+        if (::playlists.isInitialized && snapshot.channels.isNotEmpty() && snapshot.programmes.isNotEmpty()) epgWriter.submit(EpgSave(snapshot, playlists, owners, observedAt))
     }
+    private data class EpgUpdate(val channel: Channel, val entries: List<Programme>, val at: Long)
+    private val pendingEpg = linkedMapOf<String, EpgUpdate>()
+    private var epgApplying = false
+    private var epgApplyScheduled = false
+    private val applyEpgUpdates = Runnable {
+        epgApplyScheduled = false
+        if (!closed && !epgApplying && pendingEpg.isNotEmpty()) {
+            epgApplying = true
+            val updates = pendingEpg.toMap(); pendingEpg.clear()
+            val before = guide; val epoch = generation
+            imports.execute {
+                val programmes = LinkedHashMap(before.programmes)
+                updates.values.forEach { update -> val key = before.key(update.channel); programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), update.entries, update.channel.catchupDays, update.at) }
+                handler.post {
+                    epgApplying = false
+                    if (!closed && epoch == generation) {
+                        if (guide.programmes === before.programmes) {
+                            guide = guide.copy(programmes = programmes)
+                            handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
+                            if (guideVisible) adapter.refreshRows()
+                            if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                            if (details.isVisible) refreshDetails()
+                        } else updates.forEach { (id, update) -> if (id !in pendingEpg) pendingEpg[id] = update }
+                    }
+                    scheduleEpgApply()
+                }
+            }
+        }
+    }
+    private fun scheduleEpgApply() { if (!closed && pendingEpg.isNotEmpty() && !epgApplyScheduled) { epgApplyScheduled = true; handler.postDelayed(applyEpgUpdates, 120) } }
     private lateinit var refreshBar: ProgressBar
     private var refreshRetryAt = 0L
     private var launchRefreshPending = false
     private val playbackWarmup = PlaybackWarmup()
     private fun backgroundPlaybackReady(): Boolean = (current == null && onDemand == null) || playbackWarmup.ready(
         playbackToken, android.os.SystemClock.elapsedRealtime(), started && firstFrame && player.isPlaying, player.totalBufferedDuration)
+    private fun bulkRefreshReady(): Boolean {
+        if (onDemand != null || multiview.active || searchPanel.isVisible || library.opened || guideVisible && sportsVisible) return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastInputAt < 3000) return false
+        return current == null || playbackWarmup.ready(playbackToken, now, started && firstFrame && player.isPlaying, player.totalBufferedDuration, 30000, 15000, 60000)
+    }
+    private fun updateRefreshIndicator() { if (::refreshBar.isInitialized) refreshBar.isVisible = guide.channels.isEmpty() && (playlistLoading.isNotEmpty() || enabledSources().any { PlaylistRefresh.running(it.id) }) }
 
     private val ownRefreshes = mutableSetOf<String>()
     private var mergeEpoch = 0
@@ -105,16 +139,15 @@ class MainActivity : Activity() {
     private val refreshTick = object : Runnable {
         override fun run() {
             if (closed) return
-            sources.forEach { value -> settingsPanel?.findViewWithTag<TextView>("refresh-status:${value.id}")?.text = refreshSummary(value) }
+            if (settingsPanel?.opened == true) sources.forEach { value -> settingsPanel?.findViewWithTag<TextView>("refresh-status:${value.id}")?.text = refreshSummary(value) }
             val selected = source
             checkGameReminders()
             syncScoreStrip()
-            warmGuideAssets()
             if (sportsVisible && guideVisible) syncReplayDiscovery()
             enabledSources().filter { it.id != selected?.id }.forEach { refreshAdditional(it) }
             if (selected != null) {
                 val busy = PlaylistRefresh.running(selected.id)
-                if (::refreshBar.isInitialized) refreshBar.isVisible = busy
+                updateRefreshIndicator()
                 if (busy && guide.channels.isEmpty()) { loadingPanel.visibility = View.VISIBLE; loadingText.text = PlaylistRefresh.stage(selected.id) }
                 if (!busy && started && System.currentTimeMillis() >= refreshRetryAt) autoRefresh(selected, false)
             }
@@ -328,18 +361,6 @@ class MainActivity : Activity() {
     private lateinit var programmeArtwork: ProgrammeArtwork
     private lateinit var headerInfo: LinearLayout
     private lateinit var guideSearch: GuideSearchBar
-    private var vodWarmScheduled = false
-    private val warmVodIndex = object : Runnable {
-        override fun run() {
-            if (closed || !started || onDemand != null || multiview.active) { vodWarmScheduled = false; return }
-            if (!details.isVisible && !backgroundPlaybackReady()) { handler.postDelayed(this, 1000); return }
-            vodWarmScheduled = false
-            source?.let(playlistSearch::prefetch)
-        }
-    }
-    private fun scheduleVodIndex() {
-        if (!vodWarmScheduled && started && source?.kind == "xtream") { vodWarmScheduled = true; handler.postDelayed(warmVodIndex, 2000); if (::details.isInitialized && details.isVisible) refreshDetails() }
-    }
     private lateinit var playlistSearch: PlaylistSearch
     private lateinit var searchPanel: PlaylistSearchPanel
     private var searchedDemand = emptyList<OnDemand>()
@@ -389,6 +410,9 @@ class MainActivity : Activity() {
     private fun channelLabel(channel: Channel) = channel.name + if (enabledSources().size > 1) " · ${owner(channel)?.name.orEmpty()}" else ""
     private fun allowed(channel: Channel) = owner(channel)?.let { it.enabled && Network.allowed(channel.url, it.allowHttp) } == true
     private var guide = Guide.EMPTY
+    private var channelIndex = GuideChannelIndex()
+    private data class SidebarPlaylistShape(val id: String, val name: String, val groups: List<String>, val visible: Set<String>, val collapsed: Boolean, val loading: Boolean)
+    private var sidebarShape: Any? = null
     private var current: Channel? = null
     private var focused: Channel? = null
     private var favorites = emptySet<String>()
@@ -626,9 +650,7 @@ class MainActivity : Activity() {
                 if (state == Player.STATE_BUFFERING) {
                     playbackWarmup.reset()
                     stopSportsPrefetch()
-                    playlistSearch.pausePrefetch()
                 }
-                if (state == Player.STATE_READY && onDemand == null) scheduleVodIndex()
                 if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
                 syncPlaybackMonitoring(); syncReplayDiscovery()
                 if (state == Player.STATE_ENDED && started && onDemand != null) { saveDemandProgress(ended = true); showDemandControls() }
@@ -915,7 +937,7 @@ class MainActivity : Activity() {
                 // A provider archive belongs to one stream. Do not spread it to shared XMLTV variants.
                 if (key == channel.id || guide.channels.count { guide.key(it) == key } == 1) {
                     guide = guide.copy(programmes = guide.programmes + (key to GuideHistory.merge(guide.programmes[key].orEmpty(), entries, channel.catchupDays, System.currentTimeMillis())))
-                    handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+                    handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
                     adapter.refreshRows(); scheduleSports()
                 }
             }
@@ -970,7 +992,7 @@ class MainActivity : Activity() {
         sportsReplayGame = null
         val selected = owner(item) ?: return
         if (!selected.enabled || !Network.allowed(item.url, selected.allowHttp)) { toast("This title needs an enabled playlist with HTTP or HTTPS playback allowed"); return }
-        handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; playlistSearch.pause(cancel = true)
+        playlistSearch.pause(cancel = true)
         saveDemandProgress(); closeDetails(); cancelPlaybackCallbacks()
         watchingRedZone = false; onDemand = item.copy(playlistId = selected.id); demandPosition = position; demandPaused = false; demandSubtitleMode = null
         hasPlayedChannel = false; firstFrame = false; lastVideoInfo = null; alternateUsed = false; reconnects = ReconnectBudget()
@@ -1201,13 +1223,16 @@ class MainActivity : Activity() {
     private fun receivePlaylist(selected: Source, raw: Guide, resume: Boolean = false, applied: (() -> Unit)? = null) {
         if (!selected.enabled || sources.none { it.id == selected.id && it.enabled }) return
         val epoch = generation; val version = (playlistVersions[selected.id] ?: 0) + 1; playlistVersions[selected.id] = version
-        val before = guide; val needsMetadata = selected.id !in playlistMetadata
+        val before = guide; val needsMetadata = selected.id !in playlistMetadata; val previousView = providerViews[selected.id]
         imports.execute {
-            val scoped = playlists.view(selected, raw)
+            val incoming = playlists.view(selected, raw)
+            val scoped = if (previousView?.channels == incoming.channels) incoming.copy(channels = previousView.channels) else incoming
             val prefs = if (needsMetadata) ProviderPreferences(store.favorites(selected), store.videoInfo(selected), store.unavailable(selected).snapshot(), store.filters(selected)) else null
-            val days = scoped.channels.filter { it.catchupDays > 0 }.groupBy { scoped.key(it) }.mapValues { (_, channels) -> channels.maxOf { it.catchupDays } }
+            val days = HashMap<String, Int>()
+            scoped.channels.forEach { channel -> if (channel.catchupDays > 0) { val key = scoped.key(channel); days[key] = maxOf(days[key] ?: 0, channel.catchupDays) } }
             val at = System.currentTimeMillis()
-            val merged = before.programmes + scoped.programmes.mapValues { (key, entries) -> GuideHistory.merge(before.programmes[key].orEmpty(), entries, days[key] ?: 0, at) }
+            val merged = LinkedHashMap(before.programmes)
+            scoped.programmes.forEach { (key, entries) -> merged[key] = GuideHistory.merge(before.programmes[key].orEmpty(), entries, days[key] ?: 0, at) }
             handler.post {
                 if (closed || epoch != generation || playlistVersions[selected.id] != version || sources.none { it.id == selected.id && it.enabled && it.providerKey() == selected.providerKey() }) return@post
                 if (prefs != null && playlistMetadata.add(selected.id)) {
@@ -1216,17 +1241,21 @@ class MainActivity : Activity() {
                     unavailable = UnavailableChannels((unavailable.snapshot() + prefs.hidden.mapKeys { playlists.key(selected.id, it.key) }).toMutableMap())
                     playlistFilters[selected.id] = prefs.filters
                 }
+                val same = providerViews[selected.id]?.channels === scoped.channels
                 providerViews[selected.id] = scoped; providerOrders[selected.id] = raw.categoryOrder
-                val channels = enabledSources().flatMap { providerViews[it.id]?.channels.orEmpty() }
-                val same = guide.channels == channels
-                val latest = if (guide.programmes === before.programmes) merged else merged + guide.programmes.filter { (key, entries) -> entries !== before.programmes[key] }
+                val channels = if (same) guide.channels else enabledSources().flatMap { providerViews[it.id]?.channels.orEmpty() }
+                if (guide.programmes !== before.programmes) guide.programmes.forEach { (key, entries) -> if (entries !== before.programmes[key]) merged[key] = entries }
                 val oldFocus = focused?.id
-                guide = Guide(if (same) guide.channels else channels, latest, providerOrders[source?.id].orEmpty())
-                current = guide.channels.firstOrNull { it.id == current?.id } ?: current
-                focused = guide.channels.firstOrNull { it.id == oldFocus } ?: focused
-                playlistLoading.remove(selected.id); refreshBar.isVisible = playlistLoading.isNotEmpty() || enabledSources().any { PlaylistRefresh.running(it.id) }
+                guide = Guide(channels, merged, providerOrders[source?.id].orEmpty())
+                if (!same) {
+                    current = channels.firstOrNull { it.id == current?.id } ?: current
+                    focused = channels.firstOrNull { it.id == oldFocus } ?: focused
+                    val snapshot = channels; val legacy = playlists.legacySource
+                    imports.execute { val prepared = GuideChannelIndex().apply { prepare(snapshot, legacy) }; handler.post { if (!closed && guide.channels === snapshot) channelIndex = prepared } }
+                }
+                playlistLoading.remove(selected.id); updateRefreshIndicator()
                 loadingPanel.visibility = View.GONE
-                if (same) adapter.refreshRows() else { groupsForChannels = null; updateGroups(); applyFilter(); if (searchPanel.isVisible) updatePlaylistSearch() }
+                if (same) { adapter.refreshRows(); updateGroups() } else { groupsForChannels = null; updateGroups(); applyFilter(); if (searchPanel.isVisible) updatePlaylistSearch() }
                 if (current == null && onDemand == null && !library.opened && started && (resume || source?.id == selected.id || !playlistLoading.contains(source?.id))) {
                     val recent = store.recentFeeds.firstNotNullOfOrNull { id -> guide.channels.firstOrNull { it.id == id } }
                     val saved = playlists.key(selected.id, store.last(selected))
@@ -1254,7 +1283,7 @@ class MainActivity : Activity() {
     }
     private fun refreshAdditional(selected: Source, launch: Boolean = false, force: Boolean = false) {
         if (launch) additionalLaunch.add(selected.id)
-        if (!selected.enabled || selected.id == source?.id || !started || (!force && !backgroundPlaybackReady()) || (!force && PlaylistRefresh.running(selected.id))) return
+        if (!selected.enabled || selected.id == source?.id || !started || (!force && !bulkRefreshReady()) || (!force && PlaylistRefresh.running(selected.id))) return
         val policy = store.refreshPolicy(selected); val now = System.currentTimeMillis(); val onLaunch = selected.id in additionalLaunch
         val playlist = force || !store.epgMappingReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, onLaunch)
         val epg = !force && (!store.fullEpgAttempted(selected) || policy.epgDue(store.epgRefreshed(selected), now, onLaunch))
@@ -1293,10 +1322,11 @@ class MainActivity : Activity() {
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
+        pendingEpg.clear(); handler.removeCallbacks(applyEpgUpdates); epgApplyScheduled = false
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
         cancelPlaybackCallbacks(); playbackToken++; player.stop(); frameRates.clear(); current = null; playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE
-        handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; playlistSearch.pause(cancel = true)
+        playlistSearch.pause(cancel = true)
         source = selected; focused = null; store.active = selected.id; favorites = emptySet()
         filters = store.filters(selected); sportsFilters = store.sportsFilters(selected).copy(minHeight = 0); videoInfo = mutableMapOf(); unavailable = UnavailableChannels(); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
@@ -1325,7 +1355,7 @@ class MainActivity : Activity() {
     }
     private fun autoRefresh(selected: Source, launch: Boolean) {
         launchRefreshPending = launchRefreshPending || launch
-        if (!started || guide.channels.isEmpty() || !backgroundPlaybackReady()) return
+        if (!started || guide.channels.isEmpty() || !bulkRefreshReady()) return
         val refreshLaunch = launchRefreshPending; launchRefreshPending = false
         val policy = store.refreshPolicy(selected); val now = System.currentTimeMillis()
         val playlist = !store.archiveMetadataReady(selected) || !store.epgMappingReady(selected) || policy.playlistDue(store.playlistRefreshed(selected), now, refreshLaunch)
@@ -1334,11 +1364,11 @@ class MainActivity : Activity() {
     }
     private fun refreshCurrent(selected: Source, playlist: Boolean = true, epg: Boolean = true, after: (() -> Unit)? = null) {
         val epoch = generation
-        refreshBar.isVisible = true; ownRefreshes.add(selected.id)
+        ownRefreshes.add(selected.id); updateRefreshIndicator()
         PlaylistRefresh.request(this, selected, playlist, epg) { result ->
             ownRefreshes.remove(selected.id); playlistLoading.remove(selected.id)
             if (closed || epoch != generation || source != selected) return@request
-            refreshBar.isVisible = false; loadingPanel.visibility = View.GONE
+            updateRefreshIndicator(); loadingPanel.visibility = View.GONE
             if (!started) { deferredRefresh = result; if (result.error.isBlank()) after?.invoke(); return@request }
             if (result.guide != null) mergeRefresh(result, if (result.error.isBlank()) after else null)
             status.text = if (result.error.isBlank()) "" else "Using saved guide · ${result.error}"
@@ -1486,32 +1516,11 @@ class MainActivity : Activity() {
         if (!guideVisible || focused?.id == channel.id) showInfo(channel); if (details.isVisible) refreshDetails()
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
-    private fun guideWarmTargets() = guidePrefetch.targets(guide.channels, adapter.channels, (if (guideVisible && !sportsVisible) focused else current) ?: current, favorites)
-    private fun warmGuideAssets() {
-        if (!started || onDemand != null || multiview.active || guide.channels.isEmpty() || !backgroundPlaybackReady()) return
-        if (guideWarmLineup !== guide.channels) {
-            val snapshot = guide.channels; guideWarmLineup = snapshot
-            imports.execute { guidePrefetch.prepare(snapshot) }
-        }
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now >= guideWarmAt) {
-            guideWarmAt = now + 15000; guideWarmLogos = guideWarmTargets(); guideWarmLogoIndex = 0
-            collectVisibleEpg()
-        }
-        while (guideWarmLogoIndex < guideWarmLogos.size) {
-            val channel = guideWarmLogos[guideWarmLogoIndex]
-            val selected = owner(channel)
-            if (selected == null || !selected.enabled) { guideWarmLogoIndex++; continue }
-            if (!logos.prefetchWhenIdle(channel.logo, selected.allowHttp)) break
-            guideWarmLogoIndex++
-        }
-    }
     private fun collectVisibleEpg() {
         if (!started || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
-        if (!guideVisible) { epgPriority = setOfNotNull(current?.id); epgWanted = (listOfNotNull(current) + if (backgroundPlaybackReady()) guideWarmTargets() else emptyList()).distinctBy { it.id }; pumpEpg(); return }
+        if (!guideVisible) { epgWanted = listOfNotNull(current); pumpEpg(); return }
         if (sportsVisible && guideVisible) {
             epgWanted = (listOfNotNull(current) + sportsChannels).distinctBy { guide.key(it) }.take(5)
-            epgPriority = epgWanted.map { it.id }.toSet()
             pumpEpg(); return
         }
         val channels = adapter.channels
@@ -1519,11 +1528,7 @@ class MainActivity : Activity() {
         val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
         val last = if (guideVisible) layout.findLastVisibleItemPosition().coerceAtLeast(first) else first
         val visible = channels.subList(first.coerceAtMost(channels.size), minOf(last + 1, first + 20, channels.size))
-        val canWarm = backgroundPlaybackReady()
-        val nearby = if (canWarm) channels.subList((first - 12).coerceIn(0, channels.size), minOf(last + 33, channels.size)) else emptyList()
-        val favoritesToWarm = if (canWarm) guide.channels.asSequence().filter { it.id in favorites }.take(24).toList() else emptyList()
-        epgPriority = (listOfNotNull(current, focused) + visible).map { it.id }.toSet()
-        epgWanted = (listOfNotNull(current, focused?.takeIf { guideVisible }) + visible + nearby + favoritesToWarm + if (canWarm) guideWarmTargets() else emptyList()).distinctBy { it.id }.take(96)
+        epgWanted = (listOfNotNull(current, focused) + visible).distinctBy { it.id }
         pumpEpg()
     }
     private fun pumpEpg() {
@@ -1539,10 +1544,7 @@ class MainActivity : Activity() {
             return (channel.id in sportsForcedEpg || missing) && (now - (epgCheckedAt[channel.id] ?: 0) >= 5 * 60000L || depth(channel) > (epgDepth[channel.id] ?: 0))
         }
         while (epgActive < 2) {
-            fun eligible(channel: Channel) = "$epoch:${channel.id}" !in epgInFlight && needs(channel)
-            val channel = epgWanted.firstOrNull { it.id in epgPriority && eligible(it) }
-                ?: if (epgActive == 0 && backgroundPlaybackReady()) epgWanted.firstOrNull { owner(it)?.let { selected -> !PlaylistRefresh.running(selected.id) } == true && eligible(it) } else null
-            if (channel == null) return
+            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && needs(it) } ?: return
             val selected = owner(channel) ?: return
             val requestedDepth = depth(channel)
             val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
@@ -1554,12 +1556,8 @@ class MainActivity : Activity() {
                         result.onSuccess { entries ->
                             sportsFailures = 0
                             if (entries.isNotEmpty()) {
-                                val key = guide.key(channel)
-                                val days = guide.channels.asSequence().filter { guide.key(it) == key }.maxOfOrNull { it.catchupDays } ?: 0
-                                val programmes = LinkedHashMap(guide.programmes); programmes[key] = GuideHistory.merge(programmes[key].orEmpty(), entries, days, now)
-                                while (programmes.size > Importers.MAX_CHANNELS) programmes.remove(programmes.keys.first())
-                                guide = Guide(guide.channels, programmes, guide.categoryOrder); epgErrors.remove(channel.id)
-                                handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+                                if (owner(channel)?.enabled == true) { pendingEpg[channel.id] = EpgUpdate(channel, entries, now); scheduleEpgApply() }
+                                epgErrors.remove(channel.id)
                             } else epgErrors[channel.id] = "Provider supplied no current programme data."
                         }.onFailure { failure ->
                             epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(failure)}"
@@ -1568,9 +1566,10 @@ class MainActivity : Activity() {
                                 if ((failure as? HttpFailure)?.status in setOf(401, 403, 429) || sportsFailures >= 3) sportsBackoffUntil = System.currentTimeMillis() + 5 * 60000L
                             }
                         }
-                        adapter.refreshRows()
-                        if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
-                        if (details.isVisible) refreshDetails()
+                        if (result.isFailure || result.getOrNull().isNullOrEmpty()) {
+                            if (guideVisible) adapter.refreshRows()
+                            (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                        }
                     }
                     if (!closed) pumpEpg()
                 }
@@ -1589,12 +1588,11 @@ class MainActivity : Activity() {
         programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${enriched?.description?.ifBlank { it.description } ?: it.description}" } ?: "\n${epgErrors[channel.id] ?: if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
     }
     private fun applyFilter() {
-        guideWarmAt = 0L
         requestLocalMatches()
         val now = System.currentTimeMillis()
-        val hidden = guide.channels.count { unavailable.contains(it.id, now) }
+        val hidden = unavailable.snapshot().keys.count { unavailable.contains(it, now) && channelIndex.contains(guide.channels, it) }
         val searchTerm = ChannelSearch.key(query)
-        val filtered = guide.channels.filter { channel ->
+        val filtered = channelIndex.candidates(guide.channels, browsePlaylist, group).filter { channel ->
             val eligible = !channel.media && !unavailable.contains(channel.id, now) && (!localOnly || channel.id in localIds) && (!favoritesOnly || channel.id in favorites) && (browsePlaylist == null || playlistId(channel) == browsePlaylist) && (group == null || channel.group == group) &&
                 (searchTerm.isEmpty() || channel.searchKey.contains(searchTerm))
             val selectedFilter = playlistFilters[playlistId(channel)] ?: filters
@@ -1636,7 +1634,19 @@ class MainActivity : Activity() {
             providerGroups = if (source?.let(store::usaFirst) == true) CategoryOrder.usaFirst(provider) else provider
             groupsForChannels = guide.channels; groupsForOrder = guide.categoryOrder
         }
-        if (enabledSources().size > 1) {
+        val enabled = enabledSources()
+        val activeKey = when {
+            sportsVisible || localOnly -> null
+            favoritesOnly -> "favorites"
+            enabled.size > 1 && browsePlaylist != null -> if (group == null) "playlist-all:$browsePlaylist" else "playlist-group:$browsePlaylist:$group"
+            group != null -> "group:$group"
+            else -> "all"
+        }
+        val shape: Any = if (enabled.size > 1) enabled.map { selected -> SidebarPlaylistShape(selected.id, selected.name, groupsFor(selected), playlistFilters[selected.id]?.groups.orEmpty(), store.playlistCollapsed(selected.id), selected.id in playlistLoading) }
+            else listOf(providerGroups, filters.groups)
+        if (shape == sidebarShape) { sidebarAdapter.activate(activeKey); return }
+        sidebarShape = shape
+        if (enabled.size > 1) {
             val sections = mutableListOf(GuideSection("All channels", "all", browsePlaylist == null && group == null && !favoritesOnly), GuideSection("Favorites", "favorites", favoritesOnly))
             enabledSources().forEach { selected ->
                 val collapsed = store.playlistCollapsed(selected.id)
@@ -1648,11 +1658,12 @@ class MainActivity : Activity() {
                     ordered.filter { allowed.isEmpty() || it in allowed }.forEach { category -> sections.add(GuideSection("  " + category.ifBlank { "Uncategorized" }, "playlist-group:${selected.id}:$category", browsePlaylist == selected.id && group == category && !favoritesOnly, selected.id, category)) }
                 }
             }
-            sidebarAdapter.submit(sections); return
+            sidebarAdapter.submit(sections); sidebarAdapter.activate(activeKey); return
         }
         val visibleGroups = providerGroups.filter { filters.groups.isEmpty() || it in filters.groups }
         sidebarAdapter.submit(listOf(GuideSection("All channels", "all", !sportsVisible && !localOnly && !favoritesOnly && (group == null)),
             GuideSection("Favorites", "favorites", !sportsVisible && favoritesOnly)) + visibleGroups.map { GuideSection(if (it in setOf("Sports", "Favorites", "All channels")) "Category · $it" else it.ifBlank { "Uncategorized" }, "group:$it", !sportsVisible && !favoritesOnly && group == it && (group != null)) })
+        sidebarAdapter.activate(activeKey)
     }
     private fun requestLocalMatches() {
         val lineup = guide.channels; val location = store.localLocation; val selected = source
@@ -2153,7 +2164,7 @@ class MainActivity : Activity() {
             }
             val channels = (if (warmed.isEmpty()) known else redZoneLoader(evidence, profile, quality, now)).filter { (hidden[it.id] ?: 0) <= now }
             handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
-                if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500) }
+                if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000) }
                 sportsChannels = channels.take(4)
                 sportsPanel.updateRedZone(channels, quality)
                 redZoneAutoPending = false; sportsPanel.finishTuning()
@@ -2458,7 +2469,7 @@ class MainActivity : Activity() {
             val (mergedGuide, _) = prepared.mergeGuide(guide, now)
             guide = mergedGuide
             if (warmed.isNotEmpty()) {
-                handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 1500)
+                handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
             }
             val latestQuality = videoInfo.toMap()
             val alternatives = streamHealth.order(SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && allowed(it) }, latestQuality, android.os.SystemClock.elapsedRealtime())
@@ -2553,7 +2564,7 @@ class MainActivity : Activity() {
         val status = if (selected?.kind == "xtream" && target != null) playlistSearch.catalogStatus(selected, if (target.episode == null) setOf("movie", "series") else setOf("series")) else null
         val availability = if (status == null) VodAvailability.Status(false, "") else vodAvailability.update(
             listOf(channel.id, programme?.start, programme?.end, target, sources), android.os.SystemClock.elapsedRealtime(),
-            canVod, status.complete, status.checking || vodWarmScheduled && !status.complete, status.failed)
+            canVod, status.complete, status.checking, status.failed)
         details.update(channel, programme, next, (videoInfo[channel.id]?.label() ?: "Quality unverified") + (if (enabledSources().size > 1) " · ${selected?.name.orEmpty()}" else ""), channel.id in favorites, previousChannel() != null, Catchup.supported(channel), recentIds.mapNotNull(recentLookup::get), selected?.allowHttp == true, (if (watchingRedZone) "NFL RedZone" else playbackGame()?.game?.title), canVod, target?.let(VodStart::targetLabel).orEmpty(), availability.checking, availability.message)
         handler.removeCallbacks(updateVodDetails)
         if (details.isVisible && availability.checking) handler.postDelayed(updateVodDetails, 1000)
@@ -2574,6 +2585,7 @@ class MainActivity : Activity() {
         if (current == null) return
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
         suspendSportsOverlay()
+        source?.let(playlistSearch::prepare)
         details.resumeImages(); refreshDetails(); root.bringChildToFront(details); details.visibility = View.VISIBLE; details.focusActions()
         if (details.checkingVod) { handler.removeCallbacks(updateVodDetails); handler.postDelayed(updateVodDetails, 1000) }
         handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000)
@@ -3027,6 +3039,7 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
         if (::gameWatchPanel.isInitialized && gameWatchPanel.isVisible) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) cancelReminderWatch(); return true }
             return super.dispatchKeyEvent(event)
@@ -3179,7 +3192,7 @@ class MainActivity : Activity() {
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); handler.removeCallbacks(warmVodIndex); vodWarmScheduled = false; if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onStop() { scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
     override fun onDestroy() { if (::scoreStrip.isInitialized) scoreStrip.closeImages(); liveSearchWorker.shutdownNow(); if (::playlistSearch.isInitialized) playlistSearch.close(); replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); reminderWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsDestinationWorker.shutdownNow(); sportsScheduleDisk.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

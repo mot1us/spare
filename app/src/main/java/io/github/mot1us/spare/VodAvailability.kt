@@ -17,7 +17,7 @@ class VodAvailability(private val waitMs: Long = 8000) {
         return Status(false, when {
             pending -> "No saved VOD match · Library still updating"
             failed -> "VOD check unavailable · Try Library later"
-            else -> "No saved VOD match yet"
+            else -> "No saved VOD match · Open Library or Search"
         })
     }
 }
