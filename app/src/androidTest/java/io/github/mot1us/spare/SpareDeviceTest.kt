@@ -727,8 +727,19 @@ class SpareDeviceTest {
             val game = SportsGame(teams, now + 86400000L, now + 90000000L, emptyList(), "synthetic-reminder", "pre", competition = "NFL")
             val reminders = GameReminders(); reminders.toggle(game); store.write("game-reminders.enc", reminders.json().toString().toByteArray())
             store.saveSources(listOf(source)); store.active = source.id
+            // Install the fixture before onCreate can start a real ESPN request.
+            // A late live reply must never compete with this synthetic matchup.
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val isolated = AtomicBoolean()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { LiveSportsSnapshot.EMPTY }; isolated.set(true)
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
             try {
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    assertTrue("The reminder test must never depend on a real scoreboard", isolated.get())
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
                     var playing: Player? = null
                     scenario.onActivity { activity ->
@@ -914,6 +925,7 @@ class SpareDeviceTest {
                     }
                 }
             } finally {
+                lifecycle.removeLifecycleCallback(fixture)
                 writes?.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)
                 if (previousReminders == null) store.delete("game-reminders.enc") else store.write("game-reminders.enc", previousReminders)
                 store.saveSources(emptyList()); store.removeCache(source)
