@@ -9,15 +9,15 @@ import java.util.concurrent.Executors
 
 /** Schedules populate Sports independently of playlist EPG and channel quality filters. */
 object SportsSchedule {
-    fun reminderEvents(targets: Set<Pair<String, java.time.LocalDate>>, now: Long = System.currentTimeMillis(), get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }): List<LiveEvent> {
+    private fun fetch(url: String) = Network.get(url, limit = (if ("college-" in url) 6 else 2) * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8)
+    fun reminderEvents(targets: Set<Pair<String, java.time.LocalDate>>, now: Long = System.currentTimeMillis(), get: (String) -> String = ::fetch): List<LiveEvent> {
         if (targets.isEmpty()) return emptyList()
         val pool = Executors.newFixedThreadPool(4) { task -> Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, "spare-scoreboard").apply { priority = Thread.MIN_PRIORITY } }
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<List<LiveEvent>>(pool)
-            val wanted = targets.take(14)
-            wanted.forEach { (id, day) -> completion.submit(java.util.concurrent.Callable {
-                val league = SportsLeagues.byId[id] ?: return@Callable emptyList()
-                runCatching { scoreboard(id, "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100", now, get, maxCacheMs = 30000) }.getOrDefault(emptyList())
+            val wanted = targets.take(14).flatMap { (id, day) -> SportsLeagues.byId[id]?.scoreboards(day).orEmpty().map { id to it } }
+            wanted.forEach { (id, url) -> completion.submit(java.util.concurrent.Callable {
+                runCatching { scoreboard(id, url, now, get, maxCacheMs = 30000) }.getOrDefault(emptyList())
             }) }
             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
             val result = mutableListOf<LiveEvent>()
@@ -37,22 +37,22 @@ object SportsSchedule {
         val last = day.plusDays(1).atStartOfDay(zone).minusNanos(1).withZoneSameInstant(eastern).toLocalDate()
         return generateSequence(first) { it.plusDays(1) }.takeWhile { !it.isAfter(last) }.toList()
     }
-    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = { Network.get(it, limit = 2 * 1024 * 1024, timeoutMs = 4000).toString(Charsets.UTF_8) }, calendarOnly: Boolean = false): LiveSportsSnapshot {
+    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = ::fetch, calendarOnly: Boolean = false): LiveSportsSnapshot {
         val now = System.currentTimeMillis(); val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
         val events = linkedMapOf<String, LiveEvent>(); val leagues = mutableSetOf<String>()
         val urls = mutableListOf<Pair<String, String>>()
         val enabled = SportsLeagues.all.filter { it.id in enabledLeagues }
         if (requestedDate != null) {
             (if (calendarOnly) calendarDates(requestedDate) else listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1))).forEach { day -> enabled.forEach { league ->
-                urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${day.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
+                urls.addAll(league.scoreboards(day).map { league.id to it })
             } }
         } else {
         enabled.forEach { league ->
-            urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
+            urls.addAll(league.scoreboards(date).map { league.id to it })
         }
         enabled.forEach { league ->
-            if (league.id == "NFL" || league.path.startsWith("soccer/")) urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?limit=100")
-            urls.add(league.id to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/scoreboard?dates=${date.minusDays(1).format(DateTimeFormatter.BASIC_ISO_DATE)}&limit=100")
+            if (league.id in setOf("NFL", "NCAAF") || league.path.startsWith("soccer/")) urls.addAll(league.scoreboards().map { league.id to it })
+            urls.addAll(league.scoreboards(date.minusDays(1)).map { league.id to it })
         }
         }
         (if (requestedDate == null) followed else emptySet()).sorted().take(24).forEach { id -> SportsCatalog.byId[id]?.let { team ->

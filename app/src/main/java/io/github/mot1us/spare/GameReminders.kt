@@ -122,7 +122,11 @@ object SportsStreams {
         val target = game.teams.map { it.id }.toSet()
         val league = game.teams.first().league
         val words = (listOf(game.leagueId, league) + when (league) {
-            "NHL" -> listOf("hockey"); "NFL" -> listOf("football"); "NBA" -> listOf("basketball"); "MLB" -> listOf("baseball"); else -> emptyList()
+            "NHL" -> listOf("hockey"); "NFL" -> listOf("football"); "NBA" -> listOf("basketball"); "MLB" -> listOf("baseball")
+            "NCAAF" -> listOf("ncaa", "college", "football", "fbs", "fcs")
+            "NCAAM", "NCAAW" -> listOf("ncaa", "college", "basketball")
+            "NCAABSB" -> listOf("ncaa", "college", "baseball")
+            else -> emptyList()
         }).map { " ${SportsCatalog.normalize(it)} " }.distinct()
         fun eligible(channel: Channel): Boolean {
             if (!speculative(channel) || SportsGuide.excludedTitle(channel.sportsKey)) return false

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.29.0 — 2026-11-06
+
+- Add NCAA football (FBS/FCS), men's basketball, women's basketball, and baseball to Sports leagues and followed teams. College games share scores, records, artwork, calendar, reminders, live stream matching, and provider catch-up.
+- Request complete Division I scoreboards, including unranked schools, with bounded parallel requests. Bundle the school directory locally; no startup team downloads or stream probing. Preserve saved league preferences.
+- Distinguish college sports from pro leagues and men's from women's games. Prefer full school names over overlapping aliases such as Texas/Texas Tech and Washington/Washington State.
+
 ## 0.28.5 — 2026-11-06
 
 - Remove speculative category/EPG/image sweeps and automatic VOD catalog downloads during live TV. Library/Search imports VOD on demand; live details check saved titles. Keep persistent logos and load uncached guide rows when needed.

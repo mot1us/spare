@@ -1726,8 +1726,18 @@ class SpareDeviceTest {
                         assertTrue("Sports preferences save automatic playback without closing", manager.opened && SecureStore(context).sportsAutoPlay)
                         manager.selectSetting("Leagues"); manager.focusOption("Champions League"); manager.findViewWithTag<View>("settings-option:Champions League").performClick()
                         assertTrue(manager.opened); assertFalse("UCL" in SecureStore(context).sportsLeagues)
-                        manager.selectSetting("NFL")
+                        listOf("NCAA Football", "NCAA Men's Basketball", "NCAA Women's Basketball", "NCAA Baseball").forEach { name ->
+                            assertNotNull("College leagues appear in Sports preferences", manager.findViewWithTag<View>("settings-option:$name"))
+                        }
+                        manager.findViewWithTag<View>("settings-option:NCAA Football").performClick()
+                        assertFalse("NCAAF" in SecureStore(context).sportsLeagues)
+                        manager.findViewWithTag<View>("settings-option:NCAA Football").performClick()
+                        assertTrue("NCAAF" in SecureStore(context).sportsLeagues)
+                        manager.selectSetting("NCAA Football")
                     }
+                    waitFor(scenario) { find<RecyclerView>(it.window.decorView.findViewWithTag<SettingsPanel>("sports-manager"))?.findViewHolderForAdapterPosition(0)?.itemView?.isShown == true }
+                    device.pressDPadCenter(); waitFor(scenario) { "ncaaf:2000" in store.followedTeams }
+                    scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<SettingsPanel>("sports-manager").selectSetting("NFL") }
                     device.pressDPadCenter(); waitFor(scenario) { "nfl:ARI" in store.followedTeams }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-manager.png"))
                     scenario.onActivity { activity ->

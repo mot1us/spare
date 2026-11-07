@@ -23,6 +23,19 @@ object SportsGuide {
     private val hockey = Regex("\\b(nhl|hockey)\\b")
     private val soccer = Regex("\\b(soccer|premier league|champions league|mls|uefa)\\b")
     private val football = Regex("\\b(nfl|football|super bowl)\\b")
+    private val collegeFootball = Regex("\\b(ncaaf|ncaafb|cfb|fbs|fcs|(?:ncaa|college) football)\\b")
+    private val collegeBaseball = Regex("\\b(ncaabsb|ncaabb|(?:ncaa|college) (?:baseball|world series))\\b")
+    private val collegeBasketball = Regex("\\b(ncaam|ncaamb|ncaab|cbb|(?:ncaa|college)(?: men s| mens)? basketball)\\b")
+    private val collegeWomen = Regex("\\b(ncaaw|ncaawb|wcbb|(?:women s|womens|women)(?: (?:ncaa|college))? basketball|(?:ncaa|college) women s basketball)\\b")
+    private val collegeMen = Regex("\\b(ncaam|ncaamb|men s|mens)\\b")
+    private val majorLeague = Regex("\\b(mlb|world series|nfl|super bowl|nba|nhl|soccer|premier league|champions league|mls|uefa)\\b")
+    private fun declaredLeague(text: String): String? = when {
+        collegeWomen.containsMatchIn(text) -> "NCAAW"
+        collegeFootball.containsMatchIn(text) -> "NCAAF"
+        collegeBaseball.containsMatchIn(text) -> "NCAABSB"
+        collegeBasketball.containsMatchIn(text) -> "NCAAM"
+        else -> null
+    }
     private val noise = Regex("\\b(replay|rerun|classic|highlights?|pregame|postgame|pre game|post game|preview|review|news|countdown|re air|reair|encore|condensed|talk|documentary|sportscenter|nfl live|baseball tonight|quick pitch|good morning football)\\b")
     fun excludedTitle(normalized: String) = noise.containsMatchIn(normalized)
     private val sportsChannel = Regex("\\b(sports?|mlb|nfl|espn|fox|fs1|fs2|nfln|nbc|cbs|abc|tbs|tnt|yes|sny|nesn|masn|root|fanduel|bally|space city|marquee|snla|snny|sn|tsn)\\b")
@@ -32,11 +45,15 @@ object SportsGuide {
         val description = SportsCatalog.normalize(programme.description)
         val context = "$title $description"
         val leagues = listOf("MLB" to baseball, "NFL" to football, "NBA" to basketball, "NHL" to hockey, "Soccer" to soccer)
+        val channel = SportsCatalog.normalize(channelContext)
         val detected = leagues.filter { it.second.containsMatchIn(context) }.map { it.first }
-        val explicitLeague = detected.singleOrNull() ?: if (detected.isEmpty()) {
-            val channel = SportsCatalog.normalize(channelContext)
-            leagues.filter { it.second.containsMatchIn(channel) }.singleOrNull()?.first
-        } else null
+        val declared = declaredLeague(context)
+        val fromChannel = declaredLeague(channel).takeIf { college ->
+            val sport = when (college) { "NCAAF" -> "NFL"; "NCAAM", "NCAAW" -> "NBA"; "NCAABSB" -> "MLB"; else -> null }
+            !majorLeague.containsMatchIn(context) && (detected.isEmpty() || sport in detected)
+        }
+        val college = if (declared == "NCAAM" && fromChannel == "NCAAW" && !collegeMen.containsMatchIn(context)) "NCAAW" else declared ?: fromChannel
+        val explicitLeague = college ?: detected.singleOrNull() ?: if (detected.isEmpty()) leagues.filter { it.second.containsMatchIn(channel) }.singleOrNull()?.first else null
         val hasMatchup = matchup.containsMatchIn(title)
         if (!hasMatchup && explicitLeague == null) return null
         // Descriptions may contain long previews; only use them when the title identifies a game/league.
@@ -44,10 +61,10 @@ object SportsGuide {
             if (explicitLeague != null && !hasMatchup && !noise.containsMatchIn(description)) SportsCatalog.mentionScores(description, true) else emptyMap()
         }
         val resolved = mentions.toMutableMap()
-        if (explicitLeague != null && (hasMatchup || matchup.containsMatchIn(description))) {
+        if (explicitLeague != null && !explicitLeague.startsWith("NCAA") && (hasMatchup || matchup.containsMatchIn(description))) {
             SportsCatalog.cities(if (hasMatchup) title else description, explicitLeague).forEach { resolved.putIfAbsent(it, 1) }
         }
-        val candidates = listOf("MLB", "NFL", "NBA", "NHL", "Soccer").mapNotNull { league ->
+        val candidates = listOf("MLB", "NFL", "NBA", "NHL", "Soccer", "NCAAF", "NCAAM", "NCAAW", "NCAABSB").mapNotNull { league ->
             if (explicitLeague != null && explicitLeague != league) null
             else resolved.filterKeys { it.league == league }.takeIf { it.size == 2 }
         }

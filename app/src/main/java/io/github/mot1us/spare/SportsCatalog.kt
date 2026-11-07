@@ -9,7 +9,7 @@ data class SportsTeam(val id: String, val league: String, val name: String, val 
 object SportsCatalog {
     private fun team(league: String, code: String, name: String, vararg aliases: String) =
         SportsTeam("${league.lowercase(Locale.ROOT)}:$code", league, name, (listOf(name, code) + aliases).distinct())
-    val teams = listOf(
+    val teams: List<SportsTeam> by lazy { listOf(
         team("MLB", "ARI", "Arizona Diamondbacks", "Diamondbacks", "Dbacks", "D backs"),
         team("MLB", "ATH", "Athletics", "Oakland Athletics", "Oakland A's", "Athletics"),
         team("MLB", "ATL", "Atlanta Braves", "Braves"),
@@ -72,8 +72,8 @@ object SportsCatalog {
         team("NFL", "TB", "Tampa Bay Buccaneers", "Buccaneers", "Bucs", "TBB"),
         team("NFL", "TEN", "Tennessee Titans", "Titans"),
         team("NFL", "WSH", "Washington Commanders", "Commanders", "Washington Football Team", "WAS"),
-    ) + SportsExtraTeams.teams
-    val byId = teams.associateBy { it.id }
+    ) + SportsExtraTeams.teams + SportsCollegeTeams.teams }
+    val byId by lazy { teams.associateBy { it.id } }
     private val punctuation = Regex("[^a-z0-9]+")
     private val accents = Regex("\\p{M}+")
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)
@@ -102,15 +102,31 @@ object SportsCatalog {
             .values.map { it.single() }.toSet()
     }
     private data class Alias(val team: SportsTeam, val phrase: String, val short: Boolean)
-    private val index = teams.flatMap { t -> t.aliases.map { alias ->
+    private val index by lazy { teams.flatMap { t -> t.aliases.map { alias ->
         val phrase = normalize(alias); Alias(t, " $phrase ", phrase.length <= 3 && !phrase.contains(' '))
-    } }.groupBy { it.phrase.trim().substringBefore(' ') }
+    } }.groupBy { it.phrase.trim().substringBefore(' ') } }
     fun mentions(normalized: String, allowShort: Boolean): Set<SportsTeam> = mentionScores(normalized, allowShort).keys
     fun mentionScores(normalized: String, allowShort: Boolean): Map<SportsTeam, Int> {
         val padded = " $normalized "
         val scores = mutableMapOf<SportsTeam, Int>()
-        normalized.split(' ').distinct().flatMap { index[it].orEmpty() }.forEach { alias ->
-            if ((allowShort || !alias.short) && padded.contains(alias.phrase)) {
+        val matches = normalized.split(' ').distinct().flatMap { index[it].orEmpty() }.filter { (allowShort || !it.short) && padded.contains(it.phrase) }
+        matches.forEach { alias ->
+            // "Texas Tech" must not also identify Texas; preserve separate occurrences
+            // when both schools really are in the title. Shared men's/women's names
+            // remain distinct and require the requested sport's league context.
+            val present = if (!alias.team.league.startsWith("NCAA")) true else {
+                var at = padded.indexOf(alias.phrase); var found = false
+                while (at >= 0 && !found) {
+                    found = matches.none { other ->
+                        other.team.league == alias.team.league && other.team.id != alias.team.id && other.phrase.length > alias.phrase.length &&
+                            generateSequence(padded.indexOf(other.phrase)) { previous -> padded.indexOf(other.phrase, previous + 1) }.takeWhile { it >= 0 }
+                                .any { start -> start <= at && start + other.phrase.length >= at + alias.phrase.length }
+                    }
+                    if (!found) at = padded.indexOf(alias.phrase, at + 1)
+                }
+                found
+            }
+            if (present) {
                 val score = if (alias.short) 1 else if (alias.phrase.trim().contains(' ')) 3 else 2
                 scores[alias.team] = maxOf(scores[alias.team] ?: 0, score)
             }
