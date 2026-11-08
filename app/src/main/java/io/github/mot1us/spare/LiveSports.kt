@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap())
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap(), val situation: String = "", val possession: String = "")
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     /** A partial reply must not erase leagues whose requests are still pending. */
@@ -15,7 +15,7 @@ data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, va
         fun key(event: LiveEvent) = "${league(event)}:${event.id}"
         val incoming = update.events.associateBy(::key)
         val retained = events.filter { key(it) !in incoming && (!complete || league(it) !in update.leagues) }.map { event ->
-            if (complete && event.state == "in") event.copy(state = "hold", status = "Saved score · checking live status") else event
+            if (complete && event.state == "in") event.copy(state = "hold", status = "Saved score · checking live status", situation = "", possession = "") else event
         }
         return LiveSportsSnapshot((retained + update.events).takeLast(2048), maxOf(checked, update.checked), leagues + update.leagues)
     }
@@ -56,7 +56,8 @@ object LiveSports {
             val competitions = event.optJSONArray("competitions") ?: continue
             for (match in 0 until minOf(competitions.length(), 8)) {
                 val competition = competitions.optJSONObject(match) ?: continue
-                val status = (competition.optJSONObject("status") ?: event.optJSONObject("status"))?.optJSONObject("type") ?: continue
+                val timing = competition.optJSONObject("status") ?: event.optJSONObject("status") ?: continue
+                val status = timing.optJSONObject("type") ?: continue
                 val state = status.optString("name")
                 val live = status.optString("state") == "in" && !status.optBoolean("completed") && state in setOf("STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME", "STATUS_INTERMISSION", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF", "STATUS_EXTRA_TIME", "STATUS_SHOOTOUT")
                 val upcoming = !onlyLive && status.optString("state") == "pre" && state == "STATUS_SCHEDULED" && !status.optBoolean("completed")
@@ -93,7 +94,14 @@ object LiveSports {
                         val logo = team.optString("logo").ifBlank { team.optJSONArray("logos")?.optJSONObject(0)?.optString("href").orEmpty() }
                         if (logo.length <= 2048 && Network.allowed(logo, false)) logos[id] = if (runCatching { java.net.URI(logo).host }.getOrNull() == "a.espncdn.com") logo.replace("/500/scoreboard/", "/500/").replace("/500-dark/scoreboard/", "/500-dark/") else logo
                     }
-                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, status.optString("shortDetail").ifBlank { status.optString("description") }.take(100), league = league, records = records))
+                    val ball = competition.optJSONObject("situation").takeIf { live }
+                    val possessionApi = ball?.optString("possession").orEmpty()
+                    val possession = (0 until competitors.length()).firstNotNullOfOrNull { i ->
+                        val team = competitors.optJSONObject(i)?.optJSONObject("team") ?: return@firstNotNullOfOrNull null
+                        if (possessionApi.isBlank() || team.optString("id") != possessionApi) null
+                        else resolve(league, team.optString("abbreviation"), team.optString("displayName"), possessionApi)
+                    }.orEmpty()
+                    result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, SportsSituation.status(timing, status, league), league = league, records = records, situation = SportsSituation.detail(ball, league), possession = possession))
                 }
             }
         }

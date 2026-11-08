@@ -129,10 +129,10 @@ object SportsSchedule {
             else snapshot.events.filter { team in it.teams && (it.state == "in" || it.state == "pre" && it.start > now) }
                 .sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(1)
                 .ifEmpty { snapshot.events.filter { team in it.teams && it.state == "post" }.sortedByDescending { it.start }.take(1) }
-        return events.sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(256).mapNotNull { event ->
+        return events.sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(1024).mapNotNull { event ->
             val teams = event.teams.mapNotNull { SportsCatalog.byId[it] }.sortedBy { it.id }; if (teams.size != 2) return@mapNotNull null
             val stale = event.state == "in" && !snapshot.fresh(now)
-            val game = SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records)
+            val game = SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records, situation = if (stale) "" else event.situation, possession = if (stale) "" else event.possession)
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
@@ -205,11 +205,11 @@ object SportsSchedule {
         } }
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
-        .put("events", JSONArray(snapshot.events.take(500).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league).put("records", JSONObject(it.records)) }))
+        .put("events", JSONArray(snapshot.events.take(1024).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league).put("records", JSONObject(it.records)).put("situation", it.situation).put("possession", it.possession) }))
     fun from(json: JSONObject): LiveSportsSnapshot {
-        val entries = json.getJSONArray("events"); require(entries.length() <= 500)
+        val entries = json.getJSONArray("events"); require(entries.length() <= 1024)
         fun strings(array: JSONArray?) = if (array == null) emptyList() else List(minOf(array.length(), 80)) { array.optString(it) }
         fun map(j: JSONObject?) = j?.keys()?.asSequence()?.take(2)?.associateWith { j.optString(it).take(2048) }.orEmpty()
-        return LiveSportsSnapshot(List(entries.length()) { i -> val j = entries.getJSONObject(i); LiveEvent(j.getString("id"), strings(j.optJSONArray("teams")).toSet(), j.getLong("start"), j.optString("state"), strings(j.optJSONArray("networks")), map(j.optJSONObject("scores")), map(j.optJSONObject("logos")), j.optString("status"), j.optBoolean("scoreboard", true), j.optString("league"), map(j.optJSONObject("records")).filterValues { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }) }, json.getLong("checked"), strings(json.optJSONArray("leagues")).toSet())
+        return LiveSportsSnapshot(List(entries.length()) { i -> val j = entries.getJSONObject(i); LiveEvent(j.getString("id"), strings(j.optJSONArray("teams")).toSet(), j.getLong("start"), j.optString("state"), strings(j.optJSONArray("networks")), map(j.optJSONObject("scores")), map(j.optJSONObject("logos")), j.optString("status"), j.optBoolean("scoreboard", true), j.optString("league"), map(j.optJSONObject("records")).filterValues { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }, j.optString("situation").take(120), j.optString("possession").take(80).takeIf { it in strings(j.optJSONArray("teams")) }.orEmpty()) }, json.getLong("checked"), strings(json.optJSONArray("leagues")).toSet())
     }
 }

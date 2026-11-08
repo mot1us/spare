@@ -152,14 +152,45 @@ class SpareDeviceTest {
             val source = Source(name = "Refresh fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val savedText = "#EXTM3U\n" + (1..8).joinToString("\n") { "#EXTINF:-1 tvg-id=\"test$it\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n${server.base}/channel$it.mp4" }
             val channels = Importers.m3u(savedText, true).channels; val now = System.currentTimeMillis()
-            store.saveSources(listOf(source)); store.active = source.id
+            val other = source.copy(id = "restore-other", name = "Other cached playlist", url = "${server.base}/other-playlist.m3u")
+            val otherChannel = channels.first().copy(id = "other-channel", guideId = "other-guide")
+            store.saveSources(listOf(source, other)); store.active = source.id
             store.cache(source, Guide(channels, mapOf("test1" to listOf(Programme("test1", "Saved programme", now - 60000, now + 3600000)))))
+            store.cache(other, Guide(listOf(otherChannel), mapOf("other-guide" to listOf(Programme("other-guide", "Other saved programme", now - 60000, now + 3600000)))))
+            store.setRefreshPolicy(other, RefreshPolicy()); store.markFullEpgAttempted(other); store.markEpgRefreshed(other); store.markPlaylistRefreshed(other)
             store.toggleFavorite(source, channels[1]); store.setLast(source, channels[0]); store.setRefreshPolicy(source, RefreshPolicy())
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 assertEquals("Saved launch must not request the playlist", 0, server.requests["/playlist.m3u"] ?: 0)
                 var samePlayer: Player? = null; var item = ""
                 scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player; item = samePlayer!!.currentMediaItem!!.mediaId }
+                waitFor(scenario) { activity ->
+                    val saved = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    saved.programmes.values.flatten().map { it.title }.containsAll(listOf("Saved programme", "Other saved programme"))
+                }
+                // Reproduce a lifecycle flush while just one owner's EPG remains
+                // unrestored: another owner's listings must not erase its disk cache.
+                val originalProgrammes = store.cachedProgrammes(source)
+                val flushed = java.util.concurrent.CountDownLatch(1); var completeGuide: Guide? = null
+                scenario.onActivity { activity ->
+                    val field = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    completeGuide = field.get(activity) as Guide
+                    field.set(activity, completeGuide!!.copy(programmes = completeGuide!!.programmes.filterValues { entries -> entries.any { it.title == "Other saved programme" } }))
+                    @Suppress("UNCHECKED_CAST")
+                    val restoring = MainActivity::class.java.getDeclaredField("restoringProgrammes").apply { isAccessible = true }.get(activity) as MutableSet<String>
+                    restoring.add(source.id)
+                    (MainActivity::class.java.getDeclaredField("cacheEpg").apply { isAccessible = true }.get(activity) as Runnable).run()
+                    (MainActivity::class.java.getDeclaredField("cacheWrites").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService).execute { flushed.countDown() }
+                }
+                try {
+                    assertTrue(flushed.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    assertEquals("A partial multi-playlist restore must retain the owner's encrypted EPG", originalProgrammes, SecureStore(context).cachedProgrammes(source))
+                } finally { scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, completeGuide)
+                    @Suppress("UNCHECKED_CAST")
+                    val restoring = MainActivity::class.java.getDeclaredField("restoringProgrammes").apply { isAccessible = true }.get(activity) as MutableSet<String>
+                    restoring.remove(source.id)
+                } }
                 scenario.onActivity { activity ->
                     store.markFullEpgAttempted(source); store.markEpgRefreshed(source)
                     val token = MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity)
@@ -200,7 +231,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { failed.get() != null }
                 assertTrue(failed.get().error.isNotBlank()); assertNull(store.cachedLineup(bad)); assertEquals(8, store.cachedLineup(source)!!.channels.size)
             }
-            store.saveSources(emptyList()); RefreshJobs.configure(context, emptyList()); store.removeCache(source)
+            store.saveSources(emptyList()); RefreshJobs.configure(context, emptyList()); store.removeCache(source); store.removeCache(other)
         }
         FixtureServer(channelCount = 48, longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Quiet cached launch", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -551,11 +582,36 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("import-progress")?.isShown == true }
+                val preparing = java.util.concurrent.CountDownLatch(2); val releaseApply = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity { activity ->
+                    val workers = MainActivity::class.java.getDeclaredField("imports").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                    repeat(2) { workers.execute { preparing.countDown(); releaseApply.await(15, java.util.concurrent.TimeUnit.SECONDS) } }
+                }
+                try {
+                    assertTrue(preparing.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    waitFor(scenario) { (server.requests["/playlist.m3u"] ?: 0) > 0 && !PlaylistRefresh.running(source.id) }
+                    instrumentation.waitForIdleSync()
+                    scenario.onActivity { activity ->
+                        assertTrue("Progress remains animated while the downloaded lineup is being prepared", activity.window.decorView.findViewWithTag<View>("import-progress").isShown)
+                        val empty = MainActivity::class.java.getDeclaredField("emptyInfo").apply { isAccessible = true }.get(activity) as View
+                        assertFalse("An unapplied lineup must not show an empty-channel error", empty.isShown)
+                    }
+                    device.pressMenu()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown == true }
+                } finally { releaseApply.countDown() }
+                waitFor(scenario) { activity ->
+                    (MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide).channels.isNotEmpty()
+                }
+                scenario.onActivity { activity ->
+                    assertTrue("Late startup data must not close a screen opened by the user", activity.window.decorView.findViewWithTag<View>("settings-panel").isShown)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("import-progress").isShown)
+                }
+                leaveSettings(scenario)
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { it.repeatMode = Player.REPEAT_MODE_ONE; it.videoSize.width > 0 && it.playbackState == Player.STATE_READY } == true }
                 waitFor(scenario) { store.videoInfo(source).isNotEmpty() }
                 assertEquals("/channel1.ts", playingPath(scenario))
-                device.pressBack()
                 waitFor(scenario) { channelList(it)?.isShown == true }
+                scenario.onActivity { channelList(it)!!.getChildAt(0).requestFocus() }
                 device.pressDPadLeft(); instrumentation.waitForIdleSync()
                 assertTrue(device.wait(Until.hasObject(By.text("All channels").focused(true)), 5000))
                 repeat(2) { device.pressDPadDown() }; device.pressDPadCenter()
@@ -1456,6 +1512,80 @@ class SpareDeviceTest {
         } }
     }
 
+    @Test fun largeSportsSlateKeepsNavigationAndScoresResponsiveDuringPendingDiffs() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Large Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("large-slate-feed", "News", "News", "${server.base}/channel1.mp4")
+            val bytes = ByteArrayOutputStream().also { out -> Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, out); recycle() } }.toByteArray()
+            val urls = listOf("https://images.example/large-home-${System.nanoTime()}.png", "https://images.example/large-away-${System.nanoTime()}.png")
+            val files = ArtworkFiles(context); urls.forEach { files.bytes(it) { bytes } }
+            val now = System.currentTimeMillis()
+            var latest = LiveSportsSnapshot((1..240).map { LiveEvent("large-slate-$it", setOf("nfl:SEA", "nfl:SF"), now - 60000,
+                scores = mapOf("nfl:SEA" to "14", "nfl:SF" to "7"), logos = mapOf("nfl:SEA" to urls[0], "nfl:SF" to urls[1]),
+                status = "8:24 - 2nd", league = "NFL", records = mapOf("nfl:SEA" to "6-2", "nfl:SF" to "4-4"), situation = "3rd & 7 at SEA 28", possession = "nfl:SEA") }, now, setOf("NFL"))
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NFL"); store.hiddenDock = true
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { latest }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            val release = java.util.concurrent.CountDownLatch(1)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var playing: Player? = null
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> playing = p; p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { grid -> grid.adapter?.itemCount == 241 && grid.hasFocus() } == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-title")?.text?.contains("(6-2)") == true }
+                scenario.onActivity { activity ->
+                    val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                    grid.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
+                    val title = grid.findViewHolderForAdapterPosition(0)!!.itemView.findViewWithTag<TextView>("sports-card-teams:NFL:large-slate-1")
+                    assertTrue(title.text.contains("Seattle Seahawks (6-2)"))
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-detail").text.contains("3rd & 7"))
+                }
+                val entered = java.util.concurrent.CountDownLatch(1)
+                scenario.onActivity { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")
+                    val worker = SportsPanel::class.java.getDeclaredField("cardDiffWorker").apply { isAccessible = true }.get(panel) as java.util.concurrent.ExecutorService
+                    worker.submit { entered.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                    latest = latest.copy(events = latest.events.map { it.copy(scores = mapOf("nfl:SEA" to "21", "nfl:SF" to "7")) })
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, latest)
+                    MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(activity)
+                }
+                assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                try {
+                    device.pressDPadRight()
+                    waitFor(scenario) { activity ->
+                        val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                        grid.findFocus()?.let { grid.findContainingViewHolder(it)?.bindingAdapterPosition == 1 } == true
+                    }
+                } finally { release.countDown() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-score")?.text?.contains("21") == true }
+                scenario.onActivity { activity ->
+                    val panel = activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")
+                    repeat(12) {
+                        val tick = android.os.SystemClock.uptimeMillis()
+                        panel.dispatchKeyEvent(KeyEvent(tick, tick, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN, 0))
+                        panel.dispatchKeyEvent(KeyEvent(tick, tick, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN, 0))
+                    }
+                }
+                waitFor(scenario) { activity ->
+                    val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                    grid.findFocus()?.let { (grid.findContainingViewHolder(it)?.bindingAdapterPosition ?: -1) >= 30 } == true
+                }
+                scenario.onActivity { activity ->
+                    val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                    assertFalse("Rapid card navigation must not open the main menu", rail.expanded)
+                    assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
+                    assertEquals(241, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter!!.itemCount)
+                }
+                instrumentation.waitForIdleSync()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-large-slate.png"))
+            } } finally { release.countDown(); lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys }
+        }
+    }
+
     @Test fun sportsLeagueFilterCombinesWithLiveAndCalendarWithoutChangingPreferences() {
         FixtureServer().use { server ->
             val source = Source(name = "League filter fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -2179,7 +2309,7 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     assertTrue("Hero: ${activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text}; focus ${activity.currentFocus?.tag}", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle"))
                     assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("UPCOMING"))
-                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-records").text.contains("6-2"))
+                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-title").text.contains("(6-2)"))
                     val card = activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:next").text.toString()
                     assertTrue("Records appear beneath the matching team", card.contains("Seattle Seahawks\n6-2"))
                     assertTrue(card.contains("San Francisco 49ers\n2-6"))

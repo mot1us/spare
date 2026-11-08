@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.view.View
 import android.widget.ImageView
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
@@ -14,14 +16,42 @@ import java.util.concurrent.Executors
 class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null) {
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
-    private class Binding(val url: String, val http: Boolean)
+    private class Binding(val url: String, val http: Boolean, var loaded: ((Bitmap?) -> Unit)?) {
+        var waiting = false
+        var complete = false
+        var attempts = 0
+        var retryAt = 0L
+        var deadline = SystemClock.uptimeMillis() + 30000
+        var attached: View.OnAttachStateChangeListener? = null
+        var laidOut: View.OnLayoutChangeListener? = null
+    }
     private val bindings = WeakHashMap<ImageView, Binding>()
-    private val failed = ConcurrentHashMap<String, Long>()
+    private class Failure(val until: Long, val attempts: Int)
+    private val failed = ConcurrentHashMap<String, Failure>()
     private val workers = Executors.newFixedThreadPool(2) as java.util.concurrent.ThreadPoolExecutor
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var closed = false
     @Volatile private var paused = false
     @Volatile private var generation = 0
+    private var retryPosted = false
+    private var retryWhen = 0L
+    private val visibleBounds = android.graphics.Rect()
+    private val retryImages = Runnable {
+        retryPosted = false
+        if (!closed && !paused) {
+            val now = SystemClock.uptimeMillis()
+            var checked = 0
+            bindings.entries.toList().forEach { (view, binding) ->
+                if (!binding.waiting && !binding.complete && bindings[view] === binding) {
+                    if (now > binding.deadline) forget(view, binding)
+                    else if (now >= binding.retryAt && visible(view) && checked < 4) {
+                        checked++; load(view, binding)
+                    }
+                }
+            }
+            scheduleRetries()
+        }
+    }
     fun get(url: String, http: Boolean, redraw: () -> Unit): Bitmap? = request(url, http, { redraw() })
 
     /** Deliver the decoded bitmap to this binding, even if the memory cache evicts it.
@@ -29,22 +59,80 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     fun bind(view: ImageView, url: String, http: Boolean = false, loaded: ((Bitmap?) -> Unit)? = null) {
         val previous = bindings[view]
         if (previous?.url == url && previous.http == http) return
-        val binding = Binding(url, http); bindings[view] = binding
+        if (previous != null) forget(view, previous)
+        if (closed || paused || url.isBlank() || !Network.allowed(url, http)) {
+            view.setImageBitmap(null); loaded?.invoke(null); return
+        }
+        val binding = Binding(url, http, loaded); bindings[view] = binding
+        binding.attached = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                binding.deadline = SystemClock.uptimeMillis() + 30000
+                scheduleRetries()
+            }
+            override fun onViewDetachedFromWindow(v: View) = Unit
+        }.also(view::addOnAttachStateChangeListener)
+        // Attachment precedes the first layout: it can still have an empty visible
+        // rectangle then. Wake again once layout makes the image eligible to retry.
+        binding.laidOut = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> scheduleRetries() }
+            .also(view::addOnLayoutChangeListener)
+        load(view, binding, initial = true)
+    }
+
+    private fun load(view: ImageView, binding: Binding, initial: Boolean = false) {
         val target = WeakReference(view)
         fun apply(bitmap: Bitmap?) {
             val image = target.get() ?: return
             if (bindings[image] !== binding) return
+            binding.waiting = false
+            binding.complete = bitmap != null
             if ((image.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
+            val loaded = binding.loaded
+            if (bitmap != null) binding.loaded = null
             loaded?.invoke(bitmap)
-            if (bitmap == null) bindings.remove(image)
+            if (bindings[image] !== binding) return
+            if (bitmap != null) {
+                binding.attached?.let(image::removeOnAttachStateChangeListener); binding.attached = null
+                binding.laidOut?.let(image::removeOnLayoutChangeListener); binding.laidOut = null
+            } else if (binding.attempts >= 3 || SystemClock.uptimeMillis() >= binding.deadline) forget(image, binding)
+            else {
+                binding.retryAt = maxOf(SystemClock.uptimeMillis() + 1000, failed[binding.url]?.until ?: 0)
+                scheduleRetries()
+            }
         }
-        var waiting = false
-        val bitmap = request(url, http, ::apply) { waiting = true }
-        // A skipped request has no completion callback. Let a later bind retry it.
-        if (bitmap == null && !waiting && bindings[view] === binding) bindings.remove(view)
-        // Keep a pending binding so repeated score/layout updates do not subscribe again.
-        if ((view.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) view.setImageBitmap(bitmap)
-        loaded?.invoke(bitmap)
+        val bitmap = request(binding.url, binding.http, ::apply) { binding.waiting = true; binding.attempts++ }
+        if (bitmap != null) apply(bitmap)
+        else if (initial) {
+            if (view.drawable != null) view.setImageBitmap(null)
+            binding.loaded?.invoke(null)
+        }
+        // Queue pressure and a cooldown do not have a completion callback. Keep the
+        // visible binding alive so it can join the bounded worker queue later.
+        if (bitmap == null && !binding.waiting && bindings[view] === binding) {
+            binding.retryAt = maxOf(SystemClock.uptimeMillis() + 1000, failed[binding.url]?.until ?: 0)
+            scheduleRetries()
+        }
+    }
+
+    private fun visible(view: ImageView) = view.isAttachedToWindow && view.isShown && view.getGlobalVisibleRect(visibleBounds)
+    private fun forget(view: ImageView, binding: Binding) {
+        if (bindings[view] === binding) bindings.remove(view)
+        binding.loaded = null
+        binding.attached?.let(view::removeOnAttachStateChangeListener); binding.attached = null
+        binding.laidOut?.let(view::removeOnLayoutChangeListener); binding.laidOut = null
+    }
+    private fun scheduleRetries() {
+        if (closed || paused) return
+        val now = SystemClock.uptimeMillis()
+        val next = bindings.entries.asSequence().filter { !it.value.waiting && !it.value.complete }.minOfOrNull { (view, binding) ->
+            // Hidden/detached views only get cleanup, never another network attempt.
+            if (visible(view)) minOf(binding.retryAt, binding.deadline + 1) else binding.deadline + 1
+        } ?: return
+        val whenReady = maxOf(now + 250, next)
+        if (retryPosted && retryWhen <= whenReady) return
+        handler.removeCallbacks(retryImages)
+        retryPosted = true
+        retryWhen = whenReady
+        handler.postDelayed(retryImages, whenReady - now)
     }
 
     private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit, queued: () -> Unit = {}): Bitmap? {
@@ -75,7 +163,11 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             }.getOrNull()
             if (bitmap != null && !closed) cache.put(url, bitmap)
             if (token == generation) {
-                if (bitmap == null) failed[url] = System.currentTimeMillis() + 30000 else failed.remove(url)
+                if (bitmap == null) {
+                    val attempts = ((failed[url]?.attempts ?: 0) + 1).coerceAtMost(3)
+                    val delay = when (attempts) { 1 -> 1500L; 2 -> 5000L; else -> 30000L }
+                    failed[url] = Failure(SystemClock.uptimeMillis() + delay, attempts)
+                } else failed.remove(url)
                 while (failed.size > 256) failed.keys.firstOrNull()?.let(failed::remove)
                 val callbacks = synchronized(pending) { pending.remove(url).orEmpty() }
                 handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(bitmap) } }
@@ -83,9 +175,10 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         }
         return null
     }
-    fun unavailable(url: String): Boolean { val until = failed[url] ?: return false; if (System.currentTimeMillis() < until) return true; failed.remove(url); return false }
+    fun unavailable(url: String): Boolean = failed[url]?.let { SystemClock.uptimeMillis() < it.until } ?: false
     fun prefetch(url: String, http: Boolean = false) { get(url, http) {} }
-    fun pause() { bindings.clear(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null) }
+    private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
+    fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }
     fun resume() { paused = false }
-    fun close() { bindings.clear(); closed = true; workers.shutdownNow(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); cache.evictAll() }
+    fun close() { clearBindings(); closed = true; workers.shutdownNow(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false; cache.evictAll() }
 }

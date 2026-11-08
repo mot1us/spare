@@ -3,7 +3,7 @@ package io.github.mot1us.spare
 import kotlin.math.abs
 
 data class SportsBroadcast(val channel: Channel, val programme: Programme)
-data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val competition: String = "", val titleMatches: List<Channel> = emptyList(), val coverageComplete: Boolean = true, val records: Map<String, String> = emptyMap()) {
+data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Long, val broadcasts: List<SportsBroadcast>, val eventId: String = "", val state: String = "in", val networks: List<String> = emptyList(), val candidates: List<Channel> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val competition: String = "", val titleMatches: List<Channel> = emptyList(), val coverageComplete: Boolean = true, val records: Map<String, String> = emptyMap(), val situation: String = "", val possession: String = "") {
     val leagueId get() = competition.ifBlank { teams.first().league }
     val key: String get() = (if (competition.isNotBlank() && eventId.isNotBlank()) "$competition:$eventId" else eventId).ifBlank { teams.map { it.id }.sorted().joinToString("|") + ":$start" }
     val title: String get() = teams.joinToString(" vs ") { it.name }
