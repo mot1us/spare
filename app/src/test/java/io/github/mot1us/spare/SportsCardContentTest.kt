@@ -28,4 +28,14 @@ class SportsCardContentTest {
         assertFalse(SportsCardContent.teams(game.copy(scores = mapOf("nba:POR" to "101")), false).any { it.leading })
         assertFalse(SportsCardContent.teams(game.copy(scores = mapOf("nba:POR" to "98", "nba:LAL" to "98")), false).any { it.leading })
     }
+    @Test fun bannerScoresAreClearedForHiddenWaitingAndScheduledGames() {
+        assertEquals(listOf("101", "98"), SportsCardContent.scoreboard(game, false, "7:15 PM").values)
+        assertNull(SportsCardContent.scoreboard(game, false, "7:15 PM").message)
+        val hidden = SportsCardContent.scoreboard(game.copy(state = "post"), true, "7:15 PM")
+        assertEquals("Score hidden", hidden.message); assertTrue(hidden.values.isEmpty())
+        val waiting = SportsCardContent.scoreboard(game.copy(status = SportsScoreDelay.WAITING), false, "7:15 PM")
+        assertEquals("Score delayed", waiting.message); assertTrue(waiting.values.isEmpty())
+        val upcoming = SportsCardContent.scoreboard(game.copy(state = "pre"), false, "7:15 PM")
+        assertEquals("7:15 PM", upcoming.message); assertTrue(upcoming.values.isEmpty())
+    }
 }

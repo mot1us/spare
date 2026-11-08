@@ -2572,22 +2572,28 @@ class MainActivity : Activity() {
     private fun showGameStreamChoices(context: GameStreams, message: String) {
         if (source == null) return
         val now = System.currentTimeMillis(); val lineup = guide.channels.associateBy { it.id }
-        val choices = context.channels.mapNotNull { lineup[it.id] }.distinctBy { it.id }
-            .filter { !unavailable.contains(it.id, now) && allowed(it) }
+        val known = SportsStreams.results(context.game, sportsStreamFilters().copy(minHeight = 0, excludedFps = emptySet()), videoInfo, guide, now) {
+            !unavailable.contains(it.id, now) && allowed(it)
+        }.mapNotNull { lineup[it.id] }
+        val choices = streamHealth.order(known.distinctBy { it.id }, videoInfo, android.os.SystemClock.elapsedRealtime())
         stopSportsPrefetch(); clearSportsPlayback(); closeDetails()
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
         sportsVisible = true; showGameInfo(context.game); applyFilter()
         sportsPanel.matching(context.game); showGuide(true)
         if (choices.none { it.id != current?.id }) { selectGame(context.game); return }
         sportsResults = GameStreams(context.game, choices); sportsChannels = choices.take(4)
-        sportsPanel.showStreams(context.game, choices, message) { channel -> (if (channel.id == current?.id) "Current · " else "") + gameStreamLabel(context.game, channel) }
+        val note = if (choices.size == 1 && choices[0].id == current?.id && SportsStreams.coverage(context.game, choices[0], guide, now) != SportsStreams.Coverage.UNCONFIRMED) "This is the only confirmed game feed right now. Resolution labels alone do not confirm coverage or availability." else message
+        sportsPanel.showStreams(context.game, choices, note) { channel -> (if (channel.id == current?.id) "Current · " else "") + gameStreamLabel(context.game, channel) }
     }
     private fun gameStreamLabel(game: SportsGame, channel: Channel): String {
-        val at = if (game.state == "pre") game.start else System.currentTimeMillis()
-        val entry = guide.at(channel, at)
-        val currentMatch = entry?.let { SportsGuide.teams(it, game.teams.first().league)?.map { team -> team.id }?.toSet() == game.teams.map { it.id }.toSet() } == true
-        return (if (channel.id in favorites) "★ " else "") + channelLabel(channel) + " · " + channel.qualityLabel(videoInfo[channel.id]) +
-            if (game.state == "pre" && game.broadcasts.any { it.channel.id == channel.id }) " · Scheduled ${GuideClock.time(game.broadcasts.first { it.channel.id == channel.id }.programme.start)}" else if (currentMatch || game.broadcasts.any { it.channel.id == channel.id }) " · EPG matched" else if (game.titleMatches.any { it.id == channel.id }) " · Channel title matched" else " · Possible coverage"
+        val now = System.currentTimeMillis()
+        val coverage = when (SportsStreams.coverage(game, channel, guide, now)) {
+            SportsStreams.Coverage.EPG -> if (game.state == "pre") "Scheduled EPG match" else "EPG matched"
+            SportsStreams.Coverage.CHANNEL_TITLE -> "Channel title matched"
+            SportsStreams.Coverage.UNCONFIRMED -> "Possible coverage · not confirmed"
+        }
+        val health = if (streamHealth.status(channel.id, android.os.SystemClock.elapsedRealtime()) > 0) " · Recent playback failure" else ""
+        return (if (channel.id in favorites) "★ " else "") + channelLabel(channel) + " · " + channel.qualityLabel(videoInfo[channel.id]) + " · " + coverage + health
     }
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
         profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null): SportsStreamCache.Match {
@@ -2653,10 +2659,11 @@ class MainActivity : Activity() {
             }
             val latestQuality = videoInfo.toMap()
             val alternatives = streamHealth.order(SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && allowed(it) }, latestQuality, android.os.SystemClock.elapsedRealtime())
-            val channels = (alternatives + SportsStreams.rank(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality) {
+            val choices = SportsStreams.results(matched, profile.copy(minHeight = 0, excludedFps = emptySet()), latestQuality, guide, now) {
                 (game.state == "pre" || !unavailable.contains(it.id, now)) && allowed(it)
-            }).distinctBy { it.id }.filter { game.state != "pre" || matched.broadcasts.any { broadcast -> broadcast.channel.id == it.id } }
-                .filterNot { SportsStreams.conflictingCoverage(matched, it, guide, now) }
+            }
+            val channels = streamHealth.order((alternatives + choices).distinctBy { it.id }
+                .filter { game.state != "pre" || matched.broadcasts.any { broadcast -> broadcast.channel.id == it.id } }, latestQuality, android.os.SystemClock.elapsedRealtime())
             sportsResults = GameStreams(matched, channels)
             val streamLabel: (Channel) -> String = { (if (it.id == current?.id) "Current · " else "") + gameStreamLabel(matched, it) }
             if (fromScores) {

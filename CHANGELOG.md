@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.31.1 — 2026-11-08
+
+- Move game scores, clock, status and situation into the team-logo banner. Give both team names/records fixed-height rows and shorten the cards without squeezing text.
+- Show confirmed EPG/channel-title feeds in normal game results when available; keep generic network suggestions only as an explicitly unconfirmed fallback when no matchup feed is known. A working HD feed remains valid regardless of higher-resolution guesses.
+- Recheck coverage labels against current listings, and demote/label recent playback failures when reopening alternatives. Preserve unknown-FPS playback, manual retry and RedZone matching; no background playback probes.
+
 ## 0.31.0 — 2026-11-08
 
 - Restore the saved playable lineup before its EPG and additional playlists; keep loading visible until channels actually reach the guide. Resume playback once without overriding navigation, and protect each playlist’s saved EPG during staggered restores. Previously unseen guide rows still fetch on demand.

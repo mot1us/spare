@@ -101,6 +101,46 @@ object SportsStreams {
                 .then(preferenceComparator(filters, quality))
                 .thenByDescending { it.id in epg })
     }
+    enum class Coverage { EPG, CHANNEL_TITLE, UNCONFIRMED }
+    /** Coverage describes the matchup evidence, not whether a provider stream will open. */
+    fun coverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Coverage =
+        coverageEvidence(game, channel, guide, now) ?: Coverage.UNCONFIRMED
+
+    // Null means the current guide positively identifies another game or a replay.
+    private fun coverageEvidence(game: SportsGame, channel: Channel, guide: Guide, now: Long): Coverage? {
+        val upcoming = game.state == "pre"
+        if (!upcoming && !game.live(now)) return Coverage.UNCONFIRMED
+        val target = game.teams.map { it.id }.toSet()
+        fun teams(programme: Programme) = SportsGuide.teams(programme, game.teams.first().league)?.map { it.id }?.toSet()
+        fun excluded(programme: Programme) = SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title))
+        val saved = game.broadcasts.firstOrNull { it.channel.id == channel.id && SportsSchedule.broadcastWindow(game, it.programme, now) }?.programme
+        if (upcoming) {
+            val entries = guide.programmes[guide.key(channel)]
+            if (entries?.any { SportsSchedule.broadcastWindow(game, it, now) && !excluded(it) && teams(it) == target } == true)
+                return Coverage.EPG
+        }
+        val entry = guide.at(channel, if (upcoming) game.start else now)
+        if (entry != null) {
+            if (excluded(entry)) return null
+            val found = teams(entry)
+            if (found != null) return if (found == target) Coverage.EPG else null
+            // A refreshed, unrelated listing cannot inherit an old EPG-match badge.
+        } else if (saved != null && !excluded(saved)) return Coverage.EPG
+        return if (!upcoming && game.titleMatches.any { it.id == channel.id }) Coverage.CHANNEL_TITLE else Coverage.UNCONFIRMED
+    }
+
+    /** Normal alternatives contain actual matchup feeds whenever any are known. */
+    fun results(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
+        available: (Channel) -> Boolean = { true }): List<Channel> {
+        val confirmed = mutableListOf<Channel>()
+        val suggestions = mutableListOf<Channel>()
+        for (channel in rank(game, filters, quality, available)) {
+            val evidence = coverageEvidence(game, channel, guide, now) ?: continue
+            suggestions.add(channel)
+            if (evidence != Coverage.UNCONFIRMED) confirmed.add(channel)
+        }
+        return if (confirmed.isNotEmpty()) confirmed.sortedWith(preferenceComparator(filters, quality)) else suggestions
+    }
     fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
         game.live(now) && (game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } || game.titleMatches.any { it.id == channel.id }) &&
             qualifies(channel, quality[channel.id])
@@ -181,7 +221,10 @@ object SportsStreams {
         available: (Channel) -> Boolean = { true }): List<Channel> {
         if (!game.live(now)) return emptyList()
         val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
-        return rank(game, filters, quality, available).filter { (it.id in exact || advertisedCoverage(game, it, guide, now)) && !conflictingCoverage(game, it, guide, now) }
+        return rank(game, filters, quality, available).filter {
+            (it.id in exact || advertisedCoverage(game, it, guide, now)) &&
+                coverage(game, it, guide, now) != Coverage.UNCONFIRMED && !conflictingCoverage(game, it, guide, now)
+        }
     }
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {

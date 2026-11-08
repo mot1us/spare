@@ -1512,6 +1512,54 @@ class SpareDeviceTest {
         } }
     }
 
+    @Test fun compactSportsCardsKeepBothTeamNamesAndScoresInsideTheirBounds() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Compact Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("compact-feed", "News", "News", "${server.base}/channel1.mp4")
+            val teams = SportsCatalog.teams.filter { "NCAAM" in it.competitions }.sortedByDescending { it.name.length }.take(2).sortedBy { it.id }
+            val now = System.currentTimeMillis(); val key = "NCAAM:compact-card"
+            val snapshot = LiveSportsSnapshot(listOf(LiveEvent("compact-card", teams.map { it.id }.toSet(), now - 60000,
+                scores = mapOf(teams[0].id to "103", teams[1].id to "102"), status = "12:34 - 2nd half", league = "NCAAM",
+                records = teams.associate { it.id to "11-11" })), now, setOf("NCAAM"))
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NCAAM")
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { snapshot }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { player -> player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying } == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-card-team-name:$key:1")?.let { view -> view.layout != null && view.height > 0 } == true }
+                scenario.onActivity { activity ->
+                    val card = activity.window.decorView.findViewWithTag<ViewGroup>(key)
+                    val banner = card.findViewWithTag<ViewGroup>("sports-card-banner:$key")
+                    val checked = mutableListOf<TextView>()
+                    repeat(2) { index ->
+                        val name = card.findViewWithTag<TextView>("sports-card-team-name:$key:$index")
+                        val record = card.findViewWithTag<TextView>("sports-card-team-record:$key:$index")
+                        val score = card.findViewWithTag<TextView>("sports-card-score:$key:$index")
+                        assertEquals(teams[index].name, name.text.toString()); assertEquals("(11-11)", record.text.toString())
+                        assertEquals(if (index == 0) "103" else "102", score.text.toString())
+                        assertTrue("Scores belong in the logo banner", generateSequence(score as View?) { it.parent as? View }.any { it === banner })
+                        checked.addAll(listOf(name, record, score))
+                    }
+                    checked.add(card.findViewWithTag("sports-card-date:$key")); checked.add(card.findViewWithTag("sports-card-live-detail:$key"))
+                    checked.forEach { view ->
+                        val layout = view.layout!!
+                        assertTrue("Text must retain a complete line height: ${view.tag}", layout.getLineBottom(layout.lineCount - 1) + view.totalPaddingTop <= view.height - view.totalPaddingBottom + 1)
+                    }
+                    val first = card.findViewWithTag<View>("sports-card-team-name:$key:0"); val second = card.findViewWithTag<View>("sports-card-team-name:$key:1")
+                    val a = IntArray(2); val b = IntArray(2); first.getLocationOnScreen(a); second.getLocationOnScreen(b)
+                    assertTrue("The second team has its own row", a[1] + first.height <= b[1])
+                    assertTrue("Fixed body fits within the smaller card", (0 until card.childCount).all { index -> card.getChildAt(index).bottom <= card.height - card.paddingBottom })
+                }
+                instrumentation.waitForIdleSync(); device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-compact-card.png"))
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys }
+        }
+    }
+
     @Test fun largeSportsSlateKeepsNavigationAndScoresResponsiveDuringPendingDiffs() {
         FixtureServer().use { server ->
             val source = Source(name = "Large Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -1540,8 +1588,9 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
                     grid.findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
-                    val title = grid.findViewHolderForAdapterPosition(0)!!.itemView.findViewWithTag<TextView>("sports-card-teams:NFL:large-slate-1")
-                    assertTrue(title.text.contains("Seattle Seahawks (6-2)"))
+                    val card = grid.findViewHolderForAdapterPosition(0)!!.itemView
+                    assertEquals("Seattle Seahawks", card.findViewWithTag<TextView>("sports-card-team-name:NFL:large-slate-1:0").text.toString())
+                    assertEquals("(6-2)", card.findViewWithTag<TextView>("sports-card-team-record:NFL:large-slate-1:0").text.toString())
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-detail").text.contains("3rd & 7"))
                 }
                 val entered = java.util.concurrent.CountDownLatch(1)
@@ -1622,8 +1671,10 @@ class SpareDeviceTest {
                     assertTrue(activity.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus())
                     val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView as ViewGroup
                     val poster = card.getChildAt(0) as ViewGroup
-                    assertEquals("Cards contain the two team crests and RedZone label, without an editorial photo layer", 2, poster.childCount)
-                    assertEquals(2, (poster.getChildAt(0) as ViewGroup).childCount)
+                    fun countImages(view: View): Int = (if (view is android.widget.ImageView) 1 else 0) + if (view is ViewGroup) (0 until view.childCount).sumOf { countImages(view.getChildAt(it)) } else 0
+                    assertEquals("The banner retains both team crests without editorial photos", 2, countImages(poster))
+                    assertNotNull(poster.findViewWithTag<View>("sports-card-score:NBA:filter-nba:0"))
+                    assertNotNull(poster.findViewWithTag<View>("sports-card-live-detail:NBA:filter-nba"))
                     activity.window.decorView.findViewWithTag<View>("sports-live").performClick()
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NBA:filter-nba")?.isShown == true }
@@ -1845,7 +1896,7 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-score")?.text?.contains("11") == true }
                     scenario.onActivity { activity ->
-                        assertFalse(activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:NBA:delayed-fixture").text.contains("44"))
+                        repeat(2) { index -> assertFalse(activity.window.decorView.findViewWithTag<TextView>("sports-card-score:NBA:delayed-fixture:$index").text.contains("44")) }
                         assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-badge").text.contains("LIVE"))
                         assertFalse(activity.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:delayed-fixture").text.contains("catch-up", true))
                         MainActivity::class.java.getDeclaredMethod("openSportsScoreDelay").apply { isAccessible = true }.invoke(activity)
@@ -2310,9 +2361,11 @@ class SpareDeviceTest {
                     assertTrue("Hero: ${activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text}; focus ${activity.currentFocus?.tag}", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle"))
                     assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("UPCOMING"))
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-title").text.contains("(6-2)"))
-                    val card = activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:next").text.toString()
-                    assertTrue("Records appear beside the matching team", card.contains("Seattle Seahawks (6-2)"))
-                    assertTrue(card.contains("San Francisco 49ers (2-6)"))
+                    val card = activity.window.decorView.findViewWithTag<View>("sports-card-teams:next")
+                    assertEquals("Seattle Seahawks", card.findViewWithTag<TextView>("sports-card-team-name:next:0").text.toString())
+                    assertEquals("(6-2)", card.findViewWithTag<TextView>("sports-card-team-record:next:0").text.toString())
+                    assertEquals("San Francisco 49ers", card.findViewWithTag<TextView>("sports-card-team-name:next:1").text.toString())
+                    assertEquals("(2-6)", card.findViewWithTag<TextView>("sports-card-team-record:next:1").text.toString())
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage").text.toString().contains("ESPN 12"))
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-records.png"))
@@ -3493,11 +3546,12 @@ class SpareDeviceTest {
             val current = Channel("watched", "Sports One", "NFL", "${server.base}/channel1.mp4")
             val alternate = Channel("alternate", "Sports Two", "NFL", "${server.base}/channel2.mp4")
             val other = Channel("other", "Sports Three", "NFL", "${server.base}/channel3.mp4")
+            val guess = Channel("guess", "CBS 4K", "NFL", "${server.base}/missing.mp4", reportedQuality = VideoInfo(3840, 2160, 60f))
             val programme = Programme(current.id, "NFL: Seahawks vs 49ers", now - 60000, now + 3600000)
-            val event = LiveEvent("watched", setOf("nfl:SEA", "nfl:SF"), now - 60000, league = "NFL")
+            val event = LiveEvent("watched", setOf("nfl:SEA", "nfl:SF"), now - 60000, networks = listOf("CBS"), league = "NFL")
             var scores = LiveSportsSnapshot(listOf(event), now, SportsLeagues.byId.keys)
             val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
-            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(current, other), mapOf(current.id to listOf(programme)))); store.markPlaylistRefreshed(source)
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(current, other, guess), mapOf(current.id to listOf(programme)))); store.markPlaylistRefreshed(source)
             val release = java.util.concurrent.CountDownLatch(1)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 var player: Player? = null
@@ -3541,6 +3595,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:alternate")?.isShown == true }
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-title").text.contains("Seattle"))
+                    assertNull("A generic 4K broadcaster must not appear beside confirmed game feeds", activity.window.decorView.findViewWithTag<View>("sports-stream:guess"))
                     assertEquals(playing, player!!.currentMediaItem!!.mediaId)
                     activity.window.decorView.findViewWithTag<View>("sports-stream:alternate").performClick()
                 }
