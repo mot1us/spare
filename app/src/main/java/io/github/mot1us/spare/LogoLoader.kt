@@ -61,7 +61,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         if (previous?.url == url && previous.http == http) return
         if (previous != null) forget(view, previous)
         if (closed || paused || url.isBlank() || !Network.allowed(url, http)) {
-            view.setImageBitmap(null); loaded?.invoke(null); return
+            view.setImageDrawable(null); loaded?.invoke(null); return
         }
         val binding = Binding(url, http, loaded); bindings[view] = binding
         binding.attached = object : View.OnAttachStateChangeListener {
@@ -85,7 +85,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (bindings[image] !== binding) return
             binding.waiting = false
             binding.complete = bitmap != null
-            if ((image.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
+            if (bitmap == null) { if (image.drawable != null) image.setImageDrawable(null) }
+            else if ((image.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) image.setImageBitmap(bitmap)
             val loaded = binding.loaded
             if (bitmap != null) binding.loaded = null
             loaded?.invoke(bitmap)
@@ -102,7 +103,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         val bitmap = request(binding.url, binding.http, ::apply) { binding.waiting = true; binding.attempts++ }
         if (bitmap != null) apply(bitmap)
         else if (initial) {
-            if (view.drawable != null) view.setImageBitmap(null)
+            if (view.drawable != null) view.setImageDrawable(null)
             binding.loaded?.invoke(null)
         }
         // Queue pressure and a cooldown do not have a completion callback. Keep the

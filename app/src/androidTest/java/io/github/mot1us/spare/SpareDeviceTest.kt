@@ -2311,8 +2311,8 @@ class SpareDeviceTest {
                     assertTrue(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.contains("UPCOMING"))
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-hero-title").text.contains("(6-2)"))
                     val card = activity.window.decorView.findViewWithTag<TextView>("sports-card-teams:next").text.toString()
-                    assertTrue("Records appear beneath the matching team", card.contains("Seattle Seahawks\n6-2"))
-                    assertTrue(card.contains("San Francisco 49ers\n2-6"))
+                    assertTrue("Records appear beside the matching team", card.contains("Seattle Seahawks (6-2)"))
+                    assertTrue(card.contains("San Francisco 49ers (2-6)"))
                     assertTrue(activity.window.decorView.findViewWithTag<TextView>("sports-redzone-coverage").text.toString().contains("ESPN 12"))
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-records.png"))

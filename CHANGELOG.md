@@ -4,7 +4,7 @@
 
 - Restore the saved playable lineup before its EPG and additional playlists; keep loading visible until channels actually reach the guide. Resume playback once without overriding navigation, and protect each playlist’s saved EPG during staggered restores. Previously unseen guide rows still fetch on demand.
 - Keep large Sports schedules responsive with background card diffs, cached card IDs, and bounded stream/replay discovery for the focused viewport and followed teams. Retain the complete schedule and league filter.
-- Retry visible team logos after temporary failures or queue pressure, cancel retries when paused, and replace corrupt Sports image-cache files.
+- Retry visible team logos after temporary failures or queue pressure, cancel retries when paused, replace corrupt Sports image-cache files, and clear empty drawables so fallback logos remain available.
 - Put team records beside names, distinguish live/upcoming/final/replay and coverage details with clearer colors, and show available quarter/clock, football possession/down-and-distance, and baseball count/outs from the existing scoreboard. Game-state details follow score delay and spoiler settings.
 
 ## 0.30.2 — 2026-11-07
