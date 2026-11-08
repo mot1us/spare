@@ -514,6 +514,7 @@ class MainActivity : Activity() {
     private var playbackRebuffers = 0
     private var playbackReconnects = 0
     private var playbackLoadErrors = 0
+    private var playbackDroppedFrames = 0L
     private var playbackPhase = PlaybackPhase.OPENING
     private var startupFailures = StartupFailures()
     private var reconnects = ReconnectBudget()
@@ -706,7 +707,10 @@ class MainActivity : Activity() {
         })
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
-                if (started && player.currentMediaItem?.mediaId == expectedMediaId) journal(PlaybackJournal.Event.DROPPED_FRAMES, droppedFrames)
+                if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
+                    playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
+                    journal(PlaybackJournal.Event.DROPPED_FRAMES, droppedFrames)
+                }
             }
             override fun onLoadError(eventTime: AnalyticsListener.EventTime, loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo, mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData, error: java.io.IOException, wasCanceled: Boolean) {
                 if (!wasCanceled && !eventTime.timeline.isEmpty && eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId == expectedMediaId) {
@@ -1460,7 +1464,7 @@ class MainActivity : Activity() {
     private fun playAttempt(phase: PlaybackPhase = PlaybackPhase.OPENING) {
         if (playbackUrl.isBlank() || pausedPlayback != null) return
         cancelPlaybackCallbacks()
-        playbackToken++; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
+        playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand?.kind in setOf("movie", "episode")) itemBuilder.setTag(PlaybackLoadControl.VOD)
@@ -1470,7 +1474,7 @@ class MainActivity : Activity() {
             HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors(liveHlsEndpoint = playbackUrl.takeIf { onDemand == null })).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
-        if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f, exact = onDemand?.kind in setOf("movie", "episode"))
+        if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
         journal(PlaybackJournal.Event.OPEN)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
         handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
@@ -2682,8 +2686,9 @@ class MainActivity : Activity() {
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${current?.let { videoInfo[it.id]?.evidence }.orEmpty()}"
         val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
         val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
+        val presentation = "Video · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
         val audio = player.audioFormat
-        return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(),
+        return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(), presentation,
             audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())
             .filter { it.isNotBlank() }.joinToString("\n\n")
     }

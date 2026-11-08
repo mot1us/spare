@@ -2865,6 +2865,17 @@ class SpareDeviceTest {
                 assertFalse(SecureStore(context).frameRateMatching)
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(attempt, samePlayer!!.currentMediaItem!!.mediaId); assertTrue(it.window.decorView.findViewWithTag<View>("settings-panel").isShown); assertEquals(0, it.window.attributes.preferredDisplayModeId) }
                 activateSetting(scenario, "On"); assertTrue(SecureStore(context).frameRateMatching)
+                scenario.onActivity { activity ->
+                    val matching = MainActivity::class.java.getDeclaredField("frameRates").apply { isAccessible = true }.get(activity) as FrameRates
+                    val saved = matching.requestedRate
+                    matching.request(60f); assertEquals(60f, matching.requestedRate, .001f)
+                    matching.request(59.94f); assertEquals("Live TV must not discard fractional display requests", 59.94f, matching.requestedRate, .001f)
+                    if (saved > 0) matching.request(saved)
+                    val diagnostic = MainActivity::class.java.getDeclaredMethod("playbackDiagnostics").apply { isAccessible = true }.invoke(activity) as String
+                    assertTrue(diagnostic.contains("dropped frames this playback attempt")); assertTrue(diagnostic.contains("Hz · Requested"))
+                    assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player)
+                    assertEquals("Matching corrections must preserve the playing connection", attempt, samePlayer!!.currentMediaItem!!.mediaId)
+                }
                 activateSetting(scenario, "Subtitles"); activateSetting(scenario, "Subtitle appearance")
                 activateSetting(scenario, "Medium"); activateSetting(scenario, "Shadow")
                 waitFor(scenario) { store.subtitleSize == "Medium" && store.subtitleStyle == "Shadow" }

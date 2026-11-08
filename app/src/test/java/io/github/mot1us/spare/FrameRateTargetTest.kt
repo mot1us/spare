@@ -37,9 +37,9 @@ class FrameRateTargetTest {
         assertNull(target.observe(50f, 32499, true)); assertEquals(50f, target.observe(50f, 32500, true)!!, .001f)
     }
 
-    @Test fun vodCorrectsFractionalRatesOnlyAfterStableSourceTiming() {
+    @Test fun allVideoCorrectsFractionalRatesOnlyAfterStableSourceTiming() {
         for ((rounded, fractional) in listOf(24f to 23.976f, 30f to 29.97f, 60f to 59.94f)) {
-            val target = FrameRateTarget(); target.reset(rounded, exact = true)
+            val target = FrameRateTarget(); target.reset(rounded)
             // Rounded decoder/render samples cannot correct the display hint.
             assertNull(target.observe(fractional, 0, false))
             assertNull(target.observe(fractional, 10000, false))
@@ -52,12 +52,30 @@ class FrameRateTargetTest {
         }
     }
 
-    @Test fun vodCanStartWithoutARateAndReturningToLiveRestoresItsJitterTolerance() {
-        val target = FrameRateTarget(); target.reset(exact = true)
+    @Test fun newSessionsDiscardPreviousFractionalCandidates() {
+        val target = FrameRateTarget(); target.reset()
         assertNull(target.observe(23.976f, 0, true))
         assertEquals(23.976f, target.observe(23.976f, 1500, true)!!, .001f)
         target.reset(59.94f)
-        for (now in 2000L..15000L step 500) assertNull(target.observe(60f, now, true))
+        for (now in 2000L..9500L step 500) assertNull(target.observe(60f, now, true))
+        assertEquals(60f, target.observe(60f, 10000, true)!!, .001f)
+    }
+
+    @Test fun allDayLivePlaybackCorrectsFractionalChangesOnceAndIgnoresBriefReversals() {
+        for ((before, after) in listOf(60f to 59.94f, 59.94f to 60f, 30f to 29.97f, 29.97f to 30f)) {
+            val target = FrameRateTarget(); target.reset(before)
+            val allDay = 12 * 3600000L
+            assertNull(target.observe(before, allDay, true))
+            for (time in allDay + 500..allDay + 8000 step 500) assertNull(target.observe(after, time, true))
+            assertEquals(after, target.observe(after, allDay + 8500, true)!!, .001f)
+            for (time in allDay + 9000..allDay + 20000 step 500) assertNull(target.observe(after, time, true))
+            // Long-term watching must retain the same anti-flapping protection.
+            repeat(20) { index ->
+                val time = allDay + 20500 + index * 1000
+                assertNull(target.observe(before, time, true))
+                assertNull(target.observe(after, time + 500, true))
+            }
+        }
     }
 
 }

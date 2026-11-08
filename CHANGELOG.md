@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.30.2 — 2026-11-07
+
+- Correct sustained fractional frame-rate changes during live TV, including 60/59.94 and 30/29.97. Require eight seconds of stable source timing before a small correction so rounded measurements cannot repeatedly switch display modes; preserve VOD protection and playback connections.
+- Show dropped video frames, actual display refresh rate, and the requested frame rate in Playback diagnostics. Keep buffer sizes and stall/reconnect policy unchanged.
+
 ## 0.30.1 — 2026-11-06
 
 - Add a league filter beside Today, Live and Calendar. Browse one enabled league or all leagues without changing Sports settings; the filter also applies to the calendar.
