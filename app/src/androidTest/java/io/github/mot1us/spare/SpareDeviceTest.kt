@@ -846,25 +846,35 @@ class SpareDeviceTest {
                     leaveSettings(scenario)
                     val releaseWarmWorker = java.util.concurrent.CountDownLatch(1)
                     val largeLineup = (1..25000).map { Channel("filler:$it", "Local news $it", "News", "${server.base}/unused.mp4") }
+                    try {
+                        scenario.onActivity { activity ->
+                            val worker = MainActivity::class.java.getDeclaredField("sportsWarmWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
+                            worker.submit { releaseWarmWorker.await(20, java.util.concurrent.TimeUnit.SECONDS) }
+                            val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000)
+                            val reported = Channel("provider-game", "Seattle Seahawks vs San Francisco 49ers 4K 60fps", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
+                            val broken = reported.copy(id = "broken-game", name = "Seattle Seahawks vs San Francisco 49ers 4K 120fps", url = "${server.base}/live/test/test-secret/2.ts", reportedQuality = VideoInfo(3840, 2160, 120f))
+                            val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                            val snapshot = guideField.get(activity) as Guide
+                            guideField.set(activity, snapshot.copy(channels = snapshot.channels + largeLineup + broken + reported))
+                            val scores = LiveSportsSnapshot(listOf(LiveEvent(live.eventId, teams.map { it.id }.toSet(), live.start, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
+                            activity.liveSportsLoader = { scores }
+                            MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                            MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
+                        }
+                        // The executor is deliberately blocked: its task cannot post
+                        // "Finding stream" until this gate opens. Observe the queued
+                        // task itself so cancellation does not race the gate timeout.
+                        waitFor(scenario) { activity ->
+                            MainActivity::class.java.getDeclaredField("sportsWarmTask").apply { isAccessible = true }.get(activity) != null &&
+                                MainActivity::class.java.getDeclaredField("sportsWarmActive").apply { isAccessible = true }.get(activity) == game.key &&
+                                activity.window.decorView.findViewWithTag<View>("sports-coverage:${game.key}")?.isShown == true
+                        }
+                        scenario.onActivity { activity ->
+                            MainActivity::class.java.getDeclaredMethod("stopSportsPrefetch", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                            assertEquals("Cancelled work leaves an actionable card", "Select to find stream", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}").text.toString())
+                        }
+                    } finally { releaseWarmWorker.countDown() }
                     scenario.onActivity { activity ->
-                        val worker = MainActivity::class.java.getDeclaredField("sportsWarmWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
-                        worker.submit { releaseWarmWorker.await(20, java.util.concurrent.TimeUnit.SECONDS) }
-                        val live = game.copy(state = "in", start = System.currentTimeMillis() - 60000, end = System.currentTimeMillis() + 3600000)
-                        val reported = Channel("provider-game", "Seattle Seahawks vs San Francisco 49ers 4K 60fps", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
-                        val broken = reported.copy(id = "broken-game", name = "Seattle Seahawks vs San Francisco 49ers 4K 120fps", url = "${server.base}/live/test/test-secret/2.ts", reportedQuality = VideoInfo(3840, 2160, 120f))
-                        val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
-                        val snapshot = guideField.get(activity) as Guide
-                        guideField.set(activity, snapshot.copy(channels = snapshot.channels + largeLineup + broken + reported))
-                        val scores = LiveSportsSnapshot(listOf(LiveEvent(live.eventId, teams.map { it.id }.toSet(), live.start, league = "NFL")), System.currentTimeMillis(), setOf("NFL"))
-                        activity.liveSportsLoader = { scores }
-                        MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
-                        MainActivity::class.java.getDeclaredMethod("switchMode", java.lang.Boolean.TYPE).apply { isAccessible = true }.invoke(activity, true)
-                    }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}")?.text?.startsWith("Finding stream") == true }
-                    scenario.onActivity { activity ->
-                        MainActivity::class.java.getDeclaredMethod("stopSportsPrefetch", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
-                        assertEquals("Cancelled work leaves an actionable card", "Select to find stream", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}").text.toString())
-                        releaseWarmWorker.countDown()
                         MainActivity::class.java.getDeclaredMethod("queueSportsPrefetch", List::class.java).apply { isAccessible = true }.invoke(activity, null)
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-coverage:${game.key}")?.text?.contains("Seattle Seahawks") == true }
