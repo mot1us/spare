@@ -49,7 +49,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -538,8 +538,29 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     dialog = SourceDialog.show(activity, https, { saved = it }, {})
                     val root = dialog!!.window!!.decorView
-                    assertTrue(root.findViewWithTag<EditText>("Xtream password").transformationMethod is android.text.method.PasswordTransformationMethod)
-                    find<CheckBox>(root)!!.performClick()
+                    val username = root.findViewWithTag<EditText>("Xtream username")
+                    val password = root.findViewWithTag<EditText>("Xtream password")
+                    val epg = root.findViewWithTag<EditText>("Optional XMLTV URL (overrides provider guide)")
+                    assertTrue(password.transformationMethod is android.text.method.PasswordTransformationMethod)
+                    username.requestFocus()
+                    username.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
+                    username.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN))
+                    assertTrue("D-pad Down must not skip the password", password.hasFocus())
+                    password.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
+                    assertTrue("Keyboard Next reaches the guide URL", epg.hasFocus())
+                    username.requestFocus(); username.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
+                    assertTrue("Keyboard Next from username reaches password", password.hasFocus())
+                    root.findViewWithTag<CheckBox>("playlist-show-password").performClick()
+                    assertNull(password.transformationMethod)
+                    root.findViewWithTag<CheckBox>("playlist-show-password").performClick()
+                    assertTrue(password.transformationMethod is android.text.method.PasswordTransformationMethod)
+                    fun httpConsent(view: View): CheckBox? {
+                        if (view is CheckBox && view.tag != "playlist-show-password") return view
+                        if (view is ViewGroup) for (i in 0 until view.childCount) httpConsent(view.getChildAt(i))?.let { return it }
+                        return null
+                    }
+                    val allow = httpConsent(root)!!
+                    allow.performClick()
                     assertEquals(https.url, root.findViewWithTag<EditText>("Playlist URL").text.toString())
                     dialog!!.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
                 }
@@ -1544,15 +1565,19 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-card-team-name:$key:1")?.let { view -> view.layout != null && view.height > 0 } == true }
                 scenario.onActivity { activity ->
                     val card = activity.window.decorView.findViewWithTag<ViewGroup>(key)
+                    card.requestFocus()
                     val banner = card.findViewWithTag<ViewGroup>("sports-card-banner:$key")
                     val checked = mutableListOf<TextView>()
+                    assertTrue("Large crests retain their original artwork space", banner.height >= (72 * activity.resources.displayMetrics.density).toInt())
                     repeat(2) { index ->
                         val name = card.findViewWithTag<TextView>("sports-card-team-name:$key:$index")
                         val record = card.findViewWithTag<TextView>("sports-card-team-record:$key:$index")
                         val score = card.findViewWithTag<TextView>("sports-card-score:$key:$index")
                         assertEquals(teams[index].name, name.text.toString()); assertEquals("(11-11)", record.text.toString())
                         assertEquals(if (index == 0) "103" else "102", score.text.toString())
-                        assertTrue("Scores belong in the logo banner", generateSequence(score as View?) { it.parent as? View }.any { it === banner })
+                        assertEquals("Focused bottom-line scores stay legible", GuideTheme.focusText, score.currentTextColor)
+                        assertTrue("Scores belong in the bottom details line", generateSequence(score as View?) { it.parent as? View }.any { it.tag == "sports-card-footer" })
+                        assertFalse("The artwork remains free of score widgets", generateSequence(score as View?) { it.parent as? View }.any { it === banner })
                         checked.addAll(listOf(name, record, score))
                     }
                     checked.add(card.findViewWithTag("sports-card-date:$key")); checked.add(card.findViewWithTag("sports-card-live-detail:$key"))
@@ -1645,21 +1670,23 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun sportsLeagueFilterCombinesWithLiveAndCalendarWithoutChangingPreferences() {
+    @Test fun sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar() {
         FixtureServer().use { server ->
-            val source = Source(name = "League filter fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val source = Source(name = "League setup fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val channel = Channel("league-feed", "News", "News", "${server.base}/channel1.mp4")
             val now = System.currentTimeMillis()
             val snapshot = LiveSportsSnapshot(listOf(
-                LiveEvent("filter-nba", setOf("nba:POR", "nba:LAL"), now - 60000, league = "NBA"),
-                LiveEvent("filter-nfl", setOf("nfl:SEA", "nfl:SF"), now + 3600000, "pre", league = "NFL")
-            ), now, setOf("NBA", "NFL"))
-            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = snapshot.leagues
-            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+                LiveEvent("rail-nba", setOf("nba:POR", "nba:LAL"), now - 60000, league = "NBA"),
+                LiveEvent("rail-nfl-1", setOf("nfl:SEA", "nfl:SF"), now - 60000, league = "NFL"),
+                LiveEvent("rail-nfl-2", setOf("nfl:BUF", "nfl:KC"), now - 60000, league = "NFL")
+            ), now, setOf("NFL", "NBA"))
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source); store.resetSportsLeagues()
+            val calls = java.util.concurrent.atomic.AtomicInteger()
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
             val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
                 if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
-                    activity.liveSportsLoader = { snapshot }; activity.calendarSportsLoader = { _, _ -> snapshot }
+                    activity.liveSportsLoader = { calls.incrementAndGet(); snapshot }; activity.calendarSportsLoader = { _, _ -> snapshot }
                 }
             }
             lifecycle.addLifecycleCallback(fixture)
@@ -1667,46 +1694,50 @@ class SpareDeviceTest {
                 var playing: Player? = null
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> playing = p; p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league-filter").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:all")?.hasFocus() == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true }
                 scenario.onActivity { activity ->
-                    assertNull("Disabled leagues are not filter choices", activity.window.decorView.findViewWithTag<View>("sports-league:MLB"))
+                    assertEquals("Do not fetch every league before setup", 0, calls.get())
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("sports-league-continue").isEnabled)
+                    listOf("NFL", "NBA").forEach { activity.window.decorView.findViewWithTag<View>("sports-setup:$it").performClick() }
+                    activity.window.decorView.findViewWithTag<View>("sports-league-continue").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 }
+                scenario.onActivity { activity ->
+                    assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
+                    assertNull("No mixed-league option", activity.window.decorView.findViewWithTag<View>("sports-league:all"))
+                    assertNull("Disabled leagues stay out of the rail", activity.window.decorView.findViewWithTag<View>("sports-league:MLB"))
+                    val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                    grid.findViewHolderForAdapterPosition(1)!!.itemView.requestFocus()
                     activity.window.decorView.findViewWithTag<View>("sports-league:NBA").apply { requestFocus(); performClick() }
                 }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 && it.window.decorView.findViewWithTag<View>("NBA:rail-nba")?.isShown == true }
                 scenario.onActivity { activity ->
-                    assertEquals("NBA", activity.window.decorView.findViewWithTag<android.widget.Button>("sports-league-filter").text.toString())
-                    assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
-                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus())
-                    val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView as ViewGroup
-                    val poster = card.getChildAt(0) as ViewGroup
-                    fun countImages(view: View): Int = (if (view is android.widget.ImageView) 1 else 0) + if (view is ViewGroup) (0 until view.childCount).sumOf { countImages(view.getChildAt(it)) } else 0
-                    assertEquals("The banner retains both team crests without editorial photos", 2, countImages(poster))
-                    assertNotNull(poster.findViewWithTag<View>("sports-card-score:NBA:filter-nba:0"))
-                    assertNotNull(poster.findViewWithTag<View>("sports-card-live-detail:NBA:filter-nba"))
-                    activity.window.decorView.findViewWithTag<View>("sports-live").performClick()
+                    assertEquals("NBA", store.sportsLastLeague)
+                    assertTrue("Loading cannot steal focus from the rail", activity.window.decorView.findViewWithTag<View>("sports-league:NBA").hasFocus())
+                    assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
                 }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NBA:filter-nba")?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league-filter").performClick() }
-                device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-teams").hasFocus() }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("calendar-games")?.adapter?.itemCount == 1 }
                 device.pressBack()
-                scenario.onActivity { activity ->
-                    activity.window.decorView.findViewWithTag<View>("sports-league-filter").performClick()
-                    activity.window.decorView.findViewWithTag<View>("sports-league:all").apply { requestFocus(); performClick() }
-                    activity.window.decorView.findViewWithTag<View>("sports-today").performClick()
-                }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NFL").apply { requestFocus(); performClick() } }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NFL:rail-nfl-2")?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NBA").performClick() }
+                waitFor(scenario) { store.sportsLastLeague == "NBA" && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
+                scenario.recreate()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NBA:rail-nba")?.isShown == true }
                 scenario.onActivity { activity ->
-                    assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
+                    assertFalse("Saved league choices do not reopen setup", activity.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true)
                     assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
-                    activity.window.decorView.findViewWithTag<View>("sports-league-filter").performClick()
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-league-filter.png"))
-            } } finally { lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL" }
         }
     }
 
@@ -1718,13 +1749,13 @@ class SpareDeviceTest {
             val programmes = mapOf("sports:2" to listOf(Programme("sports:2", "Yankees vs Red Sox", now - 300000, now + 3600000)),
                 "sports:3" to listOf(Programme("sports:3", "MLB: NYY @ BOS", now - 300000, now + 3600000)),
                 "sports:4" to listOf(Programme("sports:4", "NFL: Bills at Chiefs", now - 300000, now + 4 * 3600000)))
-            store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true; store.followedTeams = setOf("mlb:NYY"); store.sportsTeam = "mlb:NYY"
+            store.saveSources(listOf(source)); store.active = source.id; store.smallPreview = true; store.followedTeams = setOf("mlb:NYY"); store.sportsTeam = "mlb:NYY"; store.sportsLastLeague = "MLB"
             store.toggleFavorite(source, channels[2]); store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var samePlayer: Player? = null; scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:mlb-fixture")?.text?.let { label -> label.startsWith("ESPN") || label.startsWith("YES") } == true }
                 val entered = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
                 scenario.onActivity { activity ->
@@ -1785,8 +1816,10 @@ class SpareDeviceTest {
                     assertSame("Returning reuses the existing pane controls", retainedTile, activity.window.decorView.findViewWithTag<View>("multiview-tile:1"))
                 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("multiview-add-game").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3 }
-                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(1)!!.itemView.performClick(); activity.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NFL").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
+                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.performClick(); activity.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:sports:4")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:4").performLongClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-third")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
@@ -1822,7 +1855,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail").text.contains("Updated score") }
                 scenario.onActivity { assertTrue("A scoreboard update keeps game-card focus", it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus()); assertFalse(it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").hasFocus()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
-                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
+                device.pressDPadLeft(); device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
             }
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet()
@@ -2107,12 +2140,20 @@ class SpareDeviceTest {
                         manager.findViewWithTag<View>("settings-option:Cancel").performClick(); assertTrue("nfl:ARI" in store.followedTeams)
                         manager.findViewWithTag<View>("settings-option:Reset Sports settings").performClick(); manager.findViewWithTag<View>("settings-option:Reset Sports").performClick()
                         assertTrue(store.followedTeams.isEmpty()); assertEquals(SportsLeagues.byId.keys, store.sportsLeagues)
+                        assertFalse("Reset asks for leagues again", store.sportsLeaguesChosen)
                         assertFalse(store.sportsFollowedOnly); assertFalse(SecureStore(context).sportsAutoPlay); assertEquals(GuideFilters(), store.sportsFilters(source)); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
                         assertEquals(source.id, store.active)
                     }
                     device.pressBack(); device.pressBack()
                     waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-manager").isShown && it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true }
+                    scenario.onActivity { activity ->
+                        activity.window.decorView.findViewWithTag<View>("sports-setup:NFL").performClick()
+                        activity.window.decorView.findViewWithTag<View>("sports-league-continue").performClick()
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 9 }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-today").requestFocus() }
+                    device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
                     device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                     device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports.png"))
@@ -2404,7 +2445,7 @@ class SpareDeviceTest {
                 assertEquals("A cached Game Pass listing needs no provider lookup", 0, server.epgTargets.size)
                 device.pressBack(); waitFor(scenario) { it.currentFocus?.tag == "sports-redzone" }
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
-                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
+                device.pressDPadLeft(); device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 scenario.onActivity { activity ->
                     val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
@@ -2413,7 +2454,7 @@ class SpareDeviceTest {
                 }
                 var liveMediaId = ""
                 scenario.onActivity { liveMediaId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
-                device.pressDPadLeft(); device.pressDPadDown(); device.pressDPadCenter()
+                device.pressDPadLeft(); device.pressDPadLeft(); device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 device.pressBack(); waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && channelList(it)?.isShown == false }
                 scenario.onActivity { assertEquals("Back from Library preserves the playing stream without retuning", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
@@ -3629,7 +3670,7 @@ class SpareDeviceTest {
             val filler = (1000..26999).map { Channel("xc:$it", "Local news $it", "News", "${first.base}/unused$it.mp4") }
             val video = Channel("xc:9", "Boston Celtics FHD", "NBA Teams", "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 0f))
             val listing = Programme(radio.id, "NBA: Bucks at Celtics", now - 1000, now + 3600000)
-            store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id
+            store.sportsLastLeague = "NBA"; store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id
             store.cache(a, Guide(listOf(news, radio) + generic + filler, mapOf(radio.id to listOf(listing)))); store.cache(b, Guide(listOf(video), emptyMap()))
             listOf(a, b).forEach(store::markPlaylistRefreshed)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->

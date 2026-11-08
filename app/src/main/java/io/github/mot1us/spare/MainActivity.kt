@@ -303,7 +303,7 @@ class MainActivity : Activity() {
                 ?.let { publishSportsSchedule(it, day, request, cached = true) }
         }
         val followed = if (liveSportsTeamScope in setOf("today", "live")) emptySet() else store.followedTeams + listOfNotNull(liveSportsTeamScope?.takeIf { it in SportsCatalog.byId })
-        SportsSchedule.load(followed, requestedDate = day, enabledLeagues = store.sportsLeagues,
+        SportsSchedule.load(followed, requestedDate = day, enabledLeagues = store.sportsLeagues, priorityLeague = sportsBrowseLeague,
             partial = { publishSportsSchedule(it, day, request) }).also { snapshot ->
             if (snapshot.leagues.isNotEmpty() && !closed) sportsScheduleDisk.execute { runCatching { store.write(file, SportsSchedule.json(snapshot).toString().toByteArray()) } }
         }
@@ -908,7 +908,7 @@ class MainActivity : Activity() {
             val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
-        sportsPanel.chooseLeague = ::openSportsLeaguePicker
+        sportsPanel.leagueSelected = ::selectSportsLeague
         sportsPanel.cardsReady = { queueSportsPrefetch(); syncReplayDiscovery() }
         sportsPanel.scorePresentation = ::presentScore
         sportsPanel.streamSource = ::owner; sportsPanel.streamFavorites = { favorites }
@@ -1168,7 +1168,10 @@ class MainActivity : Activity() {
         scoreStrip.submit(games, watchingSports?.game?.key, liveSportsChecking || liveSportsDay != null, store.hideCompletedScores)
     }
     private fun switchMode(sports: Boolean) {
-        clearGuideSearch(); sportsVisible = sports; if (sports) sportsPanel.loading("Finding live games…"); applyFilter(); showGuide(true)
+        clearGuideSearch(); sportsVisible = sports
+        if (sports) { ensureSportsLeague(); sportsPanel.loading("Finding live games…") }
+        applyFilter(); showGuide(true)
+        if (sports && !store.sportsLeaguesChosen) openSportsLeaguePicker()
     }
     private fun moveTime(channel: Channel?, amount: Int) {
         channel ?: return
@@ -1749,7 +1752,7 @@ class MainActivity : Activity() {
             timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "← Main navigation    OK Select game    Hold Back Full screen"
+            remoteHint.text = if (sportsVisible) "← Leagues    OK Select game    Hold Back Full screen"
                 else "← Earlier / categories    → Later on this channel    Back Categories, then main menu    Hold Back Full screen    Hold OK Favorite"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }
@@ -2034,6 +2037,7 @@ class MainActivity : Activity() {
         gameWatchPanel.dismiss(); clearSportsPlayback(); sportsPanel.back(); sportsVisible = reminderWatchReturnSports
     }
     private fun checkLiveSports(force: Boolean = false) {
+        if (!store.sportsLeaguesChosen) return
         val now = System.currentTimeMillis()
         val scope = if (sportsVisible && guideVisible) sportsTeam else "live"
         val day = SportsSchedule.selectedDate(scope)
@@ -2056,7 +2060,8 @@ class MainActivity : Activity() {
         if (!sportsRenderPending) { sportsRenderPending = true; handler.postDelayed(renderSports, 120) }
     }
     private fun refreshSports() {
-        if (!sportsVisible || !guideVisible || !started || closed) return
+        if (!sportsVisible || !guideVisible || !started || closed || !store.sportsLeaguesChosen) return
+        ensureSportsLeague()
         rememberScores(liveSports)
         if (sportsComputing) { sportsDirty = true; return }
         checkLiveSports(); handler.removeCallbacks(pollLiveSports); handler.postDelayed(pollLiveSports, 60000)
@@ -2081,7 +2086,7 @@ class MainActivity : Activity() {
                 if (liveSnapshot !== liveSports || selectedTeam != sportsTeam || selectedLeague != sportsBrowseLeague) { sportsDirty = false; scheduleSports(); return@post }
                 val browsing = sportsPanel.browsingGames
                 if (browsing) selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
-                val scanning = checkingSnapshot
+                val scanning = checkingSnapshot && selectedLeague !in liveSnapshot.leagues
                 val progress = when {
                     scanning -> "Updating sports…"
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
@@ -2124,16 +2129,31 @@ class MainActivity : Activity() {
             if (!Thread.currentThread().isInterrupted) handler.post { if (!closed && generation == sourceEpoch && epoch == sportsEpoch && sportsVisible) sportsPanel.updateRedZone(redZone, quality) }
         }
     }
-    private fun openSportsLeaguePicker() {
-        val picker = sportsLeaguePicker ?: SportsLeaguePicker(this, ::button, { league ->
-            sportsBrowseLeague = league
-            sportsLeaguePicker?.visibility = View.GONE
-            sportsPanel.setLeagueFilter(league); sportsPanel.resetLeagueBrowse()
-            scheduleSports()
-        }, ::closeSportsLeaguePicker).also { sportsLeaguePicker = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
-        root.bringChildToFront(picker); picker.open(store.sportsLeagues, sportsBrowseLeague)
+    private fun ensureSportsLeague(): String {
+        if (sportsBrowseLeague !in store.sportsLeagues) sportsBrowseLeague = store.sportsLastLeague
+        sportsPanel.setAvailableLeagues(store.sportsLeagues)
+        sportsPanel.setLeagueFilter(sportsBrowseLeague)
+        return sportsBrowseLeague!!
     }
-    private fun closeSportsLeaguePicker() { sportsLeaguePicker?.visibility = View.GONE; sportsPanel.focusLeagueFilter() }
+    private fun selectSportsLeague(league: String) {
+        if (league !in store.sportsLeagues || league == sportsBrowseLeague) return
+        // Browsing another league preserves the current stream's recovery plan.
+        stopSportsPrefetch(); ++sportsMatchEpoch; sportsMatchTask?.cancel(true)
+        sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsUpgradeKeys = emptySet(); replayDiscovery?.pause()
+        ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
+        sportsBrowseLeague = league; store.sportsLastLeague = league
+        sportsPanel.setLeagueFilter(league); scheduleSports()
+        if (league !in liveSports.leagues) checkLiveSports(force = true)
+    }
+    private fun openSportsLeaguePicker() {
+        val picker = sportsLeaguePicker ?: SportsLeaguePicker(this, ::button, { leagues ->
+            store.sportsLeagues = leagues; sportsBrowseLeague = store.sportsLastLeague
+            sportsLeaguePicker?.visibility = View.GONE; ensureSportsLeague()
+            sportsPanel.focusLeagueFilter(); checkLiveSports(force = true); scheduleSports()
+        }, ::closeSportsLeaguePicker).also { sportsLeaguePicker = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        root.bringChildToFront(picker); picker.open(if (store.sportsLeaguesChosen) store.sportsLeagues else emptySet())
+    }
+    private fun closeSportsLeaguePicker() { sportsLeaguePicker?.visibility = View.GONE; if (!store.sportsLeaguesChosen) switchMode(false) else sportsPanel.focusLeagueFilter() }
     private fun openSportsCalendar() {
         suspendSportsOverlay()
         showGuide(false); nowPlaying.hide(immediate = true)
@@ -2152,7 +2172,7 @@ class MainActivity : Activity() {
     }
     private fun calendarGames(snapshot: LiveSportsSnapshot, day: java.time.LocalDate) = SportsSchedule.games(snapshot, Guide.EMPTY, "date:$day", emptySet(), System.currentTimeMillis(), matchChannels = false)
         .filter { it.leagueId in store.sportsLeagues && (sportsBrowseLeague == null || it.leagueId == sportsBrowseLeague) && (!store.sportsFollowedOnly || it.teams.any { team -> team.id in store.followedTeams }) }
-    private fun previewCalendarDate(day: java.time.LocalDate, force: Boolean) { calendarSchedule?.request(day, store.sportsLeagues, liveSports, force) }
+    private fun previewCalendarDate(day: java.time.LocalDate, force: Boolean) { calendarSchedule?.request(day, setOf(ensureSportsLeague()), liveSports, force) }
     private fun selectCalendarGame(day: java.time.LocalDate, game: SportsGame) {
         sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty()
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
@@ -2216,7 +2236,7 @@ class MainActivity : Activity() {
             panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); panel.refresh("Hide completed-game scores") }
             panel.action("Score delay", delayLabel(store.sportsScoreDelay) + " default · Optional current-channel override") { panel.selectSetting("Score delay") }
             panel.note("NFL RedZone appears whenever NFL is enabled. Its availability follows your playlist provider; it is not a scheduled matchup.")
-            panel.action("Reset Sports settings", "Clear teams and reminders, enable all leagues and restore Sports defaults") { confirmSportsReset() }
+            panel.action("Reset Sports settings", "Clear teams and reminders, choose leagues again and restore Sports defaults") { confirmSportsReset() }
             panel.note("Saved reminders")
             if (reminders.events.isEmpty()) panel.note("Choose an upcoming game to set a reminder.")
             reminders.events.forEach { event ->
@@ -2247,24 +2267,24 @@ class MainActivity : Activity() {
     }
     private fun confirmSportsReset() {
         val panel = sportsManager ?: return
-        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, enables every league, turns off My teams only and automatic playback, resets this playlist’s stream quality, and hides completed scores. Sports will open on Today.")
+        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, asks you to choose leagues again, turns off My teams only and automatic playback, resets this playlist’s stream quality, and hides completed scores. Sports will open on Today.")
         panel.action("Cancel") { panel.refresh("Reset Sports settings") }
         panel.action("Reset Sports") {
             store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; scoreStripOpen = false; cancelScoreTune(); scoreStrip.suspend()
             store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.hideCompletedScores = true; store.sportsTeam = "today"; store.resetScoreDelays(); scoreDelayChanged()
             saveSportsFilters(GuideFilters())
-            sportsBrowseLeague = null; sportsPanel.setLeagueFilter(null)
+            store.resetSportsLeagues(); sportsBrowseLeague = null
             sportsTeam = "today"; reminders = GameReminders(); saveGameReminders(); reminderPending = null; dismissGameReminder()
-            sportsPanel.setSpoilers(true); sportsPanel.home(); sportsPreferencesChanged = true
+            sportsPanel.setSpoilers(true); sportsPanel.resetLeagueBrowse(); sportsPanel.home(); sportsPreferencesChanged = true
             panel.refresh("Reset Sports settings"); toast("Sports settings reset")
         }
         panel.focusOption("Cancel")
     }
     private fun closeSportsManager() {
         sportsManager?.visibility = View.GONE
-        if (sportsPreferencesChanged) { sportsPreferencesChanged = false; liveSportsAttempt = 0; checkLiveSports(force = true); scheduleSports() }
+        if (sportsPreferencesChanged) { sportsPreferencesChanged = false; ensureSportsLeague(); liveSportsAttempt = 0; checkLiveSports(force = true); scheduleSports() }
         if (sportsManagerReturnSettings) { settingsPanel?.visibility = View.VISIBLE; settingsPanel?.let { root.bringChildToFront(it); it.selectSetting("Sports") } }
-        else { showGuide(sportsManagerReturnGuide); if (sportsVisible && guideVisible) sportsPanel.teamsButton.requestFocus() }
+        else { showGuide(sportsManagerReturnGuide); if (sportsVisible && guideVisible) { if (!store.sportsLeaguesChosen) openSportsLeaguePicker() else sportsPanel.teamsButton.requestFocus() } }
     }
     private fun showGameInfo(game: SportsGame) {
         if (redZoneAutoPending && !sportsPanel.redZoneFocused) { redZoneAutoPending = false; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); sportsPanel.finishTuning() }

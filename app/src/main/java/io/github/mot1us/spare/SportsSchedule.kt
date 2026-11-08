@@ -37,11 +37,11 @@ object SportsSchedule {
         val last = day.plusDays(1).atStartOfDay(zone).minusNanos(1).withZoneSameInstant(eastern).toLocalDate()
         return generateSequence(first) { it.plusDays(1) }.takeWhile { !it.isAfter(last) }.toList()
     }
-    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = ::fetch, calendarOnly: Boolean = false): LiveSportsSnapshot {
+    fun load(followed: Set<String>, requestedDate: java.time.LocalDate? = null, partial: (LiveSportsSnapshot) -> Unit = {}, enabledLeagues: Set<String> = SportsLeagues.byId.keys, get: (String) -> String = ::fetch, calendarOnly: Boolean = false, priorityLeague: String? = null): LiveSportsSnapshot {
         val now = System.currentTimeMillis(); val date = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
         val events = linkedMapOf<String, LiveEvent>(); val leagues = mutableSetOf<String>()
         val urls = mutableListOf<Pair<String, String>>()
-        val enabled = SportsLeagues.all.filter { it.id in enabledLeagues }
+        val enabled = SportsLeagues.all.filter { it.id in enabledLeagues }.sortedBy { if (it.id == priorityLeague) 0 else 1 }
         if (requestedDate != null) {
             (if (calendarOnly) calendarDates(requestedDate) else listOf(requestedDate, requestedDate.minusDays(1), requestedDate.plusDays(1))).forEach { day -> enabled.forEach { league ->
                 urls.addAll(league.scoreboards(day).map { league.id to it })

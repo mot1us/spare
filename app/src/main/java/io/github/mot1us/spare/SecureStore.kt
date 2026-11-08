@@ -277,6 +277,12 @@ class SecureStore(private val context: Context) {
     var sportsLeagues: Set<String>
         get() = preferences.getStringSet("sports-leagues", SportsLeagues.byId.keys).orEmpty().filter { it in SportsLeagues.byId }.toSet().ifEmpty { SportsLeagues.byId.keys }
         set(value) { val valid = value.filter { it in SportsLeagues.byId }.toSet(); require(valid.isNotEmpty()); preferences.edit { putStringSet("sports-leagues", valid) } }
+    val sportsLeaguesChosen get() = preferences.contains("sports-leagues")
+    var sportsLastLeague: String
+        get() = preferences.getString("sports-last-league", null)?.takeIf { it in sportsLeagues }
+            ?: SportsLeagues.all.first { it.id in sportsLeagues }.id
+        set(value) { require(value in sportsLeagues); preferences.edit { putString("sports-last-league", value) } }
+    fun resetSportsLeagues() { preferences.edit { remove("sports-leagues"); remove("sports-last-league") } }
     var sportsScoreDelay: Int
         get() = preferences.getInt("sports-score-delay", 0).coerceIn(0, SportsScoreDelay.MAX_SECONDS)
         set(value) { preferences.edit { putInt("sports-score-delay", value.coerceIn(0, SportsScoreDelay.MAX_SECONDS)) } }
