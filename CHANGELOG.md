@@ -2,6 +2,8 @@
 
 ## 0.32.0 — 2026-11-08
 
+- Use startup/playback/storage smoke checks plus explicitly selected feature checks for routine releases. Keep the full TV suite for higher-risk changes, manual runs and weekly checks; log each active test. Signing and update-install verification stay required.
+
 - Choose leagues on the first Sports visit before loading scoreboards. Preserve existing choices and browse one league at a time using a left rail; Today, Live and Calendar follow that league. Remember the last league and each league’s card position, with direct remote access to top controls.
 - Restore large, smooth team logos on game cards. Keep both team names readable and move score, status and game clock into one compact bottom line.
 - Give playlist fields explicit D-pad and keyboard Next/Done navigation, including username-to-password focus. Add an optional Show password control without changing provider URLs or HTTP consent.

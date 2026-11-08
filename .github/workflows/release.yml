@@ -3,12 +3,18 @@ on:
   push:
     branches: [main]
     paths: [release-request.json]
+  schedule:
+    - cron: '17 9 * * 1'
   workflow_dispatch:
     inputs:
       publish:
         description: Publish a signed, versioned APK after all checks
         type: boolean
         default: false
+      full_tv:
+        description: Run the full TV suite instead of the requested focused checks
+        type: boolean
+        default: true
       prerelease:
         description: Keep outside stable updates until hardware testing passes
         type: boolean
@@ -29,6 +35,8 @@ jobs:
     outputs:
       publish: ${{ steps.request.outputs.publish }}
       macos: ${{ steps.request.outputs.macos }}
+      verify: ${{ steps.request.outputs.verify }}
+      tv_suite: ${{ steps.request.outputs.tv_suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: request
@@ -36,17 +44,27 @@ jobs:
         env:
           MANUAL_PUBLISH: ${{ inputs.publish }}
           MANUAL_MACOS: ${{ inputs.macos }}
+          MANUAL_FULL_TV: ${{ inputs.full_tv }}
         run: |
           python3 - <<'PYTHON'
-          import json, os
+          import json, os, runpy
           from pathlib import Path
           tracked = dict(line.split('=', 1) for line in Path('version.properties').read_text().splitlines() if '=' in line)
           request = json.loads(Path('release-request.json').read_text())
-          if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch':
+          event = os.environ['GITHUB_EVENT_NAME']
+          if event == 'workflow_dispatch':
               publish = os.environ.get('MANUAL_PUBLISH') == 'true'
+          elif event == 'schedule':
+              publish = False
           else:
               publish = request['versionName'] == tracked['versionName'] and request['versionCode'] == int(tracked['versionCode'])
+          verify = publish or event in ('schedule', 'workflow_dispatch')
+          suite = 'full' if event == 'schedule' or os.environ.get('MANUAL_FULL_TV') == 'true' else request.get('tvSuite', 'full')
+          _, count = runpy.run_path('scripts/tv_tests.py')['select'](suite, request)
+          print(f'TV gate: {suite} ({count} checks)')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('verify=' + str(verify).lower() + '\n')
+              output.write('tv_suite=' + suite + '\n')
               output.write('publish=' + str(publish).lower() + '\n')
               macos = os.environ.get('MANUAL_MACOS') == 'true' if os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' else bool(request.get('macos', False))
               output.write('macos=' + str(publish and macos).lower() + '\n')
@@ -54,7 +72,7 @@ jobs:
           PYTHON
   build:
     needs: request
-    if: needs.request.outputs.publish == 'true'
+    if: needs.request.outputs.verify == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,9 +112,11 @@ jobs:
             dist/macos/*.tar.xz
             dist/macos/MACOS-SHA256SUMS
   device:
-    needs: build
+    needs: [build, request]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: ${{ needs.request.outputs.tv_suite == 'full' && 45 || 20 }}
+    env:
+      SPARE_TV_SUITE: ${{ needs.request.outputs.tv_suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
