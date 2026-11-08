@@ -1131,6 +1131,7 @@ class MainActivity : Activity() {
     }
     private fun selectOverlayGame(game: SportsGame) {
         if (game.state == "post") {
+            selectSportsLeague(game.leagueId)
             suspendSportsOverlay(); sportsVisible = true; clearGuideSearch(); applyFilter(); showGuide(true)
             showGameInfo(game); sportsPanel.openGameActions(game)
         } else {

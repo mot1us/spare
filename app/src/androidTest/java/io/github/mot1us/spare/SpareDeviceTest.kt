@@ -3786,6 +3786,7 @@ class SpareDeviceTest {
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final")?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("score-game:NBA:overlay-final").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-actions")?.isShown == true && it.window.decorView.findViewWithTag<TextView>("sports-hero-badge")?.text.toString().contains("FINAL") }
+                scenario.onActivity { assertEquals("Overlay details open in the game's league", "NBA", store.sportsLastLeague) }
                 scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player); assertTrue(player!!.isPlaying) }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-overlay-final.png"))
             } } finally { store.scoreOverlayPinned = false; store.saveSources(emptyList()); store.removeCache(source) }
