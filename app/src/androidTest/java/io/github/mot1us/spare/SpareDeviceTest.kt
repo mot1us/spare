@@ -2793,8 +2793,9 @@ class SpareDeviceTest {
                 assertEquals(liveAttempt, playingPath(scenario))
                 scenario.onActivity { assertEquals("Closing the Catch-up browser must preserve the live connection", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
                 device.pressMenu(); setThemeControl(scenario, "Type", "Font", "Monospace")
-                waitFor(scenario) { store.font == "Monospace" && it.window.decorView.findViewWithTag<TextView>("settings-page-title").typeface == AppFont.face(true) }
-                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(AppFont.face(true), it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface) }
+                val selectedFont = AppFont.faceFor("Monospace", true)
+                waitFor(scenario) { store.font == "Monospace" && it.window.decorView.findViewWithTag<TextView>("settings-page-title").typeface == selectedFont }
+                scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); assertEquals(selectedFont, it.window.decorView.findViewWithTag<android.widget.TextView>("settings-page-title").typeface) }
                 leaveSettings(scenario)
                 scenario.recreate(); waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 assertEquals("Monospace", store.font)
