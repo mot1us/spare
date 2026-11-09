@@ -3864,6 +3864,62 @@ class SpareDeviceTest {
         return null
     }
 
+    /** Invoked only by the release smoke runner against the separately installed minified APK. */
+    fun releaseArtifactSmoke() {
+        val releasePackage = "io.github.mot1us.spare"
+        fun button(text: String) = device.wait(Until.findObject(By.pkg(releasePackage).text(text)), 8000)
+            ?: error("Could not find $text in release app")
+        FixtureServer().use { server ->
+            val launch = device.executeShellCommand("am start -W -n $releasePackage/.MainActivity")
+            assertTrue(launch, launch.contains("Status: ok"))
+            assertTrue(device.wait(Until.hasObject(By.pkg(releasePackage)), 10000))
+            device.pressMenu()
+            button("Add playlist").click()
+            val fields = device.wait(Until.findObjects(By.pkg(releasePackage).clazz(EditText::class.java)), 8000)
+            check(fields != null && fields.size >= 2) { "Playlist URL field is missing" }
+            val playlist = "${server.base}/playlist.m3u"
+            fields[1].text = playlist
+            assertEquals("Playlist URL entry", playlist, fields[1].text)
+            val consent = button("Allow HTTP-only links from this provider")
+            consent.click()
+            if (!consent.isChecked) {
+                assertTrue("Focus reached HTTP consent", consent.isFocused)
+                device.pressDPadCenter()
+            }
+            assertTrue("Fixture requires explicit HTTP consent", consent.isChecked)
+            device.pressDPadDown()
+            assertTrue("Focus reached Save", button("Save").isFocused)
+            device.pressDPadCenter()
+            val firstChannel = By.pkg(releasePackage).descStartsWith("Test Channel 1.")
+            val playbackDeadline = android.os.SystemClock.elapsedRealtime() + 20000
+            var selectedChannel = false
+            while (server.requests["/channel1.mp4"] == null && android.os.SystemClock.elapsedRealtime() < playbackDeadline) {
+                if (!selectedChannel) {
+                    device.findObject(firstChannel)?.let { channel -> channel.click(); selectedChannel = true }
+                }
+                Thread.sleep(100)
+            }
+            assertNotNull("The minified app must request the fixture video; requests: ${server.requests.keys.sorted()}", server.requests["/channel1.mp4"])
+            device.pressMenu()
+            button("Playback").click()
+            val diagnostics = device.wait(Until.findObject(By.pkg(releasePackage).desc("Playback diagnostics")), 8000)
+                ?: error("Could not find Playback diagnostics in release app")
+            diagnostics.click()
+            val refresh = By.pkg(releasePackage).desc("Refresh diagnostics")
+            if (!device.wait(Until.hasObject(refresh), 1000)) {
+                assertTrue("Focus reached Playback diagnostics", diagnostics.isFocused)
+                device.pressDPadCenter()
+            }
+            val frame = By.pkg(releasePackage).textContains(" · first frame · ")
+            assertTrue("Playback diagnostics opened", device.wait(Until.hasObject(refresh), 5000))
+            if (!device.hasObject(frame)) {
+                device.findObject(By.pkg(releasePackage).scrollable(true).hasDescendant(refresh))
+                    ?.scroll(androidx.test.uiautomator.Direction.DOWN, 0.75f)
+            }
+            assertTrue("The minified app must render a video frame", device.hasObject(frame))
+        }
+    }
+
     private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"

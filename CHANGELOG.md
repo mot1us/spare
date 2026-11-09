@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.4 — 2026-11-08
+
+- Verify import and video playback on the minified APK before publishing a release.
+
 ## 0.32.3 — 2026-11-08
 
 - Reduce memory use while importing large M3U playlists and downloading app updates.

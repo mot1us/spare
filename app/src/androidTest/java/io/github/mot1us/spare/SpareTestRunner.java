@@ -11,8 +11,25 @@ import java.io.FileOutputStream;
 /** A self-reinstall intentionally kills this instrumentation; the shell verifies return to Spare. */
 public class SpareTestRunner extends AndroidJUnitRunner {
     private boolean installSmoke;
-    @Override public void onCreate(Bundle args) { installSmoke = "true".equals(args.getString("installSmoke")); super.onCreate(args); }
+    private boolean releaseSmoke;
+    @Override public void onCreate(Bundle args) {
+        installSmoke = "true".equals(args.getString("installSmoke"));
+        releaseSmoke = "true".equals(args.getString("releaseSmoke"));
+        super.onCreate(args);
+    }
     @Override public void onStart() {
+        if (releaseSmoke) {
+            Bundle result = new Bundle();
+            try {
+                new SpareDeviceTest().releaseArtifactSmoke();
+                result.putString("releaseSmoke", "passed");
+                finish(android.app.Activity.RESULT_OK, result);
+            } catch (Exception | AssertionError failure) {
+                result.putString("failure", android.util.Log.getStackTraceString(failure));
+                finish(android.app.Activity.RESULT_CANCELED, result);
+            }
+            return;
+        }
         if (!installSmoke) { super.onStart(); return; }
         try {
             Context app = getTargetContext();
