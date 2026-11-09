@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.speech.RecognizerIntent
 import android.widget.CheckBox
+import android.widget.ImageView
 import android.widget.EditText
 import android.widget.TextView
 import android.view.View
@@ -1903,6 +1904,65 @@ class SpareDeviceTest {
                 device.pressDPadDown(); device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
             }
             store.saveSources(emptyList()); store.removeCache(source); store.followedTeams = emptySet()
+        }
+    }
+
+    @Test fun activityMemoryTrimKeepsVisibleSportsCardsAndReloadsOnReturn() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Trim fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val stamp = System.nanoTime()
+            val logos = mapOf("nfl:SEA" to "https://fixture.invalid/$stamp-sea.png", "nfl:SF" to "https://fixture.invalid/$stamp-sf.png")
+            val bytes = ByteArrayOutputStream().also { output ->
+                Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888).apply {
+                    eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, output); recycle()
+                }
+            }.toByteArray()
+            val files = ArtworkFiles(context)
+            logos.values.forEach { url -> files.bytes(url) { bytes } }
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL")
+            val now = System.currentTimeMillis()
+            val event = LiveEvent("trim-game", logos.keys, now - 60_000, league = "NFL", logos = logos)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { LiveSportsSnapshot(listOf(event), now, setOf("NFL")) }
+                }
+            }
+            fun cardBitmaps(activity: MainActivity): List<Bitmap> {
+                val banner = activity.window.decorView.findViewWithTag<ViewGroup>("sports-card-banner:NFL:trim-game")
+                if (banner?.isShown != true) return emptyList()
+                val crests = banner.getChildAt(0) as ViewGroup
+                return (0 until crests.childCount).mapNotNull { index ->
+                    ((crests.getChildAt(index) as ImageView).drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) {
+                        find<PlayerView>(it.window.decorView)?.player?.let { player ->
+                            player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying
+                        } == true
+                    }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { cardBitmaps(it).size == 2 }
+                    scenario.onActivity { activity ->
+                        val before = cardBitmaps(activity)
+                        activity.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+                        val after = cardBitmaps(activity)
+                        assertEquals(2, after.size)
+                        before.zip(after).forEach { (old, current) -> assertSame(old, current); assertFalse(current.isRecycled) }
+                        activity.window.decorView.findViewWithTag<View>("guide-mode").performClick()
+                    }
+                    waitFor(scenario) { channelList(it)?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { cardBitmaps(it).size == 2 }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
         }
     }
 

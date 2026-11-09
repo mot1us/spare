@@ -45,6 +45,7 @@ class RecentChannels(context: Context, private val watch: (Channel) -> Unit, pri
     }
     fun resume() { images.resume(); val previous = shown; shown = emptyList(); bind(previous, http) }
     fun pause() { images.pause() }
+    fun trim() = images.trim()
     fun close() { images.close() }
     fun appearance() { val focused = findFocus()?.tag; val previous = shown; shown = emptyList(); bind(previous, http); AppFont.apply(this); if (focused != null) findViewWithTag<View>(focused)?.requestFocus() }
     fun focusFirst() { shown.firstOrNull()?.let { findViewWithTag<View>("recent-watch:${it.id}")?.requestFocus() } }

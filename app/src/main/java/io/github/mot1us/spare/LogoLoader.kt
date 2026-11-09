@@ -179,6 +179,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     fun unavailable(url: String): Boolean = failed[url]?.let { SystemClock.uptimeMillis() < it.until } ?: false
     fun prefetch(url: String, http: Boolean = false) { get(url, http) {} }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
+    fun trim() { cache.evictAll() }
     fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }
     fun resume() { paused = false }
     fun close() { clearBindings(); closed = true; workers.shutdownNow(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false; cache.evictAll() }

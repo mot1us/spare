@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.9 — 2026-11-09
+
+- Release cached artwork when Android asks Spare to trim background memory.
+
 ## 0.32.8 — 2026-11-09
 
 - Exclude M3U parsing time from the playlist download deadline.

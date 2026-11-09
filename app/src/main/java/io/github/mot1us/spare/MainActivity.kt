@@ -3409,6 +3409,17 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() { scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        if (::logos.isInitialized) logos.trim()
+        if (::programmeArtwork.isInitialized) programmeArtwork.trim()
+        if (::details.isInitialized) details.trimImages()
+        if (::scoreStrip.isInitialized) scoreStrip.trimImages()
+        if (::sportsPanel.isInitialized) sportsPanel.trimImages()
+        if (::library.isInitialized) library.panel.trimImages()
+    }
+
     override fun onDestroy() {
         if (::scoreStrip.isInitialized) scoreStrip.closeImages()
         if (::playlistSearch.isInitialized) playlistSearch.close()

@@ -22,5 +22,6 @@ class ProgrammeArtwork(private val image: ImageView) {
     }
     fun pause() { key = ""; task?.let(handler::removeCallbacks); pictures.pause() }
     fun resume() { pictures.resume() }
+    fun trim() = pictures.trim()
     fun close() { handler.removeCallbacksAndMessages(null); pictures.close() }
 }

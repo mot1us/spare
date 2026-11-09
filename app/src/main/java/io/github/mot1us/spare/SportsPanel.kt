@@ -808,6 +808,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     @SuppressLint("NotifyDataSetChanged") fun refreshTheme() { hero.background = GuideTheme.glass(resources.displayMetrics.density); cards.notifyDataSetChanged(); streamAdapter.notifyDataSetChanged(); featured?.let(::showHero) }
     fun pauseImages() { closeSchedule(restoreFocus = false); ++cardsRequest; removeCallbacks(settleGameFocus); gridFocus.cancel(); channelLogos.pause(); ++focusEpoch; removeCallbacks(loadHeroArt); artwork.pause(); logos.pause(); pictures.pause(); cardLogos.pause() }
     fun resumeImages() { channelLogos.resume(); refreshStreamLabels(); artwork.resume(); logos.resume(); pictures.resume(); cardLogos.resume(); redrawVisiblePosters(); featured?.let { showHero(it); if (!artworkHidden(it)) artwork.request(it) } }
+    fun trimImages() {
+        logos.trim()
+        cardLogos.trim()
+        pictures.trim()
+        channelLogos.trim()
+    }
     fun closeImages() { cardsClosed = true; ++cardsRequest; cardDiffWorker.shutdownNow(); removeCallbacks(settleGameFocus); gridFocus.cancel(); channelLogos.close(); removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close() }
     private fun fadeArtwork(view: ImageView, opacity: Float = 1f) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(opacity).setDuration(160).start() }
     private fun bindCrest(loader: LogoLoader, view: ImageView, url: String, opacity: Float = 1f) {

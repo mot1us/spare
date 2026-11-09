@@ -104,6 +104,7 @@ class PlaybackDetails(
     val checkingVod get() = vodChecking.isVisible && vodProgress.isVisible
     fun resumeImages() = recent.resume()
     fun pauseImages() = recent.pause()
+    fun trimImages() = recent.trim()
     fun closeImages() = recent.close()
     fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); vodProgress.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent); recent.appearance(); AppFont.apply(this); refreshIcons() }
     fun update(current: Channel, programme: Programme?, upcoming: Programme?, quality: String, isFavorite: Boolean, canRecall: Boolean, canCatchup: Boolean, recentChannels: List<Channel> = emptyList(), allowHttp: Boolean = false, gameTitle: String? = null, canVodStart: Boolean = false, vodTarget: String = "", checkingVod: Boolean = false, vodMessage: String = "") {

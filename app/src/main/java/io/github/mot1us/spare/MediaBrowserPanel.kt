@@ -447,6 +447,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); ++focusEpoch; pending = null; images.pause() }
     fun resumeImages() { images.resume() }
+    fun trimImages() = images.trim()
     fun closeImages() { images.close() }
     private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box) { var generation = 0; var posterIdentity = "" }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)

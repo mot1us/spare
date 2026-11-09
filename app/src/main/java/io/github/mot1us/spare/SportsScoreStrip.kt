@@ -143,6 +143,7 @@ class SportsScoreStrip(context: Context, button: (String, () -> Unit) -> Button,
     }
     fun tuning(key: String?, text: String = "") { val previous = busy; busy = key; message = text; games.forEachIndexed { i, game -> if (game.key == key || game.key == previous) rows.adapter?.notifyItemChanged(i) }; armIdle() }
     fun appearance() { background = GuideTheme.glass(resources.displayMetrics.density); AppFont.apply(this); rows.adapter?.notifyItemRangeChanged(0, games.size) }
+    fun trimImages() = logos.trim()
     fun closeImages() { removeCallbacks(idle); logos.close() }
     companion object {
         fun todayGames(snapshot: LiveSportsSnapshot, leagues: Set<String>, followed: Set<String>, now: Long): List<SportsGame> =
