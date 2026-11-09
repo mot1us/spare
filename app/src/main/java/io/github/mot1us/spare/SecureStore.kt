@@ -103,15 +103,11 @@ class SecureStore(private val context: Context) {
         synchronized(cacheLock) {
             if (!providerCurrent(source)) return
 
-            writeEncrypted("lineup-${source.id}.enc") { output ->
-                val writer = output.writer(Charsets.UTF_8).buffered(16384)
-                GuideDisk.writeLineup(writer, guide)
-                writer.flush()
+        write("lineup-${source.id}.enc", guide.copy(programmes = emptyMap()).json().toString().toByteArray())
+        preferences.edit { putBoolean("epg-mapping-${source.id}", true) }
+        if (guide.channels.isNotEmpty() && guide.channels.all { it.archiveMetadataKnown }) preferences.edit { putBoolean("archive-metadata-${source.id}", true) }
+        if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
             }
-            preferences.edit { putBoolean("epg-mapping-${source.id}", true) }
-            if (guide.channels.isNotEmpty() && guide.channels.all { it.archiveMetadataKnown }) preferences.edit { putBoolean("archive-metadata-${source.id}", true) }
-            if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
-        }
     }
     fun archiveMetadataReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("archive-metadata-${source.id}", false)
     fun markArchiveMetadataAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("archive-metadata-${source.id}", true) } }

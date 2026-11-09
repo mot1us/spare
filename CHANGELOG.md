@@ -2,7 +2,7 @@
 
 ## 0.32.8 — 2026-11-09
 
-- Keep M3U parsing separate from the download timeout and reduce memory use when saving large channel lineups.
+- Exclude M3U parsing time from the playlist download deadline.
 
 ## 0.32.7 — 2026-11-08
 
