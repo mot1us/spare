@@ -13,8 +13,21 @@ class ImportersTest {
         "<programme channel=\"$channel\" start=\"20261024110000 +0000\" stop=\"20261024130000 +0000\"><title>$title</title><desc>Details</desc></programme>"
     private fun reject(task: () -> Unit) { try { task(); fail("Unsafe input accepted") } catch (_: IllegalArgumentException) { } }
 
+    private fun playlist(text: String, http: Boolean): Lineup {
+        val streamed = text.toByteArray(Charsets.UTF_8).inputStream().bufferedReader(Charsets.UTF_8).use { Importers.m3u(it, http) }
+        assertEquals(Importers.m3u(text, http), streamed)
+        return streamed
+    }
+
+    @Test fun streamingPlaylistHandlesCrLfAcrossBufferBoundaryAndBareCr() {
+        val prefix = " \uFEFF\r\n#EXTM3U\r\n"
+        val comment = "#".padEnd(8191 - prefix.length, 'x')
+        val lineup = playlist(prefix + comment + "\r\n#EXTINF:-1,Canal Éclair\rhttps://example.com/stream", false)
+        assertEquals("Canal Éclair", lineup.channels.single().name)
+    }
+
     @Test fun m3uPreservesQuotedCommasAndProviderOrder() {
-        val result = Importers.m3u("""
+        val result = playlist("""
             #EXTM3U x-tvg-url="https://guide.example/epg.xml"
             #EXTINF:-1 tvg-id="one" tvg-name="A, B" group-title="News, World" tvg-logo="https://images.example/logo.png",Channel, One
             https://stream.example/one.m3u8
@@ -28,8 +41,8 @@ class ImportersTest {
     }
     @Test fun m3uRequiresExplicitHttpConsent() {
         val text = "#EXTM3U\n#EXTINF:-1,One\nhttp://example.com/1\n"
-        reject { Importers.m3u(text, false) }
-        assertEquals(1, Importers.m3u(text, true).channels.size)
+        reject { playlist(text, false) }
+        assertEquals(1, playlist(text, true).channels.size)
     }
     @Test fun rejectsLocalAndExecutableSchemes() {
         listOf("file:///private/source", "content://x", "javascript:alert(1)", "data:text/plain,x", "intent://x", "ftp://example.com/a").forEach {
@@ -46,25 +59,25 @@ class ImportersTest {
         assertTrue(Network.allowed("http://192.168.1.3/playlist", true))
     }
     @Test fun stripsUnsafeLogoAndEpgAddresses() {
-        val result = Importers.m3u("#EXTM3U url-tvg=\"http://example.com/guide\"\n#EXTINF:-1 tvg-logo=\"file:///private/data\",One\nhttps://example.com/stream", false)
+        val result = playlist("#EXTM3U url-tvg=\"http://example.com/guide\"\n#EXTINF:-1 tvg-logo=\"file:///private/data\",One\nhttps://example.com/stream", false)
         assertEquals("", result.epgUrl); assertEquals("", result.channels.single().logo)
     }
     @Test fun acceptsBomAndSingleQuotedAttributes() {
-        val result = Importers.m3u("\uFEFF#EXTM3U\n#EXTINF:-1 tvg-id='one' group-title='News',One\nhttps://example.com/one", false)
+        val result = playlist("\uFEFF#EXTM3U\n#EXTINF:-1 tvg-id='one' group-title='News',One\nhttps://example.com/one", false)
         assertEquals("one", result.channels.single().guideId)
         assertEquals("News", result.channels.single().group)
     }
-    @Test fun rejectsHtmlInsteadOfPlaylist() { reject { Importers.m3u("<html>Login required</html>", false) } }
+    @Test fun rejectsHtmlInsteadOfPlaylist() { reject { playlist("<html>Login required</html>", false) } }
     @Test fun deduplicatesRepeatedChannelEntries() {
         val channel = "#EXTINF:-1 tvg-id=\"one\",One\nhttps://example.com/one\n"
-        assertEquals(1, Importers.m3u("#EXTM3U\n$channel$channel", false).channels.size)
+        assertEquals(1, playlist("#EXTM3U\n$channel$channel", false).channels.size)
     }
     @Test fun preservesChannelIdentityAcrossTokenRefreshAndDistinguishesQueryChannels() {
-        fun channel(query: String) = Importers.m3u("#EXTM3U\n#EXTINF:-1,One\nhttps://example.com/watch?$query", false).channels.single()
+        fun channel(query: String) = playlist("#EXTM3U\n#EXTINF:-1,One\nhttps://example.com/watch?$query", false).channels.single()
         assertEquals(channel("id=1&token=old").id, channel("token=new&id=1").id)
         assertNotEquals(channel("id=1").id, channel("id=2").id)
     }
-    @Test fun blocksOversizedPlaylistLines() { reject { Importers.m3u("#EXTM3U\n#" + "x".repeat(32769), false) } }
+    @Test fun blocksOversizedPlaylistLines() { reject { playlist("#EXTM3U\n#" + "x".repeat(32769), false) } }
     @Test fun encodesXtreamCredentialsWithoutQueryInjection() {
         val source = Source(name = "Test", kind = "xtream", url = "https://example.com", username = "a&action=other", password = "p/#? ")
         assertEquals("https://example.com/player_api.php?username=a%26action%3Dother&password=p%2F%23%3F%20&action=get_live_streams", Importers.endpoint(source, "player_api.php", "get_live_streams"))

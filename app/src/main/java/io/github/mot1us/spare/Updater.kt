@@ -11,6 +11,8 @@ import android.provider.Settings
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import java.io.File
+import java.io.InputStream
+import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.concurrent.Executors
 
@@ -74,12 +76,9 @@ class Updater(private val activity: Activity, private val store: SecureStore,
             val result = runCatching {
                 val directory = File(activity.cacheDir, "updates").apply { mkdirs() }
                 directory.listFiles()?.forEach { it.delete() }
-                val bytes = Network.get(candidate.url, limit = 96 * 1024 * 1024)
-                val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-                require(hash == candidate.sha256)
-                val file = File(directory, "spare.apk").apply { writeBytes(bytes) }
-                require(validPackage(file, candidate))
-                file
+                Network.consume(candidate.url, http = false, limit = 96 * 1024 * 1024) { input ->
+                    streamVerifiedUpdate(input, File(directory, "spare.apk"), candidate.sha256) { validPackage(it, candidate) }
+                }
             }
             if (!closed) handler.post {
                 busy = false
@@ -127,4 +126,18 @@ class Updater(private val activity: Activity, private val store: SecureStore,
         if (!activity.isFinishing && !closed) AlertDialog.Builder(activity).setTitle(title).setMessage(text).setPositiveButton("OK", null).show()
     }
     fun close() { closed = true; offerDialog?.dismiss(); progress?.dismiss(); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+}
+
+internal fun streamVerifiedUpdate(input: InputStream, file: File, sha256: String, validPackage: (File) -> Boolean): File {
+    val staged = File.createTempFile("download-", ".apk", file.parentFile)
+    try {
+        val digest = MessageDigest.getInstance("SHA-256")
+        staged.outputStream().use { output -> DigestInputStream(input, digest).copyTo(output, 64 * 1024) }
+        require(digest.digest().joinToString("") { "%02x".format(it) } == sha256)
+        require(validPackage(staged))
+        check(staged.renameTo(file)) { "Could not stage verified update" }
+        return file
+    } finally {
+        staged.delete()
+    }
 }

@@ -5,6 +5,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
+import java.io.Reader
 import java.net.URI
 import java.net.URLEncoder
 import java.time.ZoneOffset
@@ -13,18 +14,58 @@ import java.util.Locale
 
 object Importers {
     const val MAX_CHANNELS = 100000
+    private const val MAX_PLAYLIST_LINE = 32768
     private val attribute = Regex("([\\w-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
     private fun attrs(line: String) = attribute.findAll(line).associate { it.groupValues[1].lowercase(Locale.ROOT) to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
-    fun m3u(text: String, http: Boolean): Lineup {
-        if (!text.trimStart('\uFEFF', ' ', '\n', '\r').startsWith("#EXTM3U")) throw SourceFailure(SourceProblem.PLAYLIST)
+    fun m3u(text: String, http: Boolean): Lineup = m3u(text.lineSequence(), http)
+
+    fun m3u(reader: Reader, http: Boolean): Lineup = m3u(playlistLines(reader), http)
+
+    private fun playlistLines(reader: Reader): Sequence<String> = sequence {
+        val buffer = CharArray(8192)
+        val line = StringBuilder()
+        var afterCarriageReturn = false
+        fun append(from: Int, to: Int) {
+            require(line.length + to - from <= MAX_PLAYLIST_LINE) { "Playlist line too long" }
+            line.append(buffer, from, to - from)
+        }
+        while (true) {
+            val count = reader.read(buffer)
+            if (count < 0) break
+            var start = 0
+            for (index in 0 until count) {
+                val char = buffer[index]
+                if (char == '\r' || char == '\n') {
+                    if (char != '\n' || !afterCarriageReturn) {
+                        append(start, index)
+                        yield(line.toString())
+                        line.setLength(0)
+                    }
+                    start = index + 1
+                }
+                afterCarriageReturn = char == '\r'
+            }
+            append(start, count)
+        }
+        if (line.isNotEmpty()) yield(line.toString())
+    }
+
+    private fun m3u(lines: Sequence<String>, http: Boolean): Lineup {
         val result = ArrayList<Channel>()
+        var headerSeen = false
         var metadata: Map<String, String> = emptyMap()
         var defaults: Map<String, String> = emptyMap()
         var title = ""
         var group = ""
         var epg = ""
-        text.lineSequence().forEach { raw ->
-            require(raw.length <= 32768) { "Playlist line too long" }
+        for (raw in lines) {
+            require(raw.length <= MAX_PLAYLIST_LINE) { "Playlist line too long" }
+            if (!headerSeen) {
+                val start = raw.trimStart('\uFEFF', ' ')
+                if (start.isEmpty()) continue
+                if (!start.startsWith("#EXTM3U")) throw SourceFailure(SourceProblem.PLAYLIST)
+                headerSeen = true
+            }
             val line = raw.trim().trimStart('\uFEFF')
             when {
                 line.startsWith("#EXTM3U") -> {
@@ -64,6 +105,7 @@ object Importers {
                 }
             }
         }
+        if (!headerSeen) throw SourceFailure(SourceProblem.PLAYLIST)
         if (result.isEmpty()) throw SourceFailure(SourceProblem.NO_CHANNELS)
         return Lineup(result.distinctBy { it.id }, epg.takeIf { Network.allowed(it, http) }.orEmpty())
     }

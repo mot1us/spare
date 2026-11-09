@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.3 — 2026-11-08
+
+- Reduce memory use while importing large M3U playlists and downloading app updates.
+
 ## 0.32.2 — 2026-11-08
 
 - Combine Today, Live now and Choose date in one Sports schedule picker.

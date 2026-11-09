@@ -30,7 +30,13 @@ object PlaylistRefresh {
                 if (playlist || cached.channels.isEmpty() || !store.epgMappingReady(source)) {
                     runCatching {
                         stage("Downloading playlist…")
-                        val lineup = if (source.kind == "xtream") Importers.xtream(source) else Importers.m3u(Network.get(source.url, source.allowHttp).toString(Charsets.UTF_8), source.allowHttp)
+                        val lineup = if (source.kind == "xtream") {
+                            Importers.xtream(source)
+                        } else {
+                            Network.consume(source.url, source.allowHttp) { input ->
+                                Importers.m3u(input.bufferedReader(Charsets.UTF_8), source.allowHttp)
+                            }
+                        }
                         require(lineup.channels.isNotEmpty()) { "The provider returned an empty playlist" }
                         // Source edits/removal must invalidate an in-flight response.
                         require(store.sources().any { it == source })
