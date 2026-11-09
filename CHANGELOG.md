@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.8 — 2026-11-09
+
+- Keep M3U parsing separate from the download timeout and reduce memory use when saving large channel lineups.
+
 ## 0.32.7 — 2026-11-08
 
 - Reduce allocations when reading provider quality tags from M3U playlists.

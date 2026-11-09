@@ -33,7 +33,8 @@ object PlaylistRefresh {
                         val lineup = if (source.kind == "xtream") {
                             Importers.xtream(source)
                         } else {
-                            Network.consume(source.url, source.allowHttp) { input ->
+                            // Keep provider URLs in memory and exclude parser work from the socket budget.
+                            Network.consume(source.url, source.allowHttp, networkTimeOnly = true) { input ->
                                 Importers.m3u(input.bufferedReader(Charsets.UTF_8), source.allowHttp)
                             }
                         }

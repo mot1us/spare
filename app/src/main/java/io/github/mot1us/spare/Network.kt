@@ -3,6 +3,7 @@ package io.github.mot1us.spare
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.util.zip.GZIPInputStream
 
@@ -31,8 +32,9 @@ object Network {
         return consume(url, http, limit, timeoutMs, progress) { readLimited(it, limit) }
     }
 
-    fun <T> consume(url: String, http: Boolean, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000,
-        progress: ((Long, Long) -> Unit)? = null, read: (InputStream) -> T): T {
+    internal fun <T> consume(url: String, http: Boolean, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000,
+        progress: ((Long, Long) -> Unit)? = null, networkTimeOnly: Boolean = false,
+        nanoTime: () -> Long = System::nanoTime, read: (InputStream) -> T): T {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -51,22 +53,23 @@ object Network {
                 } else {
                     if (status !in 200..299) throw HttpFailure(status)
                     if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
-                    val deadline = System.nanoTime() + minOf(60000L, timeoutMs * 3L) * 1000000
+                    val deadline = DownloadDeadline(timeoutMs, networkTimeOnly, nanoTime)
                     val total = connection.contentLengthLong
                     progress?.invoke(0, total)
-                    val bounded = object : java.io.FilterInputStream(connection.inputStream) {
+                    val bounded = object : java.io.FilterInputStream(deadline.socketRead { connection.inputStream }) {
                         var consumed = 0L
                         var lastProgress = 0L
                         fun count(amount: Int) {
                             if (amount > 0) consumed += amount
                             if (consumed > limit) throw SourceFailure(SourceProblem.LIMIT)
-                            if (System.nanoTime() > deadline) throw java.net.SocketTimeoutException("Download deadline exceeded")
+                            deadline.check()
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
                             val now = System.nanoTime()
                             if (now - lastProgress > 100000000L) { progress?.invoke(consumed, total); lastProgress = now }
                         }
-                        override fun read(): Int = super.read().also { count(if (it < 0) 0 else 1) }
-                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { count(it) }
+                        override fun read(): Int = deadline.socketRead { `in`.read() }.also { count(if (it < 0) 0 else 1) }
+                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int =
+                            deadline.socketRead { `in`.read(bytes, offset, length) }.also { count(it) }
                     }
                     val raw = bounded.buffered()
                     val input = if (connection.contentEncoding.equals("gzip", true)) GZIPInputStream(raw) else raw
@@ -76,7 +79,7 @@ object Network {
                             if (n > 0) size += n
                             if (size > limit) throw SourceFailure(SourceProblem.LIMIT)
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
-                            if (System.nanoTime() > deadline) throw java.net.SocketTimeoutException("Download deadline exceeded")
+                            deadline.check()
                         }
                         override fun read(): Int = `in`.read().also { check(if (it < 0) 0 else 1) }
                         override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { check(it) }
@@ -86,6 +89,23 @@ object Network {
             } finally { connection.disconnect() }
         }
         error("Too many redirects")
+    }
+
+    private class DownloadDeadline(timeoutMs: Int, private val networkTimeOnly: Boolean, private val now: () -> Long) {
+        private val budget = minOf(60000L, timeoutMs * 3L) * 1_000_000
+        private val started = now()
+        private var networkNanos = 0L
+
+        inline fun <T> socketRead(read: () -> T): T {
+            if (!networkTimeOnly) return read()
+            val before = now()
+            return read().also { networkNanos += now() - before }
+        }
+
+        fun check() {
+            val elapsed = if (networkTimeOnly) networkNanos else now() - started
+            if (elapsed > budget) throw SocketTimeoutException("Download deadline exceeded")
+        }
     }
 
     fun xmlPayload(bytes: ByteArray, limit: Int = 64 * 1024 * 1024): ByteArray =

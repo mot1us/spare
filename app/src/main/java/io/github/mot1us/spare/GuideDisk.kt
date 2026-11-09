@@ -2,7 +2,9 @@ package io.github.mot1us.spare
 
 import android.util.JsonReader
 import android.util.JsonToken
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.Writer
 import android.util.JsonWriter
 
 /** Migrate old combined caches without allocating their complete EPG before playback. */
@@ -42,6 +44,18 @@ object GuideDisk {
         } }
         writer.endArray().name("categories").beginArray().endArray().endObject()
     }
+    /** Keep the existing JSON layout and serialize only one channel at a time. */
+    internal fun writeLineup(writer: Writer, guide: Guide) {
+        writer.write("{\"channels\":[")
+        guide.channels.forEachIndexed { index, channel ->
+            if (index != 0) writer.write(",")
+            writer.write(channel.json().toString())
+        }
+        writer.write("],\"programmes\":[],\"categories\":")
+        writer.write(JSONArray(guide.categoryOrder).toString())
+        writer.write("}")
+    }
+
     fun lineup(bytes: ByteArray): Guide {
         val channels = mutableListOf<Channel>(); val categories = mutableListOf<String>()
         JsonReader(bytes.inputStream().reader()).use { reader ->
