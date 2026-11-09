@@ -51,14 +51,14 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.util.concurrent.Executors
 
 @UnstableApi
 @SuppressLint("SetTextI18n")
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
-    private val imports = Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-import") }
-    private val cacheWrites = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-cache") }
+    private val workers = ActivityWorkers()
+    private val imports = workers.pool("import", threads = 2, background = true)
+    private val cacheWrites = workers.pool("cache", background = true, drain = true)
     private data class EpgSave(val guide: Guide, val catalog: PlaylistCatalog, val owners: List<Source>, val at: Long)
     private val epgWriter by lazy { LatestTask<EpgSave>(cacheWrites) { save -> save.owners.forEach { selected -> runCatching { store.cacheProgrammes(selected, save.catalog.extract(selected, save.guide).programmes, save.at) } } } }
     private var lastInputAt = 0L
@@ -81,7 +81,7 @@ class MainActivity : Activity() {
     private val restoringProgrammes = mutableSetOf<String>()
     private var availableUpdate: String? = null
     private var importTask: java.util.concurrent.Future<*>? = null
-    private val epgWorkers = Executors.newFixedThreadPool(2)
+    private val epgWorkers = workers.pool("epg", threads = 2)
     private var epgActive = 0
     private var epgWanted = emptyList<Channel>()
     private val epgInFlight = mutableSetOf<String>()
@@ -162,15 +162,15 @@ class MainActivity : Activity() {
             handler.postDelayed(this, 1000)
         }
     }
-    private val sportsWorker = Executors.newSingleThreadExecutor()
-    private val sportsDestinationWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-destinations") }
-    private val sportsScheduleDisk = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-schedule-cache") }
+    private val sportsWorker = workers.pool("sports")
+    private val sportsDestinationWorker = workers.pool("destinations", background = true)
+    private val sportsScheduleDisk = workers.pool("schedule-cache", background = true)
     private var sportsDestinationTask: java.util.concurrent.Future<*>? = null
     internal var redZoneLoader: (Guide, GuideFilters, Map<String, VideoInfo>, Long) -> List<Channel> = { snapshot, profile, quality, now -> redZoneCache.find(snapshot, profile, quality, now) }
-    private val sportsMatchWorker = Executors.newSingleThreadExecutor()
+    private val sportsMatchWorker = workers.pool("sports-match")
     private val sportsStreamCache = SportsStreamCache()
     private val redZoneCache = SportsDestinations.RedZoneCache()
-    private val sportsWarmWorker = Executors.newSingleThreadExecutor()
+    private val sportsWarmWorker = workers.pool("sports-warm")
     private var sportsWarmTask: java.util.concurrent.Future<*>? = null
     private var sportsWarmActive: String? = null
     private var sportsWarmPending = false
@@ -195,7 +195,7 @@ class MainActivity : Activity() {
     private var redZoneAutoPending = false
     private var watchingSports: GameStreams? = null
     private var sportsPlaybackPlan: SportsPlaybackPlan? = null
-    private val sportsLookupWorkers = Executors.newFixedThreadPool(2)
+    private val sportsLookupWorkers = workers.pool("sports-lookup", threads = 2)
     private var sportsMatchTask: java.util.concurrent.Future<*>? = null
     private var pendingSportsTune: String? = null
     private var sportsManager: SettingsPanel? = null
@@ -249,7 +249,7 @@ class MainActivity : Activity() {
     private var liveSportsDay: java.time.LocalDate? = null
     private var liveSportsTeamScope: String? = "today"
     private var liveSportsTask: java.util.concurrent.Future<*>? = null
-    private val liveSportsWorker = Executors.newSingleThreadExecutor()
+    private val liveSportsWorker = workers.pool("live-sports")
     private val delayedScores = SportsScoreDelay()
     private var observedScores: LiveSportsSnapshot? = null
     private var scoreDelayPlayingKey: String? = null
@@ -286,7 +286,7 @@ class MainActivity : Activity() {
         if (sportsVisible && guideVisible) selectedGame?.let(::renderGameInfo)
         scheduleScoreDelay()
     }
-    private val reminderWorker = Executors.newSingleThreadExecutor()
+    private val reminderWorker = workers.pool("reminder")
     private fun publishSportsSchedule(snapshot: LiveSportsSnapshot, day: java.time.LocalDate?, request: Int, cached: Boolean = false) {
         if (snapshot.events.isEmpty() && snapshot.leagues.isEmpty()) return
         handler.post {
@@ -416,7 +416,7 @@ class MainActivity : Activity() {
     private var searchedMedia = emptyList<OnDemand>()
     private var liveSearchBusy = false
     private var liveSearchEpoch = 0
-    private val liveSearchWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-live-search") }
+    private val liveSearchWorker = workers.pool("live-search", background = true)
     private var searchWarning = ""
     private var vodRequest: VodStart.Request? = null
     private lateinit var vodStartPanel: VodStartPanel
@@ -471,7 +471,7 @@ class MainActivity : Activity() {
     private var localLoading = false
     private var localSourceId = ""
     private lateinit var localProgress: ProgressBar
-    private val localWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-local") }
+    private val localWorker = workers.pool("local", background = true)
     private var localTask: java.util.concurrent.Future<*>? = null
     private val localStations by lazy { LocalChannels(assets.open("local-stations.tsv").bufferedReader().use { it.readText() }) }
     private lateinit var guideTabs: LinearLayout
@@ -3409,7 +3409,35 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() { scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
-    override fun onDestroy() { if (::scoreStrip.isInitialized) scoreStrip.closeImages(); liveSearchWorker.shutdownNow(); if (::playlistSearch.isInitialized) playlistSearch.close(); replayDiscovery?.close(); localTask?.cancel(true); localWorker.shutdownNow(); calendarSchedule?.close(); flushVideoReadings(); PlaylistRefresh.unlisten(this); if (::programmeArtwork.isInitialized) programmeArtwork.close(); if (::multiview.isInitialized) multiview.close(); metadata.close(); details.closeImages(); library.destroy(); sportsPanel.closeImages(); liveSportsTask?.cancel(true); liveSportsWorker.shutdownNow(); reminderWorker.shutdownNow(); if (::voiceInput.isInitialized) voiceInput.stop(); closed = true; ++generation; handler.removeCallbacksAndMessages(null); imports.shutdownNow(); epgWorkers.shutdownNow(); sportsWorker.shutdownNow(); sportsDestinationWorker.shutdownNow(); sportsScheduleDisk.shutdownNow(); sportsMatchWorker.shutdownNow(); sportsWarmWorker.shutdownNow(); sportsStreamCache.clear(); sportsLookupWorkers.shutdownNow(); cacheWrites.shutdown(); logos.close(); if (::updater.isInitialized) updater.close(); if (::player.isInitialized) { video.player = null; player.release() }; super.onDestroy() }
+    override fun onDestroy() {
+        if (::scoreStrip.isInitialized) scoreStrip.closeImages()
+        if (::playlistSearch.isInitialized) playlistSearch.close()
+        replayDiscovery?.close()
+        localTask?.cancel(true)
+        calendarSchedule?.close()
+        flushVideoReadings()
+        PlaylistRefresh.unlisten(this)
+        if (::programmeArtwork.isInitialized) programmeArtwork.close()
+        if (::multiview.isInitialized) multiview.close()
+        metadata.close()
+        details.closeImages()
+        library.destroy()
+        sportsPanel.closeImages()
+        liveSportsTask?.cancel(true)
+        if (::voiceInput.isInitialized) voiceInput.stop()
+        closed = true
+        ++generation
+        handler.removeCallbacksAndMessages(null)
+        workers.shutdown()
+        sportsStreamCache.clear()
+        logos.close()
+        if (::updater.isInitialized) updater.close()
+        if (::player.isInitialized) {
+            video.player = null
+            player.release()
+        }
+        super.onDestroy()
+    }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }
