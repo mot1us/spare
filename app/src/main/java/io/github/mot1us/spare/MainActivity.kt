@@ -2897,7 +2897,7 @@ class MainActivity : Activity() {
     }
     private fun closeSettings() {
         settingsPanel?.visibility = View.GONE
-        if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation(if (library.browsingCatchup) "guide-mode" else "library"); library.panel.focusCategories() } else showGuide(settingsReturnGuide)
+        if (settingsReturnLibrary && library.opened) { root.bringChildToFront(library.panel); showNavigation(if (library.browsingCatchup) "guide-mode" else "library"); library.panel.focusToolbar() } else showGuide(settingsReturnGuide)
         if (settingsReturnGuide) { ++focusEpoch; if (store.hiddenDock) focusChannel() else settingsButton.requestFocus() }
     }
     private fun renderSettingsPage(page: String) {

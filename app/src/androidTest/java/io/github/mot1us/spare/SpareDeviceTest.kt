@@ -1717,9 +1717,12 @@ class SpareDeviceTest {
                     assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
                 }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
-                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-teams").hasFocus() }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NBA").hasFocus() }
+                device.pressDPadRight(); device.pressDPadUp()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-schedule").hasFocus() }
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
+                device.pressDPadDown(); device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("calendar-games")?.adapter?.itemCount == 1 }
                 device.pressBack()
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NFL").apply { requestFocus(); performClick() } }
@@ -1775,6 +1778,7 @@ class SpareDeviceTest {
                 var gameMediaId = ""
                 scenario.onActivity { activity -> gameMediaId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId; activity.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel").focusToolbar() }
                 device.pressBack()
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
                 scenario.onActivity { assertEquals("Browsing Library must preserve the exact game connection", gameMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
@@ -1998,7 +2002,7 @@ class SpareDeviceTest {
                     var loadingHeroHeight = 0
                     scenario.onActivity { activity ->
                         assertEquals(0, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter!!.itemCount)
-                        assertTrue(activity.window.decorView.findViewWithTag<View>("sports-today").hasFocus())
+                        assertTrue(activity.window.decorView.findViewWithTag<View>("sports-schedule").hasFocus())
                         loadingHeroHeight = activity.window.decorView.findViewWithTag<View>("sports-hero").height
                     }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-loading.png")); scoresReady.countDown()
@@ -2057,7 +2061,7 @@ class SpareDeviceTest {
                         val drawable = card?.let { find<android.widget.ImageView>(it) }?.drawable as? android.graphics.drawable.BitmapDrawable
                         (drawable?.bitmap?.width ?: 0) >= 256 && drawable?.isFilterBitmap == true
                     }
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                    scenario.onActivity { selectSportsSchedule(it, "sports-date") }
                     val calendarToday = java.time.LocalDate.now()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == true && it.window.decorView.findViewWithTag<View>("calendar-day:$calendarToday")?.hasFocus() == true }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("calendar-games").adapter?.itemCount == 1 && !it.window.decorView.findViewWithTag<View>("calendar-games-loading").isShown }
@@ -2085,15 +2089,15 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-date")?.isSelected == true }
                     scenario.onActivity { activity ->
                         assertEquals("date:${calendarToday.plusDays(1)}", MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.get(activity))
-                        activity.window.decorView.findViewWithTag<View>("sports-date").performClick()
+                        selectSportsSchedule(activity, "sports-date")
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-day:${calendarToday.plusDays(1)}")?.hasFocus() == true }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("calendar-next").apply { requestFocus(); performClick() } }
                     device.pressBack()
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-date")?.hasFocus() == true }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-schedule")?.hasFocus() == true }
                     scenario.onActivity { activity ->
                         assertEquals("date:${calendarToday.plusDays(1)}", MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.get(activity))
-                        activity.window.decorView.findViewWithTag<View>("sports-today").performClick()
+                        selectSportsSchedule(activity, "sports-today")
                         activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus()
                     }
                     device.pressDPadDown(); device.pressDPadRight()
@@ -2152,7 +2156,7 @@ class SpareDeviceTest {
                         activity.window.decorView.findViewWithTag<View>("sports-league-continue").performClick()
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 9 }
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-today").requestFocus() }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-schedule").requestFocus() }
                     device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-filter").hasFocus() }
                     device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                     device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
@@ -2166,15 +2170,15 @@ class SpareDeviceTest {
                         SportsPanel::class.java.getDeclaredMethod("focusAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(panel, target)
                         // A user can move to the header before the requested offscreen
                         // card is laid out. The old retry must not steal focus back.
-                        activity.window.decorView.findViewWithTag<View>("sports-today").requestFocus()
+                        activity.window.decorView.findViewWithTag<View>("sports-schedule").requestFocus()
                         panel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
                         panel.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT))
                         grid.suppressLayout(false)
                         grid.postOnAnimation { grid.postOnAnimation { focusFrames.countDown() } }
                     }
                     assertTrue("Offscreen Sports focus layout completes", focusFrames.await(5, java.util.concurrent.TimeUnit.SECONDS))
-                    scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-live").hasFocus()) }
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-date").performClick() }
+                    scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-teams").hasFocus()) }
+                    scenario.onActivity { selectSportsSchedule(it, "sports-date") }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}")?.isShown == true }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}").performClick() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-watch").isShown }
@@ -2425,14 +2429,15 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("sports-today").isSelected)
                     store.sportsFollowedOnly = true
-                    activity.window.decorView.findViewWithTag<View>("sports-live").apply { requestFocus(); performClick() }
+                    selectSportsSchedule(activity, "sports-live")
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Buffalo") }
                 scenario.onActivity { activity ->
-                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-live").hasFocus()); assertTrue(activity.window.decorView.findViewWithTag<View>("sports-live").isSelected)
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("sports-schedule").hasFocus()); assertTrue(activity.window.decorView.findViewWithTag<View>("sports-live").isSelected)
                     assertNotNull("RedZone remains reachable in Live", activity.window.decorView.findViewWithTag<View>("sports-redzone"))
                 }
                 device.pressDPadDown(); device.pressDPadUp(); device.pressDPadCenter()
+                device.pressDPadUp(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 && it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-title").text.contains("Seattle") }
                 device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-reminder").isShown }
@@ -2446,18 +2451,19 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-status").text.contains("1 RedZone channels") }
                 assertEquals("A cached Game Pass listing needs no provider lookup", 0, server.epgTargets.size)
                 device.pressBack(); waitFor(scenario) { it.currentFocus?.tag == "sports-redzone" }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-schedule").hasFocus() }
                 device.pressDPadLeft(); device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 scenario.onActivity { activity ->
                     val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
                     assertTrue(rail.contentHasFocus); assertEquals(ViewGroup.FOCUS_AFTER_DESCENDANTS, rail.descendantFocusability)
-                    activity.window.decorView.findViewWithTag<View>("sports-today").requestFocus()
+                    activity.window.decorView.findViewWithTag<View>("sports-schedule").requestFocus()
                 }
                 var liveMediaId = ""
                 scenario.onActivity { liveMediaId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
                 device.pressDPadLeft(); device.pressDPadLeft(); device.pressDPadDown(); device.pressDPadCenter()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel").focusToolbar() }
                 device.pressBack(); waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && channelList(it)?.isShown == false }
                 scenario.onActivity { assertEquals("Back from Library preserves the playing stream without retuning", liveMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
             }
@@ -2667,17 +2673,24 @@ class SpareDeviceTest {
                 assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").requestFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
-                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
-                device.pressDPadLeft(); device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-search").hasFocus() }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
-                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(2)!!.itemView.apply { requestFocus(); performClick() } }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
+                device.pressDPadUp(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
+                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-category").hasFocus() }
+                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-search").hasFocus() }
+                device.pressDPadUp(); device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-category").hasFocus() && !it.window.decorView.findViewWithTag<View>("library-categories").isShown }
+                chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
-                scenario.onActivity { activity -> assertEquals("Action", (activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findFocus() as android.widget.TextView).text.toString()) }
-                device.pressDPadDown(); device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("library-heading").text.toString() == "Comedy" }
+                scenario.onActivity { activity -> assertEquals("Action ▾", activity.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
+                chooseLibraryCategory(scenario, 3)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Comedy" }
                 server.finishActionCatalog.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:3001")?.isShown == true }
-                scenario.onActivity { activity -> assertEquals("Comedy", (activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findFocus() as android.widget.TextView).text.toString()); activity.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(1)!!.itemView.apply { requestFocus(); performClick() } }
+                scenario.onActivity { activity -> assertTrue(activity.window.decorView.findViewWithTag<View>("library-category").hasFocus()) }
+                chooseLibraryCategory(scenario, 1)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 device.pressMenu(); activateSetting(scenario, "Time format"); activateSetting(scenario, "24 hour · 19:30")
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && store.clock24 }
@@ -2768,12 +2781,14 @@ class SpareDeviceTest {
                     val entries = (1..25000).map { BrowserRow("bulk:$it", "Title $it") {} }
                     panel.submit(entries, entries.associate { it.key to if (it.key.substringAfter(':').toInt() % 2 == 0) "Science fiction" else "Drama" })
                 }
-                assertTrue(device.wait(Until.hasObject(By.desc("Category · Science fiction")), 5000))
-                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").findViewHolderForAdapterPosition(2)!!.itemView.requestFocus() }
-                device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 && it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                chooseLibraryCategory(scenario, 2)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 }
+                device.pressDPadLeft(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
                 scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressBack()
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
@@ -3709,6 +3724,24 @@ class SpareDeviceTest {
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-results.png"))
             } } finally { store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
         } }
+    }
+
+    private fun selectSportsSchedule(activity: MainActivity, option: String) {
+        val root = activity.window.decorView
+        root.findViewWithTag<View>("sports-schedule").performClick()
+        root.findViewWithTag<View>(option).performClick()
+    }
+
+    private fun chooseLibraryCategory(scenario: ActivityScenario<MainActivity>, position: Int) {
+        scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-category").performClick() }
+        waitFor(scenario) {
+            val categories = it.window.decorView.findViewWithTag<RecyclerView>("library-categories")
+            categories.isShown && categories.findViewHolderForAdapterPosition(position) != null
+        }
+        scenario.onActivity {
+            it.window.decorView.findViewWithTag<RecyclerView>("library-categories")
+                .findViewHolderForAdapterPosition(position)!!.itemView.performClick()
+        }
     }
 
     private fun focusDetailsAction(scenario: ActivityScenario<MainActivity>, tag: String) {

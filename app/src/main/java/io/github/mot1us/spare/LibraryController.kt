@@ -508,7 +508,17 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
     fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
-    fun back() { when { directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }; detailItem != null -> closeDetails(); archive != null -> catchupChannels(); parentSeries != null -> open(if (kind == "favorites") "favorites" else "series"); else -> { dismiss(); closed() } } }
+    fun back() {
+        when {
+            panel.closeCategories() -> Unit
+            directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }
+            detailItem != null -> closeDetails()
+            archive != null -> catchupChannels()
+            parentSeries != null -> open(if (kind == "favorites") "favorites" else "series")
+            panel.focusRailFromContent() -> Unit
+            else -> { dismiss(); closed() }
+        }
+    }
     fun dismiss() {
         favoriteTask?.cancel(true); ++favoriteEpoch; checkingFavorites = false
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch

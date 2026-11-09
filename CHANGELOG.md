@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.32.2 — 2026-11-08
+
+- Combine Today, Live now and Choose date in one Sports schedule picker.
+- Give Library the same left rail as Sports and put categories in a picker above the catalog. Right enters the grid and Back returns to the selected rail item.
+
 ## 0.32.1 — 2026-11-08
 
 - Label available Sports replays **Replay** so the badge fits in the game card footer.

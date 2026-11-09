@@ -12,6 +12,8 @@ import kotlin.math.roundToInt
 
 /** One frame-paced scroll owner, retargeted rather than restarted for each remote repeat. */
 object TvFocus {
+    const val BROWSE_RAIL_WIDTH_DP = 140
+
     class HorizontalLayout(context: Context) : LinearLayoutManager(context, HORIZONTAL, false) {
         override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean = false
         override fun calculateExtraLayoutSpace(state: RecyclerView.State, extraLayoutSpace: IntArray) { extraLayoutSpace[0] = width; extraLayoutSpace[1] = width }
