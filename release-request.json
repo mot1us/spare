@@ -1,1 +1,1 @@
-{"versionName":"0.32.4","versionCode":97,"attempt":1,"macos":false,"tvSuite":"full","tvTests":[]}
+{"versionName":"0.32.5","versionCode":98,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":["sportsSchedulePickerBackAndLeftRestoreOpenerFocus","sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar","sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable","libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive"]}

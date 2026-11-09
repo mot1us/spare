@@ -196,12 +196,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.text.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
-                    when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) focusAt(categories, position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> true
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_UP) closeCategories(); true }
-                    else -> false
-                } }
+                    TvFocus.pickerKey(key, event.action, { focusAt(categories, position + it) }) { closeCategories() }
+                }
             }
         }
         rows.adapter = object : RecyclerView.Adapter<PosterHolder>() {
@@ -393,16 +389,16 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (categoryNames.isEmpty()) return
         hideKeyboard(); ++focusEpoch; pending = null; catalogFocusRequested = false
         categories.background = GuideTheme.guideBackground(100)
-        categories.visibility = VISIBLE
-        categories.requestFocus()
-        focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
+        TvFocus.openPicker(categories) {
+            categories.requestFocus()
+            focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
+        }
     }
-    fun closeCategories(restoreFocus: Boolean = true): Boolean {
-        if (categories.visibility != VISIBLE) return false
-        ++focusEpoch; pending = null; categories.visibility = GONE
-        if (restoreFocus) categoryButton.requestFocus()
-        return true
-    }
+    fun closeCategories(restoreFocus: Boolean = true): Boolean =
+        TvFocus.closePicker(categories, categoryButton.takeIf { restoreFocus }) {
+            ++focusEpoch
+            pending = null
+        }
     fun focusRows() { if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return

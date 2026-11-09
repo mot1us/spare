@@ -2,6 +2,7 @@ package io.github.mot1us.spare
 
 import android.content.Context
 import android.graphics.Rect
+import android.view.KeyEvent
 import android.view.View
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -13,6 +14,33 @@ import kotlin.math.roundToInt
 /** One frame-paced scroll owner, retargeted rather than restarted for each remote repeat. */
 object TvFocus {
     const val BROWSE_RAIL_WIDTH_DP = 140
+
+    fun openPicker(popup: View, focusSelection: () -> Unit) {
+        popup.visibility = View.VISIBLE
+        focusSelection()
+    }
+
+    fun closePicker(popup: View, restoreFocusTo: View?, beforeClose: () -> Unit = {}): Boolean {
+        if (popup.visibility != View.VISIBLE) return false
+        beforeClose()
+        popup.visibility = View.GONE
+        restoreFocusTo?.requestFocus()
+        return true
+    }
+
+    fun pickerKey(key: Int, action: Int, step: (Int) -> Unit, close: () -> Unit): Boolean = when (key) {
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+            if (action == KeyEvent.ACTION_DOWN) step(if (key == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
+            true
+        }
+        KeyEvent.KEYCODE_DPAD_LEFT -> {
+            // Wait for release so held Left repeats can't move focus behind the popup.
+            if (action == KeyEvent.ACTION_UP) close()
+            true
+        }
+        KeyEvent.KEYCODE_DPAD_RIGHT -> true
+        else -> false
+    }
 
     class HorizontalLayout(context: Context) : LinearLayoutManager(context, HORIZONTAL, false) {
         override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean): Boolean = false

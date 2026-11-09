@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.32.5 — 2026-11-08
+
 ## 0.32.4 — 2026-11-08
 
 - Verify import and video playback on the minified APK before publishing a release.

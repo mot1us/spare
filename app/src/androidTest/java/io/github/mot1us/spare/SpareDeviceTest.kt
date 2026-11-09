@@ -1670,6 +1670,46 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsSchedulePickerBackAndLeftRestoreOpenerFocus() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Schedule picker fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL")
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { LiveSportsSnapshot(emptyList(), System.currentTimeMillis(), setOf("NFL")) }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) {
+                        find<PlayerView>(it.window.decorView)?.player?.let { player ->
+                            player.repeatMode = Player.REPEAT_MODE_ONE
+                            player.isPlaying
+                        } == true
+                    }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-schedule")?.isShown == true }
+                    listOf({ device.pressBack() }, { device.pressDPadLeft() }).forEach { close ->
+                        scenario.onActivity {
+                            it.window.decorView.findViewWithTag<View>("sports-schedule").apply { requestFocus(); performClick() }
+                        }
+                        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
+                        close()
+                        waitFor(scenario) {
+                            it.window.decorView.findViewWithTag<View>("sports-schedule").hasFocus() &&
+                                !it.window.decorView.findViewWithTag<View>("sports-schedule-menu").isShown
+                        }
+                    }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+            }
+        }
+    }
+
     @Test fun sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar() {
         FixtureServer().use { server ->
             val source = Source(name = "League setup fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

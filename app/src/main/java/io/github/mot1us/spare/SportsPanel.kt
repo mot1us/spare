@@ -247,15 +247,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun openSchedule() {
         gridFocus.cancel(); ++focusEpoch; pendingEnter = false
         scheduleMenu.background = GuideTheme.guideBackground(100)
-        scheduleMenu.visibility = VISIBLE
-        (scheduleOptions.firstOrNull { it.isSelected } ?: todayButton).requestFocus()
+        TvFocus.openPicker(scheduleMenu) {
+            (scheduleOptions.firstOrNull { it.isSelected } ?: todayButton).requestFocus()
+        }
     }
-    private fun closeSchedule(restoreFocus: Boolean = true): Boolean {
-        if (scheduleMenu.visibility != VISIBLE) return false
-        scheduleMenu.visibility = GONE
-        if (restoreFocus) scheduleButton.requestFocus()
-        return true
-    }
+    private fun closeSchedule(restoreFocus: Boolean = true): Boolean =
+        TvFocus.closePicker(scheduleMenu, scheduleButton.takeIf { restoreFocus })
     private fun selectSchedule(value: String) {
         closeSchedule()
         showGames()
@@ -413,16 +410,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         scheduleOptions.forEachIndexed { index, option ->
             scheduleMenu.addView(option, LayoutParams(-1, dp(36)).apply { if (index > 0) topMargin = dp(4) })
             option.setOnKeyListener { _, key, event ->
-                when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        val step = if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
-                        if (event.action == KeyEvent.ACTION_DOWN) scheduleOptions.getOrNull(index + step)?.requestFocus()
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_UP) closeSchedule(); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> true
-                    else -> false
-                }
+                TvFocus.pickerKey(key, event.action, { scheduleOptions.getOrNull(index + it)?.requestFocus() }) { closeSchedule() }
             }
         }
         hero.background = GuideTheme.glass(resources.displayMetrics.density); hero.addView(backdrop, FrameLayout.LayoutParams(-1, -1))
