@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.1 — 2026-11-08
+
+- Label available Sports replays **Replay** so the badge fits in the game card footer.
+
 ## 0.32.0 — 2026-11-08
 
 - Use startup/playback/storage smoke checks plus explicitly selected feature checks for routine releases. Keep the full TV suite for higher-risk changes, manual runs and weekly checks; log each active test. Signing and update-install verification stay required.

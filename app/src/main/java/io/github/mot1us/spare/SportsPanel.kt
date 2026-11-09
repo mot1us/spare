@@ -504,7 +504,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     private fun hasReplay(game: SportsGame) = game.state == "post" && cardReplays[game.key]?.let { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) } == true
     private fun badge(game: SportsGame, display: SportsGame = scorePresentation(game)): String {
-        return when { display.live(System.currentTimeMillis()) -> "● LIVE"; display.status == SportsScoreDelay.WAITING -> "SCORE DELAY"; display.state == "post" && hasReplay(game) -> "↺ CATCH-UP"; display.state == "post" -> "FINAL"; display.state == "pre" -> "UPCOMING"; else -> "SAVED SCORE" }
+        return when { display.live(System.currentTimeMillis()) -> "● LIVE"; display.status == SportsScoreDelay.WAITING -> "SCORE DELAY"; display.state == "post" && hasReplay(game) -> "REPLAY"; display.state == "post" -> "FINAL"; display.state == "pre" -> "UPCOMING"; else -> "SAVED SCORE" }
     }
     private fun describeCard(holder: GameCard, game: SportsGame, display: SportsGame = scorePresentation(game)) {
         val names = holder.teamNames.indices.joinToString(". ") { index -> holder.teamNames[index].text.toString() + " " + holder.teamRecords[index].text }

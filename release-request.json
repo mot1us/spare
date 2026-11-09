@@ -1,1 +1,1 @@
-{"versionName":"0.32.0","versionCode":93,"attempt":3,"macos":false,"tvSuite":"focused","tvTests":["dialogRemoteFocusIsVisibleAndHttpConsentPreservesHttps","compactSportsCardsKeepBothTeamNamesAndScoresInsideTheirBounds","sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar","sportsHeroRailAndFullScreenTeamManagerKeepFocusAndLeaguePreferences","playbackActionsAndTodaysOverlayStayBoundedAndHideInSettings"]}
+{"versionName":"0.32.1","versionCode":94,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":["sportsReplayFindsArchiveHidesScoresAndReturnsToTheGame"]}

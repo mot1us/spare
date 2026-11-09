@@ -2299,7 +2299,7 @@ class SpareDeviceTest {
                     scenario.onActivity { activity ->
                         assertFalse(activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail")?.text?.contains("win") == true)
                         assertFalse(activity.window.decorView.findViewWithTag<View>("sports-watch").isShown)
-                        assertEquals("Automatic discovery confirms the lower-quality archive", "↺ CATCH-UP", activity.window.decorView.findViewWithTag<TextView>("sports-badge:NFL:sports-archive").text.toString())
+                        assertEquals("Automatic discovery confirms the lower-quality archive", "REPLAY", activity.window.decorView.findViewWithTag<TextView>("sports-badge:NFL:sports-archive").text.toString())
                         activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
                     }
                     assertEquals("Only the matching broadcaster's metadata archive is queried", 1, server.archiveRequests.get())
@@ -2313,7 +2313,9 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
                     scenario.onActivity { activity ->
                         val badge = activity.window.decorView.findViewWithTag<TextView>("sports-badge:NFL:sports-archive")
-                        assertEquals("A lower-quality archive still gets a confirmed Catch-up badge", "↺ CATCH-UP", badge.text.toString())
+                        assertEquals("A lower-quality archive still gets a confirmed replay badge", "REPLAY", badge.text.toString())
+                        val availableWidth = badge.width - badge.compoundPaddingLeft - badge.compoundPaddingRight
+                        assertTrue("The full replay label fits inside its badge", badge.paint.measureText(badge.text.toString()) <= availableWidth)
                         assertEquals(0xFF123D68.toInt(), badge.currentTextColor)
                         activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
                     }
