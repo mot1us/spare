@@ -98,7 +98,7 @@ object Importers {
                             metadata["tvg-logo"].orEmpty().takeIf { Network.allowed(it, http) }.orEmpty(), guideId,
                             (metadata["catchup-days"] ?: metadata["timeshift"])?.toIntOrNull()?.coerceIn(0, 30) ?: 0,
                             metadata["catchup"].orEmpty().ifBlank { if (metadata.containsKey("timeshift")) "shift" else "" }, metadata["catchup-source"].orEmpty().take(8192),
-                            metadata["media"] == "true" || metadata.containsKey("media-dir"), reportedQuality = ProviderQuality.parse(JSONObject(metadata), name)))
+                            metadata["media"] == "true" || metadata.containsKey("media-dir"), reportedQuality = ProviderQuality.parse(metadata, name)))
                         if (result.size > MAX_CHANNELS) throw SourceFailure(SourceProblem.CHANNEL_LIMIT)
                     }
                     metadata = emptyMap(); title = ""; group = ""

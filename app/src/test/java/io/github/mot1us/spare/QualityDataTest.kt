@@ -19,6 +19,20 @@ class QualityDataTest {
             assertTrue(json, filter.matches(Channel("one", "A channel", "", "https://example.test/live", reportedQuality = quality), null))
         }
     }
+    @Test fun m3uAttributesMatchTheJsonQualityParser() {
+        val examples = listOf(
+            emptyMap<String, String>() to "News",
+            emptyMap<String, String>() to "News 1080i30",
+            mapOf("tvg-resolution" to "3840×2160", "tvg-fps" to "60000/1001") to "News HD",
+            mapOf("height" to "1080", "width" to "1920", "fps" to "29.97", "field_order" to "tt") to "News",
+            mapOf("fps" to "null", "stream_fps" to "50", "quality" to "FHD") to "News",
+            mapOf("info" to "{\"video\":{\"height\":2160,\"fps\":\"60 fps\"}}") to "News"
+        )
+        examples.forEach { (attributes, name) ->
+            assertEquals(ProviderQuality.parse(JSONObject(attributes), name), ProviderQuality.parse(attributes, name))
+        }
+    }
+
     @Test fun partialPlaybackCannotEraseProviderResolutionAndCachedExplicitRate() {
         val channel = Channel("one", "USA FHD 60fps", "", "https://example.test/live", reportedQuality = VideoInfo(1920, 1080, 0f))
         val restored = Channel.from(channel.json())

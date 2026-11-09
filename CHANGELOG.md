@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.7 — 2026-11-08
+
+- Reduce allocations when reading provider quality tags from M3U playlists.
+
 ## 0.32.6 — 2026-11-08
 
 ## 0.32.5 — 2026-11-08

@@ -1,1 +1,1 @@
-{"versionName":"0.32.6","versionCode":99,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":["savedStartupBackgroundRefreshAndScheduledJobKeepPlaybackAndFocus","gameReminderOverlayKeepsPlaybackAndDismissesWithBack"]}
+{"versionName":"0.32.7","versionCode":100,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":[]}
