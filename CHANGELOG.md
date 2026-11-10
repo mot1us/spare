@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.11 — 2026-11-09
+
+- Preserve Media3’s codec buffer locking and callbacks when observing input cadence.
+
 ## 0.32.10 — 2026-11-09
 
 - Add an opt-in performance overlay under Playback diagnostics for playback and guide measurements.

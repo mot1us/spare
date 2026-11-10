@@ -2,6 +2,7 @@ package io.github.mot1us.spare
 
 import android.media.MediaCodec
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.util.ThrowingRunnable
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.decoder.CryptoInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
@@ -14,7 +15,10 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory, private
 
     override fun createAdapter(configuration: MediaCodecAdapter.Configuration): MediaCodecAdapter {
         val adapter = delegate.createAdapter(configuration)
-        if (!MimeTypes.isVideo(configuration.format.sampleMimeType)) return adapter
+        return if (MimeTypes.isVideo(configuration.format.sampleMimeType)) wrapVideo(adapter) else adapter
+    }
+
+    internal fun wrapVideo(adapter: MediaCodecAdapter): MediaCodecAdapter {
         val cadence = InputCadence()
         fun observe(ptsUs: Long, flags: Int) {
             if (flags and (MediaCodec.BUFFER_FLAG_CODEC_CONFIG or MediaCodec.BUFFER_FLAG_END_OF_STREAM or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME) != 0) return
@@ -23,6 +27,12 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory, private
             if (reading.first != epoch || reading.second != measured) reading = epoch to measured
         }
         return object : MediaCodecAdapter by adapter {
+            // Kotlin delegation inherits these Java defaults unless we forward them explicitly.
+            override fun <E : Exception> useBuffer(runnable: ThrowingRunnable<E>) = adapter.useBuffer(runnable)
+
+            override fun registerOnBufferAvailableListener(listener: MediaCodecAdapter.OnBufferAvailableListener): Boolean =
+                adapter.registerOnBufferAvailableListener(listener)
+
             override fun queueInputBuffer(index: Int, offset: Int, size: Int, presentationTimeUs: Long, flags: Int) {
                 adapter.queueInputBuffer(index, offset, size, presentationTimeUs, flags)
                 if (size > 0) observe(presentationTimeUs, flags)
