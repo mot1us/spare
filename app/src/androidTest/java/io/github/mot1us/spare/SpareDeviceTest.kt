@@ -1907,6 +1907,45 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun performanceOverlayIsOptInAndKeepsThePlayingConnection() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Performance fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.performanceOverlay = false
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) {
+                        find<PlayerView>(it.window.decorView)?.player?.let { player ->
+                            player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying
+                        } == true
+                    }
+                    var mediaId = ""
+                    scenario.onActivity {
+                        assertNull(it.window.decorView.findViewWithTag<View>("performance-overlay"))
+                        mediaId = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                    }
+                    device.pressMenu()
+                    activateSetting(scenario, "Playback diagnostics")
+                    activateSetting(scenario, "Developer tools")
+                    activateSetting(scenario, "Performance overlay")
+                    waitFor(scenario) {
+                        it.window.decorView.findViewWithTag<TextView>("performance-overlay")?.text?.contains("UI 10s") == true
+                    }
+                    scenario.onActivity { activity ->
+                        val journal = MainActivity::class.java.getDeclaredField("playbackJournal").apply { isAccessible = true }.get(activity) as PlaybackJournal
+                        assertTrue(journal.report("fixture").contains("performance · Display"))
+                        assertEquals(mediaId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    }
+                    activateSetting(scenario, "Performance overlay")
+                    scenario.onActivity {
+                        assertNull(it.window.decorView.findViewWithTag<View>("performance-overlay"))
+                        assertFalse(store.performanceOverlay)
+                        assertEquals(mediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    }
+                }
+            } finally { store.performanceOverlay = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun activityMemoryTrimKeepsVisibleSportsCardsAndReloadsOnReturn() {
         FixtureServer().use { server ->
             val source = Source(name = "Trim fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

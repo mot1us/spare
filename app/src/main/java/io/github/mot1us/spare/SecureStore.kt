@@ -337,6 +337,9 @@ class SecureStore(private val context: Context) {
     var frameRateMatching: Boolean
         get() = preferences.getBoolean("frame-rate-matching", true)
         set(value) { preferences.edit { putBoolean("frame-rate-matching", value) } }
+    var performanceOverlay: Boolean
+        get() = preferences.getBoolean("performance-overlay", false)
+        set(value) { preferences.edit { putBoolean("performance-overlay", value) } }
     var smallPreview: Boolean
         get() = preferences.getBoolean("small-preview", true)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }

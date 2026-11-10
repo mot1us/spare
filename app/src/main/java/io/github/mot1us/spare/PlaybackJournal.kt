@@ -6,12 +6,15 @@ class PlaybackJournal {
     private val lines = ArrayDeque<String>()
     private var started = -1L
     @Synchronized fun record(event: Event, now: Long, bufferMs: Long, heapBytes: Long, maxHeapBytes: Long, streams: Int, dropped: Int = 0, code: Int? = null, liveOffsetMs: Long? = null, loading: Boolean? = null) {
-        if (started < 0) started = now
-        val seconds = (now - started).coerceAtLeast(0) / 1000
-        lines.addLast("+${seconds}s · ${event.name.lowercase().replace('_', ' ')} · main buffer ${bufferMs.coerceAtLeast(0) / 1000}s · Java heap ${heapBytes / 1048576}/${maxHeapBytes / 1048576} MiB · $streams stream(s)" +
+        append(now, "${event.name.lowercase().replace('_', ' ')} · main buffer ${bufferMs.coerceAtLeast(0) / 1000}s · Java heap ${heapBytes / 1048576}/${maxHeapBytes / 1048576} MiB · $streams stream(s)" +
             (if (dropped > 0) " · $dropped dropped" else "") + (code?.let { " · code $it" } ?: "") +
             (liveOffsetMs?.takeIf { it >= 0 }?.let { " · live offset ${it / 1000}s" } ?: "") +
             (loading?.let { " · loading $it" } ?: ""))
+    }
+    @Synchronized fun performance(now: Long, report: String) = append(now, "performance · " + report.replace("\n", " | "))
+    private fun append(now: Long, value: String) {
+        if (started < 0) started = now
+        lines.addLast("+${(now - started).coerceAtLeast(0) / 1000}s · $value")
         while (lines.size > 64) lines.removeFirst()
     }
     @Synchronized fun report(version: String) = "Spare $version · Local playback history\nNo channel names, addresses or credentials. Memory is Java heap; hardware decoder/GPU memory is separate.\n\n" + if (lines.isEmpty()) "No playback events yet." else lines.joinToString("\n")

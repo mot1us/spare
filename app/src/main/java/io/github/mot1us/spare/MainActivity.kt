@@ -512,6 +512,17 @@ class MainActivity : Activity() {
     private var hasPlayedChannel = false
     private val streamHealth = StreamHealth()
     private val playbackJournal = PlaybackJournal()
+    private var performanceOverlay: PerformanceOverlay? = null
+    private fun syncPerformanceOverlay() {
+        if (!started || !store.performanceOverlay) {
+            performanceOverlay?.close()
+            performanceOverlay = null
+        } else if (performanceOverlay == null) {
+            performanceOverlay = PerformanceOverlay(this, player, video.videoSurfaceView!!, {
+                PerformanceOverlay.VideoReading(expectedMediaId, frameRates.requestedRate, lastVideoInfo, firstFrame, playbackDroppedFrames)
+            }, playbackJournal)
+        }
+    }
     private var journalSampleAt = 0L
     private fun journal(event: PlaybackJournal.Event, dropped: Int = 0, code: Int? = null) {
         val runtime = Runtime.getRuntime()
@@ -1056,6 +1067,7 @@ class MainActivity : Activity() {
         sportsReplayGame = null
         val selected = owner(item) ?: return
         if (!selected.enabled || !Network.allowed(item.url, selected.allowHttp)) { toast("This title needs an enabled playlist with HTTP or HTTPS playback allowed"); return }
+        performanceOverlay?.tune()
         playlistSearch.pause(cancel = true)
         saveDemandProgress(); closeDetails(); cancelPlaybackCallbacks()
         watchingRedZone = false; onDemand = item.copy(playlistId = selected.id); demandPosition = position; demandPaused = false; demandSubtitleMode = null
@@ -1518,6 +1530,7 @@ class MainActivity : Activity() {
         clearSportsPlayback()
         val selected = owner(channel) ?: return
         if (!selected.enabled || !Network.allowed(channel.url, selected.allowHttp)) { toast("This channel needs an enabled playlist with HTTP or HTTPS playback allowed."); return }
+        performanceOverlay?.tune()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls)
         closeDetails(); cancelPlaybackCallbacks(); playbackToken++
         hasPlayedChannel = false; playbackRebuffers = 0; playbackReconnects = 0; playbackLoadErrors = 0
@@ -1534,6 +1547,7 @@ class MainActivity : Activity() {
     private fun playAttempt(phase: PlaybackPhase = PlaybackPhase.OPENING) {
         if (playbackUrl.isBlank() || pausedPlayback != null) return
         cancelPlaybackCallbacks()
+        performanceOverlay?.attempt()
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
@@ -2906,6 +2920,7 @@ class MainActivity : Activity() {
         if (page != "Local channels") localEditor = null
         val parent = when (page) {
             "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
+            "Developer tools" -> "Playback diagnostics"
             "Sports overlay" -> "Sports"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
@@ -2954,7 +2969,16 @@ class MainActivity : Activity() {
                     toast("Playback report copied")
                 }
                 panel.action("Clear playback history") { playbackJournal.clear(); refresh("Clear playback history") }
+                panel.action("Developer tools") { renderSettingsPage("Developer tools"); panel.focusContent() }
                 panel.note(playbackJournal.report(BuildConfig.VERSION_NAME))
+            }
+            "Developer tools" -> {
+                panel.page(page, "Local measurements for playback and the guide. Leave off for normal viewing.")
+                panel.action("Performance overlay", if (store.performanceOverlay) "On · retune for decoder and settle timing" else "Off", store.performanceOverlay) {
+                    store.performanceOverlay = !store.performanceOverlay
+                    syncPerformanceOverlay()
+                    refresh("Performance overlay")
+                }
             }
             "Guide" -> {
                 panel.page(page, "Browsing preferences. Appearance, fonts, spacing, opacity and preview layout are in Theme.")
@@ -3384,7 +3408,7 @@ class MainActivity : Activity() {
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -3408,7 +3432,12 @@ class MainActivity : Activity() {
         if (::sportsPanel.isInitialized) sportsPanel.pauseImages()
         super.onPause()
     }
-    override fun onStop() { scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear(); super.onStop() }
+    override fun onStop() {
+        performanceOverlay?.close()
+        performanceOverlay = null
+        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
+        super.onStop()
+    }
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return

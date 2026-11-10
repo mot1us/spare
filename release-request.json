@@ -1,1 +1,1 @@
-{"versionName":"0.32.9","versionCode":102,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":["trimEvictsDecodedCacheWithoutCancellingBindings","activityMemoryTrimKeepsVisibleSportsCardsAndReloadsOnReturn"]}
+{"versionName":"0.32.10","versionCode":103,"attempt":1,"macos":false,"tvSuite":"focused","tvTests":["performanceOverlayIsOptInAndKeepsThePlayingConnection"]}

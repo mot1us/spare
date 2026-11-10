@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.10 — 2026-11-09
+
+- Add an opt-in performance overlay under Playback diagnostics for playback and guide measurements.
+
 ## 0.32.9 — 2026-11-09
 
 - Release cached artwork when Android asks Spare to trim background memory.
