@@ -376,7 +376,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         { GuideTimeline.live(System.currentTimeMillis()) },
         { channel -> if (replayMode) replays.firstOrNull { it.channel.id == channel.id }?.let(watchReplay) else watchChannel(channel) },
         { channel -> if (!replayMode) secondChannel(channel) }, {}, { _, _ -> }, { scoresButton.requestFocus() },
-        { id, direction -> val next = streamsList.indexOfFirst { it.id == id } + direction; if (next < 0) scoresButton.requestFocus() else if (next in streamsList.indices) focusStream(next) },
+        { id, direction, _ -> val next = streamsList.indexOfFirst { it.id == id } + direction; if (next < 0) scoresButton.requestFocus() else if (next in streamsList.indices) focusStream(next) },
         { channel ->
             val title = replays.firstOrNull { replayMode && it.channel.id == channel.id }?.programme?.title ?: featured?.title ?: "NFL RedZone"
             title to streamLabels(channel).replace(channel.name, "").split('·', '\n').map { it.trim().removePrefix("★").trim() }.filter { it.isNotEmpty() }.joinToString(" · ")

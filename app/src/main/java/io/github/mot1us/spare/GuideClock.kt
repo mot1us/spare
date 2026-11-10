@@ -6,16 +6,38 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object GuideClock {
-    var use24Hour = false
+    @Volatile var use24Hour = false
+
+    internal class Formats(val locale: Locale, val zone: ZoneId) {
+        private val time12 = formatter("h:mm a")
+        private val time24 = formatter("HH:mm")
+        private val day12 = formatter("EEE h:mm a")
+        private val day24 = formatter("EEE HH:mm")
+        val sportsDay = formatter("EEE, MMM d")
+
+        private fun formatter(pattern: String) = DateTimeFormatter.ofPattern(pattern, locale).withZone(zone)
+        fun time(epoch: Long, clock24: Boolean) = (if (clock24) time24 else time12).format(Instant.ofEpochMilli(epoch))
+        fun dayTime(epoch: Long, clock24: Boolean) = (if (clock24) day24 else day12).format(Instant.ofEpochMilli(epoch))
+    }
+
+    @Volatile private var cached: Formats? = null
+    internal fun formats(zone: ZoneId = ZoneId.systemDefault()): Formats {
+        val locale = Locale.getDefault()
+        return cached?.takeIf { it.locale == locale && it.zone == zone }
+            ?: Formats(locale, zone).also { cached = it }
+    }
+
     fun time(epoch: Long, clock24: Boolean = use24Hour, zone: ZoneId = ZoneId.systemDefault()): String =
-        DateTimeFormatter.ofPattern(if (clock24) "HH:mm" else "h:mm a", Locale.getDefault()).withZone(zone).format(Instant.ofEpochMilli(epoch))
+        formats(zone).time(epoch, clock24)
+
     fun sportsDate(epoch: Long, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault(), clock24: Boolean = use24Hour): String {
         val day = Instant.ofEpochMilli(epoch).atZone(zone).toLocalDate(); val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
         val prefix = when (day) { today -> "Today · "; today.plusDays(1) -> "Tomorrow · "; else -> "" }
-        return prefix + DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()).format(day) + " · " + time(epoch, clock24, zone)
+        val format = formats(zone)
+        return prefix + format.sportsDay.format(day) + " · " + format.time(epoch, clock24)
     }
-    fun dayTime(epoch: Long): String = DateTimeFormatter.ofPattern(if (use24Hour) "EEE HH:mm" else "EEE h:mm a", Locale.getDefault())
-        .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(epoch))
+
+    fun dayTime(epoch: Long): String = formats().dayTime(epoch, use24Hour)
 }
 
 /** Browsing a future programme on one channel must never move the rest of the guide. */

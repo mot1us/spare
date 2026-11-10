@@ -904,8 +904,9 @@ class MainActivity : Activity() {
                 if (store.guideOpenFullscreen || playing) showGuide(false)
             } }, { channel ->
                 toggleFavorite(channel)
-            }, { channel -> focused = channel; showInfo(channel); updateTimes(); scheduleEpg() }, { channel, direction -> moveTime(channel, direction) }, { focusSidebar() }, { id, direction ->
-                val index = adapter.channels.indexOfFirst { it.id == id }
+            }, ::focusGuideRow, { channel, direction -> moveTime(channel, direction) }, { focusSidebar() }, { id, direction, repeating ->
+                lastGuideRepeat = if (repeating) android.os.SystemClock.uptimeMillis() else -1L
+                val index = adapter.positionOf(id)
                 if (index == 0 && direction < 0 && guideTimeline.ahead(id)) { ++focusEpoch; nowButton.requestFocus() }
                 else if (index >= 0 && adapter.channels.isNotEmpty()) focusChannelAt(if (store.guideLoopChannels) Math.floorMod(index + direction, adapter.channels.size) else (index + direction).coerceIn(adapter.channels.indices))
             })
@@ -1193,10 +1194,23 @@ class MainActivity : Activity() {
     private fun resetTime() {
         guideTimeline.reset((focused ?: current)?.id); updateTimes(); adapter.refreshRows(); (focused ?: current)?.let(::showInfo); scheduleEpg()
     }
+    private var lastGuideRepeat = -1L
+    private val settledGuideHeader = Runnable {
+        if (started && guideVisible && !sportsVisible && list.hasFocus()) focused?.let(::showInfo)
+    }
+    private fun focusGuideRow(channel: Channel) {
+        focused = channel
+        handler.removeCallbacks(settledGuideHeader)
+        val idle = android.os.SystemClock.uptimeMillis() - lastGuideRepeat
+        if (lastGuideRepeat >= 0 && idle < 100) handler.postDelayed(settledGuideHeader, 100 - idle)
+        else showInfo(channel)
+        updateTimes()
+        scheduleEpg()
+    }
     private fun focusChannel() {
         if (sportsVisible) { ++focusEpoch; sportsPanel.focusGames(); return }
-        val index = adapter.channels.indexOfFirst { it.id == (focused ?: current)?.id }.takeIf { it >= 0 }
-            ?: adapter.channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
+        val index = adapter.positionOf((focused ?: current)?.id).takeIf { it >= 0 }
+            ?: adapter.positionOf(current?.id).coerceAtLeast(0)
         focusChannelAt(index)
     }
     private fun focusChannelAt(position: Int) {
@@ -1838,7 +1852,10 @@ class MainActivity : Activity() {
         if (returningToGuide) navigationRail.prepareForContent()
         closeDetails()
         if (!show && ::searchPanel.isInitialized && searchPanel.isVisible) { searchPanel.dismiss(); playlistSearch.pause() }
-        if (!show) { guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
+        if (!show) {
+            handler.removeCallbacks(settledGuideHeader)
+            lastGuideRepeat = -1L
+            guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
         if (!show || !sportsVisible) stopSportsPrefetch()
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()

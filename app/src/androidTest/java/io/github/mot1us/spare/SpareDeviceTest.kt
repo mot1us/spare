@@ -1299,6 +1299,45 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun guideRepeatsSettleHeaderWithoutDelayingTheFirstPress() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Guide repeat fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = (1..6).map { Channel("repeat-$it", "Repeat channel $it", "Guide", "${server.base}/channel1.mp4") }
+            val now = System.currentTimeMillis()
+            val programmes = channels.mapIndexed { index, channel ->
+                channel.id to listOf(Programme(channel.id, "Repeat listing ${index + 1}", now - 120_000, now + 1_800_000))
+            }.toMap()
+            val info = MainActivity::class.java.getDeclaredField("channelInfo").apply { isAccessible = true }
+            fun header(activity: MainActivity) = (info.get(activity) as TextView).text.toString()
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source); store.markFullEpgAttempted(source)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player?.let { player ->
+                        player.repeatMode = Player.REPEAT_MODE_ONE; player.isPlaying
+                    } == true }
+                    device.pressBack()
+                    waitFor(scenario) { channelList(it)?.findFocus() is GuideAdapter.Row && header(it) == "Repeat listing 1" }
+                    scenario.onActivity { activity ->
+                        val first = channelList(activity)!!.findFocus() as GuideAdapter.Row
+                        val down = android.view.KeyEvent.KEYCODE_DPAD_DOWN
+                        first.onKeyDown(down, android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, down))
+                        assertEquals("Repeat listing 2", header(activity))
+                        val second = channelList(activity)!!.findFocus() as GuideAdapter.Row
+                        val time = android.os.SystemClock.uptimeMillis()
+                        second.onKeyDown(down, android.view.KeyEvent(time, time, android.view.KeyEvent.ACTION_DOWN, down, 1))
+                        assertEquals("Focus moves immediately while the repeated header waits", "repeat-3", (channelList(activity)!!.findFocus() as GuideAdapter.Row).channel?.id)
+                        assertEquals("Repeat listing 2", header(activity))
+                    }
+                    waitFor(scenario) { header(it) == "Repeat listing 3" }
+                    scenario.onActivity { activity ->
+                        assertTrue(channelList(activity)!!.findFocus().contentDescription.contains("Repeat listing 3"))
+                    }
+                }
+            } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun guideScrollingThemesAndCategorySelectionKeepThePlayer() {
         FixtureServer(regionGroups = true).use { server ->
             val source = Source(name = "Navigation Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

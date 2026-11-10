@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.12 — 2026-11-09
+
+- Reduce repeated guide drawing and focus work while preserving programme labels and remote navigation.
+
 ## 0.32.11 — 2026-11-09
 
 - Preserve Media3’s codec buffer locking and callbacks when observing input cadence.
