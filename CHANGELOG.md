@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.15 — 2026-11-10
+
+- Browse Library posters and live programme results together in Search, with filters for each type.
+
 ## 0.32.14 — 2026-11-10
 
 - Prepare Sports matches from a shared guide index and warm several visible games together.

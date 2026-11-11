@@ -1221,7 +1221,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.pkg(keyboardPackage)), 5000))
                 device.findObject(By.desc("Search playlist")).text = "Channel 7"
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 && (channelList(it)!!.adapter as GuideAdapter).channels.single().name == "Test Channel 7" && it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").adapter?.itemCount == 1 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").getChildAt(0)?.contentDescription?.contains("Test Channel 7") == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results")?.hasFocus() == true }
                 assertTrue(device.wait(Until.gone(By.pkg(keyboardPackage)), 5000))
@@ -2416,7 +2416,7 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search").performClick() }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("One") }
-                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 1 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:favorite:1")?.isShown == true }
                 device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == false }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(1)!!.itemView.requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 && channelList(it)?.hasFocus() == true }
@@ -2789,10 +2789,11 @@ class SpareDeviceTest {
     }
 
     @Test fun guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes() {
+        store.performanceOverlay = false
         device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
-        FixtureServer(libraryCategories = true, longVideo = true).use { server ->
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
-            val channel = Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4", catchupDays = 2, catchupMode = "xc")
+            val channel = Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4", logo = "${server.base}/logo.png", catchupDays = 2, catchupMode = "xc")
             store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
@@ -2803,8 +2804,25 @@ class SpareDeviceTest {
                     it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture")
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.isShown == true && it.window.decorView.findViewWithTag<View>("search-result:series:1")?.isShown == true }
-                scenario.onActivity { assertNotNull(it.window.decorView.findViewWithTag<View>("search-result:live:xc:1")); it.window.decorView.findViewWithTag<View>("search-kind:series").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:series:1")?.hasFocus() == true }
+                waitFor(scenario) { activity ->
+                    val root = activity.window.decorView
+                    val movie = root.findViewWithTag<View>("search-result:movie:101")
+                    val channelResult = root.findViewWithTag<View>("search-result:live:xc:1")
+                    movie != null && channelResult != null &&
+                        find<ImageView>(movie)?.drawable is android.graphics.drawable.BitmapDrawable &&
+                        find<ImageView>(channelResult)?.drawable is android.graphics.drawable.BitmapDrawable
+                }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").requestFocus() }
+                device.pressDPadDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:1")?.hasFocus() == true }
+                device.pressDPadUp()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.hasFocus() == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "search-all.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:series").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("search-poster-grid")?.findViewWithTag<View>("search-result:series:1")?.hasFocus() == true }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "search-poster-grid.png"))
                 device.pressDPadDown(); device.pressDPadRight()
                 scenario.onActivity { assertTrue("Search owns remote focus at the results boundary", it.window.decorView.findViewWithTag<View>("playlist-search").hasFocus()) }
                 device.pressDPadCenter()
@@ -2814,12 +2832,96 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Pilot") }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:episode:201")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:episode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:episode:201")?.hasFocus() == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("search-poster-grid")?.findViewWithTag<View>("search-result:episode:201")?.hasFocus() == true }
                 device.pressDPadCenter()
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/201.mp4" }
                 assertEquals(1, server.catalogTargets.count { !it.contains("category_id=") })
             }
             store.saveSources(emptyList()); store.removeCache(source)
+        }
+    }
+
+    @Test fun indexedProgrammeSearchRendersResultsOnAHundredThousandChannelsAndTunes() {
+        store.performanceOverlay = false
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Search benchmark", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val initial = Channel("initial", "Initial live feed", "Fixture", "${server.base}/channel1.mp4")
+            val now = System.currentTimeMillis()
+            val channels = List(100_000) { id -> Channel("benchmark:$id", "Feed $id", "Television", "${server.base}/channel2.mp4", logo = "${server.base}/logo.png") }
+            val titles = List(1000) { "Studio $it Edition" }
+            val guide = Guide(channels, channels.mapIndexed { i, channel ->
+                val start = if (i < 3_000) now - 60_000 else now + 3_600_000
+                channel.id to listOf(Programme(channel.id, titles[i % titles.size], start, start + 3_600_000))
+            }.toMap())
+            val prepared = GuideProgrammeIndex.Builder().prepare(guide, now)
+            store.recentFeeds = emptyList()
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(initial), emptyMap())); store.markPlaylistRefreshed(source)
+            val release = java.util.concurrent.CountDownLatch(1)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType)
+                        .apply { isAccessible = true }.invoke(activity, "", false)
+                    MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, guide)
+                    MainActivity::class.java.getDeclaredField("programmeIndex").apply { isAccessible = true }.set(activity, prepared)
+                    val worker = MainActivity::class.java.getDeclaredField("liveSearchWorker").apply { isAccessible = true }
+                        .get(activity) as java.util.concurrent.ExecutorService
+                    worker.submit { release.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+                    activity.window.decorView.findViewWithTag<EditText>("guide-search-input").setText(titles[19])
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-skeleton")?.isShown == true }
+                instrumentation.waitForIdleSync()
+                Thread.sleep(120)
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "search-loading.png"))
+                release.countDown()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:benchmark:19")?.isShown == true }
+
+                val elapsed = mutableListOf<Long>()
+                for (id in 20 until 44) {
+                    val rendered = java.util.concurrent.CountDownLatch(1)
+                    var began = 0L
+                    var ended = 0L
+                    scenario.onActivity { activity ->
+                        val root = activity.window.decorView
+                        val observer = root.viewTreeObserver
+                        val listener = object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                            override fun onGlobalLayout() {
+                                if (root.findViewWithTag<View>("search-result:live:benchmark:$id")?.isShown == true) {
+                                    ended = android.os.SystemClock.elapsedRealtimeNanos()
+                                    observer.removeOnGlobalLayoutListener(this)
+                                    rendered.countDown()
+                                }
+                            }
+                        }
+                        observer.addOnGlobalLayoutListener(listener)
+                        began = android.os.SystemClock.elapsedRealtimeNanos()
+                        root.findViewWithTag<EditText>("guide-search-input").setText(titles[id])
+                    }
+                    assertTrue("Render a programme-title match for query $id", rendered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    elapsed.add((ended - began) / 1_000_000)
+                }
+                val ordered = elapsed.sorted()
+                println("Search benchmark 100000 channels and programmes, ${elapsed.size} queries: p50=${ordered[11]}ms p95=${ordered[22]}ms")
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:live").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:benchmark:43")?.hasFocus() == true }
+                scenario.onActivity { activity ->
+                    val row = activity.window.decorView.findViewWithTag<View>("search-result:live:benchmark:43")
+                    assertTrue(row.contentDescription.contains(titles[43]))
+                    assertTrue(row.contentDescription.contains("Live"))
+                    assertFalse(row.contentDescription.contains(source.name))
+                }
+                instrumentation.waitForIdleSync(); device.waitForIdle()
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "search-live.png"))
+                device.pressDPadCenter()
+                waitFor(scenario) {
+                    it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == false &&
+                        find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4"
+                }
+            } } finally {
+                release.countDown()
+                store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source)
+            }
         }
     }
 
@@ -3513,8 +3615,8 @@ class SpareDeviceTest {
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:1") != null && it.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}") != null }
                 scenario.onActivity { activity ->
-                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("search-result:live:xc:1").text.contains(a.name))
-                    assertTrue(activity.window.decorView.findViewWithTag<TextView>("search-result:live:${ownedB!!.id}").text.contains(b.name))
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("search-result:live:xc:1").contentDescription.contains(a.name))
+                    assertTrue(activity.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}").contentDescription.contains(b.name))
                     MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, "Orbit", false)
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:42") != null && it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42") != null }

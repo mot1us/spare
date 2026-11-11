@@ -204,42 +204,20 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             init { setHasStableIds(true) }
             override fun getItemId(position: Int) = shownRows[position].stableId
             override fun getItemCount() = shownRows.size
-            override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder {
-                val box = LinearLayout(context).apply { orientation = VERTICAL; isFocusableInTouchMode = true; isClickable = true; setPadding(dp(7), dp(7), dp(7), dp(7)); background = GuideTheme.background(resources.displayMetrics.density, 0x44323D4B) }
-                val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
-                val text = label(12f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(4), dp(5), dp(4), 0) }
-                box.addView(image, LayoutParams(-1, 0, 1f)); box.addView(text, LayoutParams(-1, dp(42)))
-                return PosterHolder(box, image, text)
-            }
+            override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder = PosterHolder(LibraryPosterTile(context))
             override fun onBindViewHolder(holder: PosterHolder, position: Int) {
                 val item = shownRows[position]
-                holder.box.layoutParams = RecyclerView.LayoutParams(-1, dp(if (grid) 210 else 55)).apply { marginEnd = dp(8); bottomMargin = dp(GuideTheme.rowGapDp + 5) }
-                holder.box.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000)
-                holder.box.orientation = if (grid) VERTICAL else HORIZONTAL
-                holder.image.visibility = if (grid || item.poster.isNotBlank()) VISIBLE else GONE
-                holder.image.layoutParams = if (grid) LayoutParams(-1, 0, 1f) else LayoutParams(dp(70), -1).apply { marginEnd = dp(8) }
-                val subtitle = favoriteLabels[item.key] ?: item.detail
-                holder.text.textSize = 12f * GuideTheme.textScale
-                holder.text.typeface = AppFont.face()
-                holder.text.text = (if (item.key in favoriteIds) "✓ " else "") + item.title + if (subtitle.isBlank()) "" else "\n$subtitle"
-                holder.text.layoutParams = if (grid) LayoutParams(-1, dp(45)) else LayoutParams(0, -1, 1f)
-                holder.text.setTextColor(if (holder.box.hasFocus()) GuideTheme.focusText else Color.WHITE)
-                holder.box.tag = "library-item:${item.key}"; holder.box.contentDescription = "${item.title}. ${item.detail}" + if (item.key in favoriteIds) ". In Watchlist" else ""
+                val favorite = item.key in favoriteIds
+                holder.box.configure(if (grid) LibraryPosterTile.Layout.GRID else LibraryPosterTile.Layout.LIST)
+                holder.box.appearance()
+                holder.box.tag = "library-item:${item.key}"
+                holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
+                holder.box.bind(item.key, LibraryPosterTile.Content(
+                    (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster,
+                ), images, artworkHttp, item.requestPoster)
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
-                holder.box.setOnFocusChangeListener { _, active -> holder.text.setTextColor(if (active) GuideTheme.focusText else Color.WHITE); if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
-                val posterIdentity = "${item.key}\u0000${item.title}\u0000${item.poster}"
-                if (holder.posterIdentity != posterIdentity) { holder.posterIdentity = posterIdentity; ++holder.generation }
-                val generation = holder.generation
-                var requested = false
-                images.bind(holder.image, item.poster, artworkHttp) { bitmap ->
-                    if (holder.generation == generation && bitmap == null && !requested && (item.poster.isBlank() || images.unavailable(item.poster))) {
-                        requested = true
-                        item.requestPoster?.invoke { fallback ->
-                            if (holder.generation == generation && fallback.isNotBlank() && fallback != item.poster) images.bind(holder.image, fallback, artworkHttp)
-                        }
-                    }
-                }
+                holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
                 holder.box.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
@@ -255,9 +233,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 } }
             }
         }
-        rows.layoutManager = object : GridLayoutManager(context, columns) {
-            override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
-        }
+        rows.layoutManager = PosterGridLayout(context, columns)
         rows.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(list: RecyclerView, dx: Int, dy: Int) {
                 if (hasMore && (list.layoutManager as GridLayoutManager).findLastVisibleItemPosition() >= shownRows.size - 16) { hasMore = false; catalogMore?.invoke() }
@@ -449,6 +425,5 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun resumeImages() { images.resume() }
     fun trimImages() = images.trim()
     fun closeImages() { images.close() }
-    private class PosterHolder(val box: LinearLayout, val image: ImageView, val text: TextView) : RecyclerView.ViewHolder(box) { var generation = 0; var posterIdentity = "" }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
 }

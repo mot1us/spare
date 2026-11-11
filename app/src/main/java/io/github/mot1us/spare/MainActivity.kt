@@ -412,10 +412,11 @@ class MainActivity : Activity() {
     private lateinit var searchPanel: PlaylistSearchPanel
     private var searchedDemand = emptyList<OnDemand>()
     private var searchLoading = false
-    private var searchedLive = emptyList<Channel>()
+    private var searchedLive = emptyList<PlaylistLiveSearch.Match>()
     private var searchedMedia = emptyList<OnDemand>()
     private var liveSearchBusy = false
     private var liveSearchEpoch = 0
+    private var liveSearchTask: java.util.concurrent.Future<*>? = null
     private val liveSearchWorker = workers.pool("live-search", background = true)
     private var searchWarning = ""
     private var vodRequest: VodStart.Request? = null
@@ -461,7 +462,12 @@ class MainActivity : Activity() {
     @Volatile private var programmeIndex: GuideProgrammeIndex? = null
     private val programmeIndexUpdates = LatestTask<Guide>(programmeIndexWorker) { snapshot ->
         val ready = programmeIndexBuilder.prepare(snapshot, System.currentTimeMillis())
-        handler.post { if (!closed && ready.isFor(guide)) programmeIndex = ready }
+        handler.post {
+            if (!closed && ready.isFor(guide)) {
+                programmeIndex = ready
+                if (::searchPanel.isInitialized && searchPanel.isVisible && query.isNotBlank()) searchLivePlaylist()
+            }
+        }
     }
     private val prepareProgrammeIndex = Runnable { if (!closed) programmeIndexUpdates.submit(guide) }
     private var guide = Guide.EMPTY
@@ -582,7 +588,10 @@ class MainActivity : Activity() {
     private var groupsForChannels: List<Channel>? = null
     private var groupsForOrder: List<String>? = null
     private var voiceSearchPending = false
-    private val filterSearch = Runnable { query = guideSearch.query(); applyFilter(); updatePlaylistSearch() }
+    private val filterSearch = Runnable {
+        query = guideSearch.query()
+        if (searchPanel.isVisible) updatePlaylistSearch() else applyFilter()
+    }
     private val hideDetails = object : Runnable {
         override fun run() { if (details.isVisible && details.checkingVod) handler.postDelayed(this, 1000) else closeDetails() }
     }
@@ -1938,8 +1947,9 @@ class MainActivity : Activity() {
         query = initial.take(128); guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true)
         searchedDemand = emptyList(); searchLoading = false; searchWarning = ""
         handler.removeCallbacks(filterSearch); ++focusEpoch; pendingFocusList = null
-        searchPanel.show(query); root.bringChildToFront(searchPanel); updatePlaylistSearch(); guideSearch.voice.requestFocus()
-        if (useVoice) voiceSearch() else guideSearch.message("Finding this programme in your VOD library…")
+        searchPanel.show(query); root.bringChildToFront(searchPanel); showNavigation("search")
+        updatePlaylistSearch(); guideSearch.voice.requestFocus()
+        if (useVoice) voiceSearch() else guideSearch.message("Speak a title or channel name, or select the field to type.")
     }
     private fun watchVodFromBeginning() {
         val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
@@ -1984,38 +1994,60 @@ class MainActivity : Activity() {
     private fun updatePlaylistSearch() {
         if (!::searchPanel.isInitialized || !searchPanel.isVisible) return
         searchedDemand = emptyList(); searchedLive = emptyList(); searchedMedia = emptyList(); searchLoading = enabledSources().any { it.kind == "xtream" } && query.isNotBlank(); searchWarning = ""
-        val token = ++liveSearchEpoch; val term = ChannelSearch.key(query); val snapshot = guide.channels
-        liveSearchBusy = term.isNotBlank(); renderPlaylistSearch()
-        if (term.isNotBlank()) liveSearchWorker.execute {
-            val live = mutableListOf<Channel>(); val media = mutableListOf<OnDemand>(); val counts = mutableMapOf<String, Int>()
-            for (channel in snapshot) {
-                if (Thread.currentThread().isInterrupted) return@execute
-                if (!channel.searchKey.contains(term)) continue
-                val id = playlistId(channel); val count = counts[id] ?: 0
-                if (count >= 40) continue
-                counts[id] = count + 1
-                if (channel.media) media.add(OnDemand("m3u:${channel.id}", channel.name, channel.group, channel.url, playlistId = id)) else live.add(channel)
-            }
+        searchLivePlaylist()
+        source?.let { playlistSearch.search(it, query, enabledSources().flatMap { selected -> library.knownTitles(selected).map { item -> item.copy(playlistId = selected.id) } }) }
+    }
+
+    private fun searchLivePlaylist() {
+        liveSearchTask?.cancel(true)
+        val token = ++liveSearchEpoch
+        val term = ChannelSearch.key(query)
+        val snapshot = guide
+        val index = programmeIndex
+        val legacy = playlists.legacySource
+        liveSearchBusy = term.isNotBlank()
+        renderPlaylistSearch()
+        if (term.isBlank()) return
+        liveSearchTask = liveSearchWorker.submit {
+            val matches = PlaylistLiveSearch.find(snapshot, index, term, System.currentTimeMillis(), legacy)
+            val (media, live) = matches.partition { it.channel.media }
+            val movies = media.map { (channel) -> OnDemand("m3u:${channel.id}", channel.name, channel.group, channel.url, playlistId = channel.playlistId.ifBlank { legacy }) }
             handler.post {
-                if (!closed && token == liveSearchEpoch && ChannelSearch.key(query) == term && guide.channels === snapshot && searchPanel.isVisible) {
-                    searchedLive = live.take(120); searchedMedia = media.take(120); liveSearchBusy = false; renderPlaylistSearch()
+                if (!closed && token == liveSearchEpoch && ChannelSearch.key(query) == term && guide.channels === snapshot.channels && searchPanel.isVisible) {
+                    searchedLive = live; searchedMedia = movies; liveSearchBusy = false; renderPlaylistSearch()
                 }
             }
         }
-        source?.let { playlistSearch.search(it, query, enabledSources().flatMap { selected -> library.knownTitles(selected).map { item -> item.copy(playlistId = selected.id) } }) }
     }
+
     private fun renderPlaylistSearch() {
-        val term = ChannelSearch.key(query)
-        val live = if (term.isBlank()) emptyList() else searchedLive.asSequence().map { channel ->
-            PlaylistSearchRow("live:${channel.id}", channel.name, "Live TV · ${owner(channel)?.name.orEmpty()} · ${channel.group}", "live") {
+        val now = System.currentTimeMillis()
+        val showPlaylist = enabledSources().size > 1
+        val live = searchedLive.map { (channel, programme) ->
+            val provider = owner(channel)
+            val playing = programme != null && now in programme.start until programme.end
+            val status = when {
+                playing -> "${((programme.end - now + 59_999) / 60_000).coerceAtLeast(1)}m left"
+                programme != null && programme.start > now -> "Starts ${GuideClock.time(programme.start)}"
+                else -> ""
+            }
+            val progress = if (playing) ((now - programme.start).toDouble() / (programme.end - programme.start) * 100).toInt().coerceIn(0, 100) else -1
+            PlaylistSearchChannel(channel, provider?.name.orEmpty().takeIf { showPlaylist }.orEmpty(),
+                programme?.title ?: "No programme information", status, progress, provider?.allowHttp == true) {
                 clearGuideSearch(); if (current?.id != channel.id || !hasPlayedChannel || player.playerError != null) tune(channel); showGuide(false)
             }
-        }.toList()
-        val media = searchedDemand + searchedMedia
-        val titles = media.map { item -> PlaylistSearchRow(if (item.playlistId.isBlank() || item.playlistId == playlists.legacySource) item.id else "${item.playlistId}:${item.id}", item.title, (if (enabledSources().size > 1) sources.firstOrNull { it.id == item.playlistId }?.name?.let { "$it · " }.orEmpty() else "") + when (item.kind) { "series" -> "Series"; "episode" -> "Episode · Season ${item.season} · Episode ${item.episode}"; else -> "Movie" }, item.kind) {
-            clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
-        } }
-        searchPanel.submit(query, live + titles, searchLoading || liveSearchBusy, searchWarning)
+        }
+        val titles = (searchedDemand + searchedMedia).map { item ->
+            val key = if (item.playlistId.isBlank() || item.playlistId == playlists.legacySource) item.id else "${item.playlistId}:${item.id}"
+            val provider = owner(item)
+            val subtitle = listOfNotNull(item.year, item.genre, if (item.kind == "episode") "Season ${item.season} · Episode ${item.episode}" else null,
+                provider?.name?.takeIf { showPlaylist }).filter(String::isNotBlank).joinToString(" · ")
+            val content = LibraryPosterTile.Content(item.title, subtitle, item.poster, item.kind.uppercase(java.util.Locale.ROOT))
+            PlaylistSearchPoster(key, item.kind, content, provider?.allowHttp == true) {
+                clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
+            }
+        }.distinctBy { it.key }
+        searchPanel.submit(query, live, titles, searchLoading || liveSearchBusy, searchWarning)
     }
     private fun finishSearch(close: Boolean) {
         voiceInput.stop(); voiceSearchPending = false
@@ -3524,11 +3556,13 @@ class MainActivity : Activity() {
         if (::scoreStrip.isInitialized) scoreStrip.trimImages()
         if (::sportsPanel.isInitialized) sportsPanel.trimImages()
         if (::library.isInitialized) library.panel.trimImages()
+        if (::searchPanel.isInitialized) searchPanel.trimImages()
     }
 
     override fun onDestroy() {
         if (::scoreStrip.isInitialized) scoreStrip.closeImages()
         if (::playlistSearch.isInitialized) playlistSearch.close()
+        if (::searchPanel.isInitialized) searchPanel.closeImages()
         replayDiscovery?.close()
         localTask?.cancel(true)
         calendarSchedule?.close()

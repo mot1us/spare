@@ -43,6 +43,10 @@ class GuideSearchBar(
         doAfterTextChanged { onChanged() }
     }
     val voice = makeButton("Voice", onVoice).apply { tag = "guide-search-voice"; contentDescription = "Search by voice" }
+    private val clear = makeButton("Clear") { input.setText(""); input.requestFocus() }.apply { tag = "guide-search-clear" }
+    private val done = makeButton("Done") { hideKeyboard(); onClose() }.apply { tag = "guide-search-done" }
+    internal val controls = listOf(input, voice, clear, done)
+    internal var direction: ((Int, Int) -> Unit)? = null
     private val hint = TextView(context).apply { textSize = 11f; setTextColor(Color.LTGRAY); tag = "guide-search-hint" }
     init {
         orientation = VERTICAL; tag = "guide-search"; visibility = View.GONE
@@ -50,12 +54,16 @@ class GuideSearchBar(
         val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         row.addView(input, LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(12) })
         row.addView(voice)
-        row.addView(makeButton("Clear") { input.setText(""); input.requestFocus() })
-        row.addView(makeButton("Done") { hideKeyboard(); onClose() })
+        row.addView(clear)
+        row.addView(done)
         addView(row); addView(hint, LayoutParams(-1, dp(20)))
         for (i in 0 until row.childCount) row.getChildAt(i).setOnKeyListener { view, code, event ->
             when {
                 view === input && code == KeyEvent.KEYCODE_DPAD_CENTER -> { if (event.action == KeyEvent.ACTION_UP) keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT); true }
+                direction != null && code in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (event.action == KeyEvent.ACTION_DOWN) direction?.invoke(i, code)
+                    true
+                }
                 code == KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); onResults() }; true }
                 else -> false
             }

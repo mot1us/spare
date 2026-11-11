@@ -9,14 +9,17 @@ class GuideProgrammeIndex private constructor(
     private val shape: Channels,
     val programmesByKey: Map<String, List<Listing>>,
     private val sportsByTeam: Map<Pair<String, String>, List<SportsListing>>,
+    private val titles: ProgrammeTitles,
 ) {
     data class Listing(val key: String, val programme: Programme, val titleKey: String, internal val teams: Map<String, Set<String>>)
+    internal data class SearchChannel(val channel: Channel, val groupKey: String)
     private data class SportsListing(val row: Listing, val teams: Set<String>)
     private data class Channels(
         val video: List<Channel>,
         val videoByKey: Map<String, List<Channel>>,
         val liveByKey: Map<String, List<Channel>>,
         val namePrefixes: Map<Int, IntArray>,
+        val searchChannels: List<SearchChannel>,
     )
 
     fun isFor(snapshot: Guide) = guide.channels === snapshot.channels && guide.programmes === snapshot.programmes
@@ -33,8 +36,9 @@ class GuideProgrammeIndex private constructor(
     }
 
     internal fun video(key: String) = shape.videoByKey[key].orEmpty()
-    internal fun live(key: String) = shape.liveByKey[key].orEmpty()
     internal val sportsKeys get() = shape.videoByKey.keys
+    internal val searchChannels get() = shape.searchChannels
+    internal fun matchingTitles(term: String) = titles.matching(term)
 
     internal fun sportsChannels(teamHints: List<List<String>>, networkHints: List<String>): List<Channel> {
         fun positions(hints: List<String>): BitSet {
@@ -95,7 +99,7 @@ class GuideProgrammeIndex private constructor(
                     }
                 }
             }
-            return GuideProgrammeIndex(guide, now, shape, byKey, byTeam).also { previous = it }
+            return GuideProgrammeIndex(guide, now, shape, byKey, byTeam, ProgrammeTitles(byKey.values)).also { previous = it }
         }
 
         private fun channels(guide: Guide): Channels {
@@ -106,7 +110,42 @@ class GuideProgrammeIndex private constructor(
                 val name = channel.name
                 for (i in 0 until name.lastIndex) prefixes.getOrPut(prefix(name[i], name[i + 1]), ::Positions).add(index)
             }
-            return Channels(video, video.groupBy(guide::key), guide.channels.filterNot { it.media }.groupBy(guide::key), prefixes.mapValues { it.value.toArray() })
+            val groups = HashMap<String, String>()
+            val searchable = guide.channels.map { SearchChannel(it, groups.getOrPut(it.group) { ChannelSearch.key(it.group) }) }
+            return Channels(video, video.groupBy(guide::key), guide.channels.filterNot { it.media }.groupBy(guide::key),
+                prefixes.mapValues { it.value.toArray() }, searchable)
+        }
+    }
+
+    /** Index distinct normalised titles, so repeated broadcasts only expand after the title matches. */
+    private class ProgrammeTitles(rows: Collection<List<Listing>>) {
+        private val groups: List<Map.Entry<String, List<Listing>>>
+        private val pairs: Map<Int, IntArray>
+
+        init {
+            val byTitle = LinkedHashMap<String, MutableList<Listing>>()
+            for (list in rows) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                for (row in list) if (row.titleKey.isNotEmpty()) byTitle.getOrPut(row.titleKey, ::ArrayList).add(row)
+            }
+            groups = byTitle.entries.toList()
+            val positions = HashMap<Int, Positions>()
+            groups.forEachIndexed { index, entry ->
+                val title = entry.key
+                for (i in 0 until title.lastIndex) positions.getOrPut(prefix(title[i], title[i + 1]), ::Positions).add(index)
+            }
+            pairs = positions.mapValues { it.value.toArray() }
+        }
+
+        fun matching(term: String): Sequence<Listing> {
+            if (term.isEmpty()) return emptySequence()
+            var smallest: IntArray? = null
+            for (i in 0 until term.lastIndex) {
+                val candidates = pairs[prefix(term[i], term[i + 1])] ?: return emptySequence()
+                if (smallest == null || candidates.size < smallest.size) smallest = candidates
+            }
+            val entries = smallest?.asSequence()?.map { groups[it] } ?: groups.asSequence()
+            return entries.filter { it.key.contains(term) }.flatMap { it.value.asSequence() }
         }
     }
 
