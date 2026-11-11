@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.16 — 2026-11-10
+
+- Give Sports a compact game grid, a league and settings rail, and one schedule control.
+
 ## 0.32.15 — 2026-11-10
 
 - Browse Library posters and live programme results together in Search, with filters for each type.
