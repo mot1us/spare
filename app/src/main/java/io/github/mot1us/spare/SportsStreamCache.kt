@@ -2,6 +2,12 @@ package io.github.mot1us.spare
 
 /** Session-only coverage evidence. Never stores a player or assumes that a stream is online. */
 class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs: Long = 120000, private val clock: () -> Long = System::currentTimeMillis) {
+    enum class Peek(val label: String) {
+        HIT("hit"), NO_CONTEXT("miss: no context"), LINEUP("miss: lineup changed"),
+        INELIGIBLE("miss: game not eligible"), NO_ENTRY("miss: no entry"), SIGNATURE("miss: game changed"),
+        DISPLAY_EXPIRED("miss: display expired"), GUIDE_CHANGED("miss: guide changed"),
+        COVERAGE_EXPIRED("miss: coverage expired"), STALE("miss: stale"), NOT_READY("miss: not ready to tune"),
+    }
     class Context(val source: String, val generation: Int, val guide: Guide, val favorites: Set<String>)
     data class Match(val game: SportsGame, val warmed: Map<String, List<Programme>> = emptyMap(), val autoReady: Boolean = true, val upgradeChecked: Boolean = false) {
         fun current(game: SportsGame) = copy(game = game.copy(broadcasts = this.game.broadcasts,
@@ -11,7 +17,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
             !upgradeChecked && confirmed(now) && SportsStreams.confirmationFloor(game, filters, quality, now)?.let { it >= 0 } == true
 
         /** A click can use new EPG for already-known alternatives without scanning the lineup. */
-        fun withCandidateGuide(previous: Guide, current: Guide, now: Long): Match {
+        fun withCandidateGuide(previous: Guide, current: Guide, now: Long, trace: SportsClickTrace? = null): Match {
             if (previous.programmes === current.programmes || game.candidates.isEmpty()) return this
             val changed = game.candidates.filter { channel ->
                 val key = current.key(channel)
@@ -19,7 +25,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
             }
             if (changed.isEmpty()) return this
             val entries = changed.associate { current.key(it) to current.programmes[current.key(it)].orEmpty() }
-            val extra = SportsSchedule.match(game, Guide(changed, entries), emptySet(), now)
+            val extra = SportsSchedule.match(game, Guide(changed, entries), emptySet(), now, trace = trace)
             if (extra.broadcasts.isEmpty() && extra.titleMatches.isEmpty()) return this
             return retainCoverage(copy(game = extra))
         }
@@ -34,14 +40,14 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
                 candidates = (game.candidates + other.game.candidates).distinctBy { it.id }.filterNot { it.id in ids }),
                 warmed = other.warmed + warmed, autoReady = autoReady || other.autoReady, upgradeChecked = upgradeChecked || other.upgradeChecked)
         }
-        fun needsRefresh(previous: Guide, current: Guide, now: Long): Boolean {
+        fun needsRefresh(previous: Guide, current: Guide, now: Long, trace: SportsClickTrace? = null): Boolean {
             if (previous.channels !== current.channels && previous.channels != current.channels) return true
             if (previous.programmes === current.programmes) return false
             val channels = (game.broadcasts.map { it.channel } + game.titleMatches).distinctBy { it.id }
             val keys = channels.map { previous.key(it) }.toSet()
             val changed = keys.any { current.programmes[it] != previous.programmes[it] && current.programmes[it] != warmed[it] }
             if (changed) {
-                val next = SportsSchedule.match(game, current.copy(channels = channels), emptySet(), now)
+                val next = SportsSchedule.match(game, current.copy(channels = channels), emptySet(), now, trace = trace)
                 fun evidence(value: SportsGame) = value.broadcasts.map { listOf(it.channel.id, it.programme.title, it.programme.start, it.programme.end) }.toSet()
                 if (evidence(next) != evidence(game) || next.titleMatches != game.titleMatches) return true
             }
@@ -77,17 +83,25 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         return (match.broadcasts.map { it.channel.id } + match.titleMatches.map { it.id }).toSet()
     }
     /** Read-only fast path: validate only known feeds; never wait on a background scan. */
-    fun peek(source: String, generation: Int, guide: Guide, favorites: Set<String>, game: SportsGame, now: Long, forAuto: Boolean = true): Match? {
-        val saved = published; val owner = saved.context ?: return null
-        if (owner.source != source || owner.generation != generation || owner.guide.channels !== guide.channels || owner.favorites != favorites) return null
-        if (!game.live(now) && !(game.upcoming(now) && !forAuto)) return null
-        val entry = saved.entries[game.key] ?: return null
-        if (entry.signature != signature(game) || entry.displayUntil <= now) return null
+    fun peek(source: String, generation: Int, guide: Guide, favorites: Set<String>, game: SportsGame, now: Long, forAuto: Boolean = true, trace: SportsClickTrace? = null): Match? {
+        val begin = trace?.peekStarted()
+        val saved = published
+        val owner = saved.context ?: run { trace?.peek(Peek.NO_CONTEXT, begin); return null }
+        if (owner.source != source || owner.generation != generation || owner.guide.channels !== guide.channels || owner.favorites != favorites) {
+            trace?.peek(Peek.LINEUP, begin); return null
+        }
+        if (!game.live(now) && !(game.upcoming(now) && !forAuto)) { trace?.peek(Peek.INELIGIBLE, begin); return null }
+        val entry = saved.entries[game.key] ?: run { trace?.peek(Peek.NO_ENTRY, begin); return null }
+        if (entry.signature != signature(game)) { trace?.peek(Peek.SIGNATURE, begin); return null }
+        if (entry.displayUntil <= now) { trace?.peek(Peek.DISPLAY_EXPIRED, begin); return null }
         val confirmed = entry.match.confirmed(now)
-        if (owner.guide.programmes !== guide.programmes && (!confirmed || entry.match.needsRefresh(owner.guide, guide, now))) return null
-        if (entry.match.game.broadcasts.isNotEmpty() && !confirmed) return null
-        if (entry.expires <= now && !confirmed) return null
-        return entry.match.takeIf { !forAuto || it.autoReady }?.withCandidateGuide(owner.guide, guide, now)?.current(game)
+        if (owner.guide.programmes !== guide.programmes && (!confirmed || entry.match.needsRefresh(owner.guide, guide, now, trace))) {
+            trace?.peek(Peek.GUIDE_CHANGED, begin); return null
+        }
+        if (entry.match.game.broadcasts.isNotEmpty() && !confirmed) { trace?.peek(Peek.COVERAGE_EXPIRED, begin); return null }
+        if (entry.expires <= now && !confirmed) { trace?.peek(Peek.STALE, begin); return null }
+        if (forAuto && !entry.match.autoReady) { trace?.peek(Peek.NOT_READY, begin); return null }
+        return entry.match.withCandidateGuide(owner.guide, guide, now, trace).current(game).also { trace?.peek(Peek.HIT, begin) }
     }
 
     private fun signature(game: SportsGame) = Signature(game.key, game.state, game.start, game.end, game.teams.map { it.id }, game.networks)
@@ -151,6 +165,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
 
 /** A maximum of three automatic attempts; ordinary channel changes abandon the plan. */
 class SportsPlaybackPlan(val game: SportsGame, candidates: List<Channel>, val backgroundRecovery: Boolean = false) {
+    internal var trace: SportsClickTrace? = null
     val candidates = candidates.distinctBy { it.id }.take(12)
     private val attempted = mutableSetOf<String>()
     var channel: Channel? = null; private set

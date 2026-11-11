@@ -18,6 +18,7 @@ object SportsGuide {
     const val HORIZON = 48 * 3600000L
     const val MAX_WARM_CHANNELS = 64
     private val matchup = Regex("\\b(vs|v|versus|at)\\b")
+    internal fun hasMatchupSeparator(normalizedTitle: String) = matchup.containsMatchIn(normalizedTitle)
     private val baseball = Regex("\\b(mlb|baseball|world series)\\b")
     private val basketball = Regex("\\b(nba|basketball)\\b")
     private val hockey = Regex("\\b(nhl|hockey)\\b")

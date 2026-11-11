@@ -136,8 +136,20 @@ object SportsSchedule {
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
-    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE, quality: Map<String, VideoInfo> = emptyMap(), progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
+    fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE,
+        quality: Map<String, VideoInfo> = emptyMap(), trace: SportsClickTrace? = null, progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
         if (game.state == "post") return game
+        val measurement = trace?.matchStarted()
+        val result = matchLocal(game, guide, favorites, now, deadlineNanos, quality, progress, measurement)
+        if (measurement != null) {
+            trace.matchEnded(measurement)
+            countNearMisses(game, guide, now, measurement, trace)
+            trace.matched(measurement)
+        }
+        return result
+    }
+    private fun matchLocal(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long,
+        quality: Map<String, VideoInfo>, progress: (Int, Int) -> Unit, measurement: SportsMatchMeasurement?): SportsGame {
         val target = game.teams.map { it.id }.toSet()
         val hints = game.teams.map { team -> (team.aliases + team.name.split(' ').filter { it.length >= 4 }).distinct() }
         fun relevant(title: String, description: String = "") = hints.all { aliases -> aliases.any { alias -> title.contains(alias, true) || description.contains(alias, true) } }
@@ -167,7 +179,9 @@ object SportsSchedule {
             if (Thread.currentThread().isInterrupted) return game
             if (System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedKeys++
-            val programme = guide.programmes[entry.key].orEmpty().asSequence().filter { p ->
+            val listings = guide.programmes[entry.key].orEmpty()
+            measurement?.visited(entry.key, listings.size)
+            val programme = listings.asSequence().filter { p ->
                 broadcastWindow(game, p, now) && matchesTarget(p, game.teams.first().league)
             }.minByOrNull { kotlin.math.abs(it.start - game.start) }
             if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
@@ -187,11 +201,34 @@ object SportsSchedule {
             else if (possibleNetwork && patterns.any { it in channel.sportsKey }) candidates.add(channel)
         }
         val confirmed = matches.map { it.channel.id }.toSet()
+        if (measurement != null) measurement.channels = checkedChannels
         val titleOnly = titles.filter { it.id !in confirmed }
         val found = confirmed + titleOnly.map { it.id }
         progress(checkedChannels + checkedKeys, channels.size + byGuideKey.size)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
             .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(512), coverageComplete = complete)
+    }
+    /** Run after the timed match so this diagnostic pass cannot consume its deadline. */
+    private fun countNearMisses(game: SportsGame, guide: Guide, now: Long, measurement: SportsMatchMeasurement, trace: SportsClickTrace) {
+        if (game.teams.size != 2 || !trace.active()) return
+        val aliases = game.teams.map { team -> (team.aliases + team.name).map { it to " ${SportsCatalog.normalize(it)} " }.distinct() }
+        val league = game.teams.first().league
+        val ids = game.teams.map { it.id }.toSet()
+        for (key in measurement.guideKeys) {
+            if (Thread.currentThread().isInterrupted || !trace.active()) return
+            for (programme in guide.programmes[key].orEmpty()) {
+                if (!aliases.all { names -> names.any { (raw, _) -> programme.title.contains(raw, true) || programme.description.contains(raw, true) } }) continue
+                val title = SportsCatalog.normalize(programme.title)
+                if (SportsGuide.excludedTitle(title)) continue
+                val words = " $title ${SportsCatalog.normalize(programme.description)} "
+                if (!aliases.all { names -> names.any { (_, phrase) -> words.contains(phrase) } }) continue
+                if (!broadcastWindow(game, programme, now)) measurement.outsideWindow++
+                else if (!SportsGuide.hasMatchupSeparator(title)) {
+                    measurement.separator++
+                    if (SportsGuide.teams(programme, league)?.map { it.id }?.toSet() != ids) measurement.separatorRejected++
+                }
+            }
+        }
     }
     internal fun broadcastWindow(game: SportsGame, programme: Programme, now: Long): Boolean =
         if (game.state == "pre") programme.end > game.start && programme.start in (game.start - 90 * 60000L)..(game.start + 45 * 60000L)

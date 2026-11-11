@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.13 — 2026-11-10
+
+- Trace Sports cache decisions, EPG matching, provider lookups and first-frame timing in opt-in playback diagnostics.
+
 ## 0.32.12 — 2026-11-09
 
 - Reduce repeated guide drawing and focus work while preserving programme labels and remote navigation.

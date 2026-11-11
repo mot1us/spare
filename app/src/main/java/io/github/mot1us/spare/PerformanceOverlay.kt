@@ -38,6 +38,7 @@ internal class PerformanceOverlay(
     private val frames = PerformanceFrames()
     private val drops = PerformanceDrops()
     private val settle = DisplaySettle()
+    val sports = SportsClickTraces(SystemClock::elapsedRealtime, journal::sports)
     private var codec = ""
     @Volatile private var hardware = emptyMap<String, Boolean>()
     @Volatile private var fallbackDeadlineNs = 16_666_667L
@@ -84,7 +85,7 @@ internal class PerformanceOverlay(
                 String.format(Locale.ROOT, "UI 10s · p50 %.2f / p95 %.2f / p99 %.2f ms · %.1f%% jank · %d frames · %d missed reports",
                     it.p50 / 1e6, it.p95 / 1e6, it.p99 / 1e6, it.jankyPercent, it.count, it.missedReports)
             } ?: "UI 10s · no app frames"
-            val report = listOf(rateLine, sourceLine, decoderLine, dropLine, uiLine).joinToString("\n")
+            val report = listOf(rateLine, sourceLine, decoderLine, dropLine, uiLine, sports.report()).joinToString("\n")
             if (view.text.toString() != report) view.text = report
             if (lastJournalAt < 0 || now - lastJournalAt >= 5_000) {
                 journal.performance(now, report)
@@ -127,6 +128,7 @@ internal class PerformanceOverlay(
     private fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
 
     fun close() {
+        sports.close()
         handler.removeCallbacksAndMessages(null)
         activity.window.removeOnFrameMetricsAvailableListener(metrics)
         player.removeAnalyticsListener(this)

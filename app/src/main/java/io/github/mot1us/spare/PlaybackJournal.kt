@@ -12,6 +12,7 @@ class PlaybackJournal {
             (loading?.let { " · loading $it" } ?: ""))
     }
     @Synchronized fun performance(now: Long, report: String) = append(now, "performance · " + report.replace("\n", " | "))
+    @Synchronized fun sports(now: Long, report: String) = append(now, report)
     private fun append(now: Long, value: String) {
         if (started < 0) started = now
         lines.addLast("+${(now - started).coerceAtLeast(0) / 1000}s · $value")

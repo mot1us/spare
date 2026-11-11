@@ -3618,7 +3618,7 @@ class SpareDeviceTest {
             val feed = Channel("xc:2", "Game feed 4K", "NFL", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(3840, 2160, 59.94f))
             val listing = Programme(feed.id, "NFL: Seahawks vs 49ers", now - 1800000, now + 7200000)
             val scores = LiveSportsSnapshot(listOf(LiveEvent("session-cache", setOf("nfl:SEA", "nfl:SF"), now - 1200000, league = "NFL")), now, setOf("NFL"))
-            store.saveSources(listOf(source)); store.active = source.id; store.sportsAutoPlay = true
+            store.recentFeeds = emptyList(); store.saveSources(listOf(source)); store.active = source.id; store.sportsAutoPlay = true; store.performanceOverlay = false
             store.cache(source, Guide(listOf(news, feed), mapOf(news.id to listOf(listing.copy(channel = news.id, title = "World News")), feed.id to listOf(listing)))); store.markPlaylistRefreshed(source)
             val release = java.util.concurrent.CountDownLatch(1)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -3649,11 +3649,23 @@ class SpareDeviceTest {
                 scenario.onActivity { activity -> MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true) }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:session-cache")?.text?.contains(feed.name) == true }
                 scenario.onActivity { activity ->
+                    val journal = MainActivity::class.java.getDeclaredField("playbackJournal").apply { isAccessible = true }.get(activity) as PlaybackJournal
+                    assertFalse("No Sports trace is recorded while diagnostics are off", journal.report("fixture").contains("Sports #"))
+                    store.performanceOverlay = true
+                    MainActivity::class.java.getDeclaredMethod("syncPerformanceOverlay").apply { isAccessible = true }.invoke(activity)
                     activity.window.decorView.findViewWithTag<View>("NFL:session-cache").performClick()
                     assertFalse("Returning to Sports and selecting again reuses the same discovered game", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                 }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("performance-overlay")?.text?.contains("first frame") == true }
+                scenario.onActivity { activity ->
+                    val summary = activity.window.decorView.findViewWithTag<TextView>("performance-overlay").text.toString()
+                    assertTrue(summary, summary.contains("peek hit"))
+                    assertTrue(summary, summary.contains("sent 0 / completed 0"))
+                    assertTrue(summary, summary.contains("auto→frame"))
+                    println("Sports trace warm fixture: " + summary.substringAfter("Sports #").replace("\n", " | "))
+                }
                 assertTrue("Known guide coverage needs no provider re-confirmation", server.requestedEpgTargets.isEmpty())
-            } } finally { release.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
+            } } finally { release.countDown(); store.performanceOverlay = false; store.sportsAutoPlay = false; store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
 
@@ -3865,7 +3877,7 @@ class SpareDeviceTest {
             val filler = (1000..26999).map { Channel("xc:$it", "Local news $it", "News", "${first.base}/unused$it.mp4") }
             val video = Channel("xc:9", "Boston Celtics FHD", "NBA Teams", "${second.base}/channel1.mp4", reportedQuality = VideoInfo(1920, 1080, 0f))
             val listing = Programme(radio.id, "NBA: Bucks at Celtics", now - 1000, now + 3600000)
-            store.sportsLastLeague = "NBA"; store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id
+            store.recentFeeds = emptyList(); store.sportsLastLeague = "NBA"; store.saveSources(listOf(a, b)); store.active = a.id; store.catalogRoot = a.id; store.performanceOverlay = true
             store.cache(a, Guide(listOf(news, radio) + generic + filler, mapOf(radio.id to listOf(listing)))); store.cache(b, Guide(listOf(video), emptyMap()))
             listOf(a, b).forEach(store::markPlaylistRefreshed)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -3879,7 +3891,12 @@ class SpareDeviceTest {
                 val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
                 scenario.onActivity { activity -> activity.liveSportsLoader = { scores }; MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores); activity.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>(game.key)?.isShown == true }
-                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, game, true) }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("stopSportsPrefetch", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                    val cache = MainActivity::class.java.getDeclaredField("sportsStreamCache").apply { isAccessible = true }.get(activity) as SportsStreamCache
+                    cache.clear()
+                    MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, game, true)
+                }
                 waitFor(scenario) { player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') } == true }
                 scenario.onActivity { activity ->
                     assertSame(player, find<PlayerView>(activity.window.decorView)!!.player)
@@ -3891,6 +3908,17 @@ class SpareDeviceTest {
                 }
                 assertTrue("The team channel's owning provider is queried", second.requestedEpgTargets.any { it.contains("stream_id=9") })
                 assertNull("A radio match must never be auto-tuned", first.requests["/channel2.mp4"])
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("performance-overlay")?.text?.contains("first frame") == true }
+                scenario.onActivity { activity ->
+                    val summary = activity.window.decorView.findViewWithTag<TextView>("performance-overlay").text.toString()
+                    assertTrue(summary, summary.contains("peek miss"))
+                    assertTrue(summary, summary.contains("26062 channels"))
+                    val journal = MainActivity::class.java.getDeclaredField("playbackJournal").apply { isAccessible = true }.get(activity) as PlaybackJournal
+                    val report = journal.report("fixture")
+                    assertTrue(report, report.contains("candidate 1 first frame"))
+                    assertFalse(report, report.contains(second.base) || report.contains(a.password))
+                    println("Sports trace cold fixture: " + summary.substringAfter("Sports #").replace("\n", " | "))
+                }
                 device.pressDPadCenter(); focusDetailsAction(scenario, "channel-game-streams"); device.pressDPadCenter()
                 val rowTag = "sports-stream:playlist:${b.id}:xc:9"
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>(rowTag)?.isShown == true }
@@ -3900,7 +3928,7 @@ class SpareDeviceTest {
                     assertEquals((GuideTheme.rowHeightDp * activity.resources.displayMetrics.density).toInt(), row.height)
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-results.png"))
-            } } finally { store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
+            } } finally { store.performanceOverlay = false; store.saveSources(emptyList()); listOf(a, b).forEach(store::removeCache); store.catalogRoot = ""; store.recentFeeds = emptyList() }
         } }
     }
 

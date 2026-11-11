@@ -2,6 +2,7 @@ package io.github.mot1us.spare
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -51,6 +52,26 @@ class SportsCoverageLookupTest {
             }, confirmed = { _, _ -> false })
             assertTrue(result.isEmpty()); assertTrue(calls.get() in 1..12); assertTrue(maximum.get() in 1..2)
             assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) < 2000)
+        } finally { pool.shutdownNow() }
+    }
+
+    @Test fun traceSeparatesCompletedTimeoutsFromWorkCancelledAfterAConfirmedReply() {
+        val pool = Executors.newFixedThreadPool(2)
+        val pending = channel("pending"); val timeout = channel("timeout"); val confirmed = channel("confirmed")
+        val pendingStarted = CountDownLatch(1)
+        val traces = SportsClickTraces({ TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) }) { _, _ -> }
+        val trace = traces.begin("game", true)
+        val programme = Programme(confirmed.id, "Maple Leafs at Kraken", 1000, 2000)
+        try {
+            assertEquals(mapOf(confirmed to listOf(programme)),
+                SportsCoverageLookup.load(listOf(pending, timeout, confirmed), pool, get = { channel, _ ->
+                    when (channel) {
+                        pending -> { pendingStarted.countDown(); Thread.sleep(10_000); emptyList() }
+                        timeout -> throw SocketTimeoutException()
+                        else -> { assertTrue(pendingStarted.await(1, TimeUnit.SECONDS)); listOf(programme) }
+                    }
+                }, confirmed = { channel, _ -> channel == confirmed }, trace = trace))
+            assertTrue(traces.report().contains("sent 3 / completed 2 / timeout 1 / cancelled 1 / errors 1"))
         } finally { pool.shutdownNow() }
     }
 }

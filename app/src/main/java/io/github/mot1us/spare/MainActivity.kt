@@ -575,6 +575,7 @@ class MainActivity : Activity() {
     private val revealBuffering = Runnable { if (started && (current != null || onDemand != null) && player.playbackState == Player.STATE_BUFFERING) showPlaybackLoading(PlaybackPhase.BUFFERING) }
     private val startupTimeout = Runnable {
         if (started && (current != null || onDemand != null) && !firstFrame) {
+            performanceOverlay?.sports?.playing?.outcome("startup timeout")
             if (onDemand != null) { reconnectOrFail("This title did not resume. Retry continues from your saved position. (STREAM_TIMEOUT)"); return@Runnable }
             if (!hasPlayedChannel && tryAlternate()) return@Runnable
             if (onDemand == null && hasPlayedChannel) { reconnectOrFail("The channel did not resume. Choose Retry to reconnect. (STREAM_TIMEOUT)"); return@Runnable }
@@ -690,6 +691,7 @@ class MainActivity : Activity() {
                 cancelPlaybackCallbacks()
                 val http = PlaybackErrors.httpFailure(error)
                 val statusCode = http?.responseCode
+                performanceOverlay?.sports?.playing?.playerError(statusCode, error.errorCode)
                 if (onDemand == null && hasPlayedChannel && error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     if (!reconnects.take(android.os.SystemClock.elapsedRealtime())) { showPlaybackFailure(PlaybackErrors.message(error)); return }
                     playbackReconnects++; journal(PlaybackJournal.Event.LIVE_WINDOW_RECOVERY)
@@ -738,6 +740,7 @@ class MainActivity : Activity() {
             }
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
+                performanceOverlay?.sports?.playing?.firstFrame(expectedMediaId)
                 firstFrame = true; hasPlayedChannel = true; backgroundPlaybackReady(); journal(PlaybackJournal.Event.FIRST_FRAME)
                 sportsPlaybackPlan?.takeIf { it.channel?.id == current?.id }?.let { plan ->
                     // A working stream is accepted immediately; quality never triggers another connection.
@@ -928,8 +931,11 @@ class MainActivity : Activity() {
             if (::multiview.isInitialized && multiview.browsing) startMultiview(channel) else {
                 val isRedZone = sportsPanel.redZoneResults
                 val game = sportsResults?.takeIf { result -> result.channels.any { it.id == channel.id && it.url == channel.url } }
+                val traces = performanceOverlay?.sports
+                val trace = if (traces != null && game != null) traces.forGame(game.game.key) else null
                 clearSportsPlayback()
-                if (channel.id != current?.id || !hasPlayedChannel || player.playbackState != Player.STATE_READY || player.playerError != null) tune(channel)
+                if (channel.id != current?.id || !hasPlayedChannel || player.playbackState != Player.STATE_READY || player.playerError != null) tune(channel, trace)
+                else trace?.finish("already playing")
                 watchingSports = game; watchingRedZone = isRedZone; showGuide(false)
             }
         }
@@ -1068,6 +1074,7 @@ class MainActivity : Activity() {
         sportsReplayGame = null
         val selected = owner(item) ?: return
         if (!selected.enabled || !Network.allowed(item.url, selected.allowHttp)) { toast("This title needs an enabled playlist with HTTP or HTTPS playback allowed"); return }
+        performanceOverlay?.sports?.tune(null)
         performanceOverlay?.tune()
         playlistSearch.pause(cancel = true)
         saveDemandProgress(); closeDetails(); cancelPlaybackCallbacks()
@@ -1534,7 +1541,8 @@ class MainActivity : Activity() {
         result.guide?.let { receivePlaylist(selected, it, applied = applied) }
     }
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
-    private fun tune(channel: Channel) {
+    private fun tune(channel: Channel) = tune(channel, null)
+    private fun tune(channel: Channel, trace: SportsClickTrace?) {
         startupPlaybackPending = false
         watchingRedZone = false; redZoneAutoPending = false
         scoreStripLoading = null; if (::scoreStrip.isInitialized) scoreStrip.tuning(null)
@@ -1544,6 +1552,7 @@ class MainActivity : Activity() {
         clearSportsPlayback()
         val selected = owner(channel) ?: return
         if (!selected.enabled || !Network.allowed(channel.url, selected.allowHttp)) { toast("This channel needs an enabled playlist with HTTP or HTTPS playback allowed."); return }
+        performanceOverlay?.sports?.tune(trace, channel.id)
         performanceOverlay?.tune()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls)
         closeDetails(); cancelPlaybackCallbacks(); playbackToken++
@@ -1563,6 +1572,7 @@ class MainActivity : Activity() {
         cancelPlaybackCallbacks()
         performanceOverlay?.attempt()
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
+        performanceOverlay?.sports?.playing?.attempt(expectedMediaId)
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand?.kind in setOf("movie", "episode")) itemBuilder.setTag(PlaybackLoadControl.VOD)
@@ -1581,17 +1591,22 @@ class MainActivity : Activity() {
         val selected = playbackSource() ?: return false
         if (onDemand != null || hasPlayedChannel || selected.kind != "xtream" || store.streamFormat(selected) != "auto" || alternateUsed) return false
         val alternate = StreamUrls.alternate(playbackUrl) ?: return false
+        performanceOverlay?.sports?.playing?.outcome("trying alternate format")
         alternateUsed = true; playbackUrl = alternate; playAttempt(PlaybackPhase.ALTERNATE)
         return true
     }
     private fun showPlaybackFailure(detail: String) {
+        val trace = performanceOverlay?.sports?.playing
+        trace?.outcome("failed")
         journal(PlaybackJournal.Event.FAILED)
         if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime(), true) }
         val plan = sportsPlaybackPlan
         if (plan != null && !plan.accepted && plan.channel?.id == current?.id) {
             if (playNextSportsCandidate("Stream failed · trying another match")) return
+            trace?.finish("candidates exhausted")
             cancelPlaybackCallbacks(); player.stop(); showSportsAlternatives("The automatic attempts could not open this game. Choose another stream. $detail"); return
         }
+        trace?.finish("playback failed")
         pendingSportsTune = null; if (::sportsPanel.isInitialized) sportsPanel.finishTuning()
         cancelPlaybackCallbacks()
         saveDemandProgress(); player.stop(); playbackLoading.visibility = View.GONE; playbackError.text = detail; retryPanel.visibility = View.VISIBLE
@@ -1640,11 +1655,15 @@ class MainActivity : Activity() {
     }
     private fun hideUnavailable() {
         val failed = current ?: return
+        val trace = performanceOverlay?.sports?.playing
+        trace?.outcome("unavailable")
         unavailable.hide(failed.id, System.currentTimeMillis()); saveUnavailable()
         if (sportsPlaybackPlan?.channel?.id == failed.id) {
             if (playNextSportsCandidate("Stream unavailable · trying another match")) return
+            trace?.finish("candidates exhausted")
             cancelPlaybackCallbacks(); player.stop(); showSportsAlternatives("Those game streams are unavailable. Choose another result."); return
         }
+        trace?.finish("stream unavailable")
         cancelPlaybackCallbacks(); expectedMediaId = ""; firstFrame = false; player.stop(); playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE
         current = null; applyFilter(); showGuide(true)
         status.text = "${failed.name} is unavailable · hidden for 15 minutes. Retry in Settings."
@@ -2574,7 +2593,7 @@ class MainActivity : Activity() {
         val selected = source ?: return false
         val next = plan.next { channel -> !unavailable.contains(channel.id, System.currentTimeMillis()) && allowed(channel) && !SportsStreams.conflictingCoverage(plan.game, channel, guide, System.currentTimeMillis()) &&
             guide.channels.any { it.id == channel.id && it.url == channel.url } } ?: return false
-        tune(next); sportsPlaybackPlan = plan; pendingSportsTune = next.id
+        tune(next, plan.trace); sportsPlaybackPlan = plan; pendingSportsTune = next.id
         watchingSports = sportsResults?.takeIf { it.game.key == plan.game.key } ?: GameStreams(plan.game, plan.candidates)
         val exact = plan.game.broadcasts.any { it.channel.id == next.id && System.currentTimeMillis() in it.programme.start until it.programme.end } || plan.game.titleMatches.any { it.id == next.id }
         if (!exact) sportsPanel.showMatchNotice("Trying broadcaster match · game coverage unconfirmed")
@@ -2648,11 +2667,12 @@ class MainActivity : Activity() {
         return (if (channel.id in favorites) "★ " else "") + channelLabel(channel) + " · " + channel.qualityLabel(videoInfo[channel.id]) + " · " + coverage + health
     }
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
-        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null): SportsStreamCache.Match {
+        profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null,
+        trace: SportsClickTrace? = null): SportsStreamCache.Match {
         var lastProgress = 0L
         // Finish the finite, cancellable local pass across every enabled provider. A timeout
         // here previously turned an incomplete scan into a false "no matches" result.
-        var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), quality = quality) { checked, total ->
+        var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), quality = quality, trace = trace) { checked, total ->
             val now = System.nanoTime()
             if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress("Checking ${enabledSources().size} playlists · $checked / $total", checked, total) }
         }
@@ -2674,7 +2694,7 @@ class MainActivity : Activity() {
                     confirmed = { channel, entries ->
                         targetOrder.compare(channel, bestTarget) <= 0 &&
                             SportsSchedule.match(game, Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), favoritesSnapshot, System.currentTimeMillis()).broadcasts.isNotEmpty()
-                    }, progress = { checked, total -> progress("$label · $checked / $total", checked, total) })
+                    }, trace = trace, progress = { checked, total -> progress("$label · $checked / $total", checked, total) })
                 replies.forEach { (channel, entries) -> warmed[snapshot.key(channel)] = entries }
                 if (warmed.isNotEmpty()) {
                     val fresh = SportsSchedule.match(game, Guide(targets, warmed), favoritesSnapshot, System.currentTimeMillis())
@@ -2686,24 +2706,26 @@ class MainActivity : Activity() {
         return SportsStreamCache.Match(result, warmed, confirm || !needsProvider || locallyConfirmed, upgradeChecked = confirm || !needsProvider || cached?.upgradeChecked == true)
     }
     private fun selectGame(game: SportsGame, autoWatch: Boolean = false) = selectSportsGame(game, autoWatch, false)
-    private fun selectSportsGame(game: SportsGame, autoWatch: Boolean, fromScores: Boolean) {
+    private fun selectSportsGame(game: SportsGame, autoWatch: Boolean, fromScores: Boolean, trace: SportsClickTrace? = performanceOverlay?.sports?.begin(game.key, autoWatch)) {
         redZoneAutoPending = false
-        if (game.state == "post") { findSportsReplay(game); return }
+        if (game.state == "post") { trace?.finish("replay path"); findSportsReplay(game); return }
         stopSportsPrefetch(); clearSportsPlayback()
         pendingSportsTune = null; sportsMatchTask?.cancel(true)
-        val selected = source ?: run { toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
+        val selected = source ?: run { trace?.finish("no playlist"); toast("Add a playlist in Settings to find streams"); return }; val snapshot = guide; val favoritesSnapshot = favorites
         val profile = sportsStreamFilters(); val quality = videoInfo.toMap(); val sourceEpoch = generation
         val reminderWatch = gameWatchPanel.isVisible
-        val fastCached = sportsStreamCache.peek(selected.id, sourceEpoch, snapshot, favoritesSnapshot, game, System.currentTimeMillis(), forAuto = autoWatch)
+        val fastCached = sportsStreamCache.peek(selected.id, sourceEpoch, snapshot, favoritesSnapshot, game, System.currentTimeMillis(), forAuto = autoWatch, trace = trace)
         if (fromScores) selectedGame = game else showGameInfo(game)
         val matchEpoch = ++sportsMatchEpoch
         if (!fromScores) sportsPanel.matching(game)
         fun targetActive() = if (fromScores) scoreStrip.isVisible && scoreStripLoading == game.key else sportsVisible && sportsPanel.showingStreams(game)
         fun present(prepared: SportsStreamCache.Match) {
             val warmed = prepared.warmed; val matched = prepared.game
-            if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !targetActive() || matchEpoch != sportsMatchEpoch) return
+            if (closed || !started || generation != sourceEpoch || source?.id != selected.id || !targetActive() || matchEpoch != sportsMatchEpoch) {
+                trace?.finish("selection left"); return
+            }
             val now = System.currentTimeMillis()
-            if (prepared.needsRefresh(snapshot, guide, now)) { selectSportsGame(game, autoWatch, fromScores); return }
+            if (prepared.needsRefresh(snapshot, guide, now, trace)) { selectSportsGame(game, autoWatch, fromScores, trace); return }
             val (mergedGuide, _) = prepared.mergeGuide(guide, now)
             guide = mergedGuide
             if (warmed.isNotEmpty()) {
@@ -2720,25 +2742,28 @@ class MainActivity : Activity() {
             val streamLabel: (Channel) -> String = { (if (it.id == current?.id) "Current · " else "") + gameStreamLabel(matched, it) }
             if (fromScores) {
                 scoreStripLoading = null
-                if (alternatives.isEmpty()) { scoreStrip.tuning(game.key, "No confirmed feed · Try Sports"); return }
+                if (alternatives.isEmpty()) { trace?.finish("no confirmed feed"); scoreStrip.tuning(game.key, "No confirmed feed · Try Sports"); return }
                 scoreStrip.tuning(null)
-                sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives, backgroundRecovery = true)
+                sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives, backgroundRecovery = true).also { it.trace = trace }
                 if (playNextSportsCandidate("Opening game stream")) { scoreStrip.releaseFocus(); syncScoreStrip() }
-                else scoreStrip.tuning(game.key, "No available feed · Try Sports")
+                else { trace?.finish("no available feed"); scoreStrip.tuning(game.key, "No available feed · Try Sports") }
                 return
             }
             if (autoWatch) {
                 if (alternatives.isNotEmpty()) {
                     showGameInfo(matched); sportsChannels = channels.take(4)
                     sportsPanel.showStreams(matched, channels, null, streamLabel)
-                    multiview.close(); sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives)
+                    multiview.close(); sportsPlaybackPlan = SportsPlaybackPlan(matched, alternatives).also { it.trace = trace }
                     if (reminderWatch) gameWatchPanel.dismiss()
                     showGuide(false)
-                    if (!playNextSportsCandidate("Opening best game stream")) showSportsAlternatives("The available streams changed. Choose another result.")
+                    if (!playNextSportsCandidate("Opening best game stream")) {
+                        trace?.choices(channels.size); showSportsAlternatives("The available streams changed. Choose another result.")
+                    }
                     return
                 }
             }
             showGameInfo(matched); sportsChannels = channels.take(4); scheduleEpg()
+            if (channels.isEmpty()) trace?.finish("no results") else trace?.choices(channels.size)
             sportsPanel.showStreams(matched, channels, if (autoWatch) SportsStreams.unavailableReason(matched, channels, latestQuality, now) else null, streamLabel)
             if (reminderWatch) { gameWatchPanel.dismiss(); applyFilter(); showGuide(true) }
         }
@@ -2747,12 +2772,14 @@ class MainActivity : Activity() {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val cacheContext = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoritesSnapshot)
             val cached = sportsStreamCache.get(cacheContext, game, System.currentTimeMillis(), forAuto = autoWatch)
+            trace?.workerCache(cached?.autoReady == true)
             if (cached != null && cached.autoReady) { handler.post { present(cached) }; return@submit }
             fun progress(message: String, checked: Int, total: Int) { handler.post { if (!closed && started && matchEpoch == sportsMatchEpoch && targetActive()) {
                 if (fromScores) scoreStrip.tuning(game.key, message) else sportsPanel.matchingProgress(game, message, checked, total)
                 if (reminderWatch && gameWatchPanel.isVisible) gameWatchPanel.update(message, checked, total)
             } } }
-            val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached) }.getOrElse {
+            val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached, trace) }.getOrElse {
+                trace?.finish(if (Thread.currentThread().isInterrupted) "cancelled" else "matching failed")
                 if (!Thread.currentThread().isInterrupted) handler.post {
                     if (!closed && started && sourceEpoch == generation && matchEpoch == sportsMatchEpoch && targetActive()) {
                         if (fromScores) { scoreStripLoading = null; scoreStrip.tuning(game.key, "Could not find stream · Retry"); return@post }

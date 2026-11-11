@@ -1,5 +1,6 @@
 package io.github.mot1us.spare
 
+import java.net.SocketTimeoutException
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
@@ -10,7 +11,8 @@ object SportsCoverageLookup {
     private data class Reply(val channel: Channel, val entries: List<Programme>?)
     fun load(channels: List<Channel>, executor: ExecutorService, budgetMs: Long = 3500,
         get: (Channel, Int) -> List<Programme>, confirmed: (Channel, List<Programme>) -> Boolean,
-        progress: (Int, Int) -> Unit = { _, _ -> }): Map<Channel, List<Programme>> {
+        trace: SportsClickTrace? = null, progress: (Int, Int) -> Unit = { _, _ -> }): Map<Channel, List<Programme>> {
+        val providerStart = trace?.providerStarted()
         val targets = channels.distinctBy { it.id }.take(12)
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs)
         val completion = ExecutorCompletionService<Reply>(executor)
@@ -27,7 +29,12 @@ object SportsCoverageLookup {
             targets.forEach { channel -> jobs.add(completion.submit(java.util.concurrent.Callable {
                 val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
                 if (left <= 0 || Thread.currentThread().isInterrupted) Reply(channel, null)
-                else Reply(channel, runCatching { get(channel, minOf(1000L, left).toInt().coerceAtLeast(1)) }.getOrNull())
+                else {
+                    trace?.requestStarted(channel.id)
+                    val response = runCatching { get(channel, minOf(1000L, left).toInt().coerceAtLeast(1)) }
+                    if (trace != null) trace.requestCompleted(channel.id, response.exceptionOrNull() is SocketTimeoutException, response.isFailure)
+                    Reply(channel, response.getOrNull())
+                }
             })) }
             while (received < jobs.size) {
                 val left = deadline - System.nanoTime()
@@ -42,6 +49,9 @@ object SportsCoverageLookup {
             // Preserve other replies already received before the deadline or the first match.
             while (true) receive((completion.poll() ?: break).get())
             return results
-        } finally { jobs.forEach { it.cancel(true) } }
+        } finally {
+            if (providerStart != null) trace.providerFinished(providerStart, System.nanoTime() >= deadline)
+            jobs.forEach { it.cancel(true) }
+        }
     }
 }
