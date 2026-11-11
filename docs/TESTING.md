@@ -1,105 +1,171 @@
-The Library/catch-up device scenario uses the extended TS fixture for archive playback; short MP4 fixtures still exercise movie end/replay controls. This prevents missing a very short decoder-ready window on the headless CI emulator.
+# Build and testing
 
-Routine UI release requests use `tvSuite: focused` and the relevant `tvTests` in `release-request.json`. `SPARE_TV_SUITE=focused bash scripts/device-test.sh` always includes three smoke checks; plain `bash scripts/device-test.sh` runs the full suite. Full coverage also runs weekly and on manual request. CI retains native update-install, signing and manifest checks.
+## Prerequisites and local boundaries
 
-For 0.14.1, confirm Today is the initial Sports scope and Live shows only fresh in-progress games across enabled leagues even with My teams only set. Calendar starts on today or the chosen date. Delay scoreboard responses: fixed placeholders stay until one complete reveal; background refresh leaves existing cards/focus in place. Sports reset has Cancel first and restores teams, leagues, reminders, spoiler and scope defaults only after confirmation. Verify quality counts distinguish unknown FPS from known nonmatches, explicit provider metadata survives cached restore and partial playback dimensions.
+Android uses JDK 17, the checked-in Gradle wrapper, and an Android SDK with
+platform 36 and the build tools selected by Gradle. Set `ANDROID_HOME` to an SDK
+available to the build. The optimized-release smoke script also requires
+`JAVA_HOME` and SDK build-tools 35.0.0 for `apksigner`. Device tests additionally need platform-tools, an emulator,
+and an Android TV system image. CI configuration is in
+[build.yml](../.github/workflows/build.yml) and
+[release.yml](../.github/workflows/release.yml).
 
-For 0.14.0, open Sports with delayed schedule/artwork responses: the header, hero and card grid keep their bounds, a progress line remains visible, and the first focused card is the featured game. Late empty results must not select RedZone. Refresh scores while navigating without opening the dock. Sports settings holds league/team preferences, My teams only, reminders and spoilers. Select live/final/upcoming cards to find streams, replay or set reminders; replay results contain no duplicate Find replay action. NFL RedZone is a playlist destination without fabricated live status. Check the actual launcher activity banner/icon on Projectivy, including all four opaque edges. The release gate remains 32 TV tests.
+macOS requires a Mac with Xcode command-line tools and Swift 5.9 or newer; the
+package targets macOS 13+. Native packaging also needs access to the pinned VLC
+runtime/source downloads unless already cached.
 
-For 0.13.1, confirm a direct Android-style dock focus restoration during Sports browsing neither opens the dock nor takes lasting focus. Up on Today must stay on Today; deliberate Left still opens navigation. With no score preference saved, completed results must be hidden on the first Sports visit. Score visibility changes only in Settings → Sports, and completed games show no Hide/Reveal button.
+Use synthetic playlists, guide data, credentials, and media. Do not inspect
+private `.env`, credential, or machine-specific configuration files to find build
+settings. Do not commit SDK paths, signing material, or generated build output.
+A restricted shell may need approved access to Gradle/compiler caches; this is
+separate from a missing SDK or a compilation failure.
 
-For 0.13.0, enable Settings → Sports → Hide completed-game scores. Verify cards, hero details and artwork conceal results until Reveal score. On a completed game within the provider archive window, Find replay must locate its historical broadcast, show expiry and play catch-up. Back restores Sports and the selected game. Check a missing/expired archive fails gracefully. The release gate contains 32 TV tests.
+## Required build checks
 
-For 0.12.3, browse a league/team with only completed games. Right from the league menu or main dock must reach the game cards even with both hero buttons disabled. Up from those cards returns to leagues. Live/upcoming games retain Right to hero actions, then Down to cards.
+Run from the repository root:
 
-For 0.12.2, rapidly browse Sports with large team artwork, then press Home and launch another app. Remote input must remain responsive, and Spare must stop audio as soon as it is paused. Reopen Spare and confirm playback resumes. The release gate contains 31 TV tests, including image-cache eviction and Sports background playback checks.
+```sh
+python3 scripts/version.py
+python3 -m unittest discover -s scripts/tests
+./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest
+```
 
-# Device testing
+The version script validates semantic format, channel, and the matching changelog
+heading. It does not compare against earlier commits: review the diff to verify
+that `versionCode` increases. Local release assembly is unsigned when production
+signing inputs are absent. Production signing belongs only to trusted main-branch
+jobs, as described in [Releasing](RELEASING.md).
 
-For 0.12.1, verify stable 59.94/60 readings after the initial sampling period, genuine rate/channel changes, and Watch best against a large lineup. Search should show checking/confirmation/tuning stages and keep the guide visible until the first frame. Confirm title-only live event channels match both teams and that old-date/replay titles cannot auto-tune. In Sports → Manage teams, choose visible leagues and teams in the full-screen Settings layout; confirm persistence. Right from a league enters hero actions, Down enters cards. Hold horizontal card navigation and confirm focus stays in Sports; the hidden dock should open only after deliberate Left navigation. The release gate now contains 30 TV tests.
+Android unit tests live in `app/src/test/`; instrumentation and fixture services
+live in `app/src/androidTest/`. The test APK downloads one checksum-pinned Media3
+transport-stream fixture during assembly. That fixture is not a release asset.
+Gradle reports are under `app/build/reports/` and APKs under
+`app/build/outputs/apk/`. Dependencies are locked; update locks only with an
+intentional dependency change.
 
-For 0.12.0, mark an upcoming game with Remind me and reopen Spare to confirm persistence. Settings → Sports removes reminders. A fresh live scoreboard should produce one overlay during playback; Back/Dismiss closes it, and Watch game searches for current coverage. Watch best automatically tunes only an EPG-matched, playback-verified FHD/60 stream; missing evidence opens ranked streams. Delayed/pre-game status must not announce a start based only on the clock. Reminders stay inside Spare. The release suite contains 29 TV tests plus the native update-install gate.
+For macOS:
 
-Automated local checks cover importer behavior, hostile data, the optimized APK, lint, encrypted storage, and a private Android TV emulator. The larger audio/video fixture is fetched once from Media3 1.11.1 during test-APK assembly, checked against its pinned SHA-256, and excluded from release assets. The emulator uses a local fixture server and the AndroidX Media3 sample video; no real source credentials or personal accounts are required.
+```sh
+cd macos
+swift test
+cd ..
+python3 scripts/macos-build.py
+```
 
-Twenty-four device tests cover encrypted storage, M3U/remote/favorites/resume, a 25,001-channel Xtream lineup through video playback, playback when categories fail, and Save/Cancel focus plus unchanged HTTPS addresses and trailing slashes after HTTP consent. The focus test checks actual button foreground/background contrast, D-pad navigation, Cancel behavior, and saved source data. Additional tests exercise actual network stalls without reconnecting, terminal 404 versus account errors, USA-first categories and sidebar icon controls, both guide modes and enlarged preview, rendered preview pixels, and hold-Back. Guide continuity checks preserve player and playback-attempt identity: the one-second MP4 loops naturally, so HTTP counts cannot distinguish those loops from retuning. The separate network-stall test checks the actual stream connection count. They also cover no-AUD MPEG-TS playback, TS-to-HLS fallback, category switching over full-screen background video, import progress, Back-to-guide, and strict unknown-quality filters with Settings → Show unverified channels and persisted preferences. Additional coverage verifies inline search with a controlled recognition service, no external speech activity, failed-speech fallback, and restored playback volume, OK-to-details without a new playback attempt, Left recall across failed channels and activity recreation, and provider category-array order through the encrypted cache. Additional checks cover channel-list scrolling beyond visible rows, preview-only channel selection, theme/category changes without retuning, actual rendered WebVTT and embedded CEA-608/708 subtitles, per-channel choices across switching/recreation, HLS caption omission/NONE, deep-category shortcuts and scroll-position restoration, and observed FPS. Screenshots and failure diagnostics are retained as CI artifacts. The emulator does not prove real remote microphone behavior; that requires the onn check below.
+Swift tests cover core parsing/storage/services and app-state/player-watchdog
+contracts. The packaging script builds both architectures by default, bundles the
+separate VLC runtime and license/source material, checks executable/VLC
+architectures, declares a macOS 13 minimum, and verifies ad-hoc signing. Packaging is distinct from
+real native UI/playback verification.
 
-## 2026 onn 4K Pro + Samsung checklist
+## Isolated Android TV tests
 
-1. Install the signed initial prerelease APK. Record the onn firmware/Android version, Samsung model, and whether HDMI goes directly to the TV or through an AVR/soundbar.
-2. Add a source using the TV keyboard. Verify M3U and Xtream separately if both are available. Check Google TV phone keyboard entry without sharing credentials in chat.
-3. Verify guide import, logos, groups, channel-name search, Favorites, and audio/subtitle selection. For a missing guide, confirm channels still work and the app says no programme information.
-4. While watching, Up/Down changes channels. OK shows a compact details panel; its Guide action opens the guide with the current channel still playing. Back closes details before opening the guide. Left while watching alternates the last two successfully played channels; failed attempts must not enter that history. Moving focus does not retune. OK tunes a different channel within the guide; OK on the playing channel expands it. Long-press OK toggles a favorite; Back opens the guide from full screen. Hold Back expands the current channel without reconnecting. Short Back moves between channel and sidebar focus. Test both Settings → Guide video modes. Exit is explicit in Settings.
-5. Choose minimum FHD resolution and uncheck 25/50 fps in Guide filters → Frame rates. Unknown streams must disappear. Settings → Show unverified channels, play a channel to observe its quality, then enable the guide filters again in Settings. Confirm 23.976/24, 29.97/30, and 59.94/60 remain while 25/50 are hidden; test 720p versus 1080p/2160p. Check that existing 60-only preferences migrate correctly. Provider names are never proof of quality.
-6. Close/reopen and switch sources; check last-channel resume and separate Favorites. Disable internet temporarily and confirm the cached guide remains usable and playback errors offer Retry/Guide.
-7. Test known 23.976/24, 25/50, 29.97/30, and 59.94/60 sources where available. Use the TV signal-information display to observe output refresh rates. Record unsupported modes and blackout duration. A source’s stated FPS alone does not prove HDMI matching.
-   For 0.12.0, compare AVC and HEVC source Input versus Display samples in OK details. After roughly two seconds, a genuine 59.94 source must remain visible under FHD+/60 fps+ even when decoder/display reports 30. A genuine progressive 29.97 source must remain excluded. Old playback readings are remeasured once; provider metadata is retained. Physical provider comparisons remain necessary before claiming the reported onn discrepancy resolved.
-8. Measure cold launch-to-usable UI, cached guide navigation, channel-selection-to-first-frame, and rebuffering separately. Record display-switch blackout separately from stream startup. Favor stable playback over an artificially low buffer.
-9. Test a real signed update to a higher version code: quiet badge, explicit download, unknown-source permission, Android installation confirmation, data retention, and last-channel resume. Wrong signing key/package/hash and downgrades must be rejected.
+Changes to startup, playback, storage, guide, focus, or remote behavior require
+relevant device coverage. Create an account-free Android TV emulator in an
+isolated `ANDROID_AVD_HOME`; do not reuse a personal emulator. Never point the
+mutating test scripts at a physical device. `SPARE_TEST_SERIAL` must be an
+`emulator-<port>` transport; that serial check does not prove data isolation.
 
-10. Observe a genuine network stall: a brief stall should show a small Buffering indicator, keep the stream connection, and wait for a safer buffer before resuming. Confirm that an unavailable startup channel returns to the guide and is hidden temporarily; 401/403, a timeout, or an individual missing HLS segment must not hide it. Check Settings restore/retry and automatic 15-minute expiry.
-11. Confirm EPG populates after scrolling settles on the large Xtream source, including channels with blank epg_channel_id. Only the current channel and visible rows should request short EPG; no whole-source probing. Check a provider without EPG and an explicit XMLTV override.
+After building both debug APKs and starting the disposable emulator:
 
-12. Open Search, grant microphone permission, and speak through the inline listening UI without a speech-app chooser. Confirm results appear in the inline field/guide, can be edited with the TV or paired phone keyboard, and cancellation or unavailable voice input leaves typing usable. Check the dedicated microphone button on the real onn remote; the OS owns that button. Deny permission and confirm typing still works. Close Search while listening and confirm the microphone stops and playback volume returns.
-13. Compare provider category order with the provider app. Xtream uses the categories endpoint order; M3U uses group first appearance. Check cached startup and the optional stable USA-first setting.
+```sh
+SPARE_TEST_SERIAL=emulator-5580 SPARE_TV_SUITE=full bash scripts/device-test.sh
+```
 
-On 2026-10-24, the user reported working EPG and smooth playback over several minutes on the target onn setup after 0.2.1. Voice input, the revised controls, and HDMI frame-rate matching still need the relevant physical checks.
+Routine UI release requests use `tvSuite: focused` plus the relevant `tvTests`
+method names in `release-request.json`. To run that selection locally:
 
-Only promote the initial prerelease to stable after this physical checkpoint. Subsequent routine updates use one new tracked version per completed change, and preserve signing identity.
+```sh
+python3 scripts/tv_tests.py --suite focused
+SPARE_TEST_SERIAL=emulator-5580 SPARE_TV_SUITE=focused bash scripts/device-test.sh
+```
 
-17. On the onn, verify details show a measured or declared FPS rather than an endless measuring message. Select Automatic subtitles on a provider channel known to carry captions; unsupported/absent tracks must be explained. Verify English-region/custom categories and theme preferences persist.
-18. After installing 0.3.0 once, request the next signed update in Spare. Allow install-unknown-apps for Spare if needed. Confirm the native self-update installs, then reopen Spare from the launcher; if Android requires confirmation, ensure cancel/confirm are handled. The app must never install without the user selecting Update.
+Focused selection always includes these smoke tests:
 
-The test runner also has an explicit `installSmoke` mode used by `scripts/update-device-test.sh` on isolated emulators only. It stages the installed debug APK as a self-update; Android intentionally kills instrumentation during replacement. The script requires a changed package update timestamp, success-receiver cleanup of the staged APK/session, and successful launcher reopening. It grants install permission only in the isolated fixture and restores the app-op afterward. Release builds contain neither test service nor test runner.
+- `encryptedStorageAuthenticatesDataAndNeverStoresPlaintext`
+- `networkImportPreviewRemoteFavoritesAndResume`
+- `cachedStartupDoesNotDownloadVodOrSweepUnvisitedChannels`
 
-19. From a category far down the list, press Left to reach Search immediately, Right for Settings, and Down to return to the same category/scroll position. Menu should open Settings directly on remotes with that key.
-20. Test a channel known to carry embedded captions in another player. Check CC1/Digital 1 when the provider has no caption labels; Automatic may need a few seconds to try the alternate compatibility service. Confirm a per-channel Off/track choice survives switching/reopening and does not change another channel or the app default.
+The selector rejects unknown tests and discovers the full count from current
+source; do not use a historical count as the gate. Use full coverage for playback
+engine, storage/security, or updater changes. Full coverage also runs weekly and
+on manual request. The harness streams each active test and writes results,
+screenshots, and failure diagnostics to `app/build/reports/device/`.
 
-21. Open Sports, follow teams across the supported leagues, and check the league sidebar, featured live/next game, scores and Live/Upcoming/Final labels. Select a game to find playlist streams. Stream filters must affect matches without hiding scoreboard games. Check preview tuning, full screen and returning to the same league.
+Preserve the native installer and minified-player gates for releases:
 
-22. Advance one channel’s guide with Right, move to another channel, and confirm it stays at live. Return and use Left, Back, or Now to rewind/reset only that row. Up from the first channel reaches Now. Change Settings → Time format and confirm persistence after reopening.
-23. Search for one channel, select Favorites, and confirm all favorites appear. Toggle a favorite: the focused star must be dark on the light row and an Added/Removed message must appear immediately. Hold Left on Search and confirm no flashing. Check category scrolling and the compact channel banner.
-24. With missing or generic EPG, Sports must still show schedule data and explain unmatched streams. Check Stream filters and refreshed guide data without interrupting video. Verify the Spare icon/banner in the onn launcher.
+```sh
+SPARE_TEST_SERIAL=emulator-5580 bash scripts/update-device-test.sh
+SPARE_TEST_SERIAL=emulator-5580 bash scripts/release-smoke.sh
+```
 
-25. Hold Down through many categories and confirm the highlight remains visible. Hold Up through channels: it must stop at the first row. Release and press Up again to reach Now controls.
-26. Open Settings from both preview and full screen. Check left navigation/right options, scrolling, visible selection marks, Back behavior, player/attempt continuity, and the translucent full-screen backdrop. Configure guide video, colors, time, categories, quality, and per-channel/default captions.
-27. Open Sports with no saved schedule. A loading bar should appear immediately, and games should arrive per league. Artwork must load independently, show relevant event art or team crests, and keep focus stable as scores update.
+The installer smoke stages the installed debug APK, expects instrumentation to
+stop during package replacement, verifies update time and staged-file/session
+cleanup, then reopens the launcher. It does not exercise discovery, network
+fetch, hash validation, or APK identity rejection. Those require their unit tests
+and the signed physical update check below. Release smoke signs a temporary test
+copy of the optimized APK and exercises synthetic import/playback; it does not use
+or establish the production signing identity.
 
-28. Compare a real live game, a future Seahawks matchup and a completed game. Only the confirmed live game may show Live; future games remain browseable as Upcoming and completed games show Final. Test delayed/halftime/postponed states, offline/stale scores, Refresh and overnight games.
-29. Change Font under Settings/Theme, reopen the app, and check guide rows, categories, settings, Sports and Library. Playback must continue through a font change.
-30. Open Library → Movies and Series with a provider that includes both. Check categories, inline search, seasons, episode order, pause/seek, next episode and audio/subtitles. Leave a partly watched long title, reopen Continue watching, and confirm resume; finish it and confirm removal. Switch playlists and verify history isolation.
-31. On a channel advertising archives, open Catch-up from channel details and Library. Check programme date/time and archive window, choose a completed programme, pause/seek if supported, and return to Live TV. A missing archive or unsupported source must explain the limitation without hiding the live channel. Validate Xtream and declared M3U templates on the real provider; synthetic fixtures do not prove a provider records every advertised programme.
+Scale local device coverage to the changed behavior. Once relevant checks pass,
+do not rerun unrelated suites without a new change or unresolved failure. Record
+any failed check and targeted rerun separately; never report a partial run as a
+full fresh pass.
 
-The 0.6.0 isolated suite contains 26 device tests, including one-player movie/episode/archive transitions, font persistence, encrypted/scoped watch history, and the existing guide, captions, recovery and self-update gates. External live event state is injected as synthetic data in device tests so schedules and internet availability cannot make remote regressions nondeterministic.
+## Native Mac smoke
 
-32. In both channel and category lists, hold Up/Down, reverse direction, and check that focus stays visible near the center without edge bounce or another automatic scroll. From Sports, Left reaches global navigation and Down from the mode buttons reaches Library. Team/action/result navigation must preserve focus as data updates.
-33. On the onn, use two-up then four-up with actual 1080/60 channels. Focus each pane for audio, open one full screen, add a game/channel, remove views, return to the guide and background the app. Confirm additional provider connections close. Test a provider connection limit and decoder failure; one failed pane must leave the others usable. Four-stream hardware capacity depends on codecs and resolution, beyond the synthetic emulator check.
-33. All live must display a known externally live game even with empty EPG or strict channel filters. A team without a live game must show its next scheduled game. Confirm broadcaster-only choices are labelled possible and that schedules appear without scanning the entire playlist. Regional channel matching needs the real provider check.
-34. Test a provider VOD URL redirecting to an absolute URL, relative URL and CDN; verify playback, seeking and resume through the redirect chain. HTTPS downgrade without source consent must give the HTTP explanation. Fixture checks verify byte ranges and rejected schemes; actual provider redirects require the onn check.
-35. Reopen Movies/Series and confirm the cached poster grid appears promptly. Open movie details, use Play/Resume, and inspect provider artwork, plot and episode descriptions/thumbnails. Test a title with absent metadata. Check optional AIO configuration persistence, matching and provider fallback; title ambiguity must not attach the wrong metadata.
-36. Compare the previously misreported 30.3 fps channel with another player. Check measured progressive 29.97/30 versus 59.94/60, interlaced 25/29.97 field cadence, the guide filters and the TV signal display. Interlaced coding capability is not a measurement of the decoder’s deinterlacing output; capture any provider-specific discrepancy without sharing credentials.
+Use an isolated `SPARE_DATA_DIR` and `--demo` with the packaged executable:
 
-The 0.10.0 suite has 27 device tests. Local validation targets changed flows; the release workflow runs all TV tests and the native update-install gate before signing. The Sports test exercises four synthetic streams, audio selection, adding/removing views and connection cleanup.
+```sh
+SPARE_DATA_DIR="$(mktemp -d)" dist/macos/Spare.app/Contents/MacOS/Spare --demo
+```
 
-For 0.8.0, Back from on-demand returns to live TV immediately. Library browsing pauses the movie and reopens the catalog. Exercise Science fiction/category changes in a 25,000-title catalog, then reopen/resume. Compare live buffering with 0.6.0 on the same provider. NFL shows the current-week scoreboard with final/live/scheduled status, scores, logos and local times. Selecting a game finds cached EPG/network candidates. Test the FHD+ / 60 fps preset using provider metadata before playback, then verify observed playback overrides incorrect declarations. Unknown quality stays hidden.
+Demo mode uses in-memory secrets and a separate demo preference suite. It expects
+a synthetic M3U server at `http://127.0.0.1:8767/playlist.m3u`; serve only generated
+fixture channels and media, never real provider addresses. The demo preferences
+are separate from normal settings but are shared between demo launches.
 
-For 0.10.1, verify Settings → Frame-rate matching On/Off persists without retuning. While watching, OK shows recent-channel tiles: select a tile to watch or its ＋ action to add a view. Multiview opens directly; empty tiles offer Add channel. From the global dock in Library, Right returns to the selected top tab and Down reaches search. Missing posters can load asynchronously from configured AIO Metadata; test a series without provider artwork and use Settings → Metadata → Refresh metadata artwork to retry. Physical HDMI timing and real addon/provider coverage still require the onn check.
+Check launch, channel selection, decoded video, pause/resume, preview/full-screen
+transitions, Live TV/Sports navigation, and clean exit. Use at least two fixture
+channels to exercise switching. An isolated data directory alone does not enable
+in-memory secrets; keep `--demo`. Browser testing, if needed, uses an isolated
+browser/profile without personal accounts.
 
-For 0.10.2, launch Sports with a previously selected/followed team and confirm Today includes other teams and supported leagues, with upcoming start times and final scores. All games and My teams remain separate. Compare Today around local midnight. Reopen Multiview after channel/game browsing: player, surface and pane controls should be retained; assess real 1080/60 motion on the onn. Confirm the TV launcher shows the clean Spare wordmark and Theme → Nostalgia preset changes borders, colors, guide grid and font without retuning.
+## Physical onn 4K Pro and TV acceptance
 
-For 0.11.0, check cached launch with the provider offline, first-import progress, separate saved EPG loading and manual/on-launch/interval controls per playlist. Refresh while watching and while browsing a deep category: the player/media item, favorites and current row must remain. Verify native scheduled jobs and failures retaining usable cached data. In Sports, check dated live/upcoming/final cards, Tomorrow/date requests, tonight’s NFL hero, and stable focus through delayed score/art updates. Reopen Sports home after finding streams. Artwork cache tests use synthetic bytes and must verify cross-loader reuse without requiring CDN connectivity. The isolated release suite contains 28 TV tests plus the native update-install gate.
+Synthetic tests cannot prove real provider behavior or hardware performance.
+Keep physical validation manual and record the app version, firmware/Android
+version, TV model, HDMI path, and results without provider credentials or URLs.
+Use the current [domain specs](README.md) when older test notes disagree.
 
+1. Add authorized M3U and Xtream sources using the remote and paired keyboard.
+   Verify source-edit Save/Cancel, HTTPS preservation, and explicit HTTP consent.
+2. Verify usable cached startup offline, channel/category order, Favorites, Local
+   regions, delayed/absent EPG, and refresh retaining playback and focus.
+3. Exercise actual D-pad repeats, deep categories, the hidden/visible dock,
+   guide preview/full screen, short/held Back, playback details, and previous-channel
+   recall. Moving focus or changing appearance must not retune.
+4. Exercise microphone permission, denial, unavailable recognition, typed fallback,
+   and leaving Search while listening. The OS owns the remote microphone button.
+5. Check audio/subtitle selection, embedded captions, and per-channel preferences.
+   Compare provider-reported and observed FPS without treating labels as proof.
+6. Test available 23.976/24, 25/50, 29.97/30, and 59.94/60 sources. Observe actual
+   output timing on the TV signal display and record blackouts/unsupported modes.
+7. Observe short and sustained network stalls, bounded recovery, missing endpoints,
+   and missing HLS children. Separate stream startup from HDMI-switch blackout.
+8. Verify real Sports schedule/coverage, uncertain broadcaster choices, completed
+   scores/spoilers, score delay, reminders, overlay, and provider archive expiry.
+9. Play movies/episodes and provider catch-up; verify redirect consent, seek/resume,
+   Continue watching, Watchlist, source isolation, and the correct Back destination.
+10. Test two-up/four-up with the account's allowed connection count. Select pane
+    audio, add/remove channels, return to single playback, and background the app.
+    Verify extra connections close and one failed pane leaves others usable.
+11. Install a real signed higher-version update selected explicitly in Spare.
+    Verify Android consent/unknown-source flow, data retention, launcher reopening,
+    and rejection of wrong package/signer/hash or downgrades in controlled fixtures.
+12. Background and reopen the app; audio must stop over the launcher/other apps.
+    Measure cold launch, guide navigation, first frame, and rebuffering separately.
 
-For 0.14.2, focused audit regressions cover a newer Sports header action cancelling delayed card focus, artwork retry after a paused binding, Library metadata retaining Back focus, episode Refresh making a new provider request, M3U detail Back retaining the catalog, and deleting the last playlist during VOD before background/resume. The existing 32-test release gate remains intact.
-
-
-For 0.14.3, Watch Best must accept explicit provider 59.94/60 data before playback while rejecting unknown FPS and measured lower rates. Matching title/EPG coverage is still required; fallback results distinguish FPS from coverage. The isolated Sports tests also check decoded card crest resolution, the full-screen 42-cell calendar, day selection, month navigation and Back cancellation without retuning. Compare card sharpness on the onn at its output resolution.
-
-
-For 0.15.0, browse calendar dates with synthetic schedules and check the inline games panel, loading state, local-date timezone boundaries, counts, stale-response rejection, game actions and playback continuity. Verify completed-score hiding also applies in the calendar. Sports result selection opens full screen and Back restores results. Watch Best may try a quality-qualified advertised broadcaster when EPG/title coverage is missing; it must label the uncertainty and reject guide entries naming another matchup or a replay. A broadcaster match does not prove regional coverage on the real provider.
-
-For 0.17.0, Watch Best treats resolution/FPS as preferences: a single 720p/30 or unknown-quality live match plays immediately, multiple fallback matches offer a chooser, and measuring a lower FPS never interrupts working playback. Verify failed starts still try at most three alternatives. Selecting a guide channel now opens full screen; Back restores the guide. Check Local with a U.S. city/state, guide opacity persistence, dock/category separation, direct confirmed replays, and short versus sustained buffering recovery. The isolated regressions use synthetic streams; real provider quality and HDMI behavior still need the onn check.
-
-For 0.17.1, press OK while a recognized game is playing or buffering: Other streams for this game is focused first. Open cached matches, select another stream, and confirm full-screen playback on the same primary player. Check the option survives manual selection, reconnect and error recovery, and disappears on unrelated TV/VOD or playlist changes. Guide EPG/title matchups can search on demand. Sports Live badges remain green while focused; confirmed Catch-up cards are blue and name their archive channel. Test an FHD/60 preference with a 720p/30 archive and a 4K live-only variant: the replay must remain discoverable. Unconfirmed archives say Check catch-up; providers without archives keep the fixtures and scores.
-
-For 0.18.0, Settings has one Playback group and a native Theme editor. Use each theme tab/Left/Right, hex input, reset and Nostalgia; check a live preview, persisted values, focus and unchanged player/media identity. Local city/state text auto-saves and offers inline suggestions with a live match count. Sports has no manual Refresh; scores refresh automatically. Completed cards independently discover supported archives across all quality variants, distinguish checking/confirmed/not-found, and cancel metadata work while buffering, in multiview or outside Sports. Verify provider-vs-observed quality labels and legacy interlace cache migration; all qualities stay playable. The isolated suite retains32 TV scenarios with extended theme/Local/grouped-settings coverage.
+[Historical device notes](TESTING-HISTORY.md) retain older release-specific
+scenarios and reported checkpoints. They are evidence/history, not proof that
+these physical checks have passed for the current version.

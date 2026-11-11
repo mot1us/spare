@@ -3,13 +3,9 @@ import SpareCore
 
 struct SportsPage:View {
     @EnvironmentObject var store:AppStore
-    @State private var focusedGame:Game?
+    @State private var focusedGameID:String?
     @State private var showCalendar=false
-    private var hero:Game? {
-        if let focusedGame,store.displayedGames.contains(where:{$0.id==focusedGame.id}) { return focusedGame }
-        return store.displayedGames.first { $0.live && (store.followedTeams.contains($0.home.id)||store.followedTeams.contains($0.away.id)) }
-            ?? store.displayedGames.first
-    }
+    private var hero:Game? { store.featuredGame(focusedID:focusedGameID) }
     var body:some View {
         VStack(alignment:.leading,spacing:0) {
             HStack(spacing:10) {
@@ -64,7 +60,7 @@ struct SportsPage:View {
                     }
                     LazyVGrid(columns:[GridItem(.adaptive(minimum:255,maximum:380),spacing:16)],spacing:16) {
                         ForEach(store.displayedGames) { game in
-                            GameCard(game:game).onHover { if $0 { focusedGame=game } }
+                            GameCard(game:game).onHover { if $0 { focusedGameID=game.id } }
                         }
                     }
                     Text("Scores and schedules: ESPN · Streams come from your playlist. Network matches may carry a different event.")
@@ -90,6 +86,8 @@ struct SportsPage:View {
                             Button("Watch Best") { store.findStreams(game,autoplay:true) }.buttonStyle(.borderedProminent)
                             Button("Find Streams") { store.findStreams(game) }
                         }
+                    } else if game.stale && !game.completed {
+                        Text("Saved status · scores could not refresh").font(.callout).foregroundStyle(.secondary)
                     } else {
                         Text(game.completed ? "Final · \(store.hideScores ? "scores hidden":game.awayScore+" – "+game.homeScore)" : "Upcoming · "+game.networks.joined(separator:", "))
                             .font(.callout).foregroundStyle(.secondary)
@@ -117,7 +115,7 @@ private struct GameCard:View {
                 team(game.home,score:game.homeScore)
                 Divider().opacity(0.5)
                 HStack {
-                    Text(game.live ? game.status : game.start.formatted(date:.abbreviated,time:.shortened)).lineLimit(1)
+                    Text(game.stale && !game.completed ? "Saved status" : game.live ? game.status : game.start.formatted(date:.abbreviated,time:.shortened)).lineLimit(1)
                     Spacer(minLength:3)
                     if game.live { Image(systemName:"play.fill") }
                 }.font(.caption).foregroundStyle(.secondary)
@@ -147,7 +145,7 @@ private struct StatusBadge:View {
     var body:some View {
         HStack(spacing:4) {
             if game.live { Circle().fill(.green).frame(width:5,height:5) }
-            Text(game.live ? "LIVE":game.completed ? "FINAL":"UPCOMING").font(.system(size:9,weight:.bold)).tracking(0.6)
+            Text(game.stateLabel).font(.system(size:9,weight:.bold)).tracking(0.6)
         }.foregroundStyle(game.live ? Color.green:.secondary)
             .padding(.horizontal,7).padding(.vertical,5)
             .background(game.live ? Color.green.opacity(0.10):Color.primary.opacity(0.05),in:Capsule())

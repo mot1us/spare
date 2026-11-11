@@ -19,6 +19,16 @@ Playlists are in Keychain. Lineup and guide caches are encrypted in
 ~/Library/Application Support/Spare; artwork is cached separately. HTTP needs
 per-playlist consent. Sports never sends playlist details to the score service.
 
+The preview checks HTTP consent for playlist/guide requests (including redirects)
+and the initial playback URL. VLC currently follows media redirects and HLS
+segment URLs internally, so a provider can still downgrade those later requests
+to HTTP without another consent check. End-to-end media transport enforcement
+remains a preview limitation.
+
+Since 0.32.16, lineup and guide caches are bound to their saved playlist details.
+Upgrading from older preview caches requires one refresh; the provider must be reachable for that
+first refresh. Editing an account cannot restore the previous account's streams.
+
 This first preview does not include the TV app's Library, catch-up, multiview,
 voice search, display-mode switching, full theme editor or in-app Mac installer.
 Use GitHub Releases for Mac updates during preview testing.

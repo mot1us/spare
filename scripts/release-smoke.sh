@@ -3,6 +3,7 @@ set -euo pipefail
 : "${ANDROID_HOME:?Set ANDROID_HOME to the isolated SDK}"
 : "${JAVA_HOME:?Set JAVA_HOME to the build JDK}"
 serial="${SPARE_TEST_SERIAL:-emulator-5580}"
+[[ "$serial" =~ ^emulator-[0-9]+$ ]] || { echo 'Use an isolated emulator for the release smoke test'; exit 1; }
 adb="$ANDROID_HOME/platform-tools/adb"
 report=app/build/reports/release-smoke
 mkdir -p "$report"

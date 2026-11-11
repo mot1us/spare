@@ -72,6 +72,63 @@ class SpareDeviceTest {
                 start.countDown(); writer.get(15, java.util.concurrent.TimeUnit.SECONDS); reader.get(15, java.util.concurrent.TimeUnit.SECONDS)
                 assertEquals("Write 159", concurrentStore.sources().single().name)
             } finally { pool.shutdownNow(); store.saveSources(originalSources) }
+            val cacheSource = Source(name = "Provider cache isolation", kind = "xtream", url = "https://example.com", username = "old-account", password = "old-secret")
+            val replacement = cacheSource.copy(username = "new-account", password = "new-secret")
+            val channel = Channel("xc:1", "Private channel", "News", "https://example.com/live/old-account/old-secret/1.ts", guideId = "xc:1")
+            val programme = Programme("xc:1", "Private schedule", 1, Long.MAX_VALUE)
+            val cachedGuide = Guide(listOf(channel), mapOf("xc:1" to listOf(programme)))
+            val movie = OnDemand("movie:1", "Private movie", "Films", "https://example.com/movie/old-account/old-secret/1.mp4")
+            try {
+                store.bindProvider(cacheSource)
+                store.cache(cacheSource, cachedGuide)
+                store.saveLineup(cacheSource, cachedGuide, "https://example.com/old-guide.xml")
+                store.cacheCatalog(cacheSource, "movie", listOf(movie))
+                assertTrue(store.bindProvider(replacement))
+                // This is the interval before MainActivity's worker can invalidate the files.
+                assertNull(concurrentStore.cachedLineup(replacement))
+                assertTrue(concurrentStore.cachedProgrammes(replacement).isEmpty())
+                assertEquals("", concurrentStore.guideUrl(replacement))
+                assertNull(concurrentStore.catalog(replacement, "movie"))
+                assertTrue("A recreated store must retry unfinished cleanup", concurrentStore.bindProvider(replacement))
+                concurrentStore.saveLineup(replacement, cachedGuide)
+                assertNull(concurrentStore.cachedLineup(replacement))
+                val lineupName = "lineup-${replacement.id}.enc"
+                store.delete(lineupName)
+                for (suffix in listOf("", ".new", ".bak")) {
+                    // A nonempty directory makes AtomicFile.delete fail without changing permissions.
+                    val blocked = File(context.filesDir, lineupName + suffix)
+                    assertTrue(blocked.mkdir())
+                    val child = File(blocked, "fixture").apply { writeText("synthetic") }
+                    try {
+                        try { store.invalidateProviderFiles(replacement); fail("Incomplete cache cleanup was accepted: $suffix") } catch (_: java.io.IOException) { }
+                        assertTrue("Failed cleanup must remain pending", concurrentStore.bindProvider(replacement))
+                        assertNull(concurrentStore.cachedLineup(replacement))
+                        assertTrue(concurrentStore.cachedProgrammes(replacement).isEmpty())
+                    } finally { assertTrue(child.delete()); assertTrue(blocked.delete()) }
+                }
+                val orphan = File(context.filesDir, "catalog-${replacement.id}-movie-orphan.enc.bak").apply { writeText("synthetic") }
+                store.invalidateProviderFiles(replacement)
+                assertFalse("Cleanup includes orphaned AtomicFile sidecars", orphan.exists())
+                assertFalse(store.bindProvider(replacement))
+                val newGuide = cachedGuide.copy(channels = listOf(channel.copy(url = "https://example.com/new-stream.ts")))
+                store.cache(replacement, newGuide)
+                store.cacheCatalog(replacement, "movie", listOf(movie.copy(title = "Replacement movie")))
+                store.invalidateProviderFiles(cacheSource)
+                store.invalidateProviderFiles(replacement)
+                assertEquals("Obsolete and duplicate cleanup retain fresh files", newGuide, concurrentStore.cached(replacement))
+                store.cache(cacheSource, cachedGuide)
+                assertEquals(newGuide, concurrentStore.cached(replacement))
+                store.removeCache(replacement)
+                concurrentStore.cache(replacement, newGuide)
+                concurrentStore.cacheCatalog(replacement, "movie", listOf(movie))
+                concurrentStore.saveVideoInfo(replacement, mapOf(channel.id to VideoInfo(1920, 1080, 60f)))
+                assertNull(concurrentStore.cachedLineup(replacement))
+                assertNull(concurrentStore.catalog(replacement, "movie"))
+                assertTrue(concurrentStore.videoInfo(replacement).isEmpty())
+                assertFalse(File(context.filesDir, "lineup-${replacement.id}.enc").exists())
+                assertFalse(File(context.filesDir, "epg-${replacement.id}.enc").exists())
+                assertFalse(File(context.filesDir, "library-${replacement.id}-movie.enc").exists())
+            } finally { store.removeCache(cacheSource) }
             val files = ArtworkFiles(context); val url = "https://images.example/synthetic-${System.nanoTime()}.png"
             val bytes = ByteArrayOutputStream().also { output -> Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE); compress(Bitmap.CompressFormat.PNG, 100, output); recycle() } }.toByteArray()
             var downloads = 0
@@ -146,6 +203,36 @@ class SpareDeviceTest {
             assertEquals(GuideFilters(groups = setOf("US | News")), store.filters(source))
             assertFalse(prefs.contains("sixty-${source.id}"))
         } finally { store.removeCache(source) }
+    }
+
+    @Test fun editedSourceRefreshDoesNotJoinThePreviousAccount() {
+        FixtureServer(heldPlaylist = true).use { originalServer -> FixtureServer().use { replacementServer ->
+            val source = Source(name = "Original refresh", kind = "m3u", url = "${originalServer.base}/playlist.m3u", allowHttp = true)
+            val replacement = source.copy(url = "${replacementServer.base}/playlist.m3u")
+            val oldGuide = Guide(listOf(Channel("old", "Original cached channel", "News", "${originalServer.base}/channel1.mp4")), emptyMap())
+            val originalSources = store.sources()
+            val finished = java.util.concurrent.CountDownLatch(2)
+            val result = java.util.concurrent.atomic.AtomicReference<PlaylistRefresh.Result>()
+            try {
+                store.saveSources(listOf(source)); store.bindProvider(source); store.cache(source, oldGuide)
+                assertTrue(PlaylistRefresh.request(context, source, true, false) { finished.countDown() })
+                assertTrue("The old request must already own its cached guide", originalServer.playlistStarted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                store.saveSources(listOf(replacement))
+                assertTrue(store.bindProvider(replacement)); store.invalidateProviderFiles(replacement)
+                // Sharing just the saved source ID would attach this callback to the old request.
+                assertTrue("An edited source needs its own refresh", PlaylistRefresh.request(context, replacement, true, false) { result.set(it); finished.countDown() })
+                originalServer.finishPlaylist.countDown()
+                assertTrue(finished.await(15, java.util.concurrent.TimeUnit.SECONDS))
+                assertEquals("", result.get().error)
+                assertEquals(8, result.get().guide!!.channels.size)
+                assertTrue(result.get().guide!!.channels.all { it.url.startsWith(replacementServer.base + "/") })
+                assertEquals(1, replacementServer.requests["/playlist.m3u"])
+            } finally {
+                originalServer.finishPlaylist.countDown()
+                finished.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                store.saveSources(originalSources); store.removeCache(source)
+            }
+        } }
     }
 
     @Test fun savedStartupBackgroundRefreshAndScheduledJobKeepPlaybackAndFocus() {
@@ -582,11 +669,21 @@ class SpareDeviceTest {
                         .invoke(activity, OnDemand("movie:remove", "Removal fixture", "", "${server.base}/channel1.mp4"), 0L)
                 }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/channel1.mp4" }
+                lateinit var removedCatalog: LibraryCatalog
+                lateinit var abandonedImport: LibraryCatalog.Writer
                 scenario.onActivity { activity ->
+                    removedCatalog = (MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController).repository
+                    abandonedImport = removedCatalog.Writer(seed, "movie", indexOnly = true).apply {
+                        append(listOf(OnDemand("movie:909", "Abandoned import", "Films", "${server.base}/channel1.mp4")))
+                    }
                     val removal = MainActivity::class.java.getDeclaredMethod("editSource", Source::class.java).apply { isAccessible = true }.invoke(activity, seed) as AlertDialog
                     removal.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
                 }
                 waitFor(scenario) { store.sources().isEmpty() }
+                try { abandonedImport.finish(emptyMap()); fail("A removed source's catalog producer was still current") } catch (_: java.io.InterruptedIOException) { }
+                try { abandonedImport.append(listOf(OnDemand("movie:910", "Late page", "Films"))); fail("A removed source accepted another catalog page") } catch (_: java.io.InterruptedIOException) { }
+                assertNull("Rejected catalog completion must not republish a partial snapshot", removedCatalog.memory(seed, "movie"))
+                assertTrue(removedCatalog.matches(seed, VodStart.Request("Abandoned import")).isEmpty())
                 scenario.onActivity { activity ->
                     assertNull(MainActivity::class.java.getDeclaredField("onDemand").apply { isAccessible = true }.get(activity))
                     assertEquals("", MainActivity::class.java.getDeclaredField("playbackUrl").apply { isAccessible = true }.get(activity))
@@ -893,9 +990,10 @@ class SpareDeviceTest {
                         // "Finding stream" until this gate opens. Observe the queued
                         // task itself so cancellation does not race the gate timeout.
                         waitFor(scenario) { activity ->
-                            val warming = MainActivity::class.java.getDeclaredField("sportsWarmActive").apply { isAccessible = true }.get(activity) as Set<*>
+                            // Prefetch tracks a batch of games even while its coordinator is queued.
+                            val active = MainActivity::class.java.getDeclaredField("sportsWarmActive").apply { isAccessible = true }.get(activity) as Set<*>
                             MainActivity::class.java.getDeclaredField("sportsWarmTask").apply { isAccessible = true }.get(activity) != null &&
-                                game.key in warming &&
+                                game.key in active &&
                                 activity.window.decorView.findViewWithTag<View>("sports-coverage:${game.key}")?.isShown == true
                         }
                         scenario.onActivity { activity ->
@@ -3539,6 +3637,42 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun missingVodSegmentsKeepTheTitleWhileMissingEndpointsHideIt() {
+        FixtureServer(missingStatus = 404, transientSegmentErrors = 20, transientSegmentStatus = 404).use { server ->
+            val source = Source(name = "VOD errors", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val live = Channel("xc:1", "Live fixture", "News", "${server.base}/channel1.mp4")
+            val movie = OnDemand("movie:101", "Segment fixture", "Movies", "${server.base}/live/test/test-secret/1.m3u8", playlistId = source.id)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(live), emptyMap())); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                lateinit var repository: LibraryCatalog
+                lateinit var snapshot: LibraryCatalog.Snapshot
+                scenario.onActivity { activity ->
+                    val library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
+                    repository = library.repository
+                }
+                snapshot = repository.Writer(source, "movie").apply { append(listOf(movie)) }.finish(emptyMap())
+                fun play(item: OnDemand) = scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, Long::class.javaPrimitiveType)
+                        .apply { isAccessible = true }.invoke(activity, item, 0L)
+                }
+                fun waitForFailure() = waitFor(scenario) { activity ->
+                    (MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View).isShown
+                }
+                play(movie)
+                waitForFailure()
+                assertTrue("The HLS child was requested", (server.requests["/segment.ts"] ?: 0) > 0)
+                assertEquals("A missing HLS child must not remove a valid title from Library", listOf(movie.id), repository.query(snapshot, null, "").entries.map { it.id })
+
+                // The same catalog entry is hidden only when its own media endpoint is missing.
+                play(movie.copy(url = "${server.base}/live/test/test-secret/2.m3u8"))
+                waitForFailure()
+                assertTrue("A missing media endpoint is still hidden", repository.query(snapshot, null, "").entries.isEmpty())
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun continueWatchingPositionsAreEncryptedScopedAndClearedWhenFinished() {
         val source = Source(name = "Progress", kind = "xtream", url = "https://example.com", username = "secret-user", password = "secret-password")
         val item = OnDemand("movie:101", "Fixture movie", "Films", "https://example.com/movie/secret-user/secret-password/101.mp4")
@@ -3555,7 +3689,7 @@ class SpareDeviceTest {
             store.saveVideoInfo(source, mapOf("old" to VideoInfo(3840, 2160, 60f)))
             assertTrue("An old background writer cannot restore the edited account's old quality cache", store.videoInfo(edited).isEmpty())
             assertEquals("The old account's encrypted progress remains available to that account", 45000, store.watchProgress(source).single().position)
-            store.bindProvider(source)
+            if (store.bindProvider(source)) store.invalidateProviderFiles(source)
 
             store.saveWatchProgress(source, item, 120000, 120000, ended = true); assertTrue(store.watchProgress(source).isEmpty())
             store.cacheCatalog(source, "movie", listOf(item)); assertEquals(item, SecureStore(context).catalog(source, "movie")!!.second.single())
@@ -4607,7 +4741,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -4640,6 +4774,8 @@ class SpareDeviceTest {
         val episodesRequested = java.util.concurrent.CountDownLatch(1)
         val finishEpisodes = java.util.concurrent.CountDownLatch(1)
         val finishVodCatalog = java.util.concurrent.CountDownLatch(1)
+        val playlistStarted = java.util.concurrent.CountDownLatch(1)
+        val finishPlaylist = java.util.concurrent.CountDownLatch(1)
         private val slowMovies by lazy { (1..16).joinToString(",", "[", "]") { id -> org.json.JSONObject().put("stream_id", 100 + id).put("name", if (id == 1) "EN | Fixture movie (2025) 4K DV" else if (ambiguousVod && id == 2) "Fixture movie (1990) FHD" else "Other movie $id").put("category_id", "1").put("container_extension", "mp4").put("plot", "x".repeat(1024)).toString() }.toByteArray() }
         val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
         val finishActionCatalog = java.util.concurrent.CountDownLatch(1)
@@ -4736,6 +4872,10 @@ class SpareDeviceTest {
                             output.write(body, 0, cut); output.flush(); actionCatalogStarted.countDown()
                             finishActionCatalog.await(15, java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, cut, body.size - cut); output.flush()
+                        } else if (heldPlaylist && path == "/playlist.m3u") {
+                            playlistStarted.countDown()
+                            finishPlaylist.await(15, java.util.concurrent.TimeUnit.SECONDS)
+                            output.write(body); output.flush()
                         } else if (slowPlaylist && path == "/playlist.m3u") {
                             for (chunk in body.asList().chunked(200)) { output.write(chunk.toByteArray()); output.flush(); Thread.sleep(200) }
                         } else { output.write(body); output.flush() }
@@ -4750,6 +4890,6 @@ class SpareDeviceTest {
                 }
             }
         }
-        override fun close() { finishEpisodes.countDown(); finishVodCatalog.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); clients.forEach { runCatching { it.close() } }; connections?.shutdownNow(); worker.shutdownNow() }
+        override fun close() { finishEpisodes.countDown(); finishVodCatalog.countDown(); finishPlaylist.countDown(); finishActionCatalog.countDown(); finishSportsGuide.countDown(); resumeStream.countDown(); socket.close(); clients.forEach { runCatching { it.close() } }; connections?.shutdownNow(); worker.shutdownNow() }
     }
 }

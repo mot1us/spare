@@ -33,11 +33,13 @@ public enum PlaylistService {
             if String(describing: info["auth"] ?? "1") == "0" { throw SpareError.authentication }
         }
         await progress("Downloading channels and categories…")
-        async let categoryData=HTTP.get(try endpoint(source, action: "get_live_categories"), allowHTTP: source.allowHTTP, limit: 4*1024*1024)
+        // Categories only label channels; their endpoint may be unavailable on otherwise usable accounts.
+        async let categoryData=try? HTTP.get(try endpoint(source, action: "get_live_categories"), allowHTTP: source.allowHTTP, limit: 4*1024*1024)
         async let streamData=HTTP.get(try endpoint(source, action: "get_live_streams"), allowHTTP: source.allowHTTP)
         let (categories, streams)=try await (categoryData, streamData)
         await progress("Organizing channels…")
-        let channels=try parseXtream(streams, categories: categories, source: source)
+        try Task.checkCancellation()
+        let channels=try parseXtream(streams, categories: categories ?? Data(), source: source)
         let epg=source.epgURL.isEmpty ? try endpoint(source, file: "xmltv.php") : source.epgURL
         return Lineup(channels: channels, epgURL: epg)
     }

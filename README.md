@@ -52,4 +52,4 @@ Download **spare.apk** from [Releases](https://github.com/mot1us/spare/releases)
 
 Updates appear inside Spare. Android may require permission to install apps or an installation confirmation. Current builds are prereleases for testing on the onn 4K Pro.
 
-[Build and device testing](docs/TESTING.md) · [Releasing](docs/RELEASING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Documentation and architecture](docs/README.md) · [Build and device testing](docs/TESTING.md) · [Releasing](docs/RELEASING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)

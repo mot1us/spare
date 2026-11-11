@@ -4,6 +4,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlaybackRecoveryTest {
+    @Test fun missingTitlesRequireTheirOwnEndpointInsteadOfAChildResource() {
+        val endpoint = "https://example.com/movie/master.m3u8?token=synthetic"
+        listOf(404, 410).forEach { status ->
+            assertTrue(StartupFailures.endpointMissing(status, endpoint, endpoint))
+            assertTrue(StartupFailures.endpointMissing(status, "$endpoint#fragment", endpoint))
+            listOf("segment.ts", "variant.m3u8", "key.bin", "captions.vtt").forEach { child ->
+                assertFalse(child, StartupFailures.endpointMissing(status, "https://example.com/movie/$child", endpoint))
+            }
+            assertFalse(StartupFailures.endpointMissing(status, null, endpoint))
+            assertFalse(StartupFailures.endpointMissing(status, "", ""))
+            assertFalse(StartupFailures.endpointMissing(status, "not a URI", endpoint))
+        }
+        listOf(401, 403, 408, 429, 500, null).forEach { status ->
+            assertFalse(StartupFailures.endpointMissing(status, endpoint, endpoint))
+        }
+    }
+
     @Test fun onlyConfirmedMissingEndpointsQualifyForHiding() {
         val errors = StartupFailures()
         assertFalse(errors.allEndpointsMissing())

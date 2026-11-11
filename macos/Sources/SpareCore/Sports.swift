@@ -20,13 +20,16 @@ public struct Team: Codable, Identifiable, Hashable, Sendable {
 public struct Game: Codable, Identifiable, Hashable, Sendable {
     public var id:String, league:String, name:String, start:Date, state:String, status:String
     public var home:Team, away:Team, homeScore:String, awayScore:String, networks:[String]
+    public var staleSince:Date?
     public init(id:String,league:String,name:String,start:Date,state:String,status:String,home:Team,away:Team,
                 homeScore:String="",awayScore:String="",networks:[String]=[]) {
         self.id=id;self.league=league;self.name=name;self.start=start;self.state=state;self.status=status
         self.home=home;self.away=away;self.homeScore=homeScore;self.awayScore=awayScore;self.networks=networks
     }
-    public var live:Bool { state == "in" && start <= Date().addingTimeInterval(60) && start > Date().addingTimeInterval(-18*3600) }
+    public var stale:Bool { staleSince != nil }
+    public var live:Bool { !stale && state == "in" && start <= Date().addingTimeInterval(60) && start > Date().addingTimeInterval(-18*3600) }
     public var completed:Bool { state == "post" }
+    public var stateLabel:String { completed ? "FINAL" : stale ? "SAVED" : live ? "LIVE" : "UPCOMING" }
 }
 public struct StreamMatch:Identifiable,Sendable {
     public var channel:Channel, confidence:Int, reason:String
@@ -68,7 +71,9 @@ public enum SportsMatcher {
 public struct SportsResult:Sendable { public let games:[Game], failed:[String] }
 public actor SportsService {
     private var cache=[String:(Date,[Game])]()
-    public init() {}
+    private let fetch:@Sendable (String) async throws -> Data
+    public init() { fetch={ try await HTTP.get($0,limit:3*1024*1024,timeout:8) } }
+    init(fetch:@escaping @Sendable (String) async throws -> Data) { self.fetch=fetch }
     public func load(date:Date, leagues:Set<String>, force:Bool=false) async -> SportsResult {
         let formatter=DateFormatter();formatter.locale=Locale(identifier:"en_US_POSIX")
         formatter.dateFormat="yyyyMMdd";formatter.timeZone=TimeZone(identifier:"America/New_York")
@@ -78,24 +83,43 @@ public actor SportsService {
         for league in League.all where leagues.contains(league.id) {
             for day in days {
                 let key=league.id+":"+day
-                if !force,let cached=cache[key],Date().timeIntervalSince(cached.0)<60 { games += cached.1 }
+                if !force,let cached=cache[key],Date().timeIntervalSince(cached.0)<60 {
+                    games += cached.1
+                    if cached.1.contains(where:\.stale) { failed.append(league.id) }
+                }
                 else { requests.append((league,day)) }
             }
         }
+        let fetch=fetch
         await withTaskGroup(of:(String,[Game]?).self) { group in
             for (league,day) in requests {
                 group.addTask {
                     let url="https://site.api.espn.com/apis/site/v2/sports/\(league.path)/scoreboard?dates=\(day)&limit=100"
-                    do { return (league.id+":"+day,try Self.parse(try await HTTP.get(url,limit:3*1024*1024,timeout:8),league:league.id)) }
+                    do { return (league.id+":"+day,try Self.parse(try await fetch(url),league:league.id)) }
                     catch { return (league.id+":"+day,nil) }
                 }
             }
             for await (key,entries) in group {
+                // Leaving a date or league cancels work; it does not make the shared snapshot stale.
+                guard !Task.isCancelled else { continue }
                 if let entries { cache[key]=(Date(),entries); games += entries }
-                else { failed.append(String(key.prefix(while: { $0 != ":" }))) }
+                else {
+                    // Retain only this league/date's last successful snapshot, without making it fresh.
+                    if let cached=cache[key] {
+                        let saved=cached.1.map { game in
+                            var value=game
+                            if !value.completed,value.staleSince==nil { value.staleSince=Date() }
+                            return value
+                        }
+                        cache[key]=(cached.0,saved);games += saved
+                    }
+                    failed.append(String(key.prefix(while: { $0 != ":" })))
+                }
             }
         }
         var seen=Set<String>()
+        // Adjacent date responses can contain the same event; a successful response beats stale fallback.
+        games.sort { !$0.stale && $1.stale }
         games=games.filter { seen.insert($0.id).inserted && (calendar.isDate($0.start,inSameDayAs:date) || $0.live && calendar.isDateInToday(date)) }
         return SportsResult(games:games.sorted { a,b in a.live != b.live ? a.live : a.start<b.start },failed:Array(Set(failed)).sorted())
     }

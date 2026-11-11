@@ -17,9 +17,14 @@ public enum GuideService {
             guard count>0 else { throw SpareError.limit }
             expanded.count=count; data=expanded
         }
-        guard data.count <= 96*1024*1024,
-              data.range(of: Data("<!DOCTYPE".utf8)) == nil,
-              data.range(of: Data("<!ENTITY".utf8)) == nil else { throw SpareError.playlist }
+        guard data.count <= 96*1024*1024 else { throw SpareError.playlist }
+        // XMLParser accepts wide Unicode encodings; an ASCII-only scan misses their DTDs.
+        // Reject declarations before parsing, including a DOCTYPE with no entity callbacks.
+        for encoding in [String.Encoding.utf8, .utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian] {
+            for declaration in ["<!DOCTYPE", "<!ENTITY"] where data.range(of:declaration.data(using:encoding)!) != nil {
+                throw SpareError.playlist
+            }
+        }
         let delegate=XMLGuide()
         let parser=XMLParser(data: data)
         parser.shouldResolveExternalEntities=false; parser.externalEntityResolvingPolicy = .never

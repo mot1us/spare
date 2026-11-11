@@ -11,19 +11,21 @@ object PlaylistRefresh {
     data class Result(val guide: Guide?, val error: String = "", val playlistChanged: Boolean = false)
     private val worker = Executors.newSingleThreadExecutor { work -> Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); work.run() }, "spare-refresh") }
     private val handler = Handler(Looper.getMainLooper())
-    private val pending = mutableMapOf<String, MutableList<(Result) -> Unit>>()
+    // Requests may share a saved ID while an account/address edit replaces its owner.
+    // Only the exact source snapshot may receive another request's cached result.
+    private val pending = mutableMapOf<Source, MutableList<(Result) -> Unit>>()
     private val listeners = mutableMapOf<Any, (Source, Result) -> Unit>()
     fun listen(owner: Any, changed: (Source, Result) -> Unit) { listeners[owner] = changed }
     fun unlisten(owner: Any) { listeners.remove(owner) }
-    private val progress = mutableMapOf<String, String>()
-    fun running(id: String) = synchronized(pending) { id in pending }
-    fun stage(id: String) = synchronized(pending) { progress[id].orEmpty() }
+    private val progress = mutableMapOf<Source, String>()
+    fun running(id: String) = synchronized(pending) { pending.keys.any { it.id == id } }
+    fun stage(id: String) = synchronized(pending) { progress.entries.lastOrNull { it.key.id == id }?.value.orEmpty() }
     fun request(context: Context, source: Source, playlist: Boolean, epg: Boolean, done: (Result) -> Unit): Boolean {
-        synchronized(pending) { pending[source.id]?.let { if (it.size < 8) it.add(done); return false }; pending[source.id] = mutableListOf(done); progress[source.id] = "Refreshing in background…" }
+        synchronized(pending) { pending[source]?.let { if (it.size < 8) it.add(done); return false }; pending[source] = mutableListOf(done); progress[source] = "Refreshing in background…" }
         val app = context.applicationContext
         worker.execute {
             val store = SecureStore(app)
-            fun stage(text: String) { synchronized(pending) { progress[source.id] = text } }
+            fun stage(text: String) { synchronized(pending) { progress[source] = text } }
             val result = runCatching {
                 var cached = store.cachedLineup(source) ?: Guide.EMPTY
                 var changed = false; val errors = mutableListOf<String>()
@@ -84,7 +86,7 @@ object PlaylistRefresh {
                 Result(cached.takeIf { it.channels.isNotEmpty() }?.copy(programmes = programmes), errors.joinToString(" · "), changed)
             }.getOrElse { Result(null, SourceErrors.message(it)) }
             store.refreshError(source, result.error)
-            val callbacks = synchronized(pending) { progress.remove(source.id); pending.remove(source.id).orEmpty() }
+            val callbacks = synchronized(pending) { progress.remove(source); pending.remove(source).orEmpty() }
             handler.post { RefreshJobs.configure(app, store.sources()); listeners.values.toList().forEach { it(source, result) }; callbacks.forEach { it(result) } }
         }
         return true
