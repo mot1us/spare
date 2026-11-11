@@ -3,6 +3,7 @@
 ## 0.32.15 — 2026-11-10
 
 - Browse Library posters and live programme results together in Search, with filters for each type.
+- Keep matching Sports games to channels while the preview rebuffers, instead of restarting the search on every stall.
 
 ## 0.32.14 — 2026-11-10
 

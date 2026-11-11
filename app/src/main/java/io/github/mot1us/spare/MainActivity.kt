@@ -741,10 +741,10 @@ class MainActivity : Activity() {
                     playbackRebuffers++; journal(PlaybackJournal.Event.BUFFERING)
                     if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime()) }
                 }
-                if (state == Player.STATE_BUFFERING) {
-                    playbackWarmup.reset()
-                    stopSportsPrefetch()
-                }
+                // Rebuffering only defers new Sports searches (prefetchSportsStream waits for READY).
+                // Cancelling the one in flight restarted it on every stall, so slow devices never
+                // finished matching a game.
+                if (state == Player.STATE_BUFFERING) playbackWarmup.reset()
                 if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
                 syncPlaybackMonitoring(); syncReplayDiscovery()
                 if (state == Player.STATE_ENDED && started && onDemand != null) { saveDemandProgress(ended = true); showDemandControls() }
