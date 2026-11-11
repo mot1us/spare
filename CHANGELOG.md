@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.32.14 — 2026-11-10
+
+- Prepare Sports matches from a shared guide index and warm several visible games together.
+
 ## 0.32.13 — 2026-11-10
 
 - Trace Sports cache decisions, EPG matching, provider lookups and first-frame timing in opt-in playback diagnostics.

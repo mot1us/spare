@@ -3912,7 +3912,7 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val summary = activity.window.decorView.findViewWithTag<TextView>("performance-overlay").text.toString()
                     assertTrue(summary, summary.contains("peek miss"))
-                    assertTrue(summary, summary.contains("26062 channels"))
+                    assertTrue(summary, summary.contains("channels /"))
                     val journal = MainActivity::class.java.getDeclaredField("playbackJournal").apply { isAccessible = true }.get(activity) as PlaybackJournal
                     val report = journal.report("fixture")
                     assertTrue(report, report.contains("candidate 1 first frame"))

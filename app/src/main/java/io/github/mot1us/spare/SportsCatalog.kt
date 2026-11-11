@@ -79,8 +79,7 @@ object SportsCatalog {
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)
         .lowercase(Locale.ROOT).replace("@", " at ").replace(accents, ""), " ").trim()
     /** City-only listings need league context and a city unique within that league. */
-    fun cities(normalized: String, league: String): Set<SportsTeam> {
-        val clubs = teams.filter { it.league == league }
+    private val citiesByLeague by lazy {
         fun city(team: SportsTeam): String = normalize(team.name).let { name ->
             when {
                 name.startsWith("new york ") -> "new york"
@@ -98,8 +97,13 @@ object SportsCatalog {
                 else -> name.substringBefore(' ')
             }
         }
-        return clubs.groupBy(::city).filter { (city, teams) -> teams.size == 1 && " $normalized ".contains(" $city ") }
-            .values.map { it.single() }.toSet()
+        teams.groupBy { it.league }.mapValues { (_, clubs) ->
+            clubs.groupBy(::city).filterValues { it.size == 1 }.map { (name, matches) -> " $name " to matches.single() }
+        }
+    }
+    fun cities(normalized: String, league: String): Set<SportsTeam> {
+        val text = " $normalized "
+        return citiesByLeague[league].orEmpty().mapNotNullTo(hashSetOf()) { (phrase, team) -> team.takeIf { text.contains(phrase) } }
     }
     private data class Alias(val team: SportsTeam, val phrase: String, val short: Boolean)
     private val index by lazy { teams.flatMap { t -> t.aliases.map { alias ->

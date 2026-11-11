@@ -137,19 +137,22 @@ object SportsSchedule {
         }
     }
     fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE,
-        quality: Map<String, VideoInfo> = emptyMap(), trace: SportsClickTrace? = null, progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
+        quality: Map<String, VideoInfo> = emptyMap(), trace: SportsClickTrace? = null, index: GuideProgrammeIndex? = null,
+        progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
         if (game.state == "post") return game
+        val prepared = index?.takeIf { deadlineNanos == Long.MAX_VALUE && it.isFor(guide) && it.covers(game, now) }
         val measurement = trace?.matchStarted()
-        val result = matchLocal(game, guide, favorites, now, deadlineNanos, quality, progress, measurement)
+        val result = matchLocal(game, guide, favorites, now, deadlineNanos, quality, progress, measurement, prepared)
         if (measurement != null) {
             trace.matchEnded(measurement)
-            countNearMisses(game, guide, now, measurement, trace)
+            countNearMisses(game, guide, now, measurement, trace, prepared?.sportsKeys ?: measurement.guideKeys)
             trace.matched(measurement)
         }
         return result
     }
     private fun matchLocal(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long,
-        quality: Map<String, VideoInfo>, progress: (Int, Int) -> Unit, measurement: SportsMatchMeasurement?): SportsGame {
+        quality: Map<String, VideoInfo>, progress: (Int, Int) -> Unit, measurement: SportsMatchMeasurement?,
+        prepared: GuideProgrammeIndex?): SportsGame {
         val target = game.teams.map { it.id }.toSet()
         val hints = game.teams.map { team -> (team.aliases + team.name.split(' ').filter { it.length >= 4 }).distinct() }
         fun relevant(title: String, description: String = "") = hints.all { aliases -> aliases.any { alias -> title.contains(alias, true) || description.contains(alias, true) } }
@@ -170,29 +173,49 @@ object SportsSchedule {
             return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
         }
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
-        val channels = PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
+        val channels = prepared?.sportsChannels(hints, candidateHints) ?: PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
         var complete = true
-        val byGuideKey = channels.groupBy { guide.key(it) }
         val matches = mutableListOf<SportsBroadcast>()
         var checkedKeys = 0
-        for ((index, entry) in byGuideKey.entries.withIndex()) {
-            if (Thread.currentThread().isInterrupted) return game
-            if (System.nanoTime() >= deadlineNanos) { complete = false; break }
-            checkedKeys++
-            val listings = guide.programmes[entry.key].orEmpty()
-            measurement?.visited(entry.key, listings.size)
-            val programme = listings.asSequence().filter { p ->
-                broadcastWindow(game, p, now) && matchesTarget(p, game.teams.first().league)
-            }.minByOrNull { kotlin.math.abs(it.start - game.start) }
-            if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
-            if (index % 512 == 0) progress(index, channels.size + byGuideKey.size)
+        val total: Int
+        if (prepared != null) {
+            val best = linkedMapOf<String, Programme>()
+            val visited = if (measurement == null) null else HashSet<String>()
+            for (row in prepared.sportsListings(game.teams.first().league, target)) {
+                if (Thread.currentThread().isInterrupted) return game
+                if (measurement != null) {
+                    measurement.programmes++
+                    if (visited?.add(row.key) == true) measurement.guideKeys.add(row.key)
+                }
+                val programme = row.programme
+                if (!broadcastWindow(game, programme, now) || !relevant(programme.title, programme.description)) continue
+                val prior = best[row.key]
+                if (prior == null || kotlin.math.abs(programme.start - game.start) < kotlin.math.abs(prior.start - game.start)) best[row.key] = programme
+            }
+            best.forEach { (key, programme) -> prepared.video(key).forEach { matches.add(SportsBroadcast(it, programme)) } }
+            total = channels.size
+        } else {
+            val byGuideKey = channels.groupBy(guide::key)
+            total = channels.size + byGuideKey.size
+            for ((index, entry) in byGuideKey.entries.withIndex()) {
+                if (Thread.currentThread().isInterrupted) return game
+                if (System.nanoTime() >= deadlineNanos) { complete = false; break }
+                checkedKeys++
+                val listings = guide.programmes[entry.key].orEmpty()
+                measurement?.visited(entry.key, listings.size)
+                val programme = listings.asSequence().filter { p ->
+                    broadcastWindow(game, p, now) && matchesTarget(p, game.teams.first().league)
+                }.minByOrNull { kotlin.math.abs(it.start - game.start) }
+                if (programme != null) entry.value.forEach { matches.add(SportsBroadcast(it, programme)) }
+                if (index % 512 == 0) progress(index, total)
+            }
         }
         var checkedChannels = 0
         for ((index, channel) in channels.withIndex()) {
             if (Thread.currentThread().isInterrupted) return game
             if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedChannels++
-            if (index % 512 == 0) progress(checkedKeys + checkedChannels, channels.size + byGuideKey.size)
+            if (index % 512 == 0) progress(checkedKeys + checkedChannels, total)
             val named = relevant(channel.name)
             val possibleNetwork = candidateHints.any { channel.name.contains(it, true) } && SportsStreams.speculative(channel)
             if (!named && !possibleNetwork) continue
@@ -204,17 +227,18 @@ object SportsSchedule {
         if (measurement != null) measurement.channels = checkedChannels
         val titleOnly = titles.filter { it.id !in confirmed }
         val found = confirmed + titleOnly.map { it.id }
-        progress(checkedChannels + checkedKeys, channels.size + byGuideKey.size)
+        progress(checkedChannels + checkedKeys, total)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
             .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(512), coverageComplete = complete)
     }
     /** Run after the timed match so this diagnostic pass cannot consume its deadline. */
-    private fun countNearMisses(game: SportsGame, guide: Guide, now: Long, measurement: SportsMatchMeasurement, trace: SportsClickTrace) {
+    private fun countNearMisses(game: SportsGame, guide: Guide, now: Long, measurement: SportsMatchMeasurement,
+        trace: SportsClickTrace, keys: Iterable<String>) {
         if (game.teams.size != 2 || !trace.active()) return
         val aliases = game.teams.map { team -> (team.aliases + team.name).map { it to " ${SportsCatalog.normalize(it)} " }.distinct() }
         val league = game.teams.first().league
         val ids = game.teams.map { it.id }.toSet()
-        for (key in measurement.guideKeys) {
+        for (key in keys) {
             if (Thread.currentThread().isInterrupted || !trace.active()) return
             for (programme in guide.programmes[key].orEmpty()) {
                 if (!aliases.all { names -> names.any { (raw, _) -> programme.title.contains(raw, true) || programme.description.contains(raw, true) } }) continue
