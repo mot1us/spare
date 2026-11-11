@@ -6,11 +6,15 @@ import java.net.URI
 class StartupFailures {
     private val missing = ArrayList<Boolean>()
     fun record(status: Int?, failedUrl: String?, channelUrl: String) {
-        val sameEndpoint = runCatching { URI(failedUrl.orEmpty().substringBefore('#')).normalize() == URI(channelUrl.substringBefore('#')).normalize() }.getOrDefault(false)
-        missing.add(status in setOf(404, 410) && sameEndpoint)
+        missing.add(endpointMissing(status, failedUrl, channelUrl))
     }
     fun allEndpointsMissing() = missing.isNotEmpty() && missing.all { it }
     companion object {
+        /** A missing child manifest, segment, key, or subtitle cannot hide its parent title. */
+        fun endpointMissing(status: Int?, failedUrl: String?, endpoint: String): Boolean =
+            status in setOf(404, 410) && !failedUrl.isNullOrBlank() && endpoint.isNotBlank() &&
+                runCatching { URI(failedUrl.substringBefore('#')).normalize() == URI(endpoint.substringBefore('#')).normalize() }.getOrDefault(false)
+
         /** A formerly working live endpoint can disappear temporarily, just like an expired HLS segment. */
         fun retryMissingLive(status: Int?, previouslyPlayed: Boolean, live: Boolean): Boolean =
             live && previouslyPlayed && status in setOf(404, 410)

@@ -136,9 +136,12 @@ class LibraryCatalog(private val store: SecureStore) {
         private val pending = ArrayList<OnDemand>(512)
         private var count = 0
         init { synchronized(publishLock) { writers[prefix] = generation } }
-        fun append(entries: List<OnDemand>) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog import cancelled")
-            if (entries.isEmpty()) return
+        private fun requireCurrent() {
+            if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
+        }
+        fun append(entries: List<OnDemand>) = synchronized(publishLock) {
+            requireCurrent()
+            if (entries.isEmpty()) return@synchronized
             require(entries.size <= 64)
             pending.addAll(entries)
             // Show the first handful immediately, then amortize encryption/fsync over larger pages.
@@ -156,20 +159,24 @@ class LibraryCatalog(private val store: SecureStore) {
                 count += entries.size
             }
         }
-        fun snapshot(labels: Map<String, String>): Snapshot { flush(); return Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source).also { remember(prefix, it) } }
+        fun snapshot(labels: Map<String, String>): Snapshot = synchronized(publishLock) {
+            // Invalidation must cover partial memory publication as well as the final disk index.
+            requireCurrent(); flush()
+            Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source).also { remember(prefix, it) }
+        }
         fun checkpoint(labels: Map<String, String>): Snapshot = save(labels, false)
         fun finish(labels: Map<String, String>): Snapshot = save(labels, true)
         private fun save(labels: Map<String, String>, complete: Boolean): Snapshot {
             val value = snapshot(labels).copy(complete = complete)
             val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("titles", JSONArray(it.titles.map(Title::json))) })
             synchronized(publishLock) {
-                if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
+                requireCurrent()
                 store.write("${prefix}index.enc", JSONObject().put("schema", 3).put("provider", source.providerKey()).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
+                if (complete && scope.isEmpty()) {
+                    lookup[lookupKey(source, mode)] = java.util.concurrent.ConcurrentHashMap(chunks.flatMap { it.titles }.groupBy { it.canonical })
+                }
+                remember(prefix, value)
             }
-            if (complete && scope.isEmpty()) {
-                lookup[lookupKey(source, mode)] = java.util.concurrent.ConcurrentHashMap(chunks.flatMap { it.titles }.groupBy { it.canonical })
-            }
-            remember(prefix, value)
             return value
         }
     }

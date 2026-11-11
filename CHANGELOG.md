@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.32.16 — 2026-11-10
+
+- Keep VOD titles available after missing HLS child resources; hide only confirmed missing media endpoints.
+- Isolate provider cache invalidation from source edits, deleted sources, and stale background work.
+- Correct macOS source-switch task ownership, tolerate missing optional Xtream categories, and reject encoded XML DTDs.
+- Bind Mac caches to their source identity and give brief rebuffering its own recovery window.
+- Preserve saved Mac Sports results during refresh failures, label stale status, and refresh selected scores.
+- Reject reused release tags and physical-device targets in automated emulator checks.
+
 ## 0.32.15 — 2026-11-10
 
 - Browse Library posters and live programme results together in Search, with filters for each type.

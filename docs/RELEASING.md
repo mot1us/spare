@@ -25,6 +25,8 @@ The marker may keep the last requested version while the tracked native version 
 
 The workflow publishes `spare.apk`, `SHA256SUMS`, and `update.json` at `v<versionName>`. Existing tags/releases are not overwritten. The metadata pins the APK URL to its exact version; the app also checks the APK’s package, higher version code, and signing identity. Android still verifies the package at installation.
 
+Before publication, `scripts/release_tag.py` checks the remote tag and rejects an existing tag even when it has no GitHub Release. This prevents attaching new binaries to an older source commit. A failed remote lookup or a lookup exceeding 60 seconds also fails the gate; only an explicit missing tag permits publication. Run `python3 -m unittest discover -s scripts/tests` for the local tooling regressions.
+
 Before publishing, the release script verifies the signed APK certificate against `release-certificate.sha256`, and verifies its native package/version against `version.properties`. That public fingerprint is safe to commit; the private keystore and password are not.
 
 The first APK must be installed once by sideloading. Stable update discovery uses `releases/latest/download/update.json`. Prereleases do not enter that channel. From 0.1.1, builds with `releaseChannel=prerelease` discover testing updates through the public Releases API and accept only exact version-pinned manifest URLs in this repository; stable builds keep their original channel. Version 0.1.0 requires one manual installation to obtain this correction. Create the AFTVnews Downloader shortcut to `https://github.com/mot1us/spare/releases/latest/download/spare.apk` only after a stable APK exists. Keep the asset name `spare.apk` across releases so the shortcut remains useful.

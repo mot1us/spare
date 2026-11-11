@@ -16,6 +16,20 @@ private final class CommandToken:@unchecked Sendable {
     func matches(_ next:Int)->Bool { lock.lock();defer { lock.unlock() };return value==next }
 }
 
+struct PlaybackWatchdog {
+    private var bufferingSince:Date?
+    private var lastProgress:Date
+    private var lastTime:Int64 = -1
+    init(now:Date=Date()) { bufferingSince=now;lastProgress=now }
+    mutating func stalled(state:Int32,width:UInt32,time:Int64,now:Date=Date())->Bool {
+        if time != lastTime && time>=0 { lastTime=time;lastProgress=now }
+        if state==3 && width>0 { bufferingSince=nil }
+        else if state==1 || state==2,bufferingSince==nil { bufferingSince=now }
+        // Each buffering episode gets its own grace period, independent of when the channel opened.
+        return bufferingSince.map { now.timeIntervalSince($0)>20 } == true || now.timeIntervalSince(lastProgress)>25
+    }
+}
+
 // All blocking libvlc work, including stop/reconnect, runs on one worker.
 @MainActor final class Player:ObservableObject {
     @Published var loading=false
@@ -35,7 +49,7 @@ private final class CommandToken:@unchecked Sendable {
     private var timer:Timer?
     private var generation=0, retries=0
     private var urls=[String](), urlIndex=0
-    private var started=Date(), lastProgress=Date(), lastTime:Int64 = -1
+    private var watchdog=PlaybackWatchdog()
     private var trackPoll=0, stopped=true
     private var pollPending=false
     init() {
@@ -85,7 +99,7 @@ private final class CommandToken:@unchecked Sendable {
             }
             return
         }
-        loading=true; playing=false; started=Date(); lastProgress=Date(); lastTime = -1; trackPoll=0
+        loading=true; playing=false; watchdog=PlaybackWatchdog(); trackPoll=0
         let url=urls[urlIndex], expected=generation,token=commandToken
         perform { [weak self] handle in
             guard token.matches(expected) else { return }
@@ -101,7 +115,11 @@ private final class CommandToken:@unchecked Sendable {
         advance(); stopped=true; urls=[]; loading=false; playing=false; paused=false
         perform { spare_player_stop($0) }
     }
-    func togglePause() { paused.toggle(); let value:Int32=paused ? 1:0; perform { spare_player_pause($0,value) } }
+    func togglePause() {
+        paused.toggle()
+        if !paused { watchdog=PlaybackWatchdog() }
+        let value:Int32=paused ? 1:0;perform { spare_player_pause($0,value) }
+    }
     func retry() { guard !urls.isEmpty else { return }; advance(); retries=0; urlIndex=0; error=nil; stopped=false; tune() }
     func selectTrack(_ id:Int32,subtitles:Bool) { perform { spare_player_track_select($0,subtitles ? 1:0,id) } }
     private func poll() {
@@ -130,8 +148,7 @@ private final class CommandToken:@unchecked Sendable {
     }
     private func consume(_ snapshot:PlayerSnapshot) {
         if paused { loading=false; return }
-        let now=Date()
-        if snapshot.time != lastTime && snapshot.time>=0 { lastTime=snapshot.time; lastProgress=now }
+        let stalled=watchdog.stalled(state:snapshot.state,width:snapshot.width,time:snapshot.time)
         if snapshot.state==3 && snapshot.width>0 {
             loading=false; playing=true
             let rate=snapshot.fps>0 ? String(format:" · %.2f fps",snapshot.fps):""
@@ -145,7 +162,7 @@ private final class CommandToken:@unchecked Sendable {
             loading=true
         }
         if snapshot.state==6 || snapshot.state==7 { recover(); return }
-        if loading && now.timeIntervalSince(started)>20 || playing && now.timeIntervalSince(lastProgress)>25 { recover() }
+        if stalled { recover() }
     }
     private func recover() {
         guard !stopped else { return }
@@ -155,7 +172,11 @@ private final class CommandToken:@unchecked Sendable {
         else if retries<1 { retries += 1;tune() }
         else { fail() }
     }
-    private func fail() { stopped=true; loading=false; playing=false; error=SpareError.unavailable.errorDescription }
+    private func fail() {
+        advance();stopped=true;loading=false;playing=false;error=SpareError.unavailable.errorDescription
+        // Exhausted recovery must release the live connection, including a stalled but open input.
+        perform { spare_player_stop($0) }
+    }
 }
 
 private final class VideoHost:NSView {

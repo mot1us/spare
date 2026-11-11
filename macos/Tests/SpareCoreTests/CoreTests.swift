@@ -51,6 +51,13 @@ final class CoreTests:XCTestCase {
         XCTAssertEqual(guide["one"]?.first?.title,"A & B")
         XCTAssertThrowsError(try GuideService.parse(Data("<!DOCTYPE tv [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><tv/>".utf8)))
     }
+    func testXMLGuideRejectsDTDsInUnicodeEncodings() throws {
+        // A DTD without entities must still be rejected; parser entity callbacks do not see it.
+        for encoding in [String.Encoding.utf8, .utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian] {
+            let text="<!DOCTYPE tv><tv/>"
+            XCTAssertThrowsError(try GuideService.parse(text.data(using:encoding)!),"Accepted a DTD in \(encoding)")
+        }
+    }
     func testSportsCoverageBeforeResolutionAndUnknownFPSPlayable() throws {
         let home=Team(id:"SEA",name:"Seattle Mariners",nickname:"Mariners",abbreviation:"SEA")
         let away=Team(id:"NYY",name:"New York Yankees",nickname:"Yankees",abbreviation:"NYY")
@@ -82,5 +89,37 @@ final class CoreTests:XCTestCase {
         XCTAssertNil(try Data(contentsOf:file).range(of:Data("private-test-value".utf8)))
         let restored=try await vault.load(Playlist.self,name:"source")
         XCTAssertEqual(restored,source)
+    }
+    func testSourceCacheRejectsEditedAccountsAfterReopening() async throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let vault=Vault(directory:root,testMode:true)
+        let source=Playlist(id:"source",address:"https://example.test",username:"first",password:"old-password")
+        let channel=Channel(id:"one",name:"Old account channel",url:"https://example.test/live/first/old-password/1")
+        try await vault.save(Lineup(channels:[channel]),name:"lineup",source:source)
+        let reopened=Vault(directory:root,testMode:true)
+        // Reopening uses the same synthetic key, as production restores it from Keychain.
+        let key=try await vault.secret("cache-key")!
+        try await reopened.saveSecret(key,key:"cache-key")
+        let restored=try await reopened.load(Lineup.self,name:"lineup",source:source)
+        XCTAssertEqual(restored?.channels,[channel])
+        var renamed=source;renamed.name="My renamed playlist"
+        let renamedCache=try await reopened.load(Lineup.self,name:"lineup",source:renamed)
+        XCTAssertEqual(renamedCache?.channels,[channel])
+        var edits=[Playlist]()
+        var changed=source;changed.address="https://other.example.test";edits.append(changed)
+        changed=source;changed.username="second";edits.append(changed)
+        changed=source;changed.password="new-password";edits.append(changed)
+        changed=source;changed.allowHTTP=true;edits.append(changed)
+        changed=source;changed.kind="m3u";edits.append(changed)
+        changed=source;changed.epgURL="https://example.test/new-guide";edits.append(changed)
+        for edited in edits {
+            let stale=try await reopened.load(Lineup.self,name:"lineup",source:edited)
+            XCTAssertNil(stale,"Restored a different source's channels")
+        }
+        // Old unscoped payloads cannot prove which account produced their stream URLs.
+        try await vault.save(Lineup(channels:[channel]),name:"lineup:"+source.id)
+        let legacy=try? await reopened.load(Lineup.self,name:"lineup",source:source)
+        XCTAssertNil(legacy)
     }
 }

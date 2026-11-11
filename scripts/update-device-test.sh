@@ -2,7 +2,7 @@
 set -euo pipefail
 : "${ANDROID_HOME:?Set ANDROID_HOME to the isolated SDK}"
 serial="${SPARE_TEST_SERIAL:-emulator-5580}"
-[[ "$serial" == emulator-* ]] || { echo 'Use an isolated emulator for the self-install test'; exit 1; }
+[[ "$serial" =~ ^emulator-[0-9]+$ ]] || { echo 'Use an isolated emulator for the self-install test'; exit 1; }
 adb="$ANDROID_HOME/platform-tools/adb"
 package=io.github.mot1us.spare.debug
 mkdir -p app/build/reports/device

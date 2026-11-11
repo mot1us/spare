@@ -16,6 +16,8 @@ For 0.12.2, rapidly browse Sports with large team artwork, then press Home and l
 
 # Device testing
 
+The device, self-update and optimized-release scripts reject physical-device serials. Use a freshly created Android TV emulator with an isolated `ANDROID_AVD_HOME` and no personal accounts; `SPARE_TEST_SERIAL` selects its `emulator-<port>` transport. The serial guard does not establish that an existing emulator has no personal data.
+
 For 0.12.1, verify stable 59.94/60 readings after the initial sampling period, genuine rate/channel changes, and Watch best against a large lineup. Search should show checking/confirmation/tuning stages and keep the guide visible until the first frame. Confirm title-only live event channels match both teams and that old-date/replay titles cannot auto-tune. In Sports → Manage teams, choose visible leagues and teams in the full-screen Settings layout; confirm persistence. Right from a league enters hero actions, Down enters cards. Hold horizontal card navigation and confirm focus stays in Sports; the hidden dock should open only after deliberate Left navigation. The release gate now contains 30 TV tests.
 
 For 0.12.0, mark an upcoming game with Remind me and reopen Spare to confirm persistence. Settings → Sports removes reminders. A fresh live scoreboard should produce one overlay during playback; Back/Dismiss closes it, and Watch game searches for current coverage. Watch best automatically tunes only an EPG-matched, playback-verified FHD/60 stream; missing evidence opens ranked streams. Delayed/pre-game status must not announce a start based only on the clock. Reminders stay inside Spare. The release suite contains 29 TV tests plus the native update-install gate.

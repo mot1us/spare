@@ -140,7 +140,7 @@ class MainActivity : Activity() {
     }
     private fun updateRefreshIndicator() { if (::refreshBar.isInitialized) refreshBar.isVisible = guide.channels.isEmpty() && (playlistLoading.isNotEmpty() || enabledSources().any { PlaylistRefresh.running(it.id) }) }
 
-    private val ownRefreshes = mutableSetOf<String>()
+    private val ownRefreshes = mutableSetOf<Source>()
     private var mergeEpoch = 0
     private var deferredRefresh: PlaylistRefresh.Result? = null
     private val refreshTick = object : Runnable {
@@ -722,7 +722,9 @@ class MainActivity : Activity() {
                     playbackReconnects++; journal(PlaybackJournal.Event.LIVE_WINDOW_RECOVERY)
                     showPlaybackLoading(PlaybackPhase.RECONNECTING); player.seekToDefaultPosition(); player.prepare(); syncPlaybackMonitoring(); return
                 }
-                if (statusCode == 404) onDemand?.takeIf { it.kind in setOf("movie", "episode") }?.let { item -> owner(item)?.let { library.repository.markMissing(it, item) } }
+                if (StartupFailures.endpointMissing(statusCode, http?.dataSpec?.uri?.toString(), playbackUrl)) {
+                    onDemand?.takeIf { it.kind in setOf("movie", "episode") }?.let { item -> owner(item)?.let { library.repository.markMissing(it, item) } }
+                }
                 if (!hasPlayedChannel && onDemand == null) {
                     startupFailures.record(statusCode, http?.dataSpec?.uri?.toString(), playbackUrl)
                     if (statusCode !in setOf(401, 403, 429) && tryAlternate()) return
@@ -790,7 +792,7 @@ class MainActivity : Activity() {
         if (selected == null) { status.text = if (sources.isEmpty()) "Add a playlist in Settings to start watching" else "Enable a playlist in Settings to start watching"; if (sources.isEmpty()) handler.post { editSource(null) } }
         else load(selected)
         PlaylistRefresh.listen(this) { selectedSource, result ->
-            if (!closed && selectedSource.enabled && sources.any { it == selectedSource } && selectedSource.id !in ownRefreshes) {
+            if (!closed && selectedSource.enabled && sources.any { it == selectedSource } && selectedSource !in ownRefreshes) {
                 if (started) result.guide?.let { receivePlaylist(selectedSource, it) } else if (source == selectedSource) deferredRefresh = result
             }
         }
@@ -1458,9 +1460,9 @@ class MainActivity : Activity() {
         val epg = !force && (!store.fullEpgAttempted(selected) || policy.epgDue(store.epgRefreshed(selected), now, onLaunch))
         additionalLaunch.remove(selected.id)
         if (!playlist && !epg) return
-        val epoch = generation; ownRefreshes.add(selected.id)
+        val epoch = generation; ownRefreshes.add(selected)
         PlaylistRefresh.request(this, selected, playlist, epg) { result ->
-            ownRefreshes.remove(selected.id)
+            ownRefreshes.remove(selected)
             if (!closed && epoch == generation && sources.any { it == selected && it.enabled }) {
                 if (result.guide != null) receivePlaylist(selected, result.guide)
                 else { playlistLoading.remove(selected.id); updateRefreshIndicator(); updateGroups(); applyFilter() }
@@ -1547,9 +1549,9 @@ class MainActivity : Activity() {
     }
     private fun refreshCurrent(selected: Source, playlist: Boolean = true, epg: Boolean = true, after: (() -> Unit)? = null) {
         val epoch = generation
-        ownRefreshes.add(selected.id); updateRefreshIndicator()
+        ownRefreshes.add(selected); updateRefreshIndicator()
         PlaylistRefresh.request(this, selected, playlist, epg) { result ->
-            ownRefreshes.remove(selected.id)
+            ownRefreshes.remove(selected)
             if (closed || epoch != generation || source != selected) return@request
             // A successful download is not yet a visible lineup: receivePlaylist
             // still scopes/indexes it off-thread before dismissing startup progress.
@@ -2973,7 +2975,12 @@ class MainActivity : Activity() {
             }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
     }, { removed ->
         if (source?.id == removed.id) { handler.removeCallbacks(saveVideoReadings); videoSavePending = false }
-        runCatching { flushVideoReadings(); cacheEpg.run(); configurePlaylists(sources.filterNot { it.id == removed.id }); cacheWrites.execute { store.removeCache(removed) } }
+        runCatching {
+            flushVideoReadings(); cacheEpg.run(); configurePlaylists(sources.filterNot { it.id == removed.id })
+            // Cancel catalog producers before deleting their files so a late import cannot recreate them.
+            library.invalidateProvider(removed.id)
+            cacheWrites.execute { store.removeCache(removed) }
+        }
             .onSuccess {
                 if (settingsPanel?.opened == true) closeSettings()
                 if (source == null) clearRemovedPlaylist() else { detachPlaylist(removed); updateGroups(); applyFilter() }

@@ -43,17 +43,18 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
     private var lineupTask:Task<Void,Never>?, epgTask:Task<Void,Never>?, filterTask:Task<Void,Never>?, warmTask:Task<Void,Never>?
     private var sportsTask:Task<Void,Never>?, matchTask:Task<Void,Never>?, tuneTask:Task<Void,Never>?
     private var sourceGeneration=0, sportsGeneration=0, filterGeneration=0
+    private var activatedSource:Playlist?
     private var epgVisible=Set<String>(), epgChecked=[String:Date](), byID=[String:Channel](), searchIndex=[String:String]()
     private var nowTimer:Timer?, sportsTimer:Timer?
     var source:Playlist? { playlists.first { $0.id==activeID } }
     var currentProgramme:Programme? { current.flatMap { nowPlaying($0) } }
     var demo:Bool { ProcessInfo.processInfo.arguments.contains("--demo") }
 
-    init() {
+    init(vault:Vault?=nil,preferences:UserDefaults?=nil,startAutomatically:Bool=true) {
         let demo=ProcessInfo.processInfo.arguments.contains("--demo")
-        prefs=demo ? UserDefaults(suiteName:"io.github.mot1us.spare.demo")! : .standard
+        prefs=preferences ?? (demo ? UserDefaults(suiteName:"io.github.mot1us.spare.demo")! : .standard)
         let directory=ProcessInfo.processInfo.environment["SPARE_DATA_DIR"].map { URL(fileURLWithPath:$0,isDirectory:true) }
-        vault=Vault(directory:directory,testMode:demo)
+        self.vault=vault ?? Vault(directory:directory,testMode:demo)
         favorites=Set(prefs.stringArray(forKey:"favorites") ?? [])
         followedTeams=Set(prefs.stringArray(forKey:"teams") ?? [])
         enabledLeagues=Set(prefs.stringArray(forKey:"leagues") ?? League.all.map(\.id))
@@ -74,7 +75,7 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
                 self.loadSports()
             }
         }
-        Task { await bootstrap() }
+        if startAutomatically { Task { await bootstrap() } }
     }
     private func bootstrap() async {
         if demo { await loadDemo(); return }
@@ -86,19 +87,28 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
         } catch { notice=SpareError.storage.errorDescription; showPlaylists=true }
     }
     func activate(_ source:Playlist,refresh:Bool=false) {
-        if activeID != source.id || current.map({ (try? HTTP.validate($0.url,allowHTTP:source.allowHTTP)) == nil }) == true {
+        let changedSource=activatedSource?.hasSameSource(as:source) != true
+        activatedSource=source
+        if changedSource {
             tuneTask?.cancel();player.stop();current=nil;previous=nil
+            // An old lineup must never be selectable under a different source's consent or credentials.
+            channels=[];visibleChannels=[];groups=[];byID=[:];searchIndex=[:]
         }
         activeID=source.id; prefs.set(activeID,forKey:"activePlaylist")
         sourceGeneration += 1; let generation=sourceGeneration
-        lineupTask?.cancel(); epgTask?.cancel(); warmTask?.cancel(); matchTask?.cancel()
+        lineupTask?.cancel(); epgTask?.cancel(); warmTask?.cancel(); warmTask=nil; matchTask?.cancel()
+        filterTask?.cancel();filterGeneration += 1
+        streamResults=[];selectedGame=nil;showStreams=false;matching=false;guideLoading=false
         epgVisible=[]; epgChecked=[:]; guide=[:]; category="All channels"; query=""
         loading=true; loadingMessage="Opening saved channels…"; notice=nil
         lineupTask=Task {
             do {
-                if !refresh,let saved=try? await vault.load(Lineup.self,name:"lineup:"+source.id) {
+                if !refresh,let saved=try? await vault.load(Lineup.self,name:"lineup",source:source) {
                     await apply(saved,source:source,generation:generation)
-                    if let cached=try? await vault.load([String:[Programme]].self,name:"epg:"+source.id),generation==sourceGeneration { guide=cached }
+                    guard generation==sourceGeneration,!Task.isCancelled else { return }
+                    let cached=try? await vault.load([String:[Programme]].self,name:"epg",source:source)
+                    guard generation==sourceGeneration,!Task.isCancelled else { return }
+                    if let cached { guide=cached }
                     loading=false
                     if saved.savedAt.timeIntervalSinceNow < -24*3600 { refreshPlaylist(inBackground:true) }
                     else { loadGuide(source:source,address:saved.epgURL,generation:generation) }
@@ -109,7 +119,8 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
                 }
                 try Task.checkCancellation()
                 await apply(result,source:source,generation:generation)
-                try await vault.save(result,name:"lineup:"+source.id)
+                guard generation==sourceGeneration,!Task.isCancelled else { return }
+                try await vault.save(result,name:"lineup",source:source)
                 if generation==sourceGeneration { loading=false; loadGuide(source:source,address:result.epgURL,generation:generation) }
             } catch is CancellationError {} catch {
                 if generation==sourceGeneration { loading=false; notice=SpareError.safe(error) }
@@ -135,7 +146,8 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
                 let result=try await PlaylistService.load(source)
                 try Task.checkCancellation()
                 await apply(result,source:source,generation:generation)
-                try await vault.save(result,name:"lineup:"+source.id)
+                guard generation==sourceGeneration,!Task.isCancelled else { return }
+                try await vault.save(result,name:"lineup",source:source)
                 if generation==sourceGeneration { loadGuide(source:source,address:result.epgURL,generation:generation) }
             } catch {}
         }
@@ -150,7 +162,7 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
                 try Task.checkCancellation()
                 if generation==sourceGeneration {
                     guide.merge(result,uniquingKeysWith: { _,new in new })
-                    try await vault.save(guide,name:"epg:"+source.id)
+                    try await vault.save(guide,name:"epg",source:source)
                 }
             } catch is CancellationError {} catch {
                 // Existing guide and per-channel data remain usable if the full XMLTV endpoint fails.
@@ -212,9 +224,10 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
     func warmEPG(_ channel:Channel,visible:Bool=true) {
         if visible { epgVisible.insert(channel.id) } else { epgVisible.remove(channel.id); return }
         guard !demo,source?.kind=="xtream",warmTask==nil else { return }
+        // Capture ownership before suspension so a cancelled worker cannot clear a new source's slot.
+        let generation=sourceGeneration
         warmTask=Task {
             try? await Task.sleep(nanoseconds:220_000_000)
-            let generation=sourceGeneration
             while !Task.isCancelled,let source,self.sourceGeneration==generation {
                 let next=epgVisible.compactMap { byID[$0] }.filter { channel in
                     (epgChecked[channel.id]?.timeIntervalSinceNow ?? -1000)<(-300)
@@ -250,12 +263,16 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
         do {
             try await vault.saveSecret(JSONEncoder().encode(updated),key:"playlists")
             playlists=updated
-            await vault.removeCache(name:"lineup:"+playlist.id);await vault.removeCache(name:"epg:"+playlist.id)
             if activeID==playlist.id {
-                lineupTask?.cancel();epgTask?.cancel();warmTask?.cancel();sourceGeneration += 1
-                tuneTask?.cancel();player.stop();current=nil;previous=nil;channels=[];visibleChannels=[];groups=[];guide=[:];activeID="";loading=false
+                lineupTask?.cancel();epgTask?.cancel();warmTask?.cancel();warmTask=nil;sourceGeneration += 1
+                filterTask?.cancel();filterGeneration += 1;matchTask?.cancel()
+                tuneTask?.cancel();player.stop();current=nil;previous=nil;channels=[];visibleChannels=[];groups=[];guide=[:];byID=[:];searchIndex=[:]
+                streamResults=[];selectedGame=nil;showStreams=false;matching=false;guideLoading=false
+                epgVisible=[];epgChecked=[:];activeID="";activatedSource=nil;loading=false
                 if let first=updated.first { activate(first) }
             }
+            // Cancel writers before yielding to cache deletion so they cannot recreate removed data.
+            await vault.removeCache(name:"lineup:"+playlist.id);await vault.removeCache(name:"epg:"+playlist.id)
         } catch { notice=SpareError.storage.errorDescription }
     }
     func loadSports(force:Bool=false) {
@@ -275,6 +292,13 @@ enum Destination:String,CaseIterable { case guide="Live TV", sports="Sports" }
             (sportsLeague=="All leagues" || sportsLeague=="My teams" && (followedTeams.contains(game.home.id)||followedTeams.contains(game.away.id)) || game.league==sportsLeague)
             && (!sportsLiveOnly || game.live)
         }
+    }
+    func featuredGame(focusedID:String?)->Game? {
+        let visible=displayedGames
+        // Keep selection by identity, but always read scores and status from the latest snapshot.
+        return visible.first { $0.id==focusedID }
+            ?? visible.first { $0.live && (followedTeams.contains($0.home.id)||followedTeams.contains($0.away.id)) }
+            ?? visible.first
     }
     func setLeague(_ id:String,enabled:Bool) {
         if enabled { enabledLeagues.insert(id) } else { enabledLeagues.remove(id) }

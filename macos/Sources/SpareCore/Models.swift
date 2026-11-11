@@ -15,6 +15,11 @@ public struct Playlist: Codable, Identifiable, Equatable, Sendable {
         self.id=id; self.name=name; self.kind=kind; self.address=address; self.username=username
         self.password=password; self.epgURL=epgURL; self.allowHTTP=allowHTTP
     }
+    public func hasSameSource(as other:Playlist)->Bool {
+        // A display-name edit does not change account ownership, consent, or cached provider data.
+        id==other.id && kind==other.kind && address==other.address && username==other.username
+            && password==other.password && epgURL==other.epgURL && allowHTTP==other.allowHTTP
+    }
 }
 public struct Channel: Codable, Identifiable, Hashable, Sendable {
     public var id: String

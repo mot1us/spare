@@ -85,14 +85,27 @@ class SecureStore(private val context: Context) {
         }
         cipher.doFinal(bytes, 13, bytes.size - 13)
     }
-    fun delete(name: String) = synchronized(fileLock(name)) { require(name.matches(Regex("[a-zA-Z0-9_.-]+"))); AtomicFile(File(context.filesDir, name)).delete() }
+    fun delete(name: String) = synchronized(fileLock(name)) {
+        require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
+        val base = File(context.filesDir, name)
+        AtomicFile(base).delete()
+        // AtomicFile ignores File.delete failures. Do not unlock an edited account's
+        // cache while an old base, pending write or recoverable backup still exists.
+        if (listOf("", ".new", ".bak").any { File(base.path + it).exists() })
+            throw java.io.IOException("Encrypted cache could not be removed")
+    }
+    private fun encryptedNames(): Set<String> {
+        val files = context.filesDir.listFiles() ?: throw java.io.IOException("Encrypted cache directory is unavailable")
+        // An interrupted write may leave only its sidecar; prune its base name too.
+        return files.map { it.name.removeSuffix(".new").removeSuffix(".bak") }.filter { it.endsWith(".enc") }.toSet()
+    }
     fun pruneCatalog(prefix: String, keep: Set<String>) {
         require(prefix.matches(Regex("catalog-[a-zA-Z0-9_-]+-")))
-        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") && it.name !in keep }?.forEach { delete(it.name) }
+        encryptedNames().filter { it.startsWith(prefix) && it !in keep }.forEach(::delete)
     }
     private fun pruneProviderFiles(prefix: String) {
         require(prefix.matches(Regex("(?:watch|library-favorites|library-categories)-[a-zA-Z0-9_-]+-")))
-        context.filesDir.listFiles()?.filter { it.name.startsWith(prefix) && it.name.endsWith(".enc") }?.forEach { delete(it.name) }
+        encryptedNames().filter { it.startsWith(prefix) }.forEach(::delete)
     }
     fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
@@ -111,16 +124,31 @@ class SecureStore(private val context: Context) {
     }
     fun archiveMetadataReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("archive-metadata-${source.id}", false)
     fun markArchiveMetadataAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("archive-metadata-${source.id}", true) } }
-    fun guideUrl(source: Source) = runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
-    fun cachedLineup(source: Source): Guide? = if (!providerCurrent(source)) null else read("lineup-${source.id}.enc")?.let(GuideDisk::lineup)
-        ?: read("cache-${source.id}.enc")?.let { GuideDisk.lineup(it).also { guide -> saveLineup(source, guide) } }
-    fun cachedProgrammes(source: Source): Map<String, List<Programme>> = if (!providerCurrent(source)) emptyMap() else read("epg-${source.id}.enc")?.let(GuideDisk::programmes)
-        ?: read("cache-${source.id}.enc")?.let {
-            val entries = GuideDisk.programmes(it)
+    fun guideUrl(source: Source) = synchronized(cacheLock) {
+        if (!providerCurrent(source)) "" else runCatching { read("guide-url-${source.id}.enc")?.toString(Charsets.UTF_8).orEmpty() }.getOrDefault("")
+    }
+    fun cachedLineup(source: Source): Guide? {
+        val saved = synchronized(cacheLock) {
+            if (!providerCurrent(source)) return null
+            read("lineup-${source.id}.enc")?.let { it to false } ?: read("cache-${source.id}.enc")?.let { it to true }
+        } ?: return null
+        // Parse outside the account-transition lock; a large guide must not hold up UI binding.
+        return GuideDisk.lineup(saved.first).also { if (saved.second) saveLineup(source, it) }
+    }
+    fun cachedProgrammes(source: Source): Map<String, List<Programme>> {
+        val saved = synchronized(cacheLock) {
+            if (!providerCurrent(source)) return emptyMap()
+            read("epg-${source.id}.enc")?.let { it to false } ?: read("cache-${source.id}.enc")?.let { it to true }
+        } ?: return emptyMap()
+        val entries = GuideDisk.programmes(saved.first)
+        if (saved.second) {
             cacheProgrammes(source, entries, System.currentTimeMillis())
-            if (java.io.File(context.filesDir, "lineup-${source.id}.enc").exists()) delete("cache-${source.id}.enc")
-            entries
-        }.orEmpty()
+            synchronized(cacheLock) {
+                if (providerCurrent(source) && File(context.filesDir, "lineup-${source.id}.enc").exists()) delete("cache-${source.id}.enc")
+            }
+        }
+        return entries
+    }
     fun programmesStamp(source: Source) = preferences.getLong("epg-cache-${source.id}", 0)
     fun cacheProgrammes(source: Source, programmes: Map<String, List<Programme>>, observedAt: Long) = synchronized(cacheLock) {
         if (!providerCurrent(source)) return@synchronized
@@ -142,23 +170,23 @@ class SecureStore(private val context: Context) {
     fun epgMappingReady(source: Source) = source.kind != "xtream" || preferences.getBoolean("epg-mapping-${source.id}", false)
     fun fullEpgAttempted(source: Source) = preferences.getBoolean("epg-full-attempt-${source.id}", false)
     fun markFullEpgAttempted(source: Source) { if (providerCurrent(source)) preferences.edit { putBoolean("epg-full-attempt-${source.id}", true) } }
-    fun markEpgRefreshed(source: Source) { preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
+    fun markEpgRefreshed(source: Source) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
-    fun refreshError(source: Source, value: String) { preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
+    fun refreshError(source: Source, value: String) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
     companion object { private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
     fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
         require(kind in setOf("movie", "series"))
-        return read("library-${source.id}-$kind.enc")?.let { bytes ->
-            val root = JSONObject(bytes.toString(Charsets.UTF_8)); val entries = root.getJSONArray("entries")
-            require(entries.length() <= Importers.MAX_CHANNELS)
-            root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
-        }
+        val bytes = synchronized(cacheLock) { if (providerCurrent(source)) read("library-${source.id}-$kind.enc") else null } ?: return null
+        val root = JSONObject(bytes.toString(Charsets.UTF_8)); val entries = root.getJSONArray("entries")
+        require(entries.length() <= Importers.MAX_CHANNELS)
+        return root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
     }
     fun richCatalog(source: Source, kind: String) = preferences.getInt("catalog-schema-${source.id}-$kind", 0) >= 2
     fun metadataAddon(): String = read("metadata-addon.enc")?.toString(Charsets.UTF_8).orEmpty()
     fun saveMetadataAddon(value: String) { write("metadata-addon.enc", value.toByteArray()) }
-    fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) {
+    fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) = synchronized(cacheLock) {
         require(kind in setOf("movie", "series"))
+        if (!providerCurrent(source)) return@synchronized
         write("library-${source.id}-$kind.enc", JSONObject().put("updated", System.currentTimeMillis()).put("entries", JSONArray(entries.map { it.json() })).toString().toByteArray())
         preferences.edit { putInt("catalog-schema-${source.id}-$kind", 2) }
     }
@@ -186,29 +214,44 @@ class SecureStore(private val context: Context) {
     /** Preserve user preferences, but never reuse derived data from a different server/account. */
     fun bindProvider(source: Source): Boolean = synchronized(cacheLock) {
         val key = "provider-identity-${source.id}"; val value = source.providerKey(); val old = preferences.getString(key, null)
+        val changed = old != null && old != value
         preferences.edit {
             if (!preferences.contains("legacy-provider-${source.id}")) putString("legacy-provider-${source.id}", old ?: value)
             putString(key, value)
-            if (old != null && old != value) listOf("video-info", "unavailable", "last", "previous", "recent", "playlist-refreshed", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "refresh-error", "archive-metadata", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") }
+            if (changed) {
+                // File cleanup stays on the worker. Until it finishes, neither an old
+                // response nor the new account may read or overwrite these shared names.
+                putBoolean("provider-cache-pending-${source.id}", true)
+                listOf("video-info", "unavailable", "last", "previous", "recent", "playlist-refreshed", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "refresh-error", "archive-metadata", "library-metadata", "provider-quality").forEach { remove("$it-${source.id}") }
+            }
         }
-        old != null && old != value
+        // A process can exit after binding but before its worker deletes old files.
+        changed || preferences.getBoolean("provider-cache-pending-${source.id}", false)
     }
-    private fun providerCurrent(source: Source) = preferences.getString("provider-identity-${source.id}", source.providerKey()) == source.providerKey()
-    fun invalidateProviderFiles(source: Source) {
+    private fun providerCurrent(source: Source) = preferences.getString("provider-identity-${source.id}", source.providerKey()) == source.providerKey() &&
+        !preferences.getBoolean("provider-cache-pending-${source.id}", false)
+    fun invalidateProviderFiles(source: Source) = synchronized(cacheLock) {
+        // An obsolete or repeated cleanup must not delete the replacement account's cache.
+        if (preferences.getString("provider-identity-${source.id}", null) != source.providerKey() ||
+            !preferences.getBoolean("provider-cache-pending-${source.id}", false)) return@synchronized
         pruneCatalog("catalog-${source.id}-", emptySet())
         pruneProviderFiles("library-categories-${source.id}-")
         listOf("cache-${source.id}.enc", "lineup-${source.id}.enc", "epg-${source.id}.enc", "local-matches-${source.id}.enc", "guide-url-${source.id}.enc", "sports-replays-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc").forEach(::delete)
+        preferences.edit { remove("provider-cache-pending-${source.id}") }
     }
     private fun providerFile(prefix: String, source: Source) = "$prefix-${source.id}-${source.providerKey().take(16)}.enc"
     fun legacyProviderMatches(source: Source) = preferences.getString("legacy-provider-${source.id}", source.providerKey()) == source.providerKey()
     private fun providerRead(prefix: String, source: Source): ByteArray? = read(providerFile(prefix, source)) ?: if (legacyProviderMatches(source)) read("$prefix-${source.id}.enc") else null
-    fun removeCache(source: Source) {
+    fun removeCache(source: Source) = synchronized(cacheLock) {
+        // Keep a non-secret tombstone: removing the identity would make a late
+        // background writer look like a never-bound source and recreate deleted data.
+        preferences.edit { putString("provider-identity-${source.id}", "") }
         pruneCatalog("catalog-${source.id}-", emptySet())
         pruneProviderFiles("watch-${source.id}-"); pruneProviderFiles("library-favorites-${source.id}-"); pruneProviderFiles("library-categories-${source.id}-")
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
         listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc", "library-favorites-${source.id}.enc").forEach { delete(it) }
-        preferences.edit { listOf("provider-identity", "legacy-provider", "min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "epg-full-window", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
+        preferences.edit { listOf("provider-cache-pending", "legacy-provider", "min-height", "sixty", "excluded-fps", "groups", "stream-format", "video-info", "unavailable", "favorites", "last", "previous", "category-order", "playlist-refreshed", "channel-captions", "library-metadata", "provider-quality", "archive-metadata", "recent", "playlist-hours", "epg-hours", "epg-refreshed", "epg-cache", "epg-mapping", "epg-full-attempt", "epg-full-window", "playlist-launch", "epg-launch", "refresh-error").forEach { remove("$it-${source.id}") } }
     }
     fun filters(source: Source) = GuideFilters(groups = preferences.getStringSet("groups-${source.id}", emptySet()).orEmpty().toSet())
     fun setFilters(source: Source, value: GuideFilters) { preferences.edit { putStringSet("groups-${source.id}", value.groups) } }
@@ -222,7 +265,7 @@ class SecureStore(private val context: Context) {
     fun usaFirst(source: Source) = preferences.getBoolean("category-order-${source.id}", false)
     fun setUsaFirst(source: Source, value: Boolean) { preferences.edit { putBoolean("category-order-${source.id}", value) } }
     fun playlistRefreshed(source: Source) = preferences.getLong("playlist-refreshed-${source.id}", 0)
-    fun markPlaylistRefreshed(source: Source) { preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
+    fun markPlaylistRefreshed(source: Source) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putLong("playlist-refreshed-${source.id}", System.currentTimeMillis()); putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     fun videoInfo(source: Source): MutableMap<String, VideoInfo> = runCatching {
         val j = JSONObject(preferences.getString("video-info-${source.id}", "{}").orEmpty())
         j.keys().asSequence().associateWith {

@@ -2,6 +2,11 @@ import Foundation
 import Security
 import CryptoKit
 
+private struct SourceCache<Value:Codable>:Codable {
+    let source:Playlist
+    let value:Value
+}
+
 public actor Vault {
     private let root: URL
     private let testMode: Bool
@@ -55,5 +60,14 @@ public actor Vault {
     }
     public func removeCache(name:String) {
         try? FileManager.default.removeItem(at:root.appendingPathComponent(TextMatch.stableID(name)+".bin"))
+    }
+    public func save<T:Codable>(_ object:T,name:String,source:Playlist) throws {
+        // Keep identity inside the authenticated ciphertext, never in a credential-derived filename.
+        try save(SourceCache(source:source,value:object),name:name+":"+source.id)
+    }
+    public func load<T:Codable>(_ type:T.Type,name:String,source:Playlist) throws -> T? {
+        let cached=try load(SourceCache<T>.self,name:name+":"+source.id)
+        // Unscoped legacy payloads intentionally fail decoding: their account ownership is unknown.
+        return cached?.source.hasSameSource(as:source)==true ? cached?.value : nil
     }
 }
