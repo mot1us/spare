@@ -52,7 +52,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         gravity = Gravity.CENTER_VERTICAL
     }
     private val artwork = GuideLogoFiles(context)
-    private val posters = LogoLoader(512, 8 * 1024 * 1024, artwork)
+    private val posters = LogoLoader(512, 8 * 1024 * 1024, posterFiles(context))
     private val logos = LogoLoader(96, 2 * 1024 * 1024, artwork)
     private val filters = LinearLayout(context)
     private val message = label(11f)

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.34.0 — 2026-11-11
+
+- Show Library and Search posters as tall 2:3 tiles, five per row, so artwork is no longer cropped to a square.
+- Keep Library and Search posters in their own encrypted, size-limited cache, so they appear instantly after a restart instead of downloading again.
+- Page and Channel keys jump a screen at a time through Library poster grids.
+- Replace the jumping counters while a Sports game's channels are searched with one smooth progress bar, plain wording, and placeholder rows.
+- Rename the Sports "Other day" filter to Calendar, and show arrows at either end of the league row when more leagues are off screen.
+- Widen the Sports card score slot so messages like "Score unavailable" are no longer clipped.
+- Merge the 0.32.16 review: keep VOD titles visible after a missing sub-file, isolate provider caches from source edits and deletions, reject reused release tags and physical-device test targets, and add architecture, provider, guide, Library, Sports, playback and release documentation.
+
 ## 0.33.2 — 2026-11-11
 
 - Add a sleep timer in Settings → Playback (30, 60, 90 or 120 minutes). When it ends, playback stops and the TV is allowed to sleep; OK resumes the same channel live.

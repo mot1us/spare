@@ -2205,6 +2205,53 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
+        FixtureServer().use { server ->
+            val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("league-feed", "News", "News", "${server.base}/channel1.mp4")
+            val now = System.currentTimeMillis()
+            val snapshot = LiveSportsSnapshot(listOf(LiveEvent("overflow-nfl", setOf("nfl:SEA", "nfl:SF"), now - 60000, league = "NFL")), now, setOf("NFL"))
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { snapshot }; activity.calendarSportsLoader = { _, _ -> snapshot }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertEquals("Calendar", (activity.window.decorView.findViewWithTag<View>("sports-date") as TextView).text.toString())
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-more-right")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertFalse("Nothing is hidden before the first league", activity.window.decorView.findViewWithTag<View>("sports-league-more-left").isShown)
+                }
+                // Games take focus once they load; Up returns to the selected league like a real remote.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                device.pressDPadUp()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL").hasFocus() }
+                // Walk right with the remote to the last league; the row scrolls and the cues swap sides.
+                repeat(SportsLeagues.all.size - 1) { device.pressDPadRight() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:${SportsLeagues.all.last().id}")?.hasFocus() == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-more-left")?.isShown == true }
+                scenario.onActivity { activity ->
+                    assertFalse("Nothing is hidden after the last league", activity.window.decorView.findViewWithTag<View>("sports-league-more-right").isShown)
+                    val focused = activity.window.decorView.findViewWithTag<View>("sports-league:${SportsLeagues.all.last().id}")
+                    val cue = activity.window.decorView.findViewWithTag<View>("sports-league-more-right")
+                    val at = IntArray(2); focused.getLocationOnScreen(at); val edge = IntArray(2); cue.getLocationOnScreen(edge)
+                    assertTrue("The focused league is fully visible", at[0] + focused.width <= edge[0] + cue.width)
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-league-overflow.png"))
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL" }
+        }
+    }
+
     @Test fun sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar() {
         FixtureServer().use { server ->
             val source = Source(name = "League setup fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -3412,7 +3459,11 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "library-posters.png"))
                 scenario.onActivity { activity ->
+                    val tile = activity.window.decorView.findViewWithTag<View>("library-item:movie:101")
+                    // Posters are portrait: a 2:3 art area plus captions, never a square crop.
+                    assertTrue("Poster tile ${tile.width}x${tile.height} must be portrait", tile.height > tile.width * 1.5f)
                     assertNull(activity.window.decorView.findViewWithTag<View>("library-tab:catchup"))
                     assertEquals("Watchlist", activity.window.decorView.findViewWithTag<android.widget.Button>("library-tab:favorites").text.toString())
                     store.theme = "Ocean"; store.themeStyle = "Flat"; store.guideOpacity = 85
@@ -3441,6 +3492,11 @@ class SpareDeviceTest {
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
                 scenario.onActivity { activity -> assertEquals("Action ▾", activity.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
+                device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)
+                waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition)?.let { it >= PosterGridLayout.COLUMNS } == true } }
+                device.pressKeyCode(KeyEvent.KEYCODE_PAGE_UP)
+                waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition) == 0 } }
                 chooseLibraryCategory(scenario, 3)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Comedy" }
                 server.finishActionCatalog.countDown()

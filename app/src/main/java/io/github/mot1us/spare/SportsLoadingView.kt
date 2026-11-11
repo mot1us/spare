@@ -9,10 +9,31 @@ import android.view.View
 /** Fixed card footprints while the first complete scoreboard is loading. No moving focus targets. */
 class SportsLoadingView(context: Context) : View(context) {
     var hero = false
+    /** Stream-list placeholders that gently pulse while a game's channels are searched. */
+    var streamRows = false
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
     override fun onDraw(canvas: Canvas) {
         val density = resources.displayMetrics.density
+        if (streamRows) {
+            // A slow breathing pulse (no sliding shimmer): calm, and cheap enough for TV GPUs.
+            val phase = (android.os.SystemClock.uptimeMillis() % 1600L) / 1600f
+            val pulse = 0.5f - 0.5f * kotlin.math.cos(phase * 2f * Math.PI.toFloat())
+            val rowHeight = GuideTheme.rowHeightDp * density; val gap = GuideTheme.rowGapDp * density
+            var y = 0f; var row = 0
+            while (y + rowHeight <= height && row < 6) {
+                val fade = 1f - row * 0.14f
+                paint.color = Color.argb(((28 + 22 * pulse) * fade).toInt(), 160, 173, 188)
+                canvas.drawRoundRect(0f, y, width.toFloat(), y + rowHeight, 6 * density, 6 * density, paint)
+                paint.color = Color.argb(((30 + 26 * pulse) * fade).toInt(), 200, 210, 222)
+                canvas.drawRoundRect(10 * density, y + rowHeight / 2 - 13 * density, 36 * density, y + rowHeight / 2 + 13 * density, 4 * density, 4 * density, paint)
+                canvas.drawRoundRect(48 * density, y + rowHeight / 2 - 8 * density, 48 * density + width * (.28f - row % 3 * .04f), y + rowHeight / 2 - 1 * density, 3 * density, 3 * density, paint)
+                canvas.drawRoundRect(48 * density, y + rowHeight / 2 + 4 * density, 48 * density + width * .18f, y + rowHeight / 2 + 9 * density, 3 * density, 3 * density, paint)
+                y += rowHeight + gap; row++
+            }
+            if (isShown) postInvalidateDelayed(48)
+            return
+        }
         if (hero) {
             paint.color = Color.argb(35, 200, 210, 222)
             fun bar(x: Float, y: Float, w: Float, h: Float) = canvas.drawRoundRect(x, y, x + w, y + h, 3 * density, 3 * density, paint)

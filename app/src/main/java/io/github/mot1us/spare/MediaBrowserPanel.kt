@@ -78,9 +78,11 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
 
     private var pending: RecyclerView? = null
     private var focusEpoch = 0
-    private var columns = 4
+    private var columns = PosterGridLayout.COLUMNS
     private var grid = true
-    private val images = LogoLoader(512, 12 * 1024 * 1024)
+    // Posters are kept encrypted on disk (provider URLs can carry account details) so a
+    // Library visit after a restart draws saved artwork instead of downloading it again.
+    private val images = LogoLoader(512, 12 * 1024 * 1024, posterFiles(context))
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
     private val body = LinearLayout(context)
@@ -229,6 +231,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                     }; true }
                     KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusToolbar() else focusAt(rows, position - 1) }; true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && grid && position % columns < columns - 1) focusAt(rows, position + 1); true }
+                    // Page and Channel keys jump a screen of posters at a time through long catalogs.
+                    KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { if (event.action == KeyEvent.ACTION_DOWN && shownRows.isNotEmpty()) {
+                        val layout = rows.layoutManager as GridLayoutManager
+                        val page = ((layout.findLastVisibleItemPosition() - layout.findFirstVisibleItemPosition()) / columns).coerceAtLeast(1) * columns
+                        val down = key == KeyEvent.KEYCODE_PAGE_DOWN || key == KeyEvent.KEYCODE_CHANNEL_DOWN
+                        focusAt(rows, (position + if (down) page else -page).coerceIn(0, shownRows.lastIndex))
+                    }; true }
                     else -> false
                 } }
             }
@@ -257,7 +266,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         stopCatalog()
         allCategoryTitle = "All"
         browse()
-        grid = posters; columns = if (grid) 4 else 1
+        grid = posters; columns = if (grid) PosterGridLayout.COLUMNS else 1
         (rows.layoutManager as? GridLayoutManager)?.spanCount = columns
         if (reset) { group = null; search.setText(""); rememberedKey = null }
         contentsAvailable = true; rows.alpha = 1f
@@ -280,7 +289,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
 
     fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit, allTitle: String = "All") {
         allCategoryTitle = allTitle
-        browse(); grid = true; columns = 4; (rows.layoutManager as GridLayoutManager).spanCount = 4
+        browse(); grid = true; columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
         if (catalogContext != key || catalogQuery == null) {
             if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key
             val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); changingSearch = false
@@ -380,7 +389,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
         val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
         if (item != null) { item.requestFocus(); TvFocus.center(list, item); return }
-        pending = list; list.stopScroll(); (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, list.height / 2 - dp(if (list === categories) 21 else if (grid) 105 else 28))
+        pending = list; list.stopScroll(); (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, list.height / 2 - if (list === categories) dp(21) else if (grid) gridHeight(list.width / columns - dp(8), resources.displayMetrics.density) / 2 else dp(28))
         fun attempt(left: Int) {
             if (!isShown || epoch != focusEpoch) return
             val row = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView

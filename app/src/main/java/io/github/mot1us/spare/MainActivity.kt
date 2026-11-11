@@ -2531,7 +2531,7 @@ class MainActivity : Activity() {
                         if (Thread.currentThread().isInterrupted) return@submit
                         val left = deadline - System.nanoTime()
                         if (left > 0 || task.isDone) runCatching { task.get(maxOf(1L, left), java.util.concurrent.TimeUnit.NANOSECONDS) }.getOrNull()?.let { listings[channel.id] = it }
-                        handler.post { if (!closed && started && epoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, "Checking provider archives · ${index + 1} / ${targets.size}", index + 1, targets.size) }
+                        handler.post { if (!closed && started && epoch == sportsMatchEpoch && sportsVisible) sportsPanel.matchingProgress(game, SportsPanel.CHECKING_ARCHIVES, index + 1, targets.size) }
                     }
                 } finally { requests.values.forEach { it.cancel(true) } }
                 choices = SportsReplays.findListings(game, snapshot, listings, System.currentTimeMillis())
@@ -2771,7 +2771,7 @@ class MainActivity : Activity() {
         // here previously turned an incomplete scan into a false "no matches" result.
         var result = cached?.game ?: SportsSchedule.match(game, snapshot, favoritesSnapshot, System.currentTimeMillis(), quality = quality, trace = trace, index = preparedIndex) { checked, total ->
             val now = System.nanoTime()
-            if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress("Checking ${enabledSources().size} playlists · $checked / $total", checked, total) }
+            if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress(SportsPanel.SEARCHING, checked, total) }
         }
         val warmed = cached?.warmed.orEmpty().toMutableMap()
         val needsProvider = enabledSources().any { it.kind == "xtream" && it.epgUrl.isBlank() }
@@ -2784,14 +2784,14 @@ class MainActivity : Activity() {
                 .filter { owner(it)?.let { source -> source.kind == "xtream" && source.epgUrl.isBlank() } == true }
             if (targets.isNotEmpty()) {
                 val targetOrder = SportsStreams.preferenceComparator(profile, quality); val bestTarget = targets.minWith(targetOrder)
-                val label = if (game.state == "pre") "Checking scheduled coverage" else "Confirming current coverage"
-                progress("$label · ${targets.size} channels", 0, 0)
+                val label = if (game.state == "pre") SportsPanel.CHECKING_SCHEDULES else SportsPanel.CONFIRMING
+                progress(label, 0, targets.size)
                 val replies = SportsCoverageLookup.load(targets, sportsLookupWorkers,
                     get = { channel, timeout -> XtreamEpg.load(owner(channel) ?: selected, channel, if (game.state == "pre") 72 else 6, timeout) },
                     confirmed = { channel, entries ->
                         targetOrder.compare(channel, bestTarget) <= 0 &&
                             SportsSchedule.match(game, Guide(listOf(channel), mapOf(snapshot.key(channel) to entries)), favoritesSnapshot, System.currentTimeMillis()).broadcasts.isNotEmpty()
-                    }, trace = trace, progress = { checked, total -> progress("$label · $checked / $total", checked, total) })
+                    }, trace = trace, progress = { checked, total -> progress(label, checked, total) })
                 replies.forEach { (channel, entries) -> warmed[snapshot.key(channel)] = entries }
                 if (warmed.isNotEmpty()) {
                     val fresh = SportsSchedule.match(game, Guide(targets, warmed), favoritesSnapshot, System.currentTimeMillis())

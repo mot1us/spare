@@ -16,7 +16,10 @@ import androidx.recyclerview.widget.RecyclerView
 /** The Library and Search use the same tile and grid geometry. */
 internal class PosterGridLayout(context: Context, columns: Int = COLUMNS) : GridLayoutManager(context, columns) {
     override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
-    companion object { const val COLUMNS = 4 }
+    companion object {
+        /** Five portrait posters per row keeps 2:3 artwork uncropped while two rows stay on screen. */
+        const val COLUMNS = 5
+    }
 }
 
 internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
@@ -71,12 +74,20 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         if (next == layout) return
         layout = next
         orientation = if (next == Layout.LIST) HORIZONTAL else VERTICAL
-        val height = when (next) { Layout.GRID -> 210; Layout.SHELF -> 158; Layout.LIST -> 55 }
-        layoutParams = RecyclerView.LayoutParams(if (next == Layout.SHELF) dp(120) else -1, dp(height)).apply {
+        val height = when (next) { Layout.GRID -> -2; Layout.SHELF -> dp(158); Layout.LIST -> dp(55) }
+        layoutParams = RecyclerView.LayoutParams(if (next == Layout.SHELF) dp(120) else -1, height).apply {
             marginEnd = dp(8); bottomMargin = dp(GuideTheme.rowGapDp + 5)
         }
         art.layoutParams = if (next == Layout.LIST) LayoutParams(dp(70), -1).apply { marginEnd = dp(8) } else LayoutParams(-1, 0, 1f)
         captions.layoutParams = if (next == Layout.LIST) LayoutParams(0, -1, 1f) else LayoutParams(-1, dp(43))
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        // Grid tiles take their height from the column width so posters keep their 2:3 shape.
+        if (layout == Layout.GRID && MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.EXACTLY) {
+            val height = gridHeight(MeasureSpec.getSize(widthMeasureSpec), resources.displayMetrics.density)
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+        } else super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
     fun appearance() {
@@ -128,5 +139,15 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         detail.setTextColor(if (hasFocus()) GuideTheme.focusText else Color.LTGRAY)
     }
 }
+
+/** Height of a grid tile whose poster area is [width] wide: 2:3 artwork plus the caption block. */
+internal fun gridHeight(width: Int, density: Float): Int {
+    val padding = (7 * density).toInt() * 2
+    val art = ((width - padding).coerceAtLeast(0) * 3) / 2
+    return art + (43 * density).toInt() + padding
+}
+
+/** Library and Search share one encrypted, bounded poster cache, separate from guide logos. */
+internal fun posterFiles(context: Context) = GuideLogoFiles(context, "poster-art-", 600, 64L * 1024 * 1024)
 
 internal class PosterHolder(val box: LibraryPosterTile) : RecyclerView.ViewHolder(box)
