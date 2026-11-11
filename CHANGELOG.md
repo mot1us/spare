@@ -8,6 +8,7 @@
 - Replace the jumping counters while a Sports game's channels are searched with one smooth progress bar, plain wording, and placeholder rows.
 - Rename the Sports "Other day" filter to Calendar, and show arrows at either end of the league row when more leagues are off screen.
 - Widen the Sports card score slot so messages like "Score unavailable" are no longer clipped.
+- Fail device-test jobs within three minutes when the CI emulator never connects, instead of hanging until the job timeout.
 - Merge the 0.32.16 review: keep VOD titles visible after a missing sub-file, isolate provider caches from source edits and deletions, reject reused release tags and physical-device test targets, and add architecture, provider, guide, Library, Sports, playback and release documentation.
 
 ## 0.33.2 — 2026-11-11

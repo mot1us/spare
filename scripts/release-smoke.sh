@@ -20,7 +20,10 @@ cleanup() {
   rm -rf "$tmp"
 }
 trap 'cleanup $?' EXIT
-"$adb" -s "$serial" wait-for-device
+# Bound adb waits where coreutils timeout exists (CI); macOS runs keep the plain wait.
+bounded() { local seconds="$1"; shift; if command -v timeout >/dev/null; then timeout "$seconds" "$@"; else "$@"; fi; }
+# A disconnected emulator must fail fast, not consume the job timeout.
+bounded 180 "$adb" -s "$serial" wait-for-device || { echo "Emulator $serial did not connect to adb within 3 minutes"; exit 1; }
 for attempt in $(seq 1 120); do
   if [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then break; fi
   sleep 1

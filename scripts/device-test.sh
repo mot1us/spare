@@ -18,7 +18,10 @@ collect_reports() {
   fi
 }
 trap 'collect_reports $?' EXIT
-"$adb" -s "$serial" wait-for-device
+# Bound adb waits where coreutils timeout exists (CI); macOS runs keep the plain wait.
+bounded() { local seconds="$1"; shift; if command -v timeout >/dev/null; then timeout "$seconds" "$@"; else "$@"; fi; }
+# A disconnected emulator must fail fast, not consume the job timeout.
+bounded 180 "$adb" -s "$serial" wait-for-device || { echo "Emulator $serial did not connect to adb within 3 minutes"; exit 1; }
 for attempt in $(seq 1 120); do
   if [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then break; fi
   sleep 1
@@ -27,7 +30,7 @@ test "$("$adb" -s "$serial" shell getprop sys.boot_completed | tr -d '\r')" = 1
 install_checked_apk() {
   local apk="$1" install_log="app/build/reports/device/install-$(basename "$1").txt"
   for attempt in 1 2 3; do
-    "$adb" -s "$serial" wait-for-device
+    bounded 120 "$adb" -s "$serial" wait-for-device || return 1
     if "$adb" -s "$serial" install -r "$apk" >"$install_log" 2>&1; then cat "$install_log"; return 0; fi
     cat "$install_log"
     # Package validation failures are definitive. Only transient transport/service
