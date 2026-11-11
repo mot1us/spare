@@ -887,8 +887,9 @@ class SpareDeviceTest {
                         // "Finding stream" until this gate opens. Observe the queued
                         // task itself so cancellation does not race the gate timeout.
                         waitFor(scenario) { activity ->
+                            val warming = MainActivity::class.java.getDeclaredField("sportsWarmActive").apply { isAccessible = true }.get(activity) as Set<*>
                             MainActivity::class.java.getDeclaredField("sportsWarmTask").apply { isAccessible = true }.get(activity) != null &&
-                                MainActivity::class.java.getDeclaredField("sportsWarmActive").apply { isAccessible = true }.get(activity) == game.key &&
+                                game.key in warming &&
                                 activity.window.decorView.findViewWithTag<View>("sports-coverage:${game.key}")?.isShown == true
                         }
                         scenario.onActivity { activity ->
