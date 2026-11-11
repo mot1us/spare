@@ -2719,7 +2719,16 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-calendar")?.isShown == false && it.window.decorView.findViewWithTag<View>("sports-watch").isShown }
                     scenario.onActivity { assertSame(playback, find<PlayerView>(it.window.decorView)!!.player); assertTrue(playback!!.isPlaying) }
                     device.pressHome(); instrumentation.waitForIdleSync()
-                    instrumentation.runOnMainSync { assertFalse(playback!!.playWhenReady) }
+                    // Home reaches onPause asynchronously; a slow emulator can still be playing right after idle.
+                    run {
+                        val deadline = android.os.SystemClock.uptimeMillis() + 10_000
+                        var paused = false
+                        while (!paused && android.os.SystemClock.uptimeMillis() < deadline) {
+                            instrumentation.runOnMainSync { paused = !playback!!.playWhenReady }
+                            if (!paused) Thread.sleep(100)
+                        }
+                        assertTrue("Leaving the app pauses playback", paused)
+                    }
                     scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                     instrumentation.runOnMainSync { assertEquals(Player.STATE_IDLE, playback!!.playbackState) }
                 }
@@ -3181,6 +3190,7 @@ class SpareDeviceTest {
                         find<ImageView>(movie)?.drawable is android.graphics.drawable.BitmapDrawable &&
                         root.findViewWithTag<View>("search-result:live:xc:1")?.isShown != true
                 }
+                // This test's voice search times out and returns focus to Voice, so place focus directly.
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").requestFocus() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.hasFocus() == true }
                 device.pressDPadUp()

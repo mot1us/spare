@@ -376,8 +376,10 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
             val row = list.findViewHolderForAdapterPosition(position)?.itemView
             if (row != null && row.requestFocus()) TvFocus.center(list, row)
             else if (remaining > 0) { list.scrollToPosition(position); list.postOnAnimation { attempt(remaining - 1) } }
+            // A freshly shown grid can need more than a few frames to lay out its first row.
+            else waitingForResults = true
         }
-        attempt(4)
+        attempt(12)
     }
     fun dismiss() {
         ++focusRequest; waitingForResults = false; field.hideKeyboard(); field.visibility = GONE; visibility = GONE

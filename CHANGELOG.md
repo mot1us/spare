@@ -5,6 +5,8 @@
 - Add a sleep timer in Settings → Playback (30, 60, 90 or 120 minutes). When it ends, playback stops and the TV is allowed to sleep; OK resumes the same channel live.
 - Show recent searches as one-press chips when Search is empty. A search is remembered only after you open one of its results, and Settings → Guide can clear them.
 - Measure startup with a 20,000-channel saved guide (first frame in about 1.1 s on the test emulator) as a regression check.
+- Choosing a Search tab now waits for its results to lay out before moving focus into them.
+- Split release device tests across four emulators.
 
 ## 0.33.1 — 2026-11-11
 
