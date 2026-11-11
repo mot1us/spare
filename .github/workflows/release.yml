@@ -132,7 +132,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-      - run: sdkmanager emulator 'system-images;android-36;android-tv;x86_64'
+      - name: Install emulator packages
+        # Downloads occasionally arrive truncated; retry instead of failing the release.
+        run: for attempt in 1 2 3; do sdkmanager emulator 'system-images;android-36;android-tv;x86_64' && exit 0; echo "sdkmanager attempt $attempt failed"; sleep 10; done; exit 1
       - name: Boot isolated TV emulator
         shell: bash
         run: |
@@ -175,7 +177,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-      - run: sdkmanager emulator 'system-images;android-36;android-tv;x86_64' 'build-tools;35.0.0'
+      - name: Install emulator packages
+        # Downloads occasionally arrive truncated; retry instead of failing the release.
+        run: for attempt in 1 2 3; do sdkmanager emulator 'system-images;android-36;android-tv;x86_64' 'build-tools;35.0.0' && exit 0; echo "sdkmanager attempt $attempt failed"; sleep 10; done; exit 1
       - name: Boot isolated TV emulator
         shell: bash
         run: |
