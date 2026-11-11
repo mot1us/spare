@@ -116,12 +116,21 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private val status = label(10f).apply { tag = "sports-status"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.LTGRAY) }
     private val matchNotice = label(13f).apply { tag = "sports-match-notice"; visibility = GONE; maxLines = 2; setPadding(dp(10), dp(6), dp(10), dp(6)); background = GuideTheme.glass(resources.displayMetrics.density) }
     private val empty = label(13f).apply { tag = "sports-empty"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(8), dp(4), dp(8), dp(4)) }
+    private var scrolling = false
     private val rows = RecyclerView(context).apply { layoutManager = object : GridLayoutManager(context, COLUMNS) {
         override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
         override fun calculateExtraLayoutSpace(state: RecyclerView.State, extraLayoutSpace: IntArray) {
-            extraLayoutSpace[0] = height / 2; extraLayoutSpace[1] = height / 2
+            // Pre-build half a screen of cards only while scrolling. When a league or date
+            // replaces every card, laying out the extra rows doubled the work of that frame.
+            val extra = if (scrolling) height / 2 else 0
+            extraLayoutSpace[0] = extra; extraLayoutSpace[1] = extra
         }
-    }; itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-games"; setItemViewCacheSize(8); isFocusableInTouchMode = true }
+    }; itemAnimator = null; preserveFocusAfterLayout = false; overScrollMode = OVER_SCROLL_NEVER; tag = "sports-games"; setItemViewCacheSize(8); isFocusableInTouchMode = true
+        setHasFixedSize(true)
+        addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) { scrolling = newState != RecyclerView.SCROLL_STATE_IDLE }
+        })
+    }
     private val gridFocus = SportsGridFocus(rows)
     private val gridArea = FrameLayout(context)
     private val skeleton = SportsLoadingView(context).apply { tag = "sports-skeleton"; visibility = GONE }
@@ -314,9 +323,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GameCard {
             val cardHeight = dp(CARD_HEIGHT_DP)
             val box = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(8), dp(4), dp(8), dp(4)); isFocusableInTouchMode = true; isClickable = true; layoutParams = RecyclerView.LayoutParams(-1, cardHeight).apply { marginEnd = dp(8); bottomMargin = dp(8) } }
-            val badge = label(8f).apply { typeface = AppFont.face(true); gravity = Gravity.CENTER; includeFontPadding = false; setSingleLine(); setAutoSizeTextTypeUniformWithConfiguration(7, 9, 1, android.util.TypedValue.COMPLEX_UNIT_SP) }
+            val badge = label(8f).apply { typeface = AppFont.face(true); gravity = Gravity.CENTER; includeFontPadding = false; setSingleLine() }
             val title = LinearLayout(context).apply { orientation = VERTICAL }
-            val teamNames = List(2) { label(12f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true); setAutoSizeTextTypeUniformWithConfiguration(10, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP) } }
+            val teamNames = List(2) { label(12f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END; typeface = AppFont.face(true) } }
             val teamRecords = List(2) { label(9f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, 0, 0) } }
             repeat(2) { index -> title.addView(LinearLayout(context).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -327,7 +336,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             val stream = label(9f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END }
             val poster = FrameLayout(context).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF172B40.toInt(), 0xFF344258.toInt())); clipChildren = true }
             val scoreLine = LinearLayout(context).apply { gravity = Gravity.CENTER }
-            val scoreValues = List(2) { label(12f).apply { gravity = Gravity.CENTER; setSingleLine(); includeFontPadding = false; typeface = AppFont.face(true); setAutoSizeTextTypeUniformWithConfiguration(9, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP) } }
+            val scoreValues = List(2) { label(12f).apply { gravity = Gravity.CENTER; setSingleLine(); includeFontPadding = false; typeface = AppFont.face(true) } }
             scoreLine.addView(scoreValues[0], LayoutParams(dp(28), -1)); scoreLine.addView(label(10f).apply { text = "–"; gravity = Gravity.CENTER; setTextColor(0xFFB6C6D6.toInt()) }, LayoutParams(dp(8), -1)); scoreLine.addView(scoreValues[1], LayoutParams(dp(28), -1))
             val scoreMessage = label(9f).apply { gravity = Gravity.CENTER; setSingleLine(); typeface = AppFont.face(true); visibility = GONE }
             val scoreboard = FrameLayout(context).apply { addView(scoreLine, FrameLayout.LayoutParams(-1, -1)); addView(scoreMessage, FrameLayout.LayoutParams(-1, -1)) }
@@ -452,6 +461,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         addView(matchNotice, LayoutParams(-1, -2))
         addView(empty, LayoutParams(-1, dp(32))); empty.visibility = GONE
         rows.adapter = cards; streams.adapter = streamAdapter
+        // A league switch clears every card; keep enough spare cards that the next league
+        // rebinds existing views instead of building ~15 new view trees in one frame.
+        rows.recycledViewPool.setMaxRecycledViews(0, 24)
         gridArea.addView(rows, FrameLayout.LayoutParams(-1, -1)); gridArea.addView(skeleton, FrameLayout.LayoutParams(-1, -1)); addView(gridArea, LayoutParams(-1, 0, 1f)); addView(streams, LayoutParams(-1, 0, 1f))
         addView(scrollHint, LayoutParams(-1, dp(16)))
         rows.addOnScrollListener(object : RecyclerView.OnScrollListener() { override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { updateScrollHint() } })
@@ -603,13 +615,20 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (enabled) pictures.bind(backdrop, "")
         if (!enabled) featured?.takeUnless(::artworkHidden)?.let { artwork.request(it) }
     }
+    /** Only show placeholders when loading is noticeable: a fast league switch goes straight to its cards. */
+    private val revealSkeleton = Runnable { if (loadingGames) showSkeletonNow() }
     private fun showSkeleton() {
+        if (skeleton.isVisible) return
+        removeCallbacks(revealSkeleton); postDelayed(revealSkeleton, SKELETON_DELAY_MS)
+    }
+    private fun showSkeletonNow() {
         scrollHint.visibility = INVISIBLE
         skeleton.isVisible = true; heroSkeleton.isVisible = true; rows.visibility = INVISIBLE; gridArea.isVisible = true
         heroContent.visibility = INVISIBLE; crests.visibility = INVISIBLE; backdrop.visibility = INVISIBLE; credit.visibility = INVISIBLE
         empty.text = "Loading Sports…"; empty.isVisible = true
     }
     private fun revealContent() {
+        removeCallbacks(revealSkeleton)
         if (skeleton.visibility != VISIBLE) return
         skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
@@ -905,6 +924,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private class StreamCard(val play: GuideAdapter.Row) : RecyclerView.ViewHolder(play)
     companion object {
         private const val COLUMNS = 3
+        private const val SKELETON_DELAY_MS = 150L
         internal const val CARD_HEIGHT_DP = 140
         private const val REDZONE = "sports-redzone"
         private const val SCORE_PAYLOAD = "sports-card-score"

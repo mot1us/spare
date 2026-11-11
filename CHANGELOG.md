@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.33.1 — 2026-11-11
+
+- Switch Sports leagues without stutter: league changes went from 44% to under 3% janky frames by skipping placeholder flashes for fast loads, laying out only the cards on screen, and using fixed-size card text.
+- Add remote keys: Channel +/− and Page Up/Down change channel in full screen and jump a page in the guide, Last channel returns to the previous channel, Guide opens the guide, and number keys pick a channel by its position in the list.
+- Add a large-playlist guide scrolling benchmark (3,000 channels with logos) to the device tests.
+- Split release device tests across three emulators.
+
 ## 0.33.0 — 2026-11-11
 
 - Rebuild Sports around one filter row: Live now, Today or another day, your leagues, and Leagues and teams. The side rail and schedule popup are gone, and the game grid uses the full width.

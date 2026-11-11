@@ -1024,6 +1024,89 @@ class SpareDeviceTest {
     }
 
     private fun channelList(activity: MainActivity): RecyclerView? = activity.window.decorView.findViewWithTag("channel-guide")
+    @Test fun remoteNumberChannelAndLastKeysTuneFromFullScreen() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Remote keys fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = List(3) { id -> Channel("remote:$id", "Remote ${id + 1}", "News", "${server.base}/channel${id % 2 + 1}.mp4") }
+            store.recentFeeds = emptyList(); store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            fun currentId(activity: MainActivity) = (MainActivity::class.java.getDeclaredField("current").apply { isAccessible = true }.get(activity) as Channel?)?.id
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                waitFor(scenario) { currentId(it) == "remote:0" && channelList(it)?.isShown != true }
+                device.pressKeyCode(KeyEvent.KEYCODE_3)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("channel-number-entry")?.text?.contains("3  ·  Remote 3") == true }
+                waitFor(scenario) { currentId(it) == "remote:2" && it.window.decorView.findViewWithTag<View>("channel-number-entry")?.isShown == false }
+                device.pressKeyCode(KeyEvent.KEYCODE_CHANNEL_UP)
+                waitFor(scenario) { currentId(it) == "remote:0" }
+                device.pressKeyCode(KeyEvent.KEYCODE_CHANNEL_DOWN)
+                waitFor(scenario) { currentId(it) == "remote:2" }
+                device.pressKeyCode(KeyEvent.KEYCODE_LAST_CHANNEL)
+                waitFor(scenario) { currentId(it) == "remote:0" }
+                device.pressKeyCode(KeyEvent.KEYCODE_9)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("channel-number-entry")?.text?.contains("No channel 9") == true }
+                scenario.onActivity { assertEquals("A number outside the list keeps the current channel", "remote:0", currentId(it)) }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun guideScrollsALargeLogoPlaylistAndDrawsEveryVisibleLogo() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Guide scroll fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val channels = List(3000) { id -> Channel("scroll:$id", "Channel ${id + 1}", if (id % 2 == 0) "News" else "Sports", "${server.base}/channel1.mp4", logo = "${server.base}/logo.png") }
+            val programmes = channels.associate { channel ->
+                channel.id to List(12) { slot -> Programme(channel.id, "${channel.name} show $slot", now - 3_600_000 + slot * 1_800_000L, now - 1_800_000 + slot * 1_800_000L) }
+            }
+            val measure = InstrumentationRegistry.getArguments().getString("guide_benchmark") == "true"
+            store.performanceOverlay = measure; store.recentFeeds = emptyList()
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                var frames: PerformanceFrames? = null
+                if (measure) scenario.onActivity { activity ->
+                    val overlay = MainActivity::class.java.getDeclaredField("performanceOverlay").apply { isAccessible = true }.get(activity) as PerformanceOverlay
+                    frames = PerformanceOverlay::class.java.getDeclaredField("frames").apply { isAccessible = true }.get(overlay) as PerformanceFrames
+                    frames!!.summary(android.os.SystemClock.elapsedRealtime() + 10_000L)
+                }
+                // A held Down key: repeated presses faster than a person can read rows.
+                repeat(60) { step ->
+                    scenario.onActivity { activity ->
+                        val tick = android.os.SystemClock.uptimeMillis()
+                        activity.dispatchKeyEvent(KeyEvent(tick, tick, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN, if (step == 0) 0 else 1))
+                    }
+                    Thread.sleep(45)
+                }
+                scenario.onActivity { activity ->
+                    val tick = android.os.SystemClock.uptimeMillis()
+                    activity.dispatchKeyEvent(KeyEvent(tick, tick, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN, 0))
+                }
+                frames?.let { recorded ->
+                    Thread.sleep(200)
+                    val result = recorded.summary(android.os.SystemClock.elapsedRealtime())!!
+                    println("Guide scroll 3000 channels: ${result.jankyPercent}% jank, ${result.count} frames")
+                }
+                waitFor(scenario) { activity ->
+                    val list = channelList(activity) ?: return@waitFor false
+                    val focused = list.focusedChild ?: return@waitFor false
+                    list.getChildAdapterPosition(focused) >= 30
+                }
+                // Logos for the rows now on screen arrive from the shared cache, not row by row later.
+                waitFor(scenario) { activity ->
+                    val list = channelList(activity)!!
+                    val adapter = list.adapter as GuideAdapter
+                    (0 until list.childCount).map { list.getChildAt(it) }.filter { it.isShown }.all { row ->
+                        val bitmap = GuideAdapter.Row::class.java.getDeclaredField("logoBitmap").apply { isAccessible = true }.get(row)
+                        bitmap != null || adapter.channels.isEmpty()
+                    }
+                }
+            } } finally {
+                store.performanceOverlay = false; store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun missingChannelIsHiddenWithoutRetryLoopAndAuthIsNotHidden() {
         listOf(404, 401).forEach { status -> FixtureServer(channelCount = 2, missingStatus = status).use { server ->
             val source = Source(name = "Missing Test", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -2996,6 +3079,7 @@ class SpareDeviceTest {
                         find<ImageView>(movie)?.drawable is android.graphics.drawable.BitmapDrawable &&
                         root.findViewWithTag<View>("search-result:live:xc:1")?.isShown != true
                 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").requestFocus() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.hasFocus() == true }
                 device.pressDPadUp()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-kind:vod")?.hasFocus() == true }

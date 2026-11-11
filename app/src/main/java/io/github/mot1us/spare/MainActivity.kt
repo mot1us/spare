@@ -3468,6 +3468,19 @@ class MainActivity : Activity() {
             else return super.dispatchKeyEvent(event)
         }
         if (guideVisible && pendingFocusList != null && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) return true
+        if (guideVisible && !sportsVisible && list.hasFocus()) {
+            RemoteKeys.zap(event.keyCode)?.let { step ->
+                if (event.action == KeyEvent.ACTION_DOWN && adapter.channels.isNotEmpty()) {
+                    val layout = list.layoutManager as LinearLayoutManager
+                    val page = (layout.findLastVisibleItemPosition() - layout.findFirstVisibleItemPosition()).coerceAtLeast(1)
+                    val at = list.focusedChild?.let(list::getChildAdapterPosition)?.takeIf { it >= 0 } ?: 0
+                    // Channel+ moves down the list, matching full screen where +1 is the next channel.
+                    focusChannelAt((at + step * page).coerceIn(adapter.channels.indices))
+                }
+                return true
+            }
+        }
+        if (guideVisible && event.keyCode == KeyEvent.KEYCODE_GUIDE) { if (event.action == KeyEvent.ACTION_UP && current != null && !sportsVisible) showGuide(false); return true }
         if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
@@ -3495,16 +3508,14 @@ class MainActivity : Activity() {
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) recallPrevious(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_INFO) { if (event.action == KeyEvent.ACTION_UP) showDetails(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    val channels = adapter.channels
-                    if (channels.isNotEmpty()) {
-                        val index = channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
-                        val next = (index + (if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1) + channels.size) % channels.size
-                        tune(channels[next])
-                    }
-                }
+                if (event.action == KeyEvent.ACTION_DOWN) zapBy(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)
                 return true
             }
+            // Dedicated remote keys: Channel +/-, Page, Last channel, Guide and number entry.
+            RemoteKeys.zap(event.keyCode)?.let { step -> if (event.action == KeyEvent.ACTION_DOWN) zapBy(step); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_LAST_CHANNEL) { if (event.action == KeyEvent.ACTION_UP) recallPrevious(); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_GUIDE) { if (event.action == KeyEvent.ACTION_UP) showGuide(true); return true }
+            RemoteKeys.digit(event.keyCode)?.let { digit -> if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) typeChannelDigit(digit); return true }
             if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
                 if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) showDetails()
                 return true
@@ -3616,4 +3627,32 @@ class MainActivity : Activity() {
     }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun zapBy(step: Int) {
+        val channels = adapter.channels
+        if (channels.isEmpty()) return
+        val index = channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
+        tune(channels[Math.floorMod(index + step, channels.size)])
+    }
+    private var channelDigits = ""
+    private var digitsOverlay: TextView? = null
+    private val commitChannelDigits = Runnable {
+        val typed = channelDigits; channelDigits = ""
+        val target = RemoteKeys.channelAt(adapter.channels, typed)
+        digitsOverlay?.let { overlay -> if (target == null) { overlay.text = "No channel $typed"; handler.postDelayed({ overlay.visibility = View.GONE }, 1200) } else overlay.visibility = View.GONE }
+        if (target != null && !guideVisible) tune(target)
+    }
+    /** Number entry picks the Nth channel of the list being browsed, after a short pause for more digits. */
+    private fun typeChannelDigit(digit: Int) {
+        channelDigits = (channelDigits + digit).takeLast(4).trimStart('0')
+        if (channelDigits.isEmpty()) return
+        val overlay = digitsOverlay ?: TextView(this).apply {
+            tag = "channel-number-entry"; textSize = 20f; typeface = AppFont.face(true); setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(10), dp(16), dp(10)); background = GuideTheme.glass(resources.displayMetrics.density)
+            root.addView(this, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { topMargin = dp(24); marginEnd = dp(24) })
+        }.also { digitsOverlay = it }
+        val target = RemoteKeys.channelAt(adapter.channels, channelDigits)
+        overlay.text = channelDigits + (target?.let { "  ·  ${it.name}" } ?: "")
+        overlay.visibility = View.VISIBLE; root.bringChildToFront(overlay)
+        handler.removeCallbacks(commitChannelDigits); handler.postDelayed(commitChannelDigits, 1500)
+    }
 }

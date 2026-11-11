@@ -115,15 +115,15 @@ jobs:
     needs: [build, request]
     runs-on: ubuntu-latest
     timeout-minutes: ${{ needs.request.outputs.tv_suite == 'full' && 30 || 20 }}
-    # Two isolated emulators split the suite; each verifies its exact expected test count.
+    # Three isolated emulators split the suite; each verifies its exact expected test count.
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2]
     env:
       SPARE_TV_SUITE: ${{ needs.request.outputs.tv_suite }}
       SPARE_SHARD_INDEX: ${{ matrix.shard }}
-      SPARE_SHARDS: 2
+      SPARE_SHARDS: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
