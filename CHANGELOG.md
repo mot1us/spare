@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.32.17 — 2026-11-10
+
+- Document architecture, provider ingestion, guide navigation, Library/search, Sports, and verified update contracts.
+- Expand playback, macOS, and development guidance, and distinguish current verification gates from historical test notes.
+
 ## 0.32.16 — 2026-11-10
 
 - Keep VOD titles available after missing HLS child resources; hide only confirmed missing media endpoints.

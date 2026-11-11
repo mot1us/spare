@@ -25,8 +25,8 @@ segment URLs internally, so a provider can still downgrade those later requests
 to HTTP without another consent check. End-to-end media transport enforcement
 remains a preview limitation.
 
-Lineup and guide caches are bound to their saved playlist details. This update
-refreshes older preview caches once; the provider must be reachable for that
+Since 0.32.16, lineup and guide caches are bound to their saved playlist details.
+Upgrading from older preview caches requires one refresh; the provider must be reachable for that
 first refresh. Editing an account cannot restore the previous account's streams.
 
 This first preview does not include the TV app's Library, catch-up, multiview,

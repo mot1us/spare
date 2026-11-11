@@ -5,7 +5,7 @@
 - `app/src/main/java/io/github/mot1us/spare/`: native Android TV app. `MainActivity` owns the primary player and screen lifecycle; `SecureStore` owns encrypted persistence; `LibraryCatalog` owns bounded catalog pages and shared import jobs.
 - `app/src/test/`: JVM regression tests. `app/src/androidTest/`: synthetic network/media fixtures and isolated Android TV scenarios.
 - `macos/Sources/SpareCore/`: import, HTTP, encrypted Vault, and Sports services. `macos/Sources/SpareMac/`: SwiftUI state/views and the serial VLC player worker. `macos/Sources/CSpare/`: dynamically loaded VLC bridge.
-- `docs/specs/`: domain contracts for Android provider storage, playback, and the macOS preview. `docs/TESTING.md` and `docs/RELEASING.md` define validation and release workflows.
+- `docs/README.md`: documentation entry point. `docs/specs/` covers architecture, provider ingestion/storage, guide/navigation, playback, Library/Search, Sports, updates/release, and the macOS preview. `docs/TESTING.md` and `docs/RELEASING.md` define current workflows; `docs/TESTING-HISTORY.md` preserves superseded release-specific checks and counts.
 - `version.properties` supplies both platform versions. Every completed update increments semantic version and monotonic code, with a matching `CHANGELOG.md` entry and versioned delivery commit.
 
 ## Verification and release
