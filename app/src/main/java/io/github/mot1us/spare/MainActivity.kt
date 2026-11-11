@@ -1033,7 +1033,10 @@ class MainActivity : Activity() {
         library.catalogChanged = { if (details.isVisible) refreshDetails() }
         library.refreshCatalogs = { mode -> library.currentSource?.let { playlistSearch.refresh(it, mode) } }
         guidePanel.removeView(guideSearch)
-        searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation).apply { backgroundContent = guidePanel }
+        searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation).apply {
+            backgroundContent = guidePanel
+            resultChosen = { chosen -> if (chosen.isNotBlank()) store.recentSearches = listOf(chosen) + store.recentSearches; recent = store.recentSearches }
+        }
         root.addView(searchPanel, FrameLayout.LayoutParams(-1, -1))
         vodStartPanel = VodStartPanel(this, ::button, { closeVodStart() }, {
             val series = vodSeriesChoice
@@ -1577,6 +1580,7 @@ class MainActivity : Activity() {
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
     private fun tune(channel: Channel) = tune(channel, null)
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
+        clearSleepEnded()
         startupPlaybackPending = false
         watchingRedZone = false; redZoneAutoPending = false
         scoreStripLoading = null; if (::scoreStrip.isInitialized) scoreStrip.tuning(null)
@@ -1972,6 +1976,7 @@ class MainActivity : Activity() {
         query = initial.take(128); guideSearch.setQuery(query); guideSearch.visibility = View.VISIBLE; showGuide(true)
         searchedDemand = emptyList(); searchLoading = false; searchWarning = ""
         handler.removeCallbacks(filterSearch); ++focusEpoch; pendingFocusList = null
+        searchPanel.recent = store.recentSearches
         searchPanel.show(query); root.bringChildToFront(searchPanel); showNavigation("search")
         updatePlaylistSearch(); guideSearch.voice.requestFocus()
         if (useVoice) voiceSearch() else guideSearch.message("Speak a title or channel name, or select the field to type.")
@@ -3089,6 +3094,9 @@ class MainActivity : Activity() {
             }
             "Playback" -> {
                 panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
+                panel.action("Sleep timer", SleepTimer.label(sleepAt, System.currentTimeMillis()), sleepAt > 0) {
+                    setSleepTimer(SleepTimer.next(sleepAt, System.currentTimeMillis())); refresh("Sleep timer")
+                }
                 listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels").forEach { label ->
                     panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }
                 }
@@ -3116,6 +3124,9 @@ class MainActivity : Activity() {
             }
             "Guide" -> {
                 panel.page(page, "Browsing preferences. Appearance, fonts, spacing, opacity and preview layout are in Theme.")
+                panel.action("Clear recent searches", if (store.recentSearches.isEmpty()) "None saved" else "${store.recentSearches.size} saved on this TV") {
+                    store.recentSearches = emptyList(); searchPanel.recent = emptyList(); refresh("Clear recent searches")
+                }
                 panel.action("Switch categories on highlight", if (store.guideAutoCategories) "On · show channels as you browse" else "Off · press OK to select", store.guideAutoCategories) {
                     store.guideAutoCategories = !store.guideAutoCategories; cancelCategoryPreview(); refresh("Switch categories on highlight")
                 }
@@ -3489,6 +3500,9 @@ class MainActivity : Activity() {
             return true
         }
         if (onDemand != null && !guideVisible && retryPanel.visibility != View.VISIBLE) {
+            if (sleepEnded && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)) {
+                if (event.action == KeyEvent.ACTION_UP) resumeAfterSleep(); return true
+            }
             if (event.keyCode == KeyEvent.KEYCODE_MEDIA_STOP) { if (event.action == KeyEvent.ACTION_UP) stopDemandToLibrary(); return true }
             if (event.keyCode in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE)) {
                 if (event.action == KeyEvent.ACTION_UP) { player.playWhenReady = when (event.keyCode) { KeyEvent.KEYCODE_MEDIA_PLAY -> true; KeyEvent.KEYCODE_MEDIA_PAUSE -> false; else -> !player.playWhenReady }; demandPaused = !player.playWhenReady; showDemandControls() }; return true
@@ -3516,8 +3530,8 @@ class MainActivity : Activity() {
             if (event.keyCode == KeyEvent.KEYCODE_LAST_CHANNEL) { if (event.action == KeyEvent.ACTION_UP) recallPrevious(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_GUIDE) { if (event.action == KeyEvent.ACTION_UP) showGuide(true); return true }
             RemoteKeys.digit(event.keyCode)?.let { digit -> if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) typeChannelDigit(digit); return true }
-            if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) {
-                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) showDetails()
+            if (event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)) {
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled && !resumeAfterSleep() && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER)) showDetails()
                 return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
@@ -3627,6 +3641,43 @@ class MainActivity : Activity() {
     }
     private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private var sleepAt = 0L
+    private var sleepResume: Channel? = null
+    private var sleepEnded = false
+    private val sleepTimer = Runnable { endSleepTimer() }
+    private fun setSleepTimer(minutes: Int) {
+        handler.removeCallbacks(sleepTimer)
+        sleepAt = if (minutes > 0) System.currentTimeMillis() + minutes * 60_000L else 0L
+        if (minutes > 0) { handler.postDelayed(sleepTimer, minutes * 60_000L); toast("Sleep timer: playback stops in $minutes minutes") }
+    }
+    /** Stop playback and let the TV's own sleep take over; OK resumes the same channel live. */
+    private fun endSleepTimer() {
+        sleepAt = 0L; sleepEnded = true
+        if (onDemand != null) { saveDemandProgress(); player.playWhenReady = false }
+        else { sleepResume = current; player.stop() }
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        cornerNotice("Sleep timer ended · press OK to keep watching")
+    }
+    private fun resumeAfterSleep(): Boolean {
+        if (!sleepEnded) return false
+        val channel = sleepResume
+        clearSleepEnded()
+        if (channel != null) tune(channel) else player.playWhenReady = true
+        return true
+    }
+    private fun clearSleepEnded() {
+        if (!sleepEnded) return
+        sleepEnded = false; sleepResume = null
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); digitsOverlay?.visibility = View.GONE
+    }
+    private fun cornerNotice(text: String) {
+        val overlay = digitsOverlay ?: TextView(this).apply {
+            tag = "channel-number-entry"; textSize = 20f; typeface = AppFont.face(true); setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(10), dp(16), dp(10)); background = GuideTheme.glass(resources.displayMetrics.density)
+            root.addView(this, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { topMargin = dp(24); marginEnd = dp(24) })
+        }.also { digitsOverlay = it }
+        overlay.text = text; overlay.visibility = View.VISIBLE; root.bringChildToFront(overlay)
+    }
     private fun zapBy(step: Int) {
         val channels = adapter.channels
         if (channels.isEmpty()) return
@@ -3645,14 +3696,8 @@ class MainActivity : Activity() {
     private fun typeChannelDigit(digit: Int) {
         channelDigits = (channelDigits + digit).takeLast(4).trimStart('0')
         if (channelDigits.isEmpty()) return
-        val overlay = digitsOverlay ?: TextView(this).apply {
-            tag = "channel-number-entry"; textSize = 20f; typeface = AppFont.face(true); setTextColor(Color.WHITE)
-            setPadding(dp(16), dp(10), dp(16), dp(10)); background = GuideTheme.glass(resources.displayMetrics.density)
-            root.addView(this, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply { topMargin = dp(24); marginEnd = dp(24) })
-        }.also { digitsOverlay = it }
         val target = RemoteKeys.channelAt(adapter.channels, channelDigits)
-        overlay.text = channelDigits + (target?.let { "  ·  ${it.name}" } ?: "")
-        overlay.visibility = View.VISIBLE; root.bringChildToFront(overlay)
+        cornerNotice(channelDigits + (target?.let { "  ·  ${it.name}" } ?: ""))
         handler.removeCallbacks(commitChannelDigits); handler.postDelayed(commitChannelDigits, 1500)
     }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.33.2 — 2026-11-11
+
+- Add a sleep timer in Settings → Playback (30, 60, 90 or 120 minutes). When it ends, playback stops and the TV is allowed to sleep; OK resumes the same channel live.
+- Show recent searches as one-press chips when Search is empty. A search is remembered only after you open one of its results, and Settings → Guide can clear them.
+- Measure startup with a 20,000-channel saved guide (first frame in about 1.1 s on the test emulator) as a regression check.
+
 ## 0.33.1 — 2026-11-11
 
 - Switch Sports leagues without stutter: league changes went from 44% to under 3% janky frames by skipping placeholder flashes for fast loads, laying out only the cards on screen, and using fixed-size card text.

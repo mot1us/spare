@@ -349,6 +349,10 @@ class SecureStore(private val context: Context) {
     var catalogRoot: String
         get() = preferences.getString("catalog-root", "").orEmpty()
         set(value) { preferences.edit { putString("catalog-root", value) } }
+    /** Searches that led to a chosen result, newest first. Kept on this TV only. */
+    var recentSearches: List<String>
+        get() = runCatching { JSONArray(preferences.getString("recent-searches", "[]")).let { a -> List(minOf(a.length(), 8)) { a.getString(it) } } }.getOrDefault(emptyList())
+        set(value) { preferences.edit { putString("recent-searches", JSONArray(value.map { it.trim().take(64) }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.take(8)).toString()) } }
     var recentFeeds: List<String>
         get() = runCatching { JSONArray(preferences.getString("recent-feeds", "[]")).let { a -> List(minOf(a.length(), 12)) { a.getString(it) } } }.getOrDefault(emptyList())
         set(value) { preferences.edit { putString("recent-feeds", JSONArray(value.distinct().take(12)).toString()) } }

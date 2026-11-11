@@ -40,7 +40,7 @@ internal class PlaylistSearchChannel(
 
 /** Search owns focus while open. Only the left edge hands it back to the app rail. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
-internal class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, button: (String, () -> Unit) -> Button,
+internal class PlaylistSearchPanel(context: Context, private val field: GuideSearchBar, private val button: (String, () -> Unit) -> Button,
     private val leave: () -> Unit) : LinearLayout(context) {
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
     private fun label(size: Float, bold: Boolean = false) = TextView(context).apply {
@@ -86,6 +86,10 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     private var waitingForResults = false
     private var focusRequest = 0
     var backgroundContent: ViewGroup? = null
+    /** Recent searches, shown as one-press chips while the field is empty. */
+    var recent: List<String> = emptyList()
+    var resultChosen: (String) -> Unit = {}
+    private val recentRow = LinearLayout(context).apply { tag = "search-recent"; gravity = Gravity.CENTER_VERTICAL; visibility = GONE }
 
     init {
         orientation = VERTICAL; tag = "playlist-search"; visibility = GONE; background = GuideTheme.guideBackground(100)
@@ -129,6 +133,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         }
         addView(filters)
         addView(message, LayoutParams(-1, dp(22)))
+        addView(recentRow, LayoutParams(-1, dp(40)))
         addView(skeleton, LayoutParams(-1, 0, 1f))
         addView(titleHeader, LayoutParams(-1, dp(25)))
         addView(grid, LayoutParams(-1, 0, 1f))
@@ -163,7 +168,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder {
             val tile = LibraryPosterTile(context).apply { configure(layout) }
             val holder = PosterHolder(tile)
-            tile.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.let { field.hideKeyboard(); it.select() } }
+            tile.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.let { field.hideKeyboard(); resultChosen(text); it.select() } }
             directions(tile) { key ->
                 val at = holder.bindingAdapterPosition
                 if (at == RecyclerView.NO_POSITION) return@directions
@@ -196,7 +201,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         override fun getItemId(position: Int) = items[position].channel.rowId
         override fun onCreateViewHolder(parent: ViewGroup, type: Int): LiveHolder {
             val holder = LiveHolder()
-            holder.itemView.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.let { field.hideKeyboard(); it.select() } }
+            holder.itemView.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.let { field.hideKeyboard(); resultChosen(text); it.select() } }
             directions(holder.itemView) { key ->
                 val at = holder.bindingAdapterPosition
                 if (at == RecyclerView.NO_POSITION) return@directions
@@ -315,6 +320,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         tabs.getValue("live").text = if (text.isBlank()) "Live TV" else "Live TV · ${allLive.size}"
         tabs.getValue("vod").text = if (text.isBlank()) "Movies and series" else "Movies and series · ${allPosters.size}"
         kinds.values.forEach { it.isVisible = !showLive }
+        showRecent()
         skeleton.isVisible = text.isNotBlank() && busy && firstResults() == null
         message.text = when {
             text.isBlank() -> "Search live channels and on-demand movies, series and episodes."
@@ -327,6 +333,28 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         tabs.forEach { (key, tab) -> tab.isSelected = key == section }
         kinds.forEach { (key, chip) -> chip.isSelected = key == kind }
     }
+    private var shownRecent = emptyList<String>()
+    private fun showRecent() {
+        val wanted = if (text.isBlank()) recent else emptyList()
+        recentRow.isVisible = wanted.isNotEmpty()
+        if (wanted == shownRecent) return
+        shownRecent = wanted; recentRow.removeAllViews()
+        if (wanted.isEmpty()) return
+        recentRow.addView(label(11f).apply { text = "Recent"; setPadding(0, 0, dp(10), 0) })
+        val chips = wanted.map { query ->
+            button(query) { field.input.setText(query); field.input.setSelection(query.length) }.apply { tag = "search-recent:$query" }
+        }
+        chips.forEachIndexed { index, chip ->
+            recentRow.addView(chip)
+            directions(chip) { key ->
+                when (key) {
+                    KeyEvent.KEYCODE_DPAD_UP -> tabs.getValue(section).requestFocus()
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (index == 0) leave() else chips[index - 1].requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> chips.getOrNull(index + 1)?.requestFocus()
+                }
+            }
+        }
+    }
     private fun firstResults(): RecyclerView? = when {
         grid.isVisible -> grid
         live.isVisible -> live
@@ -334,6 +362,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     }
     fun focusResults() {
         val list = firstResults()
+        if (list == null && recentRow.isVisible && recentRow.childCount > 1) { recentRow.getChildAt(1).requestFocus(); return }
         waitingForResults = list == null
         if (list == null) field.input.requestFocus() else focusAt(list, 0)
     }

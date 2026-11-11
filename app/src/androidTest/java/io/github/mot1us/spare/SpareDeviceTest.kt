@@ -429,7 +429,13 @@ class SpareDeviceTest {
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
                     guide.programmes["xc:2"]?.isNotEmpty() == true
                 }
-                assertFalse(server.requestedEpgTargets.any { it.endsWith("stream_id=20") || it.contains("stream_id=20&") })
+                // The open guide reads ahead in the background, so rows below the screen are ready before
+                // the remote reaches them, and each channel's guide is fetched only once.
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:20"]?.isNotEmpty() == true
+                }
+                assertEquals("Read-ahead never repeats a channel", server.requestedEpgTargets.size, server.requestedEpgTargets.toSet().size)
                 scenario.onActivity { MainActivity::class.java.getDeclaredMethod("focusChannelAt", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, 19) }
                 waitFor(scenario) { activity ->
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
@@ -1050,6 +1056,98 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun largeSavedGuideStartsPlaybackAndOpensTheGuideQuickly() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Startup fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val channels = List(20_000) { id -> Channel("start:$id", "Channel ${id + 1}", listOf("News", "Sports", "Movies", "Kids")[id % 4], "${server.base}/channel1.mp4") }
+            val programmes = channels.associate { channel ->
+                channel.id to List(8) { slot -> Programme(channel.id, "${channel.name} show $slot", now - 3_600_000 + slot * 1_800_000L, now - 1_800_000 + slot * 1_800_000L) }
+            }
+            store.recentFeeds = emptyList(); store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            try {
+                val launched = android.os.SystemClock.elapsedRealtime()
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    val playing = android.os.SystemClock.elapsedRealtime() - launched
+                    device.pressBack()
+                    waitFor(scenario) { activity ->
+                        val list = channelList(activity)
+                        list?.hasFocus() == true && (list.adapter as GuideAdapter).channels.size == 20_000
+                    }
+                    val guide = android.os.SystemClock.elapsedRealtime() - launched
+                    println("Startup 20000 channels, 160000 programmes: first frame ${playing}ms, guide ready ${guide}ms")
+                    assertTrue("Saved playback starts within 15 s even with a large guide, took ${playing}ms", playing < 15_000)
+                }
+            } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun sleepTimerStopsPlaybackReleasesTheScreenAndOkResumesLive() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Sleep fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = List(2) { id -> Channel("sleep:$id", "Sleep ${id + 1}", "News", "${server.base}/channel${id + 1}.mp4") }
+            store.recentFeeds = emptyList(); store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            fun screenKeptOn(activity: MainActivity) = activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    assertTrue(screenKeptOn(activity))
+                    MainActivity::class.java.getDeclaredMethod("setSleepTimer", Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, 30)
+                    // Fire the timer now instead of waiting half an hour.
+                    MainActivity::class.java.getDeclaredMethod("endSleepTimer").apply { isAccessible = true }.invoke(activity)
+                }
+                waitFor(scenario) { activity ->
+                    val player = find<PlayerView>(activity.window.decorView)!!.player!!
+                    player.playbackState == Player.STATE_IDLE && !screenKeptOn(activity) &&
+                        activity.window.decorView.findViewWithTag<TextView>("channel-number-entry")?.text?.contains("Sleep timer ended") == true
+                }
+                device.pressDPadCenter()
+                waitFor(scenario) { activity ->
+                    find<PlayerView>(activity.window.decorView)?.player?.isPlaying == true && screenKeptOn(activity) &&
+                        activity.window.decorView.findViewWithTag<View>("channel-number-entry")?.isShown == false
+                }
+                scenario.onActivity { activity ->
+                    assertEquals("OK resumes the same channel", "sleep:0", (MainActivity::class.java.getDeclaredField("current").apply { isAccessible = true }.get(activity) as Channel?)?.id)
+                    assertNull("Resuming does not also open details", activity.window.decorView.findViewWithTag<View>("details-panel")?.takeIf { it.isShown })
+                }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun searchRemembersChosenQueriesAndReplaysThemFromAChip() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Recent search fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = listOf(Channel("recent:0", "Harbour News", "News", "${server.base}/channel1.mp4"), Channel("recent:1", "Mountain Sports", "Sports", "${server.base}/channel2.mp4"))
+            store.recentFeeds = emptyList(); store.recentSearches = emptyList(); store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Mountain")
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:recent:1")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:live:recent:1").performClick() }
+                waitFor(scenario) { store.recentSearches == listOf("Mountain") }
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("")
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-recent:Mountain")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-recent:Mountain").performClick() }
+                waitFor(scenario) { activity ->
+                    activity.window.decorView.findViewWithTag<EditText>("guide-search-input").text.toString() == "Mountain" &&
+                        activity.window.decorView.findViewWithTag<View>("search-result:live:recent:1")?.isShown == true &&
+                        activity.window.decorView.findViewWithTag<View>("search-recent")?.isShown == false
+                }
+            } } finally { store.recentSearches = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun guideScrollsALargeLogoPlaylistAndDrawsEveryVisibleLogo() {
         FixtureServer(longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Guide scroll fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -1086,6 +1184,10 @@ class SpareDeviceTest {
                     Thread.sleep(200)
                     val result = recorded.summary(android.os.SystemClock.elapsedRealtime())!!
                     println("Guide scroll 3000 channels: ${result.jankyPercent}% jank, ${result.count} frames")
+                    val threads = Thread.getAllStackTraces().keys.groupingBy { it.name.replace(Regex("[-:]?\\d+$"), "") }.eachCount()
+                    println("Guide scroll threads: ${threads.values.sum()} · " + threads.entries.sortedByDescending { it.value }.joinToString { "${it.key}=${it.value}" })
+                    val runtime = Runtime.getRuntime()
+                    println("Guide scroll heap: ${(runtime.totalMemory() - runtime.freeMemory()) / 1048576} MB used of ${runtime.maxMemory() / 1048576} MB")
                 }
                 waitFor(scenario) { activity ->
                     val list = channelList(activity) ?: return@waitFor false
