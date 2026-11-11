@@ -52,6 +52,10 @@ import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
+
+/** Channels whose short EPG is fetched ahead of the visible guide rows. */
+private const val EPG_READ_AHEAD_LIMIT = 200
+
 @UnstableApi
 @SuppressLint("SetTextI18n")
 class MainActivity : Activity() {
@@ -81,9 +85,13 @@ class MainActivity : Activity() {
     private val restoringProgrammes = mutableSetOf<String>()
     private var availableUpdate: String? = null
     private var importTask: java.util.concurrent.Future<*>? = null
-    private val epgWorkers = workers.pool("epg", threads = 2)
+    private val epgWorkers = workers.pool("epg", threads = 3, background = true)
     private var epgActive = 0
     private var epgWanted = emptyList<Channel>()
+    /** Rows needed on screen now; the rest of epgWanted is background read-ahead. */
+    private var epgUrgent = 0
+    private var epgScrollDown = true
+    private var epgAheadPausedUntil = 0L
     private val epgInFlight = mutableSetOf<String>()
     private val epgCheckedAt = mutableMapOf<String, Long>()
     private val epgDepth = mutableMapOf<String, Int>()
@@ -621,7 +629,7 @@ class MainActivity : Activity() {
         store = SecureStore(this)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
-        logos = LogoLoader(96, 8 * 1024 * 1024, GuideLogoFiles(this))
+        logos = LogoLoader(160, 12 * 1024 * 1024, GuideLogoFiles(this))
         configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
         buildUi()
         @Suppress("DEPRECATION")
@@ -941,6 +949,7 @@ class MainActivity : Activity() {
         list.adapter = adapter
         list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) { if (newState == RecyclerView.SCROLL_STATE_IDLE) scheduleEpg() }
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) { if (dy != 0) epgScrollDown = dy > 0 }
         })
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
@@ -1727,7 +1736,15 @@ class MainActivity : Activity() {
         val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
         val last = if (guideVisible) layout.findLastVisibleItemPosition().coerceAtLeast(first) else first
         val visible = channels.subList(first.coerceAtMost(channels.size), minOf(last + 1, first + 20, channels.size))
-        epgWanted = (listOfNotNull(current, focused) + visible).distinctBy { it.id }
+        val urgent = (listOfNotNull(current, focused) + visible).distinctBy { it.id }
+        // Read ahead in the scroll direction, then a little behind, then the rest of this
+        // category, so rows are filled before the remote reaches them.
+        val below = channels.subList(minOf(last + 1, channels.size), minOf(last + 61, channels.size))
+        val above = channels.subList(maxOf(0, first - 20), first.coerceAtMost(channels.size)).asReversed()
+        val ahead = if (epgScrollDown) below + above else above + below
+        val rest = if (channels.size <= EPG_READ_AHEAD_LIMIT) channels else emptyList()
+        epgWanted = (urgent + ahead + rest).distinctBy { it.id }.take(EPG_READ_AHEAD_LIMIT)
+        epgUrgent = urgent.size
         pumpEpg()
     }
     private fun pumpEpg() {
@@ -1743,8 +1760,14 @@ class MainActivity : Activity() {
             val missing = guide.at(channel, now) == null || (!(sportsVisible && guideVisible) && (guide.programmes[guide.key(channel)].orEmpty().maxOfOrNull { it.end } ?: 0) < target)
             return (channel.id in sportsForcedEpg || missing) && (now - (epgCheckedAt[channel.id] ?: 0) >= 5 * 60000L || depth(channel) > (epgDepth[channel.id] ?: 0))
         }
-        while (epgActive < 2) {
-            val channel = epgWanted.firstOrNull { "$epoch:${it.id}" !in epgInFlight && needs(it) } ?: return
+        while (epgActive < 3) {
+            val readAhead = now >= epgAheadPausedUntil
+            val candidates = if (readAhead) epgWanted else epgWanted.take(epgUrgent.coerceAtLeast(1))
+            val index = candidates.indexOfFirst { "$epoch:${it.id}" !in epgInFlight && needs(it) }
+            if (index < 0) return
+            // Keep one worker free for rows the viewer can see right now.
+            if (index >= epgUrgent && epgActive >= 2) return
+            val channel = candidates[index]
             val selected = owner(channel) ?: return
             val requestedDepth = depth(channel)
             val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
@@ -1761,6 +1784,8 @@ class MainActivity : Activity() {
                             } else epgErrors[channel.id] = "Provider supplied no current programme data."
                         }.onFailure { failure ->
                             epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(failure)}"
+                            // A busy or rate-limiting provider pauses read-ahead, never the visible rows.
+                            if ((failure as? HttpFailure)?.status in setOf(403, 429, 503)) epgAheadPausedUntil = System.currentTimeMillis() + 2 * 60000L
                             if (sportsVisible && guideVisible) {
                                 sportsFailures++
                                 if ((failure as? HttpFailure)?.status in setOf(401, 403, 429) || sportsFailures >= 3) sportsBackoffUntil = System.currentTimeMillis() + 5 * 60000L
@@ -1825,7 +1850,7 @@ class MainActivity : Activity() {
             timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "← Leagues    OK Select game    Hold Back Full screen"
+            remoteHint.text = if (sportsVisible) "↑ Filters    OK Select game    Hold OK More options    Hold Back Full screen"
                 else "← Earlier / categories    → Later on this channel    Back Categories, then main menu    Hold Back Full screen    Hold OK Favorite"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }

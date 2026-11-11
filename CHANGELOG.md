@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.33.0 — 2026-11-11
+
+- Rebuild Sports around one filter row: Live now, Today or another day, your leagues, and Leagues and teams. The side rail and schedule popup are gone, and the game grid uses the full width.
+- Split Search into Live TV and Movies and series tabs with result counts, so live channels and on-demand titles are never mixed.
+- Draw guide channel logos larger and with smooth scaling, and decode them closer to their display size so they no longer look pixelated.
+- Load programme guide data ahead of the visible rows in the background, in the direction you are scrolling, and pause read-ahead when a provider rate-limits.
+- Run release device tests on two emulators in parallel to roughly halve publish time.
+
 ## 0.32.16 — 2026-11-10
 
 - Give Sports a compact game grid, a league and settings rail, and one schedule control.

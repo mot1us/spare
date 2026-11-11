@@ -39,11 +39,14 @@ install_checked_apk() {
 install_checked_apk app/build/outputs/apk/debug/app-debug.apk
 install_checked_apk app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 suite="${SPARE_TV_SUITE:-full}"
-selection="$(python3 scripts/tv_tests.py --suite "$suite")"
+shard="${SPARE_SHARD_INDEX:-0}"
+shards="${SPARE_SHARDS:-1}"
+selection="$(python3 scripts/tv_tests.py --suite "$suite" --shard "$shard" --shards "$shards")"
 classes="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["classes"])' "$selection")"
 count="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["count"])' "$selection")"
 args=(-w -e listener io.github.mot1us.spare.SpareProgressListener)
 if [ -n "$classes" ]; then args+=(-e class "$classes"); fi
-printf 'TV suite: %s (%s checks)\n' "$suite" "$count"
+if [ "$shards" -gt 1 ]; then args+=(-e numShards "$shards" -e shardIndex "$shard"); fi
+printf 'TV suite: %s, shard %s of %s (%s checks)\n' "$suite" "$((shard + 1))" "$shards" "$count"
 "$adb" -s "$serial" shell am instrument "${args[@]}" io.github.mot1us.spare.debug.test/io.github.mot1us.spare.SpareTestRunner | tee app/build/reports/device/results.txt
 grep -q "^OK ($count tests)" app/build/reports/device/results.txt

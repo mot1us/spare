@@ -66,6 +66,7 @@ class GuideAdapter(
         private val rowDensity = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val logoBounds = RectF()
+        private val logoPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG or android.graphics.Paint.ANTI_ALIAS_FLAG)
         private val star = android.graphics.Path()
         private val archiveBounds = RectF()
         private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
@@ -148,11 +149,11 @@ class GuideAdapter(
             if (http != logoHttp) { logoBitmap = null; logoHttp = http }
             val logo = logoBitmap ?: logos.get(channel.logo, http) { if (this.channel?.id == channel.id) invalidate() }.also { logoBitmap = it }
             if (logo != null) {
-                val size = 24 * rowDensity
+                val size = 30 * rowDensity
                 val ratio = minOf(size / logo.width, size / logo.height)
                 val w = logo.width * ratio; val h = logo.height * ratio
                 logoBounds.set(6 * rowDensity + (size - w) / 2, (height - h) / 2, 6 * rowDensity + (size + w) / 2, (height + h) / 2)
-                canvas.drawBitmap(logo, null, logoBounds, null)
+                canvas.drawBitmap(logo, null, logoBounds, logoPaint)
             }
             val ahead = start > GuideTimeline.live(now)
             val details = rowDetails?.invoke(channel)
@@ -162,12 +163,12 @@ class GuideAdapter(
             if (labelName != channel.name || labelBadges != badges) {
                 labelName = channel.name
                 labelBadges = badges
-                channelLabel = ellipsize(channel.name, leftWidth - (43 + badges) * rowDensity)
+                channelLabel = ellipsize(channel.name, leftWidth - (49 + badges) * rowDensity)
             }
-            canvas.drawText(channelLabel, 36 * rowDensity, if (ahead) height / 2f - 3 * rowDensity else base, text)
+            canvas.drawText(channelLabel, 42 * rowDensity, if (ahead) height / 2f - 3 * rowDensity else base, text)
             labels?.startLabel?.let {
                 text.textSize = smallTextSizePx
-                canvas.drawText(it, 36 * rowDensity, height / 2f + 10 * rowDensity, text)
+                canvas.drawText(it, 42 * rowDensity, height / 2f + 10 * rowDensity, text)
                 text.textSize = textSizePx
             }
             if (favorite) {

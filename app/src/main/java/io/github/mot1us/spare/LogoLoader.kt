@@ -2,6 +2,7 @@ package io.github.mot1us.spare
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.core.graphics.scale
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -160,7 +161,19 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                     inSampleSize = 1
                     while ((maxOf(bounds.outWidth, bounds.outHeight) + inSampleSize - 1) / inSampleSize > maxDimension) inSampleSize *= 2
                 }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                // Power-of-two sampling can land far below the target (700 px -> 44 px). Decode
+                // one step larger and scale smoothly instead, so small logos stay crisp.
+                val sized = if (decoded != null && options.inSampleSize > 1 && maxOf(decoded.width, decoded.height) < maxDimension * 3 / 4) {
+                    val larger = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = options.inSampleSize / 2 })
+                    if (larger == null) decoded else {
+                        decoded.recycle()
+                        val scale = maxDimension.toFloat() / maxOf(larger.width, larger.height)
+                        larger.scale(maxOf(1, (larger.width * scale).toInt()), maxOf(1, (larger.height * scale).toInt()), filter = true)
+                            .also { if (it !== larger) larger.recycle() }
+                    }
+                } else decoded
+                sized?.apply { setHasMipMap(true) }
             }.getOrNull()
             if (bitmap != null && !closed) cache.put(url, bitmap)
             if (token == generation) {

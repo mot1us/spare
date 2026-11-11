@@ -58,10 +58,8 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     private val message = label(11f)
     private val titleHeader = label(13f, true).apply { tag = "search-library-heading" }
     private val liveHeader = label(13f, true).apply { tag = "search-live-heading" }
-    private val shelf = list("search-poster-shelf", TvFocus.HorizontalLayout(context))
     private val grid = list("search-poster-grid", PosterGridLayout(context))
     private val live = list("playlist-search-results", TvFocus.Layout(context))
-    private val shelfAdapter = PosterAdapter(shelf, LibraryPosterTile.Layout.SHELF)
     private val gridAdapter = PosterAdapter(grid, LibraryPosterTile.Layout.GRID)
     private val liveAdapter = LiveAdapter()
     private val skeleton = LinearLayout(context).apply {
@@ -75,8 +73,12 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
             LayoutParams(-1, dp(36)).apply { topMargin = dp(8) }) }
     }
     private val tabs = linkedMapOf<String, Button>()
+    private val kinds = linkedMapOf<String, Button>()
     private var allPosters = emptyList<PlaylistSearchPoster>()
     private var allLive = emptyList<PlaylistSearchChannel>()
+    /** "live" or "vod": live channels and on-demand titles are never mixed in one list. */
+    private var section = "live"
+    private var sectionChosen = false
     private var kind = ""
     private var text = ""
     private var busy = false
@@ -90,29 +92,37 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         setPadding(dp(104), dp(14), dp(24), dp(12))
         field.setPadding(0, 0, 0, dp(4))
         addView(field, LayoutParams(-1, -2))
-        val chips = listOf("All" to "", "Live TV" to "live", "Movies" to "movie", "Series" to "series", "Episodes" to "episode")
-        chips.forEach { (title, key) ->
+        listOf("Live TV" to "live", "Movies and series" to "vod").forEach { (title, key) ->
             val tab = button(title) {
-                kind = key; display()
+                section = key; sectionChosen = true; display()
                 if (firstResults() != null) focusResults()
             }.apply { tag = "search-kind:$key" }
             tabs[key] = tab; filters.addView(tab)
         }
-        val chipViews = tabs.values.toList()
-        chipViews.forEachIndexed { index, tab ->
+        filters.addView(View(context), LayoutParams(dp(18), 1))
+        listOf("All" to "", "Movies" to "movie", "Series" to "series", "Episodes" to "episode").forEach { (title, key) ->
+            val chip = button(title) {
+                kind = key; display()
+                if (firstResults() != null) focusResults()
+            }.apply { tag = "search-kind:${key.ifEmpty { "vod-all" }}"; alpha = .85f }
+            kinds[key] = chip; filters.addView(chip)
+        }
+        val chipViews = { tabs.values.toList() + kinds.values.filter { it.isVisible } }
+        tabs.values.toList().plus(kinds.values).forEach { tab ->
             directions(tab) { key ->
+                val row = chipViews(); val index = row.indexOf(tab)
                 when (key) {
                     KeyEvent.KEYCODE_DPAD_UP -> field.input.requestFocus()
                     KeyEvent.KEYCODE_DPAD_DOWN -> focusResults()
-                    KeyEvent.KEYCODE_DPAD_LEFT -> if (index == 0) leave() else chipViews[index - 1].requestFocus()
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> chipViews.getOrNull(index + 1)?.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (index <= 0) leave() else row[index - 1].requestFocus()
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> row.getOrNull(index + 1)?.requestFocus()
                 }
             }
         }
         field.direction = { index, key ->
             ++focusRequest; waitingForResults = false
             when (key) {
-                KeyEvent.KEYCODE_DPAD_DOWN -> { field.hideKeyboard(); tabs.getValue(kind).requestFocus() }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { field.hideKeyboard(); tabs.getValue(section).requestFocus() }
                 KeyEvent.KEYCODE_DPAD_LEFT -> if (index == 0) leave() else field.controls[index - 1].requestFocus()
                 KeyEvent.KEYCODE_DPAD_RIGHT -> field.controls.getOrNull(index + 1)?.requestFocus()
             }
@@ -121,11 +131,10 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         addView(message, LayoutParams(-1, dp(22)))
         addView(skeleton, LayoutParams(-1, 0, 1f))
         addView(titleHeader, LayoutParams(-1, dp(25)))
-        addView(shelf, LayoutParams(-1, dp(168)))
         addView(grid, LayoutParams(-1, 0, 1f))
         addView(liveHeader, LayoutParams(-1, dp(25)))
         addView(live, LayoutParams(-1, 0, 1f))
-        shelf.adapter = shelfAdapter; grid.adapter = gridAdapter; live.adapter = liveAdapter
+        grid.adapter = gridAdapter; live.adapter = liveAdapter
     }
 
     private fun list(name: String, layout: RecyclerView.LayoutManager) = RecyclerView(context).apply {
@@ -161,7 +170,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
                 val columns = PosterGridLayout.COLUMNS
                 val horizontal = layout == LibraryPosterTile.Layout.SHELF
                 when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP -> if (horizontal || at < columns) field.input.requestFocus() else focusAt(list, at - columns)
+                    KeyEvent.KEYCODE_DPAD_UP -> if (horizontal || at < columns) tabs.getValue(section).requestFocus() else focusAt(list, at - columns)
                     KeyEvent.KEYCODE_DPAD_DOWN -> if (horizontal) focusAt(live, 0) else focusAt(list, at + columns)
                     KeyEvent.KEYCODE_DPAD_LEFT -> if (at == 0 || !horizontal && at % columns == 0) leave() else focusAt(list, at - 1)
                     KeyEvent.KEYCODE_DPAD_RIGHT -> if (horizontal || at % columns < columns - 1) focusAt(list, at + 1)
@@ -192,7 +201,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
                 val at = holder.bindingAdapterPosition
                 if (at == RecyclerView.NO_POSITION) return@directions
                 when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP -> if (at > 0) focusAt(live, at - 1) else if (shelf.isVisible) focusAt(shelf, 0) else field.input.requestFocus()
+                    KeyEvent.KEYCODE_DPAD_UP -> if (at > 0) focusAt(live, at - 1) else tabs.getValue(section).requestFocus()
                     KeyEvent.KEYCODE_DPAD_DOWN -> focusAt(live, at + 1)
                     KeyEvent.KEYCODE_DPAD_LEFT -> leave()
                 }
@@ -279,7 +288,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
 
     fun show(query: String) {
-        text = query; kind = ""; waitingForResults = false
+        text = query; kind = ""; section = "live"; sectionChosen = false; waitingForResults = false
         backgroundContent?.descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         visibility = VISIBLE; field.visibility = VISIBLE
         display()
@@ -290,31 +299,35 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         if (waitingForResults && firstResults() != null && hasFocus()) focusResults()
     }
     private fun display() {
-        val filtered = if (text.isBlank() || kind == "live") emptyList() else if (kind.isEmpty()) allPosters else allPosters.filter { it.kind == kind }
-        val channels = if (text.isNotBlank() && (kind.isEmpty() || kind == "live")) allLive else emptyList()
-        shelfAdapter.submit(filtered.takeIf { kind.isEmpty() }.orEmpty())
-        gridAdapter.submit(filtered.takeIf { kind.isNotEmpty() }.orEmpty())
-        liveAdapter.submit(channels)
-        shelf.isVisible = shelfAdapter.itemCount > 0
-        grid.isVisible = gridAdapter.itemCount > 0
-        live.isVisible = channels.isNotEmpty()
-        titleHeader.isVisible = filtered.isNotEmpty()
-        liveHeader.isVisible = channels.isNotEmpty()
-        titleHeader.text = "${tabs[kind]?.text?.takeIf { kind.isNotEmpty() } ?: "Movies & Series"} · ${filtered.size}"
-        liveHeader.text = "On now · ${channels.size}"
+        val titles = if (text.isBlank()) emptyList() else if (kind.isEmpty()) allPosters else allPosters.filter { it.kind == kind }
+        val channels = if (text.isNotBlank()) allLive else emptyList()
+        // Open on whichever side has matches until the viewer picks a tab themselves.
+        if (!sectionChosen && text.isNotBlank()) section = if (channels.isEmpty() && allPosters.isNotEmpty()) "vod" else "live"
+        val showLive = section == "live"
+        gridAdapter.submit(if (showLive) emptyList() else titles)
+        liveAdapter.submit(if (showLive) channels else emptyList())
+        grid.isVisible = !showLive && titles.isNotEmpty()
+        live.isVisible = showLive && channels.isNotEmpty()
+        titleHeader.isVisible = !showLive && text.isNotBlank()
+        liveHeader.isVisible = showLive && text.isNotBlank()
+        titleHeader.text = "On demand · ${titles.size} ${if (kind.isEmpty()) "movies, series and episodes" else kinds[kind]?.text.toString().lowercase()}"
+        liveHeader.text = "Live channels · ${channels.size}"
+        tabs.getValue("live").text = if (text.isBlank()) "Live TV" else "Live TV · ${allLive.size}"
+        tabs.getValue("vod").text = if (text.isBlank()) "Movies and series" else "Movies and series · ${allPosters.size}"
+        kinds.values.forEach { it.isVisible = !showLive }
         skeleton.isVisible = text.isNotBlank() && busy && firstResults() == null
         message.text = when {
-            text.isBlank() -> "Episode titles are included after opening a series."
+            text.isBlank() -> "Search live channels and on-demand movies, series and episodes."
             busy -> "Searching…"
             warning.isNotBlank() -> warning
-            firstResults() == null -> "No matches"
+            firstResults() == null -> if (showLive) "No live channels match · try Movies and series" else "No on-demand titles match · try Live TV"
             else -> ""
         }
         message.isVisible = message.text.isNotEmpty()
-        tabs.forEach { (key, tab) -> tab.isSelected = key == kind }
+        tabs.forEach { (key, tab) -> tab.isSelected = key == section }
+        kinds.forEach { (key, chip) -> chip.isSelected = key == kind }
     }
     private fun firstResults(): RecyclerView? = when {
-        shelf.isVisible -> shelf
         grid.isVisible -> grid
         live.isVisible -> live
         else -> null
@@ -344,7 +357,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     fun appearance(opacity: Int = -1) {
         background = GuideTheme.guideBackground(opacity.coerceIn(96, 100))
         AppFont.apply(this)
-        for (list in listOf(shelf, grid)) for (i in 0 until list.childCount) (list.getChildAt(i) as? LibraryPosterTile)?.appearance()
+        for (list in listOf(grid)) for (i in 0 until list.childCount) (list.getChildAt(i) as? LibraryPosterTile)?.appearance()
     }
     fun trimImages() { posters.trim(); logos.trim() }
     fun closeImages() { posters.close(); logos.close() }
