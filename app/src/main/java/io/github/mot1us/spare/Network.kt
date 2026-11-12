@@ -8,6 +8,11 @@ import java.net.URI
 import java.util.zip.GZIPInputStream
 
 object Network {
+    /** Socket reads ignore Thread.interrupt(); close a cancelled request's connection so its worker is released at once. */
+    private val open = java.util.concurrent.ConcurrentHashMap<HttpURLConnection, Thread>()
+    private val reaper = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "spare-network-cancel").apply { isDaemon = true } }
+        .apply { scheduleWithFixedDelay({ open.forEach { (connection, thread) -> if (thread.isInterrupted && open.remove(connection) != null) runCatching { connection.disconnect() } } }, 200, 200, java.util.concurrent.TimeUnit.MILLISECONDS) }
+    internal val openConnections get() = open.size
     fun allowed(value: String, http: Boolean): Boolean = runCatching {
         val uri = URI(value)
         uri.host != null && uri.rawUserInfo == null && (uri.scheme.equals("https", true) || (http && uri.scheme.equals("http", true)))
@@ -39,7 +44,9 @@ object Network {
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
                 if (runCatching { URI(destination).scheme.equals("http", true) }.getOrDefault(false) && !http) SourceProblem.HTTP_REQUIRED else SourceProblem.ADDRESS)
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
             val connection = URI(destination).toURL().openConnection() as HttpURLConnection
+            open[connection] = Thread.currentThread()
             try {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = minOf(12000, timeoutMs)
@@ -86,7 +93,10 @@ object Network {
                     }
                     return decoded.use(read).also { progress?.invoke(bounded.consumed, total) }
                 }
-            } finally { connection.disconnect() }
+            } catch (error: java.io.IOException) {
+                if (Thread.currentThread().isInterrupted && error !is java.io.InterruptedIOException) throw java.io.InterruptedIOException("Download cancelled")
+                throw error
+            } finally { open.remove(connection); connection.disconnect() }
         }
         error("Too many redirects")
     }

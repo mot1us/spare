@@ -37,7 +37,7 @@ class LibraryCatalog(private val store: SecureStore) {
     private data class LoadKey(val source: Source, val mode: String, val scope: String)
     private val jobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog-import") })
     // A category someone is waiting on must never queue behind whole-catalog search warming.
-    private val categoryJobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread(task, "spare-catalog-category") })
+    private val categoryJobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(3) { task -> Thread(task, "spare-catalog-category") })
     private val restoreLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
     private fun lookupKey(source: Source, mode: String) = "${source.id}:${source.providerKey()}:$mode"
     fun invalidate(sourceId: String) {

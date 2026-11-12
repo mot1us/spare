@@ -253,7 +253,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun scopedCatalog(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>, query: String, force: Boolean) {
         val key = "$root:category:$scope"
-        catalogImports.filterKeys { it.startsWith("$root:category:") && it != key }.forEach { (oldKey, task) ->
+        // Only the category on screen downloads; an abandoned one (including the other tab's) must not hold a worker.
+        catalogImports.filterKeys { it.contains(":category:") && it != key }.forEach { (oldKey, task) ->
             if (!task.isDone) { catalogGenerations.remove(oldKey); task.cancel(true) }
         }
         if (activeCatalog != key || activeQuery != query) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.34.2 — 2026-11-11
+
+- Release a provider download's worker the moment it is cancelled: close the connection instead of waiting up to a minute for a slow server, so switching Library categories no longer queues behind abandoned requests.
+- Cancel the other Library tab's category download when you pick a category, so Movies and Series never compete for the same workers.
+- Back from a Sports game now returns straight to the Sports cards instead of the list of streams found for that game.
+- Back follows what is on screen: after switching from a game to a non-game channel with Left, Back returns to the guide on that channel instead of the Sports section.
+
 ## 0.34.1 — 2026-11-11
 
 - Open Library Movies and Series categories quickly even while Search is still downloading the full catalog in the background: category pages now use their own download workers instead of waiting behind it.

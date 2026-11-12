@@ -2324,6 +2324,41 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun backFromAGameReturnsToCardsButARecalledChannelReturnsToTheGuide() {
+        FixtureServer(channelCount = 2).use { server ->
+            val source = Source(name = "Sports back fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = listOf(Channel("back:1", "News", "News", "${server.base}/channel1.mp4"), Channel("back:2", "YES", "Sports", "${server.base}/channel2.mp4"))
+            val now = System.currentTimeMillis()
+            store.saveSources(listOf(source)); store.active = source.id; store.followedTeams = setOf("mlb:NYY"); store.sportsTeam = "mlb:NYY"; store.sportsLastLeague = "MLB"
+            store.cache(source, Guide(channels, mapOf("back:2" to listOf(Programme("back:2", "MLB: NYY @ BOS", now - 300000, now + 3600000))))); store.markPlaylistRefreshed(source)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                assertEquals("/channel1.mp4", playingPath(scenario))
+                device.pressBack(); scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { (it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount ?: 0) >= 1 }
+                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.performClick(); activity.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:back:2")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:back:2").performClick() }
+                waitFor(scenario) { playingPath(scenario) == "/channel2.mp4" && !it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                scenario.onActivity { assertFalse("Back from a game lands on the cards", it.window.decorView.findViewWithTag<RecyclerView>("sports-streams")?.isShown == true) }
+                scenario.onActivity { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick(); activity.window.decorView.findViewWithTag<View>("sports-choose-stream").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:back:2")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:back:2").performClick() }
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
+                device.pressDPadLeft()
+                waitFor(scenario) { playingPath(scenario) == "/channel1.mp4" }
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.isShown == true && channelList(it)?.findFocus() != null }
+                scenario.onActivity { activity ->
+                    assertFalse("A recalled non-game channel returns to the guide", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                    val list = channelList(activity)!!; val row = list.findContainingViewHolder(list.findFocus()!!)!!
+                    assertEquals("Guide focus lands on the channel being watched", 0, row.bindingAdapterPosition)
+                }
+            }
+        }
+    }
     @Test fun sportsFindsFollowedGamesSelectsPreviewAndPreservesRemoteFocus() {
         FixtureServer(channelCount = 4).use { server ->
             val source = Source(name = "Sports fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -2363,9 +2398,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
                 scenario.onActivity { assertEquals("Browsing Library must preserve the exact game connection", gameMediaId, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId) }
                 device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-streams")?.isShown == true }
-                device.pressBack()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                scenario.onActivity { assertFalse("Back from a game returns to the cards, not its stream list", it.window.decorView.findViewWithTag<RecyclerView>("sports-streams")?.isShown == true) }
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<View>("sports-panel")
                     assertTrue(panel.height > activity.window.decorView.height * .75f); assertTrue(panel.width > activity.window.decorView.width * .8f)
@@ -2380,7 +2414,13 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:3").performClick() }
                 waitFor(scenario) { store.last(source) == "sports:3" }; assertEquals("/channel3.mp4", playingPath(scenario))
                 scenario.onActivity { assertFalse("Selecting a Sports result opens full screen", it.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
-                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2")?.isShown == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
+                scenario.onActivity { activity ->
+                    assertFalse(activity.window.decorView.findViewWithTag<RecyclerView>("sports-streams")?.isShown == true)
+                    activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findFocus().performClick()
+                    activity.window.decorView.findViewWithTag<View>("sports-choose-stream").requestFocus()
+                }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-stream:sports:2").performLongClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<PlayerView>("multiview-second")?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var retainedPlayer: Player? = null; var retainedSurface: android.view.Surface? = null; var retainedTile: View? = null

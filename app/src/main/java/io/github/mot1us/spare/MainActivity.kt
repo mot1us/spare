@@ -3566,7 +3566,15 @@ class MainActivity : Activity() {
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
-        else if (!guideVisible) showGuide(true)
+        else if (!guideVisible) {
+            // Back follows what is on screen: a game returns to the Sports cards (not its stream list);
+            // any other channel, such as one recalled with Left, returns to the guide on that channel.
+            if (sportsVisible && onDemand == null && !watchingRedZone && playbackGame() == null) {
+                stopSportsPrefetch(); sportsVisible = false; focused = current; applyFilter()
+            }
+            val toCards = sportsVisible && sportsPanel.watching
+            showGuide(true); if (toCards) sportsPanel.back()
+        }
         else if (list.hasFocus() && guideTimeline.ahead((focused ?: current)?.id)) resetTime()
         else if (sportsVisible && sportsPanel.back()) return
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
