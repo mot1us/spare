@@ -6,6 +6,7 @@
 - Cancel the other Library tab's category download when you pick a category, so Movies and Series never compete for the same workers.
 - Back from a Sports game now returns straight to the Sports cards instead of the list of streams found for that game.
 - Back follows what is on screen: after switching from a game to a non-game channel with Left, Back returns to the guide on that channel instead of the Sports section.
+- Keep waiting, and reconnect, when a CI emulator briefly reports offline during boot instead of failing the device-test job within seconds.
 
 ## 0.34.1 — 2026-11-11
 

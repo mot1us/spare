@@ -22,11 +22,15 @@ trap 'collect_reports $?' EXIT
 bounded() { local seconds="$1"; shift; if command -v timeout >/dev/null; then timeout "$seconds" "$@"; else "$@"; fi; }
 # A disconnected emulator must fail fast, not consume the job timeout.
 bounded 180 "$adb" -s "$serial" wait-for-device || { echo "Emulator $serial did not connect to adb within 3 minutes"; exit 1; }
-for attempt in $(seq 1 120); do
-  if [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then break; fi
-  sleep 1
+# Time-bound the boot wait: an emulator that briefly reports "offline" fails getprop instantly,
+# which used to exhaust a count-based loop in seconds. Reconnect it and keep waiting.
+boot_deadline=$((SECONDS + 300))
+until [ "$("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; do
+  if [ "$SECONDS" -ge "$boot_deadline" ]; then echo "Emulator $serial did not finish booting within 5 minutes"; "$adb" devices; exit 1; fi
+  if "$adb" devices | grep -q "^$serial[[:space:]]*offline"; then "$adb" reconnect offline >/dev/null 2>&1 || true; fi
+  bounded 30 "$adb" -s "$serial" wait-for-device >/dev/null 2>&1 || true
+  sleep 2
 done
-test "$("$adb" -s "$serial" shell getprop sys.boot_completed | tr -d '\r')" = 1
 install_checked_apk() {
   local apk="$1" install_log="app/build/reports/device/install-$(basename "$1").txt"
   for attempt in 1 2 3; do
