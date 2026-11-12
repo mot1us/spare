@@ -3521,7 +3521,7 @@ class SpareDeviceTest {
     }
 
     @Test fun upNextOffersTheNextEpisodeOfAStartedSeries() {
-        FixtureServer(libraryCategories = true, longVideo = true).use { server ->
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Up next fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             val series = OnDemand("series:1", "Fixture series", "Category 1", kind = "series")

@@ -207,6 +207,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
         if (!keepCategory || mode != kind) shelfCategory = null
+        // Leaving Movies or Series stops their row downloads, so the tab you opened gets the provider to itself.
+        if (mode != kind) { shelfTasks.values.forEach { it.cancel(true) }; shelfTasks.clear() }
         shelfForce = false
         panel.archiveMode(mode == "catchup")
         fromBeginning = false; startEpisode = null
@@ -752,6 +754,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
         catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
+        shelfTasks.values.forEach { it.cancel(true) }; shelfTasks.clear()
     }
     fun invalidateProvider(id: String) {
         cancelStart(); ++epoch; task?.cancel(true); favoriteTask?.cancel(true); ++favoriteEpoch

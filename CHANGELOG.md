@@ -5,6 +5,7 @@
 - Movies and Series open on category rows, like streaming apps: one row per provider category with its first 20 posters and a "See all" tile. Up/Down moves between categories (each row remembers its place), Left/Right within a row, OK opens a title. Only rows on screen download, two categories at a time, and each is saved on the TV for the next visit.
 - See all (or the category picker) opens that category's full grid with Sort and search; Back returns to the rows on the same tile. Choosing All categories in the picker returns to the rows.
 - Stopping a movie returns to the row or category it was started from, with the cursor on it.
+- Leaving Movies or Series (or Library) stops their row downloads, so Up next, Watchlist and playback get the provider to themselves.
 
 ## 0.39.3 — 2026-11-12
 

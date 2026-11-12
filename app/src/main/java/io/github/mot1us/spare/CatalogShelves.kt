@@ -105,7 +105,8 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         override fun onBindViewHolder(holder: ShelfHolder, position: Int) {
             val shelf = shelves[position]
             holder.bind(shelf, data[shelf.id])
-            if (data[shelf.id] == null || data[shelf.id]?.failed == true && data[shelf.id]?.rows.isNullOrEmpty()) load?.invoke(shelf.id)
+            // Unloaded, interrupted (still marked busy) or failed-empty rows ask again; a running download is not restarted.
+            data[shelf.id].let { if (it == null || it.busy || it.failed && it.rows.isEmpty()) load?.invoke(shelf.id) }
         }
         override fun onViewRecycled(holder: ShelfHolder) { holder.id?.let { id -> if (data[id]?.busy != false) release?.invoke(id) } }
     }
