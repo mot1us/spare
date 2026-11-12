@@ -584,9 +584,19 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.submit(emptyList()); panel.page("Continue watching", "Loading saved positions…", true)
         request { token ->
             val entries = runCatching { store.watchProgress(selected).sortedByDescending { it.updated } }.getOrDefault(emptyList())
+            // Episodes are shown as their series: its poster and name, with the episode code and resume point.
+            val series = runCatching { (store.followedSeries(selected).entries + store.libraryFavorites(selected).entries).map { it.item }.filter { it.kind == "series" }.associateBy { it.id } }.getOrDefault(emptyMap())
             ui(token) {
                 panel.page("Continue watching", "Saved on this TV for ${selected.name}. Finished titles disappear automatically.", false)
-                panel.submit(entries.map { entry -> BrowserRow(entry.item.id, entry.item.title, "Resume at ${duration(entry.position)}", poster = entry.item.poster) { select(entry.item) } }); panel.focusRows()
+                panel.submit(entries.map { entry ->
+                    val item = entry.item; val show = series[item.seriesId].takeIf { item.kind == "episode" }
+                    val resume = "Resume at ${duration(entry.position)}"
+                    BrowserRow(item.id, show?.title ?: item.title, if (item.kind == "episode" && item.season > 0) "S${item.season} E${item.episode} · $resume" else resume,
+                        poster = item.poster.ifBlank { show?.poster.orEmpty() }, description = if (show != null) item.title else item.description, backdrop = show?.backdrop.orEmpty()) {
+                        if (show != null) { parentSeries = show; episodeList = episodeCache["${selected.id}:${show.id}"].orEmpty() }
+                        select(item)
+                    }
+                }); panel.focusRows()
             }
         }
     }

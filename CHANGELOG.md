@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.1 — 2026-11-12
+
+- Continue watching shows episodes as their series, with the series poster and name, the episode code and the resume point, instead of a blank tile with only the episode title.
+
 ## 0.39.0 — 2026-11-12
 
 - Sort Library Movies and Series: a Sort button beside the category picker cycles Provider order, A–Z and Newest, and the choice is remembered. A–Z ignores provider tags such as "EN |" and leading articles, so "The Batman" sorts under B.
