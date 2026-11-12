@@ -82,10 +82,16 @@ object VodCatalog {
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
         }.distinctBy { it.id }
     }
-    fun episodes(source: Source, series: OnDemand, timeoutMs: Int = 6000): List<OnDemand> {
+    fun episodes(source: Source, series: OnDemand, timeoutMs: Int = 6000): List<OnDemand> = parseEpisodes(seriesRoot(source, series, timeoutMs), source, series)
+    private fun seriesRoot(source: Source, series: OnDemand, timeoutMs: Int): JSONObject {
         val id = series.id.removePrefix("series:"); require(numeric.matches(id))
-        val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024, timeoutMs = timeoutMs).toString(Charsets.UTF_8))
-        return parseEpisodes(root, source, series)
+        return JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024, timeoutMs = timeoutMs).toString(Charsets.UTF_8))
+    }
+    /** One get_series_info response serves both the spotlight text and the episode list. */
+    fun seriesInfo(source: Source, series: OnDemand, timeoutMs: Int = 6000): Pair<OnDemand, List<OnDemand>> {
+        if (source.kind != "xtream" || series.kind != "series") return series to emptyList()
+        val root = seriesRoot(source, series, timeoutMs)
+        return seriesDetails(root, source, series) to runCatching { parseEpisodes(root, source, series) }.getOrDefault(emptyList())
     }
     fun parseEpisodes(root: JSONObject, source: Source, series: OnDemand): List<OnDemand> {
         val seasons = root.optJSONObject("episodes") ?: if (root.optJSONArray("episodes")?.length() == 0) return emptyList() else throw SourceFailure(SourceProblem.RESPONSE)
@@ -118,10 +124,8 @@ object VodCatalog {
             externalId = externalId(info).ifBlank { item.externalId }, url = data?.let { playbackUrl(source, "movie", id, it, item.url) } ?: item.url)
     }
     /** Spotlight/details text for a series without its episode list being needed by the caller. */
-    fun seriesDetails(source: Source, series: OnDemand, timeoutMs: Int = 6000): OnDemand {
-        if (source.kind != "xtream" || series.kind != "series") return series
-        val id = series.id.removePrefix("series:"); require(numeric.matches(id))
-        val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024, timeoutMs = timeoutMs).toString(Charsets.UTF_8))
+    fun seriesDetails(source: Source, series: OnDemand, timeoutMs: Int = 6000): OnDemand = seriesInfo(source, series, timeoutMs).first
+    fun seriesDetails(root: JSONObject, source: Source, series: OnDemand): OnDemand {
         val info = root.optJSONObject("info") ?: return series
         return series.copy(description = info.optString("plot").take(4096).ifBlank { series.description },
             backdrop = artwork(info.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source).ifBlank { series.backdrop },

@@ -410,15 +410,20 @@ class LibraryController(private val activity: Activity, private val store: Secur
         seriesSpots[key]?.let { done(it); return }
         spotTask?.cancel(true)
         spotTask = spotWorker.submit {
-            val loaded = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) else VodCatalog.seriesDetails(selected, item) }.getOrNull() ?: return@submit
+            val (loaded, entries) = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) to emptyList() else VodCatalog.seriesInfo(selected, item) }.getOrNull() ?: return@submit
             handler.post {
                 if (destroyed) return@post
                 val spot = spotlight(loaded.copy(category = item.category))
                 if (item.kind == "movie") { details[key] = loaded; while (details.size > 200) details.remove(details.keys.first()) }
-                else { seriesSpots[key] = spot; while (seriesSpots.size > 200) seriesSpots.remove(seriesSpots.keys.first()) }
+                else { rememberSeries(key, spot, entries) }
                 done(spot)
             }
         }
+    }
+    /** The spotlight's series fetch already holds the episode list, so opening that series is instant. */
+    private fun rememberSeries(key: String, spot: Spotlight, entries: List<OnDemand>) {
+        seriesSpots[key] = spot; while (seriesSpots.size > 200) seriesSpots.remove(seriesSpots.keys.first())
+        if (entries.isNotEmpty() && entries.size <= 2000 && episodeCache[key] == null) { episodeCache[key] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) }
     }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
@@ -511,7 +516,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             episodeList = cached; showItems(cached, "Series", "${counted(cached.size, "episode")} · Back returns to Series", force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
-        request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
+        request { token -> runCatching { VodCatalog.seriesInfo(selected, series) }.onSuccess { (info, entries) -> ui(token) {
+            if (seriesSpots[cacheKey] == null) seriesSpots[cacheKey] = spotlight(info.copy(category = series.category))
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
             episodeList = entries; showItems(entries, "Series", "${counted(entries.size, "episode")} · Back returns to Series", false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()

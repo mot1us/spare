@@ -101,7 +101,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Posters are kept encrypted on disk (provider URLs can carry account details) so a
     // Library visit after a restart draws saved artwork instead of downloading it again.
     // A 1080p tile is ~300x450 px: 480 px keeps posters sharp; 28 MB of RGB_565 holds ~90 of them (several screens).
-    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true)
+    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4)
     private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0

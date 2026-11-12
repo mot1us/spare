@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /** Posters pass [opaque] = true: RGB_565 halves memory (twice as many fit in the cache) and they never need mipmaps. */
-class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false) {
+class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false, threads: Int = 2) {
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
     private class Binding(val url: String, val http: Boolean, var loaded: ((Bitmap?) -> Unit)?) {
@@ -30,7 +30,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private val bindings = WeakHashMap<ImageView, Binding>()
     private class Failure(val until: Long, val attempts: Int)
     private val failed = ConcurrentHashMap<String, Failure>()
-    private val workers = Executors.newFixedThreadPool(2) as java.util.concurrent.ThreadPoolExecutor
+    private val workers = Executors.newFixedThreadPool(threads) as java.util.concurrent.ThreadPoolExecutor
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var closed = false
     @Volatile private var paused = false

@@ -47,6 +47,9 @@ object Network {
             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
             val connection = URI(destination).toURL().openConnection() as HttpURLConnection
             open[connection] = Thread.currentThread()
+            // A fully read, closed response leaves its socket in the keep-alive pool: the next provider or
+            // artwork request skips DNS, TCP and TLS setup. Failures and cancellations still disconnect.
+            var reusable = false
             try {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = minOf(12000, timeoutMs)
@@ -91,12 +94,12 @@ object Network {
                         override fun read(): Int = `in`.read().also { check(if (it < 0) 0 else 1) }
                         override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { check(it) }
                     }
-                    return decoded.use(read).also { progress?.invoke(bounded.consumed, total) }
+                    return decoded.use(read).also { progress?.invoke(bounded.consumed, total); reusable = !Thread.currentThread().isInterrupted }
                 }
             } catch (error: java.io.IOException) {
                 if (Thread.currentThread().isInterrupted && error !is java.io.InterruptedIOException) throw java.io.InterruptedIOException("Download cancelled")
                 throw error
-            } finally { open.remove(connection); connection.disconnect() }
+            } finally { open.remove(connection); if (!reusable) connection.disconnect() }
         }
         error("Too many redirects")
     }

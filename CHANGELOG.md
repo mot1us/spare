@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.39.2 — 2026-11-12
+
+- Faster Library over the network: finished provider and artwork requests keep their connection open for reuse, so later category, details, episode and poster requests skip a fresh connection and encryption handshake. Library posters download four at a time.
+- Opening a series you just paused on is instant: the spotlight's series request already carries the episode list, so it is fetched once instead of up to three times.
+
 ## 0.39.1 — 2026-11-12
 
 - Continue watching shows episodes as their series, with the series poster and name, the episode code and the resume point, instead of a blank tile with only the episode title.
