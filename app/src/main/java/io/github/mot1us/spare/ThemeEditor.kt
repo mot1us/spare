@@ -119,6 +119,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
 
     private fun selectMode(next: Boolean) {
         if (advanced == next && controls.isNotEmpty()) return
+        previewPreset = null
         advanced = next; tabRow.visibility = if (advanced) VISIBLE else GONE
         help.text = if (advanced) "← → adjust · OK next · Saved automatically" else "OK applies a preset · Advanced keeps every individual control"
         if (advanced) selectPage(page, true) else {
@@ -129,6 +130,8 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                     store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
                     store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1
                 }.apply { tag = "theme-preset:${preset.name}"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(8), 0); maxLines = 2 }
+                val focus = row.onFocusChangeListener
+                row.setOnFocusChangeListener { view, active -> focus?.onFocusChange(view, active); previewPreset = if (active) preset else previewPreset?.takeUnless { it == preset }; refreshPreview() }
                 // Two-tone chip: the palette's background with its accent, so each preset's mood shows before applying it.
                 val colors = GuideTheme.palettes.first { it.name == preset.palette }
                 val swatch = android.graphics.drawable.LayerDrawable(arrayOf(
@@ -295,11 +298,23 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     }
     private fun hexValue(value: Int) = String.format(Locale.US, "%06X", value and 0xFFFFFF)
     private fun colorValue(value: Int, automatic: Int) = if (value == automatic) "Palette" else "#${hexValue(value)}"
-    private fun palette() = GuideTheme.palettes.firstOrNull { it.name == store.theme } ?: GuideTheme.palettes.first()
-    private fun accent() = (if (store.customAccent != 0) store.customAccent else palette().accent) or 0xFF000000.toInt()
+    /** The preset under the cursor is previewed live, before OK applies it. */
+    private var previewPreset: Preset? = null
+    private fun themeName() = previewPreset?.palette ?: store.theme
+    private fun styleName() = previewPreset?.style ?: store.themeStyle
+    private fun fontName() = previewPreset?.font ?: store.font
+    private fun customAccentValue() = if (previewPreset != null) 0 else store.customAccent
+    private fun cornerValue() = if (previewPreset != null) -1 else store.cornerRadius
+    private fun borderValue() = if (previewPreset != null) -1 else store.borderWidth
+    private fun textScaleValue() = if (previewPreset != null) 100 else store.guideTextScale
+    private fun rowHeightValue() = if (previewPreset != null) 32 else store.guideRowHeight
+    private fun rowGapValue() = if (previewPreset != null) 3 else store.guideRowGap
+    private fun opacityValue() = if (previewPreset != null) -1 else store.guideOpacity
+    private fun palette() = GuideTheme.palettes.firstOrNull { it.name == themeName() } ?: GuideTheme.palettes.first()
+    private fun accent() = (if (customAccentValue() != 0) customAccentValue() else palette().accent) or 0xFF000000.toInt()
     private fun backgroundColor() = (if (store.customBackground >= 0) GuideTheme.panelTint(store.customBackground) else palette().background) or 0xFF000000.toInt()
-    private fun radius() = if (store.cornerRadius >= 0) store.cornerRadius.toFloat() else when (store.themeStyle) { "Soft" -> 14f; "Rounded" -> 20f; "Broadcast" -> 2f; "Glass" -> 6f; "Outline" -> 3f; "Cinema" -> 8f; else -> 0f }
-    private fun border() = if (store.borderWidth >= 0) store.borderWidth.toFloat() else when (store.themeStyle) { "Nostalgia" -> 2f; "Flat", "Soft", "Cinema" -> 0f; else -> 1f }
+    private fun radius() = if (cornerValue() >= 0) cornerValue().toFloat() else when (styleName()) { "Soft" -> 14f; "Rounded" -> 20f; "Broadcast" -> 2f; "Glass" -> 6f; "Outline" -> 3f; "Cinema" -> 8f; else -> 0f }
+    private fun border() = if (borderValue() >= 0) borderValue().toFloat() else when (styleName()) { "Nostalgia" -> 2f; "Flat", "Soft", "Cinema" -> 0f; else -> 1f }
     private fun contrastingInk(color: Int): Int = if ((Color.red(color) * 299 + Color.green(color) * 587 + Color.blue(color) * 114) / 1000 >= 145) Color.BLACK else Color.WHITE
     private fun controlBackground(active: Boolean) = GradientDrawable().apply {
         setColor(if (active) accent() else 0x66313C4B); cornerRadius = dp(6).toFloat()
@@ -322,24 +337,24 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
             val w = width / density; val h = height / density
             paint.shader = null; paint.style = Paint.Style.FILL; paint.color = backgroundColor(); canvas.drawRoundRect(0f, 0f, w, h, 10f, 10f, paint)
             fun label(text: String, x: Float, y: Float, size: Float, color: Int = Color.WHITE, bold: Boolean = false) {
-                paint.style = Paint.Style.FILL; paint.color = color; paint.textSize = size; paint.typeface = AppFont.faceFor(store.font, bold)
+                paint.style = Paint.Style.FILL; paint.color = color; paint.textSize = size; paint.typeface = AppFont.faceFor(fontName(), bold)
                 canvas.drawText(text, x, y, paint)
             }
             fun tile(left: Float, top: Float, right: Float, bottom: Float, color: Int, selected: Boolean = false) {
                 tileRect.set(left, top, right, bottom)
                 paint.style = Paint.Style.FILL; paint.color = color; canvas.drawRoundRect(tileRect, radius(), radius(), paint)
-                if (border() > 0) { paint.style = Paint.Style.STROKE; paint.strokeWidth = border(); paint.color = if (selected || store.themeStyle in listOf("Outline", "Nostalgia", "Terminal", "Broadcast")) accent() else 0x66FFFFFF; canvas.drawRoundRect(tileRect, radius(), radius(), paint); paint.style = Paint.Style.FILL }
+                if (border() > 0) { paint.style = Paint.Style.STROKE; paint.strokeWidth = border(); paint.color = if (selected || styleName() in listOf("Outline", "Nostalgia", "Terminal", "Broadcast")) accent() else 0x66FFFFFF; canvas.drawRoundRect(tileRect, radius(), radius(), paint); paint.style = Paint.Style.FILL }
             }
             label("Live preview", 14f, 24f, 14f, bold = true)
-            label("${store.theme} · ${store.themeStyle}", 14f, 43f, 9f, 0xFFBAC8DC.toInt())
+            label("${themeName()} · ${styleName()}", 14f, 43f, 9f, 0xFFBAC8DC.toInt())
             tile(12f, 57f, w - 12f, 124f, 0x55313C4B)
             label("SPORTS   ·   LIVE", 23f, 76f, 9f, accent(), true)
-            label("Seahawks vs 49ers", 23f, 98f, 12f * store.guideTextScale / 100f, bold = true)
+            label("Seahawks vs 49ers", 23f, 98f, 12f * textScaleValue() / 100f, bold = true)
             label("Game coverage", 23f, 114f, 9f, 0xFFBAC8DC.toInt())
             val guideTop = 142f; val bottom = (h - 39f).coerceAtLeast(guideTop + 100f)
             paint.shader = videoGradient
             canvas.drawRoundRect(12f, guideTop, w - 12f, bottom, 5f, 5f, paint); paint.shader = null
-            val opacity = if (store.guideOpacity >= 0) store.guideOpacity else if (store.themeStyle == "Cinema") 65 else 91
+            val opacity = if (opacityValue() >= 0) opacityValue() else if (styleName() == "Cinema") 65 else 91
             paint.color = (backgroundColor() and 0xFFFFFF) or ((opacity * 255 / 100) shl 24)
             canvas.drawRoundRect(12f, guideTop, w - 12f, bottom, 5f, 5f, paint)
             if (store.smallPreview) {
@@ -349,8 +364,8 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
             label("GUIDE", 20f, guideTop + 21f, 10f, accent(), true)
             val channelWidth = (w * .25f).coerceIn(45f, 65f)
             val start = 16f + channelWidth
-            val rowHeight = store.guideRowHeight * .65f
-            val gap = store.guideRowGap.toFloat()
+            val rowHeight = rowHeightValue() * .65f
+            val gap = rowGapValue().toFloat()
             val names = listOf("ESPN", "FOX", "NBC", "RedZone")
             val shows = listOf("SEA vs SF", "Live sports", "Game day", "Live NFL")
             canvas.save(); canvas.clipRect(14f, guideTop + 32f, w - 14f, bottom - 4f)
@@ -359,12 +374,12 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 val selected = index == 0; val fill = if (selected) accent() else 0x55313C4B
                 tile(17f, y, start - gap, y + rowHeight, 0x66313C4B)
                 tile(start, y, w - 18f, y + rowHeight, fill, selected)
-                val textY = y + rowHeight / 2f + 3f; val textSize = 9f * store.guideTextScale / 100f
+                val textY = y + rowHeight / 2f + 3f; val textSize = 9f * textScaleValue() / 100f
                 label(name, 21f, textY, textSize, bold = true)
                 label(shows[index], start + 6f, textY, textSize, if (selected) contrastingInk(accent()) else Color.WHITE)
             }
             canvas.restore()
-            label("${store.font} · ${store.guideTextScale}% · ${store.guideRowHeight} dp rows", 14f, h - 16f, 9f, 0xFFBAC8DC.toInt())
+            label("${fontName()} · ${textScaleValue()}% · ${rowHeightValue()} dp rows", 14f, h - 16f, 9f, 0xFFBAC8DC.toInt())
             canvas.restore()
         }
     }

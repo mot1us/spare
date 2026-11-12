@@ -290,7 +290,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         activeCatalogTitle = title
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
             activeSnapshot = snapshot; catalogImporting = busy
-            panel.page(title, "${snapshot.count} titles${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
+            panel.page(title, "${counted(snapshot.count, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
             loadCatalogPage(null, activeQuery, false)
         }
         val memory = catalogs[key]
@@ -377,7 +377,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun activateCatalog(key: String, snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
         activeCatalog = key; activeSnapshot = snapshot; catalogImporting = busy
         activeCatalogTitle = if (kind == "movie") "Movies" else "Series"
-        panel.page(if (kind == "movie") "Movies" else "Series", "${snapshot.count} titles" + if (busy) " · Loading more in the background…" else "", busy)
+        panel.page(if (kind == "movie") "Movies" else "Series", counted(snapshot.count, "title") + if (busy) " · Loading more in the background…" else "", busy)
         val groups = snapshot.categories + snapshot.labels.mapKeys { "Category ${it.key}" }
         panel.bindCatalog(key, groups, { group, query ->
             val selected = selectedSource(); val scope = group?.removePrefix("Category ")
@@ -435,7 +435,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
-                    panel.page(activeCatalogTitle, "${page.rows.size} titles shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+                    panel.page(activeCatalogTitle, "${counted(page.rows.size, "title")} shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
                 }
             } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
         }
@@ -500,13 +500,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val cached = episodeCache[cacheKey]
         if (cached != null) {
             if (startRequestedEpisode(cached)) return
-            episodeList = cached; showItems(cached, "Series", "${cached.size} episodes · Back returns to Series", force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
+            episodeList = cached; showItems(cached, "Series", "${counted(cached.size, "episode")} · Back returns to Series", force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
-            episodeList = entries; showItems(entries, "Series", "${entries.size} episodes · Back returns to Series", false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
+            episodeList = entries; showItems(entries, "Series", "${counted(entries.size, "episode")} · Back returns to Series", false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
             spotlightDetails(series) { spot -> if (parentSeries?.id == series.id) panel.seriesSpotlight(posterMetadata.known(series), spot) }
             if (favoriteState.contains(series.id)) editFavorites(selected) { it.update(series, entries, System.currentTimeMillis()) }
             worker.execute {
@@ -571,7 +571,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun upNextSummary(count: Int, fresh: Int = upNextRows.orEmpty().count { it.detail.startsWith("New") }) =
         if (count == 0) "Nothing new yet. Series you start or add to your Watchlist appear here with their next episode."
-        else "$count ${if (count == 1) "series" else "series"} to continue" + if (fresh > 0) " · $fresh with new episodes" else ""
+        else "${counted(count, "series", "series")} to continue" + if (fresh > 0) " · $fresh with new episodes" else ""
     private fun continueWatching(selected: Source) {
         panel.submit(emptyList()); panel.page("Continue watching", "Loading saved positions…", true)
         request { token ->

@@ -71,6 +71,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"
         // Leave room for the focused poster's lift instead of clipping it at the grid edge.
         clipChildren = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)) }
+    // Same remote-hint line as the Guide and Sports, so long-press actions are discoverable here too.
+    private val hint = label(10f).apply { setTextColor(Color.LTGRAY); maxLines = 1; tag = "library-hint"; setPadding(dp(4), dp(6), 0, 0) }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
@@ -198,6 +200,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             addView(search, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(4) })
             addView(body, LayoutParams(-1, 0, 1f))
             addView(detailPane, LayoutParams(-1, 0, 1f))
+            addView(hint, LayoutParams(-1, dp(22)))
         }
         addView(LinearLayout(context).apply {
             addView(sectionRail, LayoutParams(dp(TvFocus.BROWSE_RAIL_WIDTH_DP), -1))
@@ -439,7 +442,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         background = GuideTheme.guideBackground(opacity); AppFont.apply(this)
         search.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000); search.setPadding(dp(12), 0, dp(12), 0); search.setTextColor(GuideTheme.ink())
         heading.textSize = 16f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale
-        spotTitle.textSize = 24f * GuideTheme.textScale; spotMeta.textSize = 12f * GuideTheme.textScale; spotPlot.textSize = 12f * GuideTheme.textScale
+        hint.textSize = 10f * GuideTheme.textScale; spotTitle.textSize = 24f * GuideTheme.textScale; spotMeta.textSize = 12f * GuideTheme.textScale; spotPlot.textSize = 12f * GuideTheme.textScale
         spotTitle.typeface = AppFont.face(true)
         val base = (GuideTheme.current.background or 0xFF000000.toInt()) and 0xFFFFFF
         fun shade(alpha: Int) = base or (alpha shl 24)
@@ -452,7 +455,17 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun allowArtworkHttp(value: Boolean) { artworkHttp = value }
     fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE; updateCategoryButton(); spotKey = null; spotMode() }
     /** Spotlight shows in poster grids and on a details page; plain lists (episodes, archive) keep the compact header. */
+    private fun updateHint() {
+        hint.text = when {
+            archive -> "OK Open    ← Library sections    Back Live TV"
+            detailPane.isVisible -> "OK Play    ← Library sections    Back Catalog"
+            seriesSpot != null -> "OK Play episode    ↑ Search    Back Series"
+            grid -> "OK Details    Hold OK Watchlist    CH+ / CH− Page    ← Sections    ↑ Search"
+            else -> "OK Open    ← Library sections    ↑ Search"
+        }
+    }
     private fun spotMode() {
+        updateHint()
         val on = !archive && (detailPane.isVisible || (body.isVisible && (grid || seriesSpot != null)))
         spotlight.isVisible = on
         val height = dp(if (on) HERO_SPOTLIGHT_DP else HERO_COMPACT_DP)

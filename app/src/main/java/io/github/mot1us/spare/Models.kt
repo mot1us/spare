@@ -102,3 +102,6 @@ data class Guide(val channels: List<Channel>, val programmes: Map<String, List<P
         }
     }
 }
+
+/** "1 title", "2 titles": counts shown to viewers read naturally. */
+internal fun counted(count: Int, one: String, many: String = "${one}s") = "$count ${if (count == 1) one else many}"

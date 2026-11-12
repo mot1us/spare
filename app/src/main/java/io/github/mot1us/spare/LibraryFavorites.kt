@@ -10,7 +10,7 @@ data class LibraryFavorites(val entries: List<Entry> = emptyList(), val watched:
         fun label(watched: Set<String>): String {
             val fresh = added.count { it !in watched }
             return when {
-                item.kind != "series" -> "Movie"
+                item.kind != "series" -> listOf("Movie", item.year).filter { it.isNotBlank() }.joinToString(" · ")
                 checked == 0L -> "Episodes not checked yet"
                 fresh > 0 -> "$fresh new · ${unwatched(watched)} unwatched"
                 episodes.isEmpty() -> "No episodes supplied by provider"

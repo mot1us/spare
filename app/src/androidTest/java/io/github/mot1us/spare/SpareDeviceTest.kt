@@ -4001,6 +4001,9 @@ class SpareDeviceTest {
                 }
                 waitFor(scenario) { GuideTheme.style == "Glass" && GuideTheme.current.name == "Monochrome" }
                 device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "theme-presets.png"))
+                // Moving onto a preset previews it before OK applies it.
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("theme-preset:Synthwave").requestFocus() }
+                device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "theme-preset-preview.png"))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("theme-mode:Advanced").requestFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-tab:Look")?.hasFocus() == true }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("theme-control:Palette")?.hasFocus() == true }

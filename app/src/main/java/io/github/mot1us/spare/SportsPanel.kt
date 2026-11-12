@@ -697,7 +697,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         setTextChanged(headerTitle, selectedLeague?.let(SportsLeagues::label) ?: "Sports")
         val now = System.currentTimeMillis()
         setTextChanged(contextLine, if (scanning && next.isEmpty()) "$schedule · Checking games…"
-            else "$schedule · ${next.size} games · ${next.count { it.live(now) }} live")
+            else "$schedule · ${counted(next.size, "game")} · ${next.count { it.live(now) }} live")
         if (scanning && next.isEmpty() && (initialReveal || !changedScope)) {
             if (!watchMode && !actionsOpen) { progress.isIndeterminate = true; progress.isVisible = true; status.text = "Updating sports…" }
             if (initialReveal && browsingGames) { loadingGames = true; showSkeleton() }

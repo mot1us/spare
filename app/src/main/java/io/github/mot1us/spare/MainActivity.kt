@@ -88,6 +88,8 @@ class MainActivity : Activity() {
     private var availableUpdate: String? = null
     private var importTask: java.util.concurrent.Future<*>? = null
     private val epgWorkers = workers.pool("epg", threads = 3, background = true)
+    // Ranking a very large lineup must never queue ahead of saved-guide or Sports work on the import thread.
+    private val epgOrderWorker = workers.pool("epg-order", threads = 1, background = true)
     private var epgActive = 0
     private var epgBackgroundFor: List<Channel>? = null
     private var epgBackgroundOrder = emptyList<Channel>()
@@ -1812,6 +1814,8 @@ class MainActivity : Activity() {
     private fun warmGuideInBackground(epoch: Int, now: Long) {
         if (epgActive > 0 || now < epgAheadPausedUntil || epgBackgroundRequests >= EPG_BACKGROUND_LIMIT) return
         if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
+        // A game being matched to channels gets the provider to itself.
+        if (sportsMatchTask?.isDone == false || sportsWarmActive.isNotEmpty()) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, 5000); return }
         // Let startup playback and the first visible rows settle before quiet background work.
         val wait = epgBackgroundNotBefore - android.os.SystemClock.elapsedRealtime()
         if (wait > 0) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, wait); return }
@@ -1821,7 +1825,7 @@ class MainActivity : Activity() {
             if (epgBackgroundOrdering === channels) return
             epgBackgroundOrdering = channels
             val favoriteIds = favorites; val followed = store.followedTeams
-            imports.execute {
+            epgOrderWorker.execute {
                 // Favorites, then likely game networks (so Sports matches from the saved guide instead of
                 // asking the provider per game), then everything else in guide order.
                 val all = channels.filter { !it.media }
@@ -1921,7 +1925,7 @@ class MainActivity : Activity() {
         searchButton.contentDescription = if (query.isEmpty()) "Search" else "Search · filter active"
         val selection = if (localOnly) "Local · ${store.localLocation}" else if (favoritesOnly) "Favorites" else group
         val profileLabel = filters.summary().takeUnless { it == "All channels" && selection != null }
-        filterInfo.text = "${filtered.size} channels · " + listOfNotNull(selection, profileLabel, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
+        filterInfo.text = "${counted(filtered.size, "channel")} · " + listOfNotNull(selection, profileLabel, query.takeIf { it.isNotEmpty() }?.let { "Search: ${it.take(40)}" }, if (hidden > 0) "$hidden unavailable hidden" else null).joinToString(" · ")
         val loadingSelection = if (browsePlaylist != null) browsePlaylist in playlistLoading else playlistLoading.isNotEmpty()
         if (filtered.isEmpty() && loadingSelection) filterInfo.text = "Loading channels…"
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty() && !loadingSelection) View.VISIBLE else View.GONE

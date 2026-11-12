@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.38.1 — 2026-11-12
+
+- Includes 0.38.0 and 0.37.0, whose publishes were stopped by CI device runs.
+- Rank the lineup for the background guide fill on its own low-priority thread, and pause the fill while Sports is matching a game, so very large lineups never delay saved-guide or Sports work.
+- Preview a theme preset live while the cursor rests on it: the preview panel and the studio's own accents switch before OK applies it.
+- Show a remote-hint line at the bottom of Library, matching the Guide and Sports: OK Details, Hold OK Watchlist, CH+/CH− Page, and context-specific hints on details, episode and archive pages.
+- Counts read naturally ("1 title", "1 episode", "1 channel", "1 game").
+- Watchlist movies show their year beside "Movie".
+
 ## 0.38.0 — 2026-11-12
 
 - Includes 0.37.0, whose publish was stopped by an unresponsive CI emulator.
