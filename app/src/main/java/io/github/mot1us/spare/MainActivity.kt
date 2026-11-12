@@ -99,6 +99,7 @@ class MainActivity : Activity() {
     private var epgBackgroundFailures = 0
     private var epgBackgroundNotBefore = 0L
     private var epgSavePending = false
+    private var epgSaveQuiet = false
     private fun cancelEpgSave() { handler.removeCallbacks(cacheEpg); epgSavePending = false }
     private val fetchBackgroundEpg = Runnable { pumpEpg() }
     private val prewarmLibrary = Runnable { if (started && !closed && ::library.isInitialized) enabledSources().firstOrNull { it.kind == "xtream" }?.let(library::prewarm) }
@@ -120,7 +121,7 @@ class MainActivity : Activity() {
         val owners = enabledSources().filter { it.id in providerViews && it.id !in restoringProgrammes }
         if (::playlists.isInitialized && snapshot.channels.isNotEmpty() && snapshot.programmes.isNotEmpty()) epgWriter.submit(EpgSave(snapshot, playlists, owners, observedAt))
     }
-    private data class EpgUpdate(val channel: Channel, val entries: List<Programme>, val at: Long)
+    private data class EpgUpdate(val channel: Channel, val entries: List<Programme>, val at: Long, val background: Boolean = false)
     private val pendingEpg = linkedMapOf<String, EpgUpdate>()
     private var epgApplying = false
     private var epgApplyScheduled = false
@@ -138,8 +139,11 @@ class MainActivity : Activity() {
                     if (!closed && epoch == generation) {
                         if (guide.programmes === before.programmes) {
                             guide = guide.copy(programmes = programmes)
-                            // Save within 30 s of the first unsaved update; a steady background fill must not postpone it forever.
-                            if (!epgSavePending) { epgSavePending = true; handler.postDelayed(cacheEpg, 30000) }
+                            // Save within 30 s of the first unsaved update you asked for. Background fill rewrites the whole
+                            // encrypted guide, so it saves at most every 5 minutes (and when Spare stops) to keep playback smooth.
+                            val quiet = updates.values.all { it.background }
+                            if (epgSavePending && epgSaveQuiet && !quiet) cancelEpgSave()
+                            if (!epgSavePending) { epgSavePending = true; epgSaveQuiet = quiet; handler.postDelayed(cacheEpg, if (quiet) 300000 else 30000) }
                             if (guideVisible) adapter.refreshRows()
                             if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
                             if (details.isVisible) refreshDetails()
@@ -1535,7 +1539,7 @@ class MainActivity : Activity() {
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
         epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave()
-        epgBackgroundFor = null; epgBackgroundOrdering = null; epgBackgroundRequests = 0; epgBackgroundFailures = 0; epgBackgroundNotBefore = android.os.SystemClock.elapsedRealtime() + 15000; handler.removeCallbacks(fetchBackgroundEpg)
+        epgBackgroundFor = null; epgBackgroundOrdering = null; epgBackgroundRequests = 0; epgBackgroundFailures = 0; epgBackgroundNotBefore = android.os.SystemClock.elapsedRealtime() + 45000; handler.removeCallbacks(fetchBackgroundEpg)
         pendingEpg.clear(); handler.removeCallbacks(applyEpgUpdates); epgApplyScheduled = false
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
@@ -1545,6 +1549,7 @@ class MainActivity : Activity() {
         filters = store.filters(selected); sportsFilters = store.sportsFilters(selected).copy(minHeight = 0); videoInfo = mutableMapOf(); unavailable = UnavailableChannels(); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
         status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
+        val began = Timings.now()
         importTask = imports.submit {
             if (providerChanged) store.invalidateProviderFiles(selected)
             val saved = if (force) null else runCatching { store.cachedLineup(selected) }.getOrNull()
@@ -1554,6 +1559,7 @@ class MainActivity : Activity() {
                     // Apply the playable lineup before reading its larger EPG. A
                     // second receive must not invalidate this fast first apply.
                     receivePlaylist(selected, saved) {
+                        Timings.since("Channels", began)
                         cachedStartup = true
                         status.text = "Loading saved programme guide…"
                         imports.execute {
@@ -1562,6 +1568,7 @@ class MainActivity : Activity() {
                             ui(epoch) {
                                 savedReplays.forEach { (game, choices) -> replayCache["${selected.id}:$epoch:$game"] = System.currentTimeMillis() to choices }
                                 receiveSavedProgrammes(selected, programmes) {
+                                    Timings.since("Saved guide", began)
                                     status.text = store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "Using saved guide · $it" }.orEmpty()
                                     scheduleEpg(); autoRefresh(selected, true)
                                     handler.removeCallbacks(prewarmLibrary); handler.postDelayed(prewarmLibrary, 20000)
@@ -1869,7 +1876,7 @@ class MainActivity : Activity() {
                         if (result.isSuccess) epgBackgroundFailures = 0
                         else if (++epgBackgroundFailures >= 5) { epgBackgroundFailures = 0; epgBackgroundNotBefore = android.os.SystemClock.elapsedRealtime() + 10 * 60000L }
                         if ((result.exceptionOrNull() as? HttpFailure)?.status in setOf(401, 403, 429, 503)) epgAheadPausedUntil = System.currentTimeMillis() + 10 * 60000L
-                        result.getOrNull()?.takeIf { it.isNotEmpty() && owner(channel)?.enabled == true }?.let { entries -> pendingEpg[channel.id] = EpgUpdate(channel, entries, now); scheduleEpgApply(2500) }
+                        result.getOrNull()?.takeIf { it.isNotEmpty() && owner(channel)?.enabled == true }?.let { entries -> pendingEpg[channel.id] = EpgUpdate(channel, entries, now, background = true); scheduleEpgApply(2500) }
                     } else result.onSuccess { entries ->
                         sportsFailures = 0
                         if (entries.isNotEmpty()) {
@@ -3327,7 +3334,9 @@ class MainActivity : Activity() {
     }
     private fun refreshSummary(selected: Source): String {
         fun saved(value: Long) = if (value <= 0) "Not refreshed yet" else GuideClock.sportsDate(value)
-        return (if (PlaylistRefresh.running(selected.id)) PlaylistRefresh.stage(selected.id) + "\n" else "") + "Playlist: ${saved(store.playlistRefreshed(selected))}\nEPG refresh: ${saved(store.epgRefreshed(selected))}" + store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "\n$it · Saved data is kept." }.orEmpty()
+        return (if (PlaylistRefresh.running(selected.id)) PlaylistRefresh.stage(selected.id) + "\n" else "") + "Playlist: ${saved(store.playlistRefreshed(selected))}\nEPG refresh: ${saved(store.epgRefreshed(selected))}" + store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "\n$it · Saved data is kept." }.orEmpty() +
+            Timings.summary(listOf("Channels", "Saved guide")).takeIf { it.isNotBlank() }?.let { "\nLast start: $it" }.orEmpty() +
+            Timings.summary(listOf("Category", "Movie details", "Series info")).takeIf { it.isNotBlank() }?.let { "\nProvider replies: $it" }.orEmpty()
     }
     private fun renderRefreshSettings(selected: Source, focus: String? = null) {
         val panel = settingsPanel ?: return; val policy = store.refreshPolicy(selected)

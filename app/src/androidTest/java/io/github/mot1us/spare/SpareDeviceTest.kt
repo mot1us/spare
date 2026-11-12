@@ -546,7 +546,7 @@ class SpareDeviceTest {
                 var media = ""
                 scenario.onActivity { activity ->
                     media = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
-                    // Skip the 15 s startup grace period instead of sleeping through it.
+                    // Skip the 45 s startup grace period instead of sleeping through it.
                     MainActivity::class.java.getDeclaredField("epgBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
                     MainActivity::class.java.getDeclaredMethod("pumpEpg").apply { isAccessible = true }.invoke(activity)
                 }

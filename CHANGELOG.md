@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.3 — 2026-11-12
+
+- Smoother Library scrolling while a category downloads: the grid keeps the titles already shown and only grows, instead of being rebuilt (and every poster redrawn) about once a second.
+- Smoother playback after startup: the quiet background guide fill starts 45 s after launch instead of 15 s, and saves its listings at most every 5 minutes (and whenever Spare stops) rather than rewriting the whole encrypted guide every 30 s.
+- Settings › Refresh shows how long the last start took to show channels and the saved guide, and how long the provider took to answer the last Library category, movie details and series request.
+
 ## 0.39.2 — 2026-11-12
 
 - Faster Library over the network: finished provider and artwork requests keep their connection open for reuse, so later category, details, episode and poster requests skip a fresh connection and encryption handshake. Library posters download four at a time.

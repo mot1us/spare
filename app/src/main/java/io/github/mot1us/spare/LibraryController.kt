@@ -324,11 +324,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
             }.getOrNull()
             if (cached != null) deliver(cached, !cached.complete)
             if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
+            val began = Timings.now()
             runCatching {
                 repository.load(selected, mode, scope, force, names) { snapshot ->
                     if (cached == null || snapshot.complete || snapshot.count >= cached.count) deliver(snapshot, !snapshot.complete)
                 }
-            }.onSuccess { deliver(it, false) }.onFailure { failure ->
+            }.onSuccess { Timings.since("Category", began); deliver(it, false) }.onFailure { failure ->
                 val saved = cached ?: if (Thread.currentThread().isInterrupted) null else runCatching {
                     repository.cached(selected, mode)?.takeIf { full -> full.chunks.any { "Category $scope" in it.groups } }?.copy(labels = names, scopeGroup = "Category $scope")
                 }.getOrNull()
@@ -410,7 +411,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         seriesSpots[key]?.let { done(it); return }
         spotTask?.cancel(true)
         spotTask = spotWorker.submit {
+            val began = Timings.now()
             val (loaded, entries) = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) to emptyList() else VodCatalog.seriesInfo(selected, item) }.getOrNull() ?: return@submit
+            Timings.since(if (item.kind == "movie") "Movie details" else "Series info", began)
             handler.post {
                 if (destroyed) return@post
                 val spot = spotlight(loaded.copy(category = item.category))
@@ -438,11 +441,25 @@ class LibraryController(private val activity: Activity, private val store: Secur
             browsePages[stateKey] = updated; panel.catalogPage(updated.rows, false, updated.more); return
         }
         if (more && old?.more == false && old.available == snapshot.count) return
+        // A category still downloading publishes a larger snapshot every ~¾ s. Rebuilding the grid each time
+        // reloaded every poster and could drop rows you had scrolled to: keep what is shown and only extend it.
+        val previous = browsePages[stateKey]?.takeIf { !more && it.rows.isNotEmpty() && it.version != version }
+        if (previous != null && (sort == LibraryCatalog.SORT_PROVIDER || !snapshot.complete)) {
+            val kept = previous.copy(version = version, more = if (sort == LibraryCatalog.SORT_PROVIDER) previous.cursor < snapshot.count else previous.more, available = snapshot.count)
+            browsePages[stateKey] = kept; panel.catalogPage(kept.rows, false, kept.more)
+            panel.page(activeCatalogTitle, "${counted(kept.rows.size, "title")} shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+            return
+        }
         panel.catalogBusy()
         pageTask = catalogReader.submit {
             runCatching {
-                val page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0, sort = sort)
-                BrowsePage(version, (if (more) old?.rows.orEmpty() else emptyList()) + page.entries.map(::browserRow), page.cursor, page.more, snapshot.count)
+                // A finished sorted import re-sorts once, keeping as many rows as were already shown.
+                val wanted = previous?.rows?.size ?: 0
+                var page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0, sort = sort)
+                val entries = page.entries.toMutableList()
+                while (entries.size < wanted && page.more && !Thread.currentThread().isInterrupted) { page = repository.query(snapshot, group, query, page.cursor, sort = sort); entries += page.entries }
+                val rows = (if (more) old?.rows.orEmpty() else emptyList()) + entries.map(::browserRow)
+                BrowsePage(version, rows.distinctBy { it.key }, page.cursor, page.more, snapshot.count)
             }.onSuccess { page -> handler.post {
                 if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null) {
                     browsePages[stateKey] = page
@@ -483,7 +500,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         render(detailItem!!, details[key] == null)
         if (details[key] != null) return
         request { token ->
+            val began = Timings.now()
             var loaded = runCatching { VodCatalog.details(selected, item) }.getOrDefault(item)
+            Timings.since("Movie details", began)
             val addon = runCatching { store.metadataAddon() }.getOrDefault("")
             val provider = loaded
             ui(token) { details[key] = provider; while (details.size > 200) details.remove(details.keys.first()); render(provider, false) }
@@ -516,7 +535,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             episodeList = cached; showItems(cached, "Series", "${counted(cached.size, "episode")} · Back returns to Series", force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
-        request { token -> runCatching { VodCatalog.seriesInfo(selected, series) }.onSuccess { (info, entries) -> ui(token) {
+        val began = Timings.now()
+        request { token -> runCatching { VodCatalog.seriesInfo(selected, series).also { Timings.since("Series info", began) } }.onSuccess { (info, entries) -> ui(token) {
             if (seriesSpots[cacheKey] == null) seriesSpots[cacheKey] = spotlight(info.copy(category = series.category))
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
