@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.37.0 — 2026-11-12
+
+- Add Up next to Library: one poster per series you follow, showing the episode to resume, the next unwatched episode, or a newly released one marked New. Series you start are followed automatically, alongside Watchlist series, without being added to the Watchlist. Newly released episodes are listed first, then the series you watched most recently.
+- Episode lists for Up next are re-checked at most every 15 minutes, for up to 40 series and within 25 seconds, and stopping an episode started from Up next returns to the list.
+
 ## 0.36.0 — 2026-11-11
 
 - Give Library Movies and Series a streaming-app layout: a spotlight above the grid shows the focused title's backdrop, name, year, genre, runtime and plot, with seven posters per row below. Plot and backdrop are fetched once when the cursor settles on a poster and are reused by the details page.

@@ -104,7 +104,7 @@ class SecureStore(private val context: Context) {
         encryptedNames().filter { it.startsWith(prefix) && it !in keep }.forEach(::delete)
     }
     private fun pruneProviderFiles(prefix: String) {
-        require(prefix.matches(Regex("(?:watch|library-favorites|library-categories)-[a-zA-Z0-9_-]+-")))
+        require(prefix.matches(Regex("(?:watch|library-favorites|library-followed|library-categories)-[a-zA-Z0-9_-]+-")))
         encryptedNames().filter { it.startsWith(prefix) }.forEach(::delete)
     }
     fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
@@ -207,6 +207,13 @@ class SecureStore(private val context: Context) {
         if (next != before) write(providerFile("library-favorites", source), next.json().toString().toByteArray())
         return next
     }
+    /** Series you have started, tracked for Up next like Watchlist series (same model, separate file). */
+    @Synchronized fun followedSeries(source: Source): LibraryFavorites = providerRead("library-followed", source)?.let { LibraryFavorites.from(JSONObject(it.toString(Charsets.UTF_8))) } ?: LibraryFavorites()
+    @Synchronized fun editFollowedSeries(source: Source, change: (LibraryFavorites) -> LibraryFavorites): LibraryFavorites {
+        val before = followedSeries(source); val next = change(before)
+        if (next != before) write(providerFile("library-followed", source), next.json().toString().toByteArray())
+        return next
+    }
     fun providerQualityReady(source: Source) = preferences.getBoolean("provider-quality-${source.id}", false)
     fun markProviderQuality(source: Source) { preferences.edit { putBoolean("provider-quality-${source.id}", true) } }
     fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
@@ -247,7 +254,7 @@ class SecureStore(private val context: Context) {
         // background writer look like a never-bound source and recreate deleted data.
         preferences.edit { putString("provider-identity-${source.id}", "") }
         pruneCatalog("catalog-${source.id}-", emptySet())
-        pruneProviderFiles("watch-${source.id}-"); pruneProviderFiles("library-favorites-${source.id}-"); pruneProviderFiles("library-categories-${source.id}-")
+        pruneProviderFiles("watch-${source.id}-"); pruneProviderFiles("library-favorites-${source.id}-"); pruneProviderFiles("library-followed-${source.id}-"); pruneProviderFiles("library-categories-${source.id}-")
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")
         listOf("lineup-${source.id}.enc", "local-matches-${source.id}.enc", "epg-${source.id}.enc", "guide-url-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc", "watch-${source.id}.enc", "library-favorites-${source.id}.enc").forEach { delete(it) }

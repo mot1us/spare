@@ -31,6 +31,12 @@ data class LibraryFavorites(val entries: List<Entry> = emptyList(), val watched:
         return copy(entries = entries.map { entry -> if (entry.item.id != series.id) entry else entry.copy(
             item = series, episodes = ids, added = if (entry.checked == 0L) emptySet() else (entry.added + (ids - entry.episodes)).intersect(ids), checked = now) })
     }
+    /** Keep the most recently started series first, bounded like the Watchlist. */
+    fun follow(series: OnDemand): LibraryFavorites {
+        require(series.kind == "series")
+        val old = entries.firstOrNull { it.item.id == series.id }
+        return copy(entries = (listOf(old?.copy(item = series) ?: Entry(series)) + entries.filterNot { it.item.id == series.id }).take(60))
+    }
     fun completed(ids: Collection<String>) = copy(watched = (watched + ids).toList().takeLast(10000).toSet())
     fun unwatched(ids: Collection<String>) = copy(watched = watched - ids.toSet())
     fun json() = JSONObject().put("watched", JSONArray(watched.toList())).put("entries", JSONArray(entries.map { entry ->

@@ -203,7 +203,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fromBeginning = false; startEpisode = null
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
         panel.selectTab(mode); panel.seriesArtwork(null)
-        directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; panel.resumeImages(); panel.visibility = View.VISIBLE
+        directCatchup = false; parentSeries = null; archive = null; detailItem = null; kind = mode; returnToUpNext = false; panel.resumeImages(); panel.visibility = View.VISIBLE
         val selected = selectedSource()
         panel.favoriteTitle(null, false)
         task?.cancel(true); ++epoch; panel.browse(); panel.allowArtworkHttp(selected?.allowHttp == true)
@@ -212,6 +212,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (mode == "favorites") { displayFavorites(reset = true); checkFavoriteEpisodes(selected); panel.focusRows(); return }
         if (mode == "catchup") { catchupChannels(); return }
         if (mode == "continue") { continueWatching(selected); return }
+        if (mode == "upnext") { upNext(selected); return }
         if (selected.kind != "xtream") {
             panel.submit(emptyList())
             val items = if (mode == "movie") guide().channels.filter { it.media }.map { OnDemand("m3u:${it.id}", it.name, it.group, it.url) } else emptyList()
@@ -454,6 +455,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         favoriteTask?.cancel(true); ++favoriteEpoch; checkingFavorites = false
         val selected = selectedSource() ?: return
         task?.cancel(true); val token = ++epoch
+        // Starting an episode follows its series for Up next, without touching the Watchlist.
+        if (item.kind == "episode") (parentSeries?.takeIf { it.id == item.seriesId } ?: upNextSeries[item.seriesId])?.let { series ->
+            disk.execute { runCatching { store.editFollowedSeries(selected) { it.follow(series) } } }; upNextChecked = 0L
+        }
         positions.execute {
             val position = if (fromBeginning) 0L else runCatching { store.watchProgress(selected).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
             ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId }.map { it.copy(playlistId = selected.id) } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item.copy(playlistId = selected.id), position) }
@@ -482,6 +487,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         when {
             kind == "favorites" -> { displayFavorites(); panel.favoriteTitle(null, false) }
             kind == "continue" -> continueWatching(selected)
+            kind == "upnext" -> upNext(selected)
             selected.kind == "xtream" -> catalog(selected, kind, false)
             else -> open(kind)
         }
@@ -509,6 +515,63 @@ class LibraryController(private val activity: Activity, private val store: Secur
             }
         } }.onFailure { ui(token) { panel.page(series.title, "${if (cached != null) "Using saved episodes · " else "Episodes unavailable · "}${SourceErrors.message(it)} · Refresh to retry.", false); if (!force) panel.focusRows() } } }
     }
+    private var upNextRows: List<BrowserRow>? = null
+    private var returnToUpNext = false
+    private var upNextFor = ""
+    private var upNextChecked = 0L
+    private val upNextSeries = mutableMapOf<String, OnDemand>()
+    /**
+     * One row per followed series (Watchlist series and series you have started): resume, next or newly
+     * released episode. Provider episode lists are re-checked at most every 15 minutes, bounded in count and time.
+     */
+    private fun upNext(selected: Source, force: Boolean = false) {
+        val owner = "${selected.id}:${selected.providerKey()}"
+        if (upNextFor != owner) { upNextFor = owner; upNextRows = null; upNextChecked = 0L }
+        val cached = upNextRows
+        panel.page("Up next", if (cached == null) "Checking your series for new episodes…" else upNextSummary(cached.size), true)
+        panel.submit(cached.orEmpty(), reset = true); panel.focusRows()
+        if (!force && cached != null && System.currentTimeMillis() - upNextChecked in 0 until 15 * 60000L) { panel.page("Up next", upNextSummary(cached.size), false); return }
+        val known = episodeCache.toMap()
+        request { token ->
+            val now = System.currentTimeMillis()
+            val favorites = runCatching { store.libraryFavorites(selected) }.getOrDefault(LibraryFavorites())
+            val followed = runCatching { store.followedSeries(selected) }.getOrDefault(LibraryFavorites())
+            val progress = runCatching { store.watchProgress(selected) }.getOrDefault(emptyList())
+            val tracked = (followed.entries + favorites.entries.filter { it.item.kind == "series" }).distinctBy { it.item.id }.take(40)
+            val deadline = System.nanoTime() + 25_000_000_000L
+            val loaded = linkedMapOf<String, List<OnDemand>>(); val picks = mutableListOf<UpNext.Pick>()
+            var followState = followed; var favoriteSaved = favorites
+            for (entry in tracked) {
+                if (Thread.currentThread().isInterrupted) return@request
+                val key = "${selected.id}:${entry.item.id}"
+                val episodes = known[key] ?: if (System.nanoTime() < deadline) runCatching { VodCatalog.episodes(selected, entry.item, 4000) }.getOrNull() else null
+                if (episodes == null) continue
+                loaded[key] = episodes
+                // Record the episode list so later checks can tell which episodes are new.
+                if (followState.contains(entry.item.id)) followState = runCatching { store.editFollowedSeries(selected) { it.update(entry.item, episodes, now) } }.getOrDefault(followState)
+                if (favoriteSaved.contains(entry.item.id)) favoriteSaved = runCatching { store.editLibraryFavorites(selected) { it.update(entry.item, episodes, now) } }.getOrDefault(favoriteSaved)
+                val added = (followState.entries + favoriteSaved.entries).filter { it.item.id == entry.item.id }.flatMap { it.added }.toSet()
+                UpNext.pick(entry.item, episodes, favoriteSaved.watched, progress, added)?.let(picks::add)
+            }
+            val ordered = UpNext.order(picks)
+            ui(token) {
+                loaded.forEach { (key, value) -> episodeCache[key] = value }; while (episodeCache.size > 64) episodeCache.remove(episodeCache.keys.first())
+                tracked.forEach { upNextSeries[it.item.id] = it.item }
+                favoriteState = favoriteSaved; presentFavorites()
+                val rows = ordered.map { pick ->
+                    val episodes = loaded["${selected.id}:${pick.series.id}"].orEmpty()
+                    BrowserRow(pick.episode.id, pick.series.title, pick.label, poster = pick.series.poster.ifBlank { pick.episode.poster }, description = pick.episode.title,
+                        backdrop = pick.series.backdrop) { parentSeries = pick.series; episodeList = episodes; returnToUpNext = true; playSelected(pick.episode) }
+                }
+                upNextRows = rows; upNextChecked = System.currentTimeMillis()
+                panel.page("Up next", upNextSummary(rows.size, ordered.count { it.fresh }), false)
+                panel.submit(rows, reset = false); panel.focusRows()
+            }
+        }
+    }
+    private fun upNextSummary(count: Int, fresh: Int = upNextRows.orEmpty().count { it.detail.startsWith("New") }) =
+        if (count == 0) "Nothing new yet. Series you start or add to your Watchlist appear here with their next episode."
+        else "$count ${if (count == 1) "series" else "series"} to continue" + if (fresh > 0) " · $fresh with new episodes" else ""
     private fun continueWatching(selected: Source) {
         panel.submit(emptyList()); panel.page("Continue watching", "Loading saved positions…", true)
         request { token ->
@@ -556,6 +619,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (item?.playlistId?.isNotBlank() == true) selectPlaylist(resolveSource(item.playlistId))
         val selected = selectedSource()
         if (item?.kind == "movie") { open("movie"); return }
+        // Stopping an episode started from Up next returns there, with the list re-checked from cached episodes.
+        if (returnToUpNext && item?.kind == "episode") { returnToUpNext = false; parentSeries = null; open("upnext"); return }
         val series = parentSeries?.takeIf { item == null || item.kind == "episode" && it.id == item.seriesId }
             ?: favoriteState.entries.firstOrNull { it.item.id == item?.seriesId }?.item
         if (selected != null && series != null) {
@@ -564,7 +629,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         } else open(if (item?.kind == "episode") "series" else kind)
     }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
+    fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind == "upnext" && parentSeries == null -> upNext(selected, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
     fun back() {
         when {
             panel.closeCategories() -> Unit

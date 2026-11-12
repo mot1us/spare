@@ -3520,6 +3520,35 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun upNextOffersTheNextEpisodeOfAStartedSeries() {
+        FixtureServer(libraryCategories = true, longVideo = true).use { server ->
+            val source = Source(name = "Up next fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            val series = OnDemand("series:1", "Fixture series", "Category 1", kind = "series")
+            val pilot = OnDemand("episode:201", "Pilot", "Season 1", kind = "episode", seriesId = series.id, season = 1, episode = 1)
+            // Finished the pilot: Up next offers episode 2 of a series that is not in the Watchlist.
+            store.editFollowedSeries(source) { it.follow(series) }
+            store.editLibraryFavorites(source) { it.completed(listOf(pilot.id)) }
+            store.saveWatchProgress(source, pilot, 1000, 60000)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:upnext")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:upnext").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:202")?.isShown == true }
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:episode:202" }
+                scenario.onActivity { activity ->
+                    assertEquals("Fixture series", activity.window.decorView.findViewWithTag<TextView>("library-spot-title").text.toString())
+                    assertEquals("Next · S1 E2", activity.window.decorView.findViewWithTag<TextView>("library-spot-meta").text.toString())
+                }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "library-up-next.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:episode:202").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.endsWith("/202.mp4") == true }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive() {
         FixtureServer(libraryCategories = true, longVideo = true).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

@@ -112,7 +112,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val sectionControls = mutableListOf<Button>()
     private val refreshButton = button("Refresh", refresh).apply { tag = "library-refresh" }
     private var selectedTab = "movie"
-    private val tabs = listOf("Movies" to "movie", "Series" to "series", "Watchlist" to "favorites", "Continue watching" to "continue")
+    private val tabs = listOf("Movies" to "movie", "Series" to "series", "Up next" to "upnext", "Watchlist" to "favorites", "Continue watching" to "continue")
     private val archiveHome = button("Channels") { mode("catchup") }.apply { tag = "archive-channels"; visibility = GONE }
     private var archive = false
     init {
