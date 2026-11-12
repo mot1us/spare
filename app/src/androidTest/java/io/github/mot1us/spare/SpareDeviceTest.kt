@@ -3565,8 +3565,9 @@ class SpareDeviceTest {
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "library-posters.png"))
                 scenario.onActivity { activity ->
                     val tile = activity.window.decorView.findViewWithTag<View>("library-item:movie:101")
-                    // Posters are portrait: a 2:3 art area plus captions, never a square crop.
-                    assertTrue("Poster tile ${tile.width}x${tile.height} must be portrait", tile.height > tile.width * 1.5f)
+                    // Category rows show portrait 2:3 artwork, never a square crop.
+                    assertTrue("Poster tile ${tile.width}x${tile.height} must be portrait", tile.height > tile.width * 1.4f)
+                    assertNotNull("Movies open on category rows", activity.window.decorView.findViewWithTag<View>("library-shelf:1"))
                     assertNull(activity.window.decorView.findViewWithTag<View>("library-tab:catchup"))
                     assertEquals("Watchlist", activity.window.decorView.findViewWithTag<android.widget.Button>("library-tab:favorites").text.toString())
                     store.theme = "Ocean"; store.themeStyle = "Flat"; store.guideOpacity = 85
@@ -3585,7 +3586,15 @@ class SpareDeviceTest {
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
                 device.pressDPadUp(); device.pressDPadRight()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-shelves").hasFocus() }
+                // Down moves to the next category row and Up returns to the remembered tile of the first.
+                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-item:movie:20") == true }
+                device.pressDPadRight(); device.pressDPadUp(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:101" }
+                // See all opens the whole category; Back returns to the rows on the same tile.
+                device.pressDPadRight(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").let { grid -> grid.isShown && grid.hasFocus() } }
+                scenario.onActivity { assertEquals("Fixture cinema ▾", it.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
+                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
                 device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-category").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-search").hasFocus() }
@@ -3712,6 +3721,9 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
                 scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
+                // Back from a category opened from the rows returns to the rows, then to the Library sections.
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-shelves").let { rows -> rows.isShown && rows.hasFocus() } }
                 device.pressBack()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressBack()

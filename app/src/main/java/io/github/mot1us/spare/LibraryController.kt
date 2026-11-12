@@ -16,7 +16,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var playlist: String? = null
     private fun selectedSource(): Source? = playlist?.let(resolveSource) ?: if (playlist == null) source() else null
     val currentSource get() = selectedSource()
-    fun selectPlaylist(selected: Source?) { if (playlist != selected?.id) { task?.cancel(true); ++epoch; playlist = selected?.id; detailItem = null; parentSeries = null; favoriteSource = "" } }
+    fun selectPlaylist(selected: Source?) { if (playlist != selected?.id) { task?.cancel(true); ++epoch; playlist = selected?.id; detailItem = null; parentSeries = null; favoriteSource = ""; shelfCategory = null; ++shelfEpoch } }
     private val handler = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
     private var task: java.util.concurrent.Future<*>? = null
@@ -205,7 +205,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val item = entries.singleOrNull { it.season == target.first && it.episode == target.second } ?: return false
         episodeList = entries; playSelected(item); return true
     }
-    fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false) {
+    fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
+        if (!keepCategory || mode != kind) shelfCategory = null
+        shelfForce = false
         panel.archiveMode(mode == "catchup")
         fromBeginning = false; startEpisode = null
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
@@ -227,31 +229,28 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (focusContent) panel.focusRows()
             return
         }
-        catalog(selected, mode, false)
+        catalog(selected, mode, false, focusContent)
         if (focusContent) panel.requestContentFocus()
     }
     private fun request(job: (Int) -> Unit) { task?.cancel(true); val token = ++epoch; task = worker.submit { if (!destroyed) job(token) } }
     private fun ui(token: Int, work: () -> Unit) { handler.post { if (!destroyed && token == epoch && opened) work() } }
     private val categoryNames = mutableMapOf<String, Map<String, String>>()
-    private fun catalog(selected: Source, mode: String, force: Boolean) {
+    private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
         val title = if (mode == "movie") "Movies" else "Series"
-        panel.page(title, "Loading categories…", true)
+        if (panel.shelfCatalog != root) panel.page(title, "Loading categories…", true)
         fun bind(names: Map<String, String>) {
             categoryNames[root] = names
-            repository.memory(selected, mode)?.takeIf { it.chunks.any { chunk -> chunk.titles.isNotEmpty() } }?.let {
-                activateCatalog(root, it.copy(labels = names), !it.complete); return
-            }
-            panel.page(title, "Choose a category · Only the selected category is downloaded", false)
-            var refreshPending = force
-            panel.bindCatalog(root, names, { group, query ->
-                val scope = group ?: names.keys.first(); val reload = refreshPending; refreshPending = false
-                scopedCatalog(selected, mode, root, scope, names, query, reload)
-            }, { loadCatalogPage(null, activeQuery, true) }, "Featured")
+            shelfCategory?.takeIf { it in names }?.let { openCategory(selected, mode, root, names, it, force, focus); return }
+            shelfCategory = null; activeCatalog = root
+            if (force) { shelfForce = true; shelfForced.clear(); panel.resetShelves() }
+            panel.page(title, "${counted(names.size, "category", "categories")} · ↑ ↓ browse · See all opens a whole category", false)
+            panel.showShelves(root, names, { scope -> loadShelf(selected, mode, root, scope, names) }, { scope -> shelfTasks["$root:category:$scope"]?.cancel(false) },
+                { scope -> openCategory(selected, mode, root, names, scope) },
+                { scope -> if (scope != null) openCategory(selected, mode, root, names, scope, focus = false) }, focus)
         }
         val memory = categoryNames[root]
         if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
-        if (!force) repository.memory(selected, mode)?.let { activateCatalog(root, it, !it.complete) }
         request { token ->
             val names = categoriesFor(selected, mode, force)
             ui(token) { if (names.isEmpty()) bulkCatalog(selected, mode, force) else bind(names) }
@@ -264,6 +263,68 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val names = runCatching { VodCatalog.categories(selected, mode).filterKeys { it.matches(Regex("[0-9]{1,20}")) } }.getOrDefault(emptyMap())
         if (names.isNotEmpty()) runCatching { store.write(file, org.json.JSONObject(names).toString().toByteArray()) }
         return names.ifEmpty { cached.orEmpty() }
+    }
+    // ── Category rows ────────────────────────────────────────────────────────────────────────────────
+    /** The category whose full grid was opened from the rows; Back returns to the rows. */
+    private var shelfCategory: String? = null
+    private var shelfForce = false
+    private val shelfForced = mutableSetOf<String>()
+    private var shelfEpoch = 0
+    private val shelfTasks = mutableMapOf<String, java.util.concurrent.Future<*>>()
+    // Two categories download at a time, so rows on screen fill quickly without flooding the provider.
+    private val shelfWorker = Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-rows") }
+    private fun fresh(snapshot: LibraryCatalog.Snapshot?) = snapshot?.complete == true && System.currentTimeMillis() - snapshot.updated in 0 until 6 * 3600000L
+    private fun loadShelf(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>) {
+        val key = "$root:category:$scope"
+        if (shelfTasks[key]?.isDone == false) return
+        val memory = catalogs[key]
+        val force = shelfForce && shelfForced.add(key)
+        val full = repository.memory(selected, mode)
+        val epoch = shelfEpoch
+        shelfTasks[key] = shelfWorker.submit {
+            fun publish(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
+                val rows = runCatching { repository.query(snapshot, null, "", 0, SHELF_TITLES).entries.map(::browserRow) }.getOrNull() ?: return
+                handler.post {
+                    if (destroyed || epoch != shelfEpoch) return@post
+                    val prior = catalogs[key]
+                    if (snapshot.complete || prior == null || snapshot.count >= prior.count) catalogs[key] = snapshot
+                    panel.shelf(scope, CatalogShelves.Data(rows, snapshot.count, busy))
+                }
+            }
+            val cached = memory ?: runCatching {
+                repository.cached(selected, mode, scope) ?: full?.takeIf { it.complete && it.chunks.any { chunk -> "Category $scope" in chunk.groups } }?.copy(labels = names, scopeGroup = "Category $scope")
+            }.getOrNull()
+            if (cached != null) publish(cached, force || !fresh(cached))
+            if (!force && fresh(cached)) return@submit
+            var shown = cached?.count ?: 0
+            runCatching {
+                repository.load(selected, mode, scope, force, names) { snapshot ->
+                    // A row needs only its first titles: publish until it is full, then once more when complete.
+                    if (shown < SHELF_TITLES && snapshot.count > shown) { shown = snapshot.count; publish(snapshot, !snapshot.complete) }
+                }
+            }.onSuccess { publish(it, false) }.onFailure {
+                if (Thread.currentThread().isInterrupted) return@onFailure
+                handler.post { if (!destroyed && epoch == shelfEpoch && cached == null) panel.shelf(scope, CatalogShelves.Data(emptyList(), 0, busy = false, failed = true)) }
+                if (cached != null) publish(cached, false)
+            }
+        }
+    }
+    /** See all (or the category picker): the full grid for one category, sortable and searchable. */
+    private fun openCategory(selected: Source, mode: String, root: String, names: Map<String, String>, scope: String, force: Boolean = false, focus: Boolean = true) {
+        shelfCategory = scope; shelfForce = false
+        shelfTasks.filterKeys { it != "$root:category:$scope" }.values.forEach { it.cancel(false) }
+        var refreshPending = force
+        panel.bindCatalog(root, names, { group, query ->
+            val target = group ?: scope; val reload = refreshPending; refreshPending = false
+            scopedCatalog(selected, mode, root, target, names, query, reload)
+        }, { loadCatalogPage(null, activeQuery, true) }, "All categories", initialGroup = scope,
+            picked = { next -> if (next == null) backToShelves(focus = false) else openCategory(selected, mode, root, names, next, focus = false) })
+        if (focus) panel.requestContentFocus()
+    }
+    private fun backToShelves(focus: Boolean = true) {
+        val selected = selectedSource() ?: return
+        shelfCategory = null; pageTask?.cancel(true); ++pageEpoch; panel.stopCatalog()
+        catalog(selected, kind, false, focus)
     }
     private val warming = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-warm") }
     private var warmTask: java.util.concurrent.Future<*>? = null
@@ -520,7 +581,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             kind == "favorites" -> { displayFavorites(); panel.favoriteTitle(null, false) }
             kind == "continue" -> continueWatching(selected)
             kind == "upnext" -> upNext(selected)
-            selected.kind == "xtream" -> catalog(selected, kind, false)
+            selected.kind == "xtream" -> catalog(selected, kind, false, focus = true)
             else -> open(kind)
         }
     }
@@ -662,7 +723,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun reopen(item: OnDemand? = null) {
         if (item?.playlistId?.isNotBlank() == true) selectPlaylist(resolveSource(item.playlistId))
         val selected = selectedSource()
-        if (item?.kind == "movie") { open("movie"); return }
+        if (item?.kind == "movie") { open("movie", focusContent = true, keepCategory = true); return }
         // Stopping an episode started from Up next returns there, with the list re-checked from cached episodes.
         if (returnToUpNext && item?.kind == "episode") { returnToUpNext = false; parentSeries = null; open("upnext"); return }
         val series = parentSeries?.takeIf { item == null || item.kind == "episode" && it.id == item.seriesId }
@@ -680,7 +741,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }
             detailItem != null -> closeDetails()
             archive != null -> catchupChannels()
-            parentSeries != null -> open(if (kind == "favorites") "favorites" else "series")
+            parentSeries != null -> open(if (kind == "favorites") "favorites" else "series", focusContent = true, keepCategory = true)
+            shelfCategory != null && kind in setOf("movie", "series") -> backToShelves()
             panel.focusRailFromContent() -> Unit
             else -> { dismiss(); closed() }
         }
@@ -693,12 +755,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     fun invalidateProvider(id: String) {
         cancelStart(); ++epoch; task?.cancel(true); favoriteTask?.cancel(true); ++favoriteEpoch
+        ++shelfEpoch; shelfTasks.values.forEach { it.cancel(true) }; shelfTasks.clear(); panel.resetShelves()
         catalogImports.values.forEach { it.cancel(true) }; catalogImports.clear(); catalogGenerations.clear()
         pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null; activeCatalog = ""
         catalogs.clear(); browsePages.clear(); categoryNames.clear(); episodeCache.clear(); details.clear()
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
-    fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    fun destroy() { ++shelfEpoch; shelfWorker.shutdownNow(); warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    companion object { private const val SHELF_TITLES = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

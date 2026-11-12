@@ -24,7 +24,7 @@ internal class PosterGridLayout(context: Context, columns: Int = COLUMNS) : Grid
 }
 
 internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
-    enum class Layout { GRID, SHELF, LIST }
+    enum class Layout { GRID, SHELF, LIST, ROW }
     data class Content(
         val title: String, val subtitle: String, val poster: String, val badge: String = "",
         val initials: String = title.trim().split(Regex("\\s+"), limit = 3).take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString(""),
@@ -75,10 +75,13 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         if (next == layout) return
         layout = next
         orientation = if (next == Layout.LIST) HORIZONTAL else VERTICAL
-        val height = when (next) { Layout.GRID -> -2; Layout.SHELF -> dp(158); Layout.LIST -> dp(55) }
+        val height = when (next) { Layout.GRID -> -2; Layout.SHELF -> dp(158); Layout.LIST -> dp(55); Layout.ROW -> -2 }
         layoutParams = RecyclerView.LayoutParams(if (next == Layout.SHELF) dp(120) else -1, height).apply {
             marginEnd = dp(8); bottomMargin = dp(GuideTheme.rowGapDp + 5)
         }
+        // Category rows show artwork only: the spotlight above names the title under the cursor.
+        val padding = dp(if (next == Layout.ROW) 5 else 7); setPadding(padding, padding, padding, padding)
+        captions.visibility = if (next == Layout.ROW) GONE else VISIBLE
         art.layoutParams = if (next == Layout.LIST) LayoutParams(dp(70), -1).apply { marginEnd = dp(8) } else LayoutParams(-1, 0, 1f)
         captions.layoutParams = if (next == Layout.LIST) LayoutParams(0, -1, 1f) else LayoutParams(-1, dp(43))
     }
