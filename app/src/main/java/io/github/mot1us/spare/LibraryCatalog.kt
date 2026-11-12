@@ -182,8 +182,23 @@ class LibraryCatalog(private val store: SecureStore) {
             return value
         }
     }
-    fun query(snapshot: Snapshot, group: String?, query: String, cursor: Int = 0, limit: Int = 80): Page {
-        require(limit in 1..160)
+    /** Sorted browsing materializes one category's matches once, then pages through that list. */
+    // Compared by identity: a Snapshot holds every title, so structural equality would rescan the catalog.
+    private class Sorted(val snapshot: Snapshot, val group: String?, val query: String, val sort: String, val items: List<OnDemand>) {
+        fun matches(other: Snapshot, group: String?, query: String, sort: String) = snapshot === other && this.group == group && this.query == query && this.sort == sort
+    }
+    @Volatile private var sorted: Sorted? = null
+    fun query(snapshot: Snapshot, group: String?, query: String, cursor: Int = 0, limit: Int = 80, sort: String = SORT_PROVIDER): Page {
+        require(limit in 1..160 && sort in SORTS)
+        if (sort != SORT_PROVIDER) {
+            val all = sorted?.takeIf { it.matches(snapshot, group, query, sort) }?.items ?: run {
+                val matches = ArrayList<OnDemand>(); var next = 0
+                while (true) { val page = query(snapshot, group, query, next, 160); matches.addAll(page.entries); if (!page.more || page.entries.isEmpty()) break; next = page.cursor }
+                sortTitles(matches, sort).also { sorted = Sorted(snapshot, group, query, sort, it) }
+            }
+            val end = minOf(all.size, cursor + limit)
+            return Page(if (cursor < end) all.subList(cursor, end).toList() else emptyList(), end, end < all.size)
+        }
         val key = ChannelSearch.key(query); val result = mutableListOf<OnDemand>(); var offset = 0
         val selectedGroup = group ?: snapshot.scopeGroup
         for (chunk in snapshot.chunks) {
@@ -204,5 +219,23 @@ class LibraryCatalog(private val store: SecureStore) {
             offset += chunk.count
         }
         return Page(result, snapshot.count, false)
+    }
+    companion object {
+        const val SORT_PROVIDER = "Provider order"
+        const val SORT_TITLE = "A–Z"
+        const val SORT_NEWEST = "Newest"
+        val SORTS = listOf(SORT_PROVIDER, SORT_TITLE, SORT_NEWEST)
+        private val providerPrefix = Regex("^\\s*[A-Za-z0-9]{2,4}\\s*[|:]\\s*")
+        private val article = Regex("^(?:the|a|an)\\s+", RegexOption.IGNORE_CASE)
+        /** A–Z ignores provider tags ("EN | ") and leading articles ("The Batman" sorts under B). */
+        internal fun sortKey(title: String) = ChannelSearch.key(article.replace(providerPrefix.replace(title, ""), ""))
+        internal fun sortTitles(items: List<OnDemand>, sort: String): List<OnDemand> {
+            fun titleKey(item: OnDemand) = sortKey(item.title)
+            return when (sort) {
+                SORT_TITLE -> items.sortedBy(::titleKey)
+                SORT_NEWEST -> items.sortedWith(compareByDescending<OnDemand> { it.year.toIntOrNull() ?: 0 }.thenBy(::titleKey))
+                else -> items
+            }
+        }
     }
 }

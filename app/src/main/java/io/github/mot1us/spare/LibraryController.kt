@@ -77,6 +77,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     init {
         panel.favoriteAction = { (detailItem ?: parentSeries)?.let(::toggleLibraryFavorite) }
+        panel.sortLabel(store.librarySort)
+        panel.sortAction = {
+            val sorts = LibraryCatalog.SORTS
+            store.librarySort = sorts[(sorts.indexOf(store.librarySort) + 1) % sorts.size]
+            if (kind in setOf("movie", "series") && activeSnapshot != null) loadCatalogPage(activeGroup, activeQuery, false)
+            store.librarySort
+        }
         panel.markWatchedAction = {
             val selected = selectedSource()
             if (selected != null && parentSeries != null) { val ids = episodeList.filter { it.seriesId == parentSeries?.id }.map { it.id }
@@ -415,20 +422,21 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
-        val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query"
+        val sort = store.librarySort
+        val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query:$sort"
         val version = "${snapshot.updated}:${snapshot.labels.hashCode()}"
         activeGroup = group; activeQuery = query
         pageTask?.cancel(true); val token = ++pageEpoch
         val old = browsePages[stateKey]?.takeIf { it.version == version }
         if (!more && old != null && (old.rows.size >= 80 || old.available == snapshot.count)) {
-            val updated = old.copy(more = old.cursor < snapshot.count, available = snapshot.count)
+            val updated = old.copy(more = if (sort == LibraryCatalog.SORT_PROVIDER) old.cursor < snapshot.count else old.more, available = snapshot.count)
             browsePages[stateKey] = updated; panel.catalogPage(updated.rows, false, updated.more); return
         }
         if (more && old?.more == false && old.available == snapshot.count) return
         panel.catalogBusy()
         pageTask = catalogReader.submit {
             runCatching {
-                val page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0)
+                val page = repository.query(snapshot, group, query, if (more) old?.cursor ?: 0 else 0, sort = sort)
                 BrowsePage(version, (if (more) old?.rows.orEmpty() else emptyList()) + page.entries.map(::browserRow), page.cursor, page.more, snapshot.count)
             }.onSuccess { page -> handler.post {
                 if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null) {

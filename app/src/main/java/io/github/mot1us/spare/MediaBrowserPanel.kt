@@ -113,6 +113,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     private val sectionControls = mutableListOf<Button>()
     private val refreshButton = button("Refresh", refresh).apply { tag = "library-refresh" }
+    /** OK cycles the order of the Movies and Series grids; the choice is remembered. */
+    var sortAction: (() -> String)? = null
+    private val sortButton = button("Sort") { sortAction?.invoke()?.let(::sortLabel) }.apply { tag = "library-sort"; visibility = GONE; maxLines = 1 }
+    fun sortLabel(value: String) { sortButton.text = "Sort · $value"; sortButton.contentDescription = "Sort order, $value. OK changes it." }
     private var selectedTab = "movie"
     private val tabs = listOf("Movies" to "movie", "Series" to "series", "Up next" to "upnext", "Watchlist" to "favorites", "Continue watching" to "continue")
     private val archiveHome = button("Channels") { mode("catchup") }.apply { tag = "archive-channels"; visibility = GONE }
@@ -149,7 +153,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 else -> false
             } }
         }
-        val headerControls = listOf(categoryButton, refreshButton, saveTitle, markWatched)
+        val headerControls = listOf(categoryButton, sortButton, refreshButton, saveTitle, markWatched)
         headerControls.forEach { control ->
             control.setOnKeyListener { _, key, event ->
                 when (key) {
@@ -407,6 +411,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         categoryButton.text = "$label ▾"
         categoryButton.contentDescription = "Category, $label"
         categoryButton.isVisible = body.isVisible && categoryNames.isNotEmpty()
+        sortButton.isVisible = body.isVisible && catalogQuery != null
         if (!categoryButton.isVisible) closeCategories(restoreFocus = false)
     }
     private fun openCategories() {

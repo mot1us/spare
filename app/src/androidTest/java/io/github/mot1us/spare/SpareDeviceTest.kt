@@ -50,7 +50,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER; store.saveMetadataAddon("") }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -3600,6 +3600,13 @@ class SpareDeviceTest {
                 waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition)?.let { it >= PosterGridLayout.COLUMNS } == true } }
                 device.pressKeyCode(KeyEvent.KEYCODE_PAGE_UP)
                 waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition) == 0 } }
+                // Sort cycles A–Z and Newest and is remembered; "Action title 10" sorts right after "Action title 1".
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-sort").performClick() }
+                waitFor(scenario) { activity -> (activity.window.decorView.findViewWithTag<TextView>("library-sort").text.toString() == "Sort · A–Z") &&
+                    activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> (list.findViewHolderForAdapterPosition(1)?.itemView?.tag as? String) == "library-item:movie:2010" } }
+                assertEquals(LibraryCatalog.SORT_TITLE, store.librarySort)
+                scenario.onActivity { activity -> repeat(2) { activity.window.decorView.findViewWithTag<View>("library-sort").performClick() } }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-sort").text.toString() == "Sort · Provider order" }
                 chooseLibraryCategory(scenario, 3)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Comedy" }
                 server.finishActionCatalog.countDown()

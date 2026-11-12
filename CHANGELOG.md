@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.39.0 — 2026-11-12
+
+- Sort Library Movies and Series: a Sort button beside the category picker cycles Provider order, A–Z and Newest, and the choice is remembered. A–Z ignores provider tags such as "EN |" and leading articles, so "The Batman" sorts under B.
+
 ## 0.38.1 — 2026-11-12
 
 - Includes 0.38.0 and 0.37.0, whose publishes were stopped by CI device runs.

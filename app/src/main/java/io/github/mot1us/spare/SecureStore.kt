@@ -342,6 +342,9 @@ class SecureStore(private val context: Context) {
     var theme: String
         get() = preferences.getString("theme", "Monochrome").orEmpty()
         set(value) { preferences.edit { putString("theme", value) } }
+    var librarySort: String
+        get() = preferences.getString("library-sort", LibraryCatalog.SORT_PROVIDER).orEmpty().takeIf { it in LibraryCatalog.SORTS } ?: LibraryCatalog.SORT_PROVIDER
+        set(value) { preferences.edit { putString("library-sort", value) } }
     var themeStyle: String
         get() = preferences.getString("theme-style", "Glass").orEmpty()
         set(value) { preferences.edit { putString("theme-style", value) } }
