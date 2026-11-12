@@ -82,7 +82,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var grid = true
     // Posters are kept encrypted on disk (provider URLs can carry account details) so a
     // Library visit after a restart draws saved artwork instead of downloading it again.
-    private val images = LogoLoader(512, 12 * 1024 * 1024, posterFiles(context))
+    // A 1080p tile is ~300x450 px: 480 px keeps posters sharp; 28 MB of RGB_565 holds ~90 of them (several screens).
+    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true)
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
     private val body = LinearLayout(context)
@@ -217,6 +218,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.bind(item.key, LibraryPosterTile.Content(
                     (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster,
                 ), images, artworkHttp, item.requestPoster)
+                // Decode the rows the remote is about to reach before they scroll into view.
+                if (grid) shownRows.getOrNull(position + columns * 2)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, artworkHttp) }
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }

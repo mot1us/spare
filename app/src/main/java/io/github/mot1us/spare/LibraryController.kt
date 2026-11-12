@@ -243,12 +243,34 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
         if (!force) repository.memory(selected, mode)?.let { activateCatalog(root, it, !it.complete) }
         request { token ->
-            val file = "library-categories-${selected.id}-${selected.providerKey().take(16)}-$mode.enc"
-            val cached = runCatching { store.read(file)?.let { org.json.JSONObject(it.toString(Charsets.UTF_8)) }?.let { j -> j.keys().asSequence().associateWith { j.getString(it) } } }.getOrNull()
-            if (!force && !cached.isNullOrEmpty()) { ui(token) { bind(cached) }; return@request }
-            val names = runCatching { VodCatalog.categories(selected, mode).filterKeys { it.matches(Regex("[0-9]{1,20}")) } }.getOrDefault(emptyMap())
-            if (names.isNotEmpty()) runCatching { store.write(file, org.json.JSONObject(names).toString().toByteArray()) }
+            val names = categoriesFor(selected, mode, force)
             ui(token) { if (names.isEmpty()) bulkCatalog(selected, mode, force) else bind(names) }
+        }
+    }
+    private fun categoriesFor(selected: Source, mode: String, force: Boolean): Map<String, String> {
+        val file = "library-categories-${selected.id}-${selected.providerKey().take(16)}-$mode.enc"
+        val cached = runCatching { store.read(file)?.let { org.json.JSONObject(it.toString(Charsets.UTF_8)) }?.let { j -> j.keys().asSequence().associateWith { j.getString(it) } } }.getOrNull()
+        if (!force && !cached.isNullOrEmpty()) return cached
+        val names = runCatching { VodCatalog.categories(selected, mode).filterKeys { it.matches(Regex("[0-9]{1,20}")) } }.getOrDefault(emptyMap())
+        if (names.isNotEmpty()) runCatching { store.write(file, org.json.JSONObject(names).toString().toByteArray()) }
+        return names.ifEmpty { cached.orEmpty() }
+    }
+    private val warming = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-warm") }
+    private var warmTask: java.util.concurrent.Future<*>? = null
+    /**
+     * Quietly prepare what Library opens to — the category list and the first ("Featured")
+     * category of Movies and Series — so the first visit reads saved pages instead of waiting
+     * on the provider. Skipped while Library is open; never touches the player.
+     */
+    fun prewarm(selected: Source) {
+        if (destroyed || opened || selected.kind != "xtream" || !selected.enabled || warmTask?.isDone == false) return
+        warmTask = warming.submit {
+            for (mode in listOf("movie", "series")) {
+                if (Thread.currentThread().isInterrupted || destroyed) return@submit
+                val names = runCatching { categoriesFor(selected, mode, false) }.getOrDefault(emptyMap())
+                val first = names.keys.firstOrNull() ?: continue
+                runCatching { repository.load(selected, mode, first, false, names) }
+            }
         }
     }
     private fun scopedCatalog(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>, query: String, force: Boolean) {
@@ -541,6 +563,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
-    fun destroy() { repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

@@ -534,6 +534,38 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun backgroundGuideFillCoversUnvisitedChannelsOnceAndSavesThem() {
+        FixtureServer(channelCount = 40, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Background guide", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            val lineup = Importers.xtream(source)
+            store.cache(source, Guide(lineup.channels, emptyMap()))
+            store.markPlaylistRefreshed(source); store.markEpgRefreshed(source); store.markFullEpgAttempted(source); store.setRefreshPolicy(source, RefreshPolicy())
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var media = ""
+                scenario.onActivity { activity ->
+                    media = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                    // Skip the 15 s startup grace period instead of sleeping through it.
+                    MainActivity::class.java.getDeclaredField("epgBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
+                    MainActivity::class.java.getDeclaredMethod("pumpEpg").apply { isAccessible = true }.invoke(activity)
+                }
+                // Full screen, never visiting the guide: the last channel still gets programmes.
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.channels.all { channel -> guide.programmes[guide.key(channel)].orEmpty().isNotEmpty() }
+                }
+                assertEquals("Background fill never repeats a channel", server.requestedEpgTargets.size, server.requestedEpgTargets.toSet().size)
+                scenario.onActivity { activity ->
+                    assertEquals("Background fill keeps the playing connection", media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    (MainActivity::class.java.getDeclaredField("cacheEpg").apply { isAccessible = true }.get(activity) as Runnable).run()
+                }
+                val last = lineup.channels.last()
+                waitFor(scenario) { store.cachedProgrammes(source)[last.guideId.ifBlank { last.id }].orEmpty().isNotEmpty() }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun fullProviderEpgWarmsUnvisitedChannelsAndSurvivesRestart() {
         FixtureServer(channelCount = 96, fullGuide = true).use { server ->
             val source = Source(name = "Full guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

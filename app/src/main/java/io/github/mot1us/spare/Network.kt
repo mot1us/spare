@@ -39,7 +39,7 @@ object Network {
 
     internal fun <T> consume(url: String, http: Boolean, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000,
         progress: ((Long, Long) -> Unit)? = null, networkTimeOnly: Boolean = false,
-        nanoTime: () -> Long = System::nanoTime, read: (InputStream) -> T): T {
+        nanoTime: () -> Long = System::nanoTime, deadlineMs: Long = minOf(60000L, timeoutMs * 3L), read: (InputStream) -> T): T {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -60,7 +60,7 @@ object Network {
                 } else {
                     if (status !in 200..299) throw HttpFailure(status)
                     if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
-                    val deadline = DownloadDeadline(timeoutMs, networkTimeOnly, nanoTime)
+                    val deadline = DownloadDeadline(deadlineMs, networkTimeOnly, nanoTime)
                     val total = connection.contentLengthLong
                     progress?.invoke(0, total)
                     val bounded = object : java.io.FilterInputStream(deadline.socketRead { connection.inputStream }) {
@@ -101,8 +101,8 @@ object Network {
         error("Too many redirects")
     }
 
-    private class DownloadDeadline(timeoutMs: Int, private val networkTimeOnly: Boolean, private val now: () -> Long) {
-        private val budget = minOf(60000L, timeoutMs * 3L) * 1_000_000
+    private class DownloadDeadline(deadlineMs: Long, private val networkTimeOnly: Boolean, private val now: () -> Long) {
+        private val budget = deadlineMs * 1_000_000
         private val started = now()
         private var networkNanos = 0L
 

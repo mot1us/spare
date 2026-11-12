@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.35.0 — 2026-11-11
+
+- Fill the programme guide for every channel quietly in the background, one request at a time, so categories you have not opened already show programmes and the guide is saved for the next launch. Favorites go first, then likely game networks, so Sports can match games from the saved guide instead of asking the provider each time. The fill waits for startup to settle, pauses for visible rows, and backs off when the provider errors or rate-limits.
+- Stop failing large provider XMLTV guides on slower TV boxes: parsing time no longer counts against the download deadline, and the full guide gets a three-minute network budget.
+- Prepare Library in the background after startup: the category lists and the first Movies and Series categories are saved, so the first Library visit opens from the TV instead of the provider.
+- Scroll Library posters more smoothly: posters use half the memory, the cache holds several screens instead of under three rows, posters skip unused mipmaps, tiles no longer rebuild their styling on every bind, and posters two rows ahead are decoded before they scroll into view.
+- Save the guide within 30 seconds of new programme data even while updates keep arriving.
+
 ## 0.34.2 — 2026-11-11
 
 - Release a provider download's worker the moment it is cancelled: close the connection instead of waiting up to a minute for a slow server, so switching Library categories no longer queues behind abandoned requests.

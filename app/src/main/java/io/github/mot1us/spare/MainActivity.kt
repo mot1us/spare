@@ -55,6 +55,8 @@ import androidx.recyclerview.widget.RecyclerView
 
 /** Channels whose short EPG is fetched ahead of the visible guide rows. */
 private const val EPG_READ_AHEAD_LIMIT = 200
+private const val EPG_BACKGROUND_LIMIT = 4000
+private const val EPG_BACKGROUND_GAP_MS = 120L
 
 @UnstableApi
 @SuppressLint("SetTextI18n")
@@ -87,6 +89,17 @@ class MainActivity : Activity() {
     private var importTask: java.util.concurrent.Future<*>? = null
     private val epgWorkers = workers.pool("epg", threads = 3, background = true)
     private var epgActive = 0
+    private var epgBackgroundFor: List<Channel>? = null
+    private var epgBackgroundOrder = emptyList<Channel>()
+    private var epgBackgroundOrdering: List<Channel>? = null
+    private var epgBackgroundCursor = 0
+    private var epgBackgroundRequests = 0
+    private var epgBackgroundFailures = 0
+    private var epgBackgroundNotBefore = 0L
+    private var epgSavePending = false
+    private fun cancelEpgSave() { handler.removeCallbacks(cacheEpg); epgSavePending = false }
+    private val fetchBackgroundEpg = Runnable { pumpEpg() }
+    private val prewarmLibrary = Runnable { if (started && !closed && ::library.isInitialized) enabledSources().firstOrNull { it.kind == "xtream" }?.let(library::prewarm) }
     private var epgWanted = emptyList<Channel>()
     /** Rows needed on screen now; the rest of epgWanted is background read-ahead. */
     private var epgUrgent = 0
@@ -98,6 +111,7 @@ class MainActivity : Activity() {
     private val epgErrors = mutableMapOf<String, String>()
     private val fetchVisibleEpg = Runnable { collectVisibleEpg() }
     private val cacheEpg = Runnable {
+        epgSavePending = false
         val snapshot = guide; val observedAt = System.currentTimeMillis()
         // Another playlist can already have listings while this owner's saved EPG
         // is still being read. Never replace its disk cache with that partial view.
@@ -122,7 +136,8 @@ class MainActivity : Activity() {
                     if (!closed && epoch == generation) {
                         if (guide.programmes === before.programmes) {
                             guide = guide.copy(programmes = programmes)
-                            handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
+                            // Save within 30 s of the first unsaved update; a steady background fill must not postpone it forever.
+                            if (!epgSavePending) { epgSavePending = true; handler.postDelayed(cacheEpg, 30000) }
                             if (guideVisible) adapter.refreshRows()
                             if (guideVisible && sportsVisible) scheduleSports() else (if (guideVisible) focused ?: current else current)?.let(::showInfo)
                             if (details.isVisible) refreshDetails()
@@ -133,7 +148,15 @@ class MainActivity : Activity() {
             }
         }
     }
-    private fun scheduleEpgApply() { if (!closed && pendingEpg.isNotEmpty() && !epgApplyScheduled) { epgApplyScheduled = true; handler.postDelayed(applyEpgUpdates, 120) } }
+    private var epgApplyAt = 0L
+    /** Visible rows apply within 120 ms; background fills batch for a few seconds to keep the guide smooth. */
+    private fun scheduleEpgApply(delay: Long = 120) {
+        if (closed || pendingEpg.isEmpty()) return
+        val at = android.os.SystemClock.uptimeMillis() + delay
+        if (epgApplyScheduled && epgApplyAt <= at) return
+        handler.removeCallbacks(applyEpgUpdates); epgApplyScheduled = true; epgApplyAt = at
+        handler.postDelayed(applyEpgUpdates, delay)
+    }
     private lateinit var refreshBar: ProgressBar
     private var refreshRetryAt = 0L
     private var launchRefreshPending = false
@@ -1058,7 +1081,7 @@ class MainActivity : Activity() {
                 // A provider archive belongs to one stream. Do not spread it to shared XMLTV variants.
                 if (key == channel.id || guide.channels.count { guide.key(it) == key } == 1) {
                     guide = guide.copy(programmes = guide.programmes + (key to GuideHistory.merge(guide.programmes[key].orEmpty(), entries, channel.catchupDays, System.currentTimeMillis())))
-                    handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
+                    cancelEpgSave(); handler.postDelayed(cacheEpg, 30000)
                     adapter.refreshRows(); scheduleSports()
                 }
             }
@@ -1495,7 +1518,7 @@ class MainActivity : Activity() {
         val providerChanged = store.bindProvider(selected)
         if (providerChanged) {
             library.invalidateProvider(selected.id)
-            handler.removeCallbacks(saveVideoReadings); videoSavePending = false; handler.removeCallbacks(cacheEpg)
+            handler.removeCallbacks(saveVideoReadings); videoSavePending = false; cancelEpgSave()
         }
         streamHealth.clear()
         clearGuideSearch()
@@ -1509,7 +1532,8 @@ class MainActivity : Activity() {
         sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; replayDiscovery?.pause(); replayGames = emptyList(); sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
         ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); handler.removeCallbacks(renderSports); sportsRenderPending = false
         if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; handler.removeCallbacks(filterSearch); guideSearch.hideKeyboard(); guideSearch.visibility = View.GONE; guideSearch.setQuery(""); closeDetails()
-        epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg)
+        epgWanted = emptyList(); epgCheckedAt.clear(); epgDepth.clear(); epgErrors.clear(); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave()
+        epgBackgroundFor = null; epgBackgroundOrdering = null; epgBackgroundRequests = 0; epgBackgroundFailures = 0; epgBackgroundNotBefore = android.os.SystemClock.elapsedRealtime() + 15000; handler.removeCallbacks(fetchBackgroundEpg)
         pendingEpg.clear(); handler.removeCallbacks(applyEpgUpdates); epgApplyScheduled = false
         importTask?.cancel(true)
         firstFrame = false; expectedMediaId = ""; playbackUrl = ""
@@ -1538,6 +1562,7 @@ class MainActivity : Activity() {
                                 receiveSavedProgrammes(selected, programmes) {
                                     status.text = store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "Using saved guide · $it" }.orEmpty()
                                     scheduleEpg(); autoRefresh(selected, true)
+                                    handler.removeCallbacks(prewarmLibrary); handler.postDelayed(prewarmLibrary, 20000)
                                 }
                             }
                         }
@@ -1770,40 +1795,98 @@ class MainActivity : Activity() {
             val readAhead = now >= epgAheadPausedUntil
             val candidates = if (readAhead) epgWanted else epgWanted.take(epgUrgent.coerceAtLeast(1))
             val index = candidates.indexOfFirst { "$epoch:${it.id}" !in epgInFlight && needs(it) }
-            if (index < 0) return
+            if (index < 0) { warmGuideInBackground(epoch, now); return }
             // Keep one worker free for rows the viewer can see right now.
             if (index >= epgUrgent && epgActive >= 2) return
             val channel = candidates[index]
             val selected = owner(channel) ?: return
-            val requestedDepth = depth(channel)
-            val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
-            epgWorkers.execute {
-                val result = runCatching { XtreamEpg.load(selected, channel, requestedDepth) }
+            startEpgRequest(channel, selected, depth(channel), epoch, now, background = false)
+        }
+    }
+    /**
+     * Fill the whole guide quietly, one request at a time and only when nothing visible is
+     * waiting, so a category opened later already has programmes (and they are saved for the
+     * next launch). Providers whose XMLTV download works never need this: their channels are
+     * already filled, so these checks skip them.
+     */
+    private fun warmGuideInBackground(epoch: Int, now: Long) {
+        if (epgActive > 0 || now < epgAheadPausedUntil || epgBackgroundRequests >= EPG_BACKGROUND_LIMIT) return
+        if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
+        // Let startup playback and the first visible rows settle before quiet background work.
+        val wait = epgBackgroundNotBefore - android.os.SystemClock.elapsedRealtime()
+        if (wait > 0) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, wait); return }
+        if (epgBackgroundFor !== guide.channels) {
+            // Ranking thousands of channels is CPU work: build the order off the UI thread.
+            val channels = guide.channels
+            if (epgBackgroundOrdering === channels) return
+            epgBackgroundOrdering = channels
+            val favoriteIds = favorites; val followed = store.followedTeams
+            imports.execute {
+                // Favorites, then likely game networks (so Sports matches from the saved guide instead of
+                // asking the provider per game), then everything else in guide order.
+                val all = channels.filter { !it.media }
+                val sports = runCatching { SportsGuide.warmChannels(all, favoriteIds, followed) }.getOrDefault(emptyList())
+                val order = (all.filter { it.id in favoriteIds } + sports + all).distinctBy { it.id }
                 handler.post {
-                    epgActive--; epgInFlight.remove(request)
-                    if (!closed && epoch == generation) {
-                        result.onSuccess { entries ->
-                            sportsFailures = 0
-                            if (entries.isNotEmpty()) {
-                                if (owner(channel)?.enabled == true) { pendingEpg[channel.id] = EpgUpdate(channel, entries, now); scheduleEpgApply() }
-                                epgErrors.remove(channel.id)
-                            } else epgErrors[channel.id] = "Provider supplied no current programme data."
-                        }.onFailure { failure ->
-                            epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(failure)}"
-                            // A busy or rate-limiting provider pauses read-ahead, never the visible rows.
-                            if ((failure as? HttpFailure)?.status in setOf(403, 429, 503)) epgAheadPausedUntil = System.currentTimeMillis() + 2 * 60000L
-                            if (sportsVisible && guideVisible) {
-                                sportsFailures++
-                                if ((failure as? HttpFailure)?.status in setOf(401, 403, 429) || sportsFailures >= 3) sportsBackoffUntil = System.currentTimeMillis() + 5 * 60000L
-                            }
-                        }
-                        if (result.isFailure || result.getOrNull().isNullOrEmpty()) {
-                            if (guideVisible) adapter.refreshRows()
-                            (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                    if (!closed && epgBackgroundOrdering === channels) {
+                        epgBackgroundOrdering = null
+                        if (guide.channels === channels) { epgBackgroundFor = channels; epgBackgroundOrder = order; epgBackgroundCursor = 0; pumpEpg() }
+                    }
+                }
+            }
+            return
+        }
+        val order = epgBackgroundOrder
+        while (epgBackgroundCursor < order.size) {
+            val channel = order[epgBackgroundCursor++]
+            val selected = owner(channel) ?: continue
+            if (!selected.enabled || selected.kind != "xtream" || selected.epgUrl.isNotBlank() || selected.id in restoringProgrammes) continue
+            // A running full-guide refresh will fill these channels itself.
+            if (PlaylistRefresh.running(selected.id)) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, 15000); epgBackgroundCursor--; return }
+            if (unavailable.contains(channel.id, now) || "$epoch:${channel.id}" in epgInFlight) continue
+            val key = guide.key(channel)
+            val ends = guide.programmes[key].orEmpty().maxOfOrNull { it.end } ?: 0
+            if (guide.at(channel, now) != null && ends >= now + 3 * 3600000L) continue
+            if (now - (epgCheckedAt[channel.id] ?: 0) < 30 * 60000L) continue
+            epgBackgroundRequests++
+            startEpgRequest(channel, selected, 24, epoch, now, background = true)
+            return
+        }
+    }
+    private fun startEpgRequest(channel: Channel, selected: Source, requestedDepth: Int, epoch: Int, now: Long, background: Boolean) {
+        val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
+        epgWorkers.execute {
+            val result = runCatching { XtreamEpg.load(selected, channel, requestedDepth) }
+            handler.post {
+                epgActive--; epgInFlight.remove(request)
+                if (!closed && epoch == generation) {
+                    if (background) {
+                        // Quiet work never shows errors; repeated failures pause it instead of retrying the provider.
+                        if (result.isSuccess) epgBackgroundFailures = 0
+                        else if (++epgBackgroundFailures >= 5) { epgBackgroundFailures = 0; epgBackgroundNotBefore = android.os.SystemClock.elapsedRealtime() + 10 * 60000L }
+                        if ((result.exceptionOrNull() as? HttpFailure)?.status in setOf(401, 403, 429, 503)) epgAheadPausedUntil = System.currentTimeMillis() + 10 * 60000L
+                        result.getOrNull()?.takeIf { it.isNotEmpty() && owner(channel)?.enabled == true }?.let { entries -> pendingEpg[channel.id] = EpgUpdate(channel, entries, now); scheduleEpgApply(2500) }
+                    } else result.onSuccess { entries ->
+                        sportsFailures = 0
+                        if (entries.isNotEmpty()) {
+                            if (owner(channel)?.enabled == true) { pendingEpg[channel.id] = EpgUpdate(channel, entries, now); scheduleEpgApply() }
+                            epgErrors.remove(channel.id)
+                        } else epgErrors[channel.id] = "Provider supplied no current programme data."
+                    }.onFailure { failure ->
+                        epgErrors[channel.id] = "Guide unavailable · ${SourceErrors.message(failure)}"
+                        // A busy or rate-limiting provider pauses read-ahead, never the visible rows.
+                        if ((failure as? HttpFailure)?.status in setOf(403, 429, 503)) epgAheadPausedUntil = System.currentTimeMillis() + 2 * 60000L
+                        if (sportsVisible && guideVisible) {
+                            sportsFailures++
+                            if ((failure as? HttpFailure)?.status in setOf(401, 403, 429) || sportsFailures >= 3) sportsBackoffUntil = System.currentTimeMillis() + 5 * 60000L
                         }
                     }
-                    if (!closed) pumpEpg()
+                    if (!background && (result.isFailure || result.getOrNull().isNullOrEmpty())) {
+                        if (guideVisible) adapter.refreshRows()
+                        (if (guideVisible) focused ?: current else current)?.let(::showInfo)
+                    }
                 }
+                if (!closed) { if (background) handler.postDelayed(fetchBackgroundEpg, EPG_BACKGROUND_GAP_MS) else pumpEpg() }
             }
         }
     }
@@ -2483,7 +2566,7 @@ class MainActivity : Activity() {
             }
             val channels = (if (warmed.isEmpty()) known else redZoneLoader(evidence, profile, quality, now)).filter { (hidden[it.id] ?: 0) <= now }
             handler.post { if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
-                if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000) }
+                if (warmed.isNotEmpty()) { guide = guide.copy(programmes = guide.programmes + warmed.mapValues { (key, entries) -> GuideHistory.merge(guide.programmes[key].orEmpty(), entries, archiveDays[key] ?: 0, now) }); cancelEpgSave(); handler.postDelayed(cacheEpg, 30000) }
                 sportsChannels = channels.take(4)
                 sportsPanel.updateRedZone(channels, quality)
                 redZoneAutoPending = false; sportsPanel.finishTuning()
@@ -2826,7 +2909,7 @@ class MainActivity : Activity() {
             val (mergedGuide, _) = prepared.mergeGuide(guide, now)
             guide = mergedGuide
             if (warmed.isNotEmpty()) {
-                handler.removeCallbacks(cacheEpg); handler.postDelayed(cacheEpg, 30000)
+                cancelEpgSave(); handler.postDelayed(cacheEpg, 30000)
             }
             val latestQuality = videoInfo.toMap()
             val alternatives = streamHealth.order(SportsStreams.automaticChoices(matched, profile, latestQuality, guide, now) { !unavailable.contains(it.id, now) && allowed(it) }, latestQuality, android.os.SystemClock.elapsedRealtime())
@@ -3021,7 +3104,7 @@ class MainActivity : Activity() {
         stopSportsPrefetch(clear = true); clearSportsPlayback()
         ++generation; ++mergeEpoch; deferredRefresh = null; refreshRetryAt = 0L
         handler.removeCallbacks(saveVideoReadings); videoSavePending = false; recentLookupChannels = null; recentLookup = emptyMap()
-        importTask?.cancel(true); cancelPlaybackCallbacks(); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(fetchVisibleEpg)
+        importTask?.cancel(true); cancelPlaybackCallbacks(); cancelEpgSave(); handler.removeCallbacks(fetchVisibleEpg)
         handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls); handler.removeCallbacks(filterSearch)
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
@@ -3609,7 +3692,7 @@ class MainActivity : Activity() {
     override fun onStop() {
         performanceOverlay?.close()
         performanceOverlay = null
-        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); handler.removeCallbacks(cacheEpg); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); handler.removeCallbacks(cacheEpg); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
+        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
         super.onStop()
     }
     override fun onTrimMemory(level: Int) {

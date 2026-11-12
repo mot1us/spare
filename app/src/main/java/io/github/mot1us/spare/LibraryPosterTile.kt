@@ -90,7 +90,12 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         } else super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
 
+    private var appearanceKey: Any? = null
+    /** Rebinding during a scroll must not rebuild drawables or re-measure text unless the theme changed. */
     fun appearance() {
+        val key = listOf(GuideTheme.signature, AppFont.face(true), AppFont.face(), resources.displayMetrics.density)
+        if (key == appearanceKey) { tint(); return }
+        appearanceKey = key
         background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000)
         title.typeface = AppFont.face(true); detail.typeface = AppFont.face()
         badge.typeface = AppFont.face(true); placeholder.typeface = AppFont.face(true)

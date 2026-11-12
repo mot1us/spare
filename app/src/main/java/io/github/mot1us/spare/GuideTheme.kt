@@ -43,6 +43,8 @@ object GuideTheme {
     private var customBorder = -1
     val cornerRadiusDp get() = if (customRadius >= 0) customRadius.toFloat() else when (style) { "Glass" -> 6f; "Soft" -> 14f; "Outline" -> 3f; "Cinema" -> 8f; "Rounded" -> 20f; "Broadcast" -> 2f; else -> 0f }
     private val radius get() = cornerRadiusDp
+    /** Changes whenever anything that affects drawn styling changes; views cache against it. */
+    val signature get() = listOf(style, current, customRadius, customBorder, rowHeightDp, rowGapDp, textScale)
     fun configure(accent: Int, background: Int, corner: Int, border: Int, rowHeight: Int, rowGap: Int, textPercent: Int) {
         current = current.copy(accent = if (accent == 0) current.accent else accent or 0xFF000000.toInt(), background = if (background < 0) current.background else panelTint(background))
         customRadius = corner.coerceIn(-1, 20); customBorder = border.coerceIn(-1, 3)

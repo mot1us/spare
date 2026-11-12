@@ -14,7 +14,8 @@ import android.util.LruCache
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null) {
+/** Posters pass [opaque] = true: RGB_565 halves memory (twice as many fit in the cache) and they never need mipmaps. */
+class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false) {
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
     private class Binding(val url: String, val http: Boolean, var loaded: ((Bitmap?) -> Unit)?) {
@@ -158,6 +159,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 // Round sampling up: rounding down can decode an image larger than its
                 // entire LRU budget and create an endless decode/evict/redraw cycle.
                 val options = BitmapFactory.Options().apply {
+                    if (opaque) inPreferredConfig = Bitmap.Config.RGB_565
                     inSampleSize = 1
                     while ((maxOf(bounds.outWidth, bounds.outHeight) + inSampleSize - 1) / inSampleSize > maxDimension) inSampleSize *= 2
                 }
@@ -165,7 +167,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 // Power-of-two sampling can land far below the target (700 px -> 44 px). Decode
                 // one step larger and scale smoothly instead, so small logos stay crisp.
                 val sized = if (decoded != null && options.inSampleSize > 1 && maxOf(decoded.width, decoded.height) < maxDimension * 3 / 4) {
-                    val larger = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = options.inSampleSize / 2 })
+                    val larger = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = options.inSampleSize / 2; if (opaque) inPreferredConfig = Bitmap.Config.RGB_565 })
                     if (larger == null) decoded else {
                         decoded.recycle()
                         val scale = maxDimension.toFloat() / maxOf(larger.width, larger.height)
@@ -173,7 +175,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                             .also { if (it !== larger) larger.recycle() }
                     }
                 } else decoded
-                sized?.apply { setHasMipMap(true) }
+                sized?.apply { if (!opaque) setHasMipMap(true) }
             }.getOrNull()
             if (bitmap != null && !closed) cache.put(url, bitmap)
             if (token == generation) {
