@@ -284,8 +284,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         } }
         catalogImports[key] = worker.submit {
             val cached = memory?.takeIf { it.complete } ?: runCatching {
-                repository.cached(selected, mode, scope) ?: repository.cached(selected, mode)?.takeIf { full ->
-                    full.chunks.any { "Category $scope" in it.groups }
+                // Only reuse an already-parsed full catalog here; decrypting a large saved one first delays the category.
+                repository.cached(selected, mode, scope) ?: repository.memory(selected, mode)?.takeIf { full ->
+                    full.complete && full.chunks.any { "Category $scope" in it.groups }
                 }?.copy(labels = names, scopeGroup = "Category $scope")
             }.getOrNull()
             if (cached != null) deliver(cached, !cached.complete)
@@ -294,9 +295,15 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 repository.load(selected, mode, scope, force, names) { snapshot ->
                     if (cached == null || snapshot.complete || snapshot.count >= cached.count) deliver(snapshot, !snapshot.complete)
                 }
-            }.onSuccess { deliver(it, false) }.onFailure { failure -> handler.post {
-                if (!destroyed && catalogGenerations[key] == generation && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (cached != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
-            } }
+            }.onSuccess { deliver(it, false) }.onFailure { failure ->
+                val saved = cached ?: if (Thread.currentThread().isInterrupted) null else runCatching {
+                    repository.cached(selected, mode)?.takeIf { full -> full.chunks.any { "Category $scope" in it.groups } }?.copy(labels = names, scopeGroup = "Category $scope")
+                }.getOrNull()
+                if (saved != null && cached == null) deliver(saved, false)
+                handler.post {
+                    if (!destroyed && catalogGenerations[key] == generation && opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) panel.page(title, "${if (saved != null) "Using saved category · " else ""}${SourceErrors.message(failure)} · Refresh to retry", false)
+                }
+            }
         }
     }
     private fun bulkCatalog(selected: Source, mode: String, force: Boolean) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.34.1 — 2026-11-11
+
+- Open Library Movies and Series categories quickly even while Search is still downloading the full catalog in the background: category pages now use their own download workers instead of waiting behind it.
+- Stop decrypting the whole saved catalog before a category's first page; it is now used only as an offline fallback when the category download fails.
+
 ## 0.34.0 — 2026-11-11
 
 - Show Library and Search posters as tall 2:3 tiles, five per row, so artwork is no longer cropped to a square.

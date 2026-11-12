@@ -36,16 +36,18 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     private data class LoadKey(val source: Source, val mode: String, val scope: String)
     private val jobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog-import") })
+    // A category someone is waiting on must never queue behind whole-catalog search warming.
+    private val categoryJobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread(task, "spare-catalog-category") })
     private val restoreLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
     private fun lookupKey(source: Source, mode: String) = "${source.id}:${source.providerKey()}:$mode"
     fun invalidate(sourceId: String) {
-        jobs.cancel { it.source.id == sourceId }
+        jobs.cancel { it.source.id == sourceId }; categoryJobs.cancel { it.source.id == sourceId }
         synchronized(publishLock) { writers.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         synchronized(snapshots) { snapshots.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         synchronized(memory) { memory.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         lookup.keys.removeAll { it.startsWith("$sourceId:") }; missing.keys.removeAll { it.startsWith("$sourceId:") }
     }
-    fun close() = jobs.close()
+    fun close() { jobs.close(); categoryJobs.close() }
     private val publishLock = Any()
     private val writers = mutableMapOf<String, String>()
     private val snapshots = object : LinkedHashMap<String, Snapshot>(8, .75f, true) {
@@ -115,7 +117,7 @@ class LibraryCatalog(private val store: SecureStore) {
         val saved = cached(source, mode, scope)
         if (saved != null) progress(saved)
         if (!force && fresh(saved)) return saved!!
-        return jobs.await(LoadKey(source.copy(name = ""), mode, scope), progress) { publish ->
+        return (if (scope.isEmpty()) jobs else categoryJobs).await(LoadKey(source.copy(name = ""), mode, scope), progress) { publish ->
             val latest = cached(source, mode, scope)
             if (!force && fresh(latest)) return@await latest!!
             val writer = Writer(source, mode, scope = scope, indexOnly = true)
