@@ -88,6 +88,8 @@ object SourceDialog {
         val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add playlist" else "Edit playlist")
             .setView(ScrollView(activity).apply { addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
             .apply { if (existing != null) setNeutralButton("Remove") { _, _ -> remove(existing) } }.create()
+        // Match the app's panels instead of the stock black system dialog.
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.InsetDrawable(GuideTheme.glass(density), (24 * density).toInt()))
         fun configureDialog() {
             val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             val cancelButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)

@@ -144,7 +144,7 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
             values.forEachIndexed { column, date ->
                 val index = week * 7 + column
                 val day = Button(context).apply {
-                    tag = "calendar-day:$date"; text = dayText(date, now)
+                    tag = "calendar-day:$date"; isAllCaps = false; text = dayText(date, now)
                     typeface = AppFont.face(date == selected || date == now); textSize = 16f
                     isFocusableInTouchMode = true; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
                     setPadding(0, 0, 0, 0); stateListAnimator = null
@@ -173,7 +173,15 @@ class SportsCalendarPanel(context: Context, button: (String, () -> Unit) -> Butt
             if (key == KeyEvent.KEYCODE_DPAD_DOWN) { if (event.action == KeyEvent.ACTION_DOWN) focusDate(if (YearMonth.from(selected) == month) selected else month.atDay(1)); true } else false
         } }
     }
-    private fun dayText(day: LocalDate, today: LocalDate = LocalDate.now()) = day.dayOfMonth.toString() + (if (day == today) " •" else "") + (counts[day]?.takeIf { it > 0 }?.let { "\n$it ${if (it == 1) "game" else "games"}" }.orEmpty())
+    /** Day number at full size; "Today" and the game count on a smaller second line. */
+    private fun dayText(day: LocalDate, today: LocalDate = LocalDate.now()): CharSequence {
+        val note = listOfNotNull("Today".takeIf { day == today }, counts[day]?.takeIf { it > 0 }?.let { "$it ${if (it == 1) "game" else "games"}" }).joinToString(" · ")
+        val number = day.dayOfMonth.toString()
+        if (note.isEmpty()) return number
+        return android.text.SpannableString("$number\n$note").apply {
+            setSpan(android.text.style.RelativeSizeSpan(.62f), number.length + 1, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
     private fun previewDate(day: LocalDate) {
         if (day != activeDate) { val count = games.size; games = emptyList(); if (count > 0) gameAdapter.notifyItemRangeRemoved(0, count); pendingGames = null; ++focusEpoch }
         activeDate = day; agendaTitle.text = day.format(DateTimeFormatter.ofPattern("EEE, MMM d"))

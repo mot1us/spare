@@ -532,7 +532,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
         // Actions lead the column beside the poster, so they stay in view above a long plot.
         val actions = LinearLayout(context)
-        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back to catalog", back).apply { tag = "library-back" }, LayoutParams(-2, dp(38)))
+        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back", back).apply { tag = "library-back" }, LayoutParams(-2, dp(38)))
         copy.addView(actions, 0, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(14) })
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()

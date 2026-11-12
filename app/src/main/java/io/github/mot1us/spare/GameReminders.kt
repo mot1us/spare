@@ -226,17 +226,20 @@ object SportsStreams {
                 coverage(game, it, guide, now) != Coverage.UNCONFIRMED && !conflictingCoverage(game, it, guide, now)
         }
     }
+    /** Cards name the channel; a quality line appears only when there is something real to say. */
+    private fun cardQuality(channel: Channel, quality: Map<String, VideoInfo>) =
+        channel.qualityLabel(quality[channel.id]).takeUnless { it == "Quality unknown" }?.let { "\n$it" }.orEmpty()
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {
         if (game.state == "pre") {
             val ids = game.broadcasts.map { it.channel.id }.toSet()
             val scheduled = rank(game, filters, quality, available).firstOrNull { it.id in ids }
-            return scheduled?.let { "Scheduled · ${it.name}\n${it.qualityLabel(quality[it.id])}" }
+            return scheduled?.let { "Scheduled · ${it.name}" + cardQuality(it, quality) }
                 ?: if (game.start >= now + 3 * 86400000L) "Guide not available this far ahead" else "No scheduled EPG match yet"
         }
         val channel = automaticChoices(game, filters, quality, guide, now, available).firstOrNull()
         if (channel != null) {
-            return channel.name + "\n" + channel.qualityLabel(quality[channel.id])
+            return channel.name + cardQuality(channel, quality)
         }
         val matches = rank(game, filters, quality, available)
         if (matches.isEmpty()) return "No playlist match found"

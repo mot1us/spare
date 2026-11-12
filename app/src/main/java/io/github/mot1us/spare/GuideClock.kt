@@ -32,9 +32,10 @@ object GuideClock {
 
     fun sportsDate(epoch: Long, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault(), clock24: Boolean = use24Hour): String {
         val day = Instant.ofEpochMilli(epoch).atZone(zone).toLocalDate(); val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-        val prefix = when (day) { today -> "Today · "; today.plusDays(1) -> "Tomorrow · "; else -> "" }
+        // "Today · 7:15 PM" reads faster than repeating the date a viewer already knows.
         val format = formats(zone)
-        return prefix + format.sportsDay.format(day) + " · " + format.time(epoch, clock24)
+        val label = when (day) { today -> "Today"; today.plusDays(1) -> "Tomorrow"; else -> format.sportsDay.format(day) }
+        return label + " · " + format.time(epoch, clock24)
     }
 
     fun dayTime(epoch: Long): String = formats().dayTime(epoch, use24Hour)

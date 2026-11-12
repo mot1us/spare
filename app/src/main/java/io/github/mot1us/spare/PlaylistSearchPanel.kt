@@ -386,7 +386,8 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         backgroundContent?.descendantFocusability = FOCUS_AFTER_DESCENDANTS
     }
     fun appearance(opacity: Int = -1) {
-        background = GuideTheme.guideBackground(opacity.coerceIn(96, 100))
+        // Search is a full page: an opaque background keeps the guide underneath from ghosting through results.
+        background = GuideTheme.guideBackground(100)
         AppFont.apply(this)
         for (list in listOf(grid)) for (i in 0 until list.childCount) (list.getChildAt(i) as? LibraryPosterTile)?.appearance()
     }

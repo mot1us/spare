@@ -3353,7 +3353,7 @@ class MainActivity : Activity() {
                     val result = runCatching { val url = MetadataAddon.validate(value); MetadataAddon.manifest(url); store.saveMetadataAddon(url) }
                     handler.post { if (!closed) { result.onSuccess { metadata.clear(); library.clearMetadata(); settingsPanel?.note("AIO Metadata connected · Missing posters load as you browse Movies and Series."); toast("AIO Metadata connected") }.onFailure { notice("Could not connect metadata", "Use a valid configured HTTPS manifest.json URL. The addon must be reachable. Your playlist is unchanged.") } } }
                 }
-            }.setNegativeButton("Cancel", null).show()
+            }.setNegativeButton("Cancel", null).create().also(::themed).show()
     }
     private fun renderCategoryChoices() {
         val panel = settingsPanel ?: return
@@ -3737,7 +3737,8 @@ class MainActivity : Activity() {
         }
         super.onDestroy()
     }
-    private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show() }
+    private fun notice(title: String, message: String) { if (!isFinishing) AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).create().also(::themed).show() }
+    private fun themed(dialog: AlertDialog) { dialog.window?.setBackgroundDrawable(android.graphics.drawable.InsetDrawable(GuideTheme.glass(resources.displayMetrics.density), dp(24))) }
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     private var sleepAt = 0L
     private var sleepResume: Channel? = null

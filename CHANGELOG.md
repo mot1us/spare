@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.38.0 — 2026-11-12
+
+- Includes 0.37.0, whose publish was stopped by an unresponsive CI emulator.
+- Add ten bolder palettes (Neon, Synthwave, Crimson, Gold, Electric, Emerald, Tangerine, Aurora, Lagoon, Ultraviolet) and eight new presets built on them: Neon Night, Synthwave, Stadium, Gilded, Aurora, Ember, Emerald and Ultraviolet. Preset swatches show each theme's background and accent together, and the preset list scrolls with the remote.
+- Make Search a fully opaque page so the guide underneath no longer ghosts through the results.
+- Sports cards name the channel without repeating "Quality unknown" on every game.
+- Sports times for today and tomorrow read "Today · 7:15 PM" instead of repeating the date.
+- Sports calendar days show the date large with "Today" and the game count on a smaller line, instead of an all-caps label squeezed into the tile.
+- Playlist, metadata and notice dialogs use the theme's panel style instead of the stock black system dialog.
+- Give a device test's secondary playlist a unique ID per run, so a playlist removed by an earlier run cannot block its saved guide.
+- Series pages title the header "Series" and leave the series name and plot to the spotlight; episode rows drop the dangling separator when the provider gives no runtime; the details page's Back button is simply "Back".
+
 ## 0.37.0 — 2026-11-12
 
 - Add Up next to Library: one poster per series you follow, showing the episode to resume, the next unwatched episode, or a newly released one marked New. Series you start are followed automatically, alongside Watchlist series, without being added to the Watchlist. Newly released episodes are listed first, then the series you watched most recently.

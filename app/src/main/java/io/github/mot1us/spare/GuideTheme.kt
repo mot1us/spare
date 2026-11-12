@@ -28,6 +28,17 @@ object GuideTheme {
         Palette("Sand", 0xFFE9DCBE.toInt(), 0x001B1810),
         Palette("Teal", 0xFF8DDDD5.toInt(), 0x000A1A1D),
         Palette("Cherry", 0xFFFFAEB5.toInt(), 0x00210E15),
+        // Bolder palettes: saturated accents over tinted backgrounds, so themes read as different at a glance.
+        Palette("Neon", 0xFF00E5FF.toInt(), 0x00050B1F),
+        Palette("Synthwave", 0xFFFF4FD8.toInt(), 0x00170630),
+        Palette("Crimson", 0xFFFF4D6A.toInt(), 0x001C060C),
+        Palette("Gold", 0xFFFFC53D.toInt(), 0x00161008),
+        Palette("Electric", 0xFF8C7BFF.toInt(), 0x000E0A2E),
+        Palette("Emerald", 0xFF2EE59D.toInt(), 0x00041C14),
+        Palette("Tangerine", 0xFFFF9447.toInt(), 0x001F1006),
+        Palette("Aurora", 0xFF5CF2C9.toInt(), 0x00071C2E),
+        Palette("Lagoon", 0xFF3DD9FF.toInt(), 0x00031F2B),
+        Palette("Ultraviolet", 0xFFD07BFF.toInt(), 0x00120624),
     )
     val styles = listOf("Glass", "Flat", "Grid", "Soft", "Outline", "Cinema", "Nostalgia", "Rounded", "Broadcast", "Terminal")
     var style = "Glass"

@@ -240,7 +240,7 @@ class SpareDeviceTest {
             val source = Source(name = "Refresh fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val savedText = "#EXTM3U\n" + (1..8).joinToString("\n") { "#EXTINF:-1 tvg-id=\"test$it\" group-title=\"${if (it <= 4) "News" else "Culture"}\",Test Channel $it\n${server.base}/channel$it.mp4" }
             val channels = Importers.m3u(savedText, true).channels; val now = System.currentTimeMillis()
-            val other = source.copy(id = "restore-other", name = "Other cached playlist", url = "${server.base}/other-playlist.m3u")
+            val other = source.copy(id = "restore-other-${java.util.UUID.randomUUID()}", name = "Other cached playlist", url = "${server.base}/other-playlist.m3u")
             val otherChannel = channels.first().copy(id = "other-channel", guideId = "other-guide")
             store.saveSources(listOf(source, other)); store.active = source.id
             store.cache(source, Guide(channels, mapOf("test1" to listOf(Programme("test1", "Saved programme", now - 60000, now + 3600000)))))
@@ -252,10 +252,10 @@ class SpareDeviceTest {
                 assertEquals("Saved launch must not request the playlist", 0, server.requests["/playlist.m3u"] ?: 0)
                 var samePlayer: Player? = null; var item = ""
                 scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player; item = samePlayer!!.currentMediaItem!!.mediaId }
-                waitFor(scenario) { activity ->
+                try { waitFor(scenario) { activity ->
                     val saved = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
                     saved.programmes.values.flatten().map { it.title }.containsAll(listOf("Saved programme", "Other saved programme"))
-                }
+                } } catch (failure: AssertionError) { var titles = ""; scenario.onActivity { activity -> val g = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide; titles = "channels=${g.channels.map { it.id }} programmes=${g.programmes.mapValues { e -> e.value.map { it.title } }} disk=${store.cachedProgrammes(source).keys}/${store.cachedProgrammes(other).keys}" }; throw AssertionError(titles, failure) }
                 // Reproduce a lifecycle flush while just one owner's EPG remains
                 // unrestored: another owner's listings must not erase its disk cache.
                 val originalProgrammes = store.cachedProgrammes(source)

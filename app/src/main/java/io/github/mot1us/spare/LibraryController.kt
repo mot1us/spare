@@ -387,7 +387,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }, { loadCatalogPage(activeGroup, activeQuery, true) })
     }
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
-        if (item.kind == "episode") "Episode ${item.episode} · ${item.runtime}" else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
+        if (item.kind == "episode") listOf("Episode ${item.episode}", item.runtime).filter { it.isNotBlank() }.joinToString(" · ") else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
         poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }, longPress = if (item.kind in setOf("movie", "series")) ({ toggleLibraryFavorite(item) }) else null,
         backdrop = item.backdrop, spotlight = if (item.kind in setOf("movie", "series")) ({ done -> spotlightDetails(item, done) }) else null) { select(posterMetadata.known(item)) }
     private val spotWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-spotlight") }
@@ -500,18 +500,18 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val cached = episodeCache[cacheKey]
         if (cached != null) {
             if (startRequestedEpisode(cached)) return
-            episodeList = cached; showItems(cached, series.title, series.description.ifBlank { "${cached.size} episodes · Back returns to Series" }, force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
+            episodeList = cached; showItems(cached, "Series", "${cached.size} episodes · Back returns to Series", force); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         request { token -> runCatching { VodCatalog.episodes(selected, series) }.onSuccess { entries -> ui(token) {
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
-            episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
+            episodeList = entries; showItems(entries, "Series", "${entries.size} episodes · Back returns to Series", false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
             spotlightDetails(series) { spot -> if (parentSeries?.id == series.id) panel.seriesSpotlight(posterMetadata.known(series), spot) }
             if (favoriteState.contains(series.id)) editFavorites(selected) { it.update(series, entries, System.currentTimeMillis()) }
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
-                if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { panel.seriesArtwork(enriched); if (enriched.description.isNotBlank()) panel.page(series.title, enriched.description, false) } }
+                if (url.isNotBlank()) runCatching { MetadataAddon.enrich(url, series) }.onSuccess { enriched -> ui(token) { panel.seriesArtwork(enriched) } }
             }
         } }.onFailure { ui(token) { panel.page(series.title, "${if (cached != null) "Using saved episodes · " else "Episodes unavailable · "}${SourceErrors.message(it)} · Refresh to retry.", false); if (!force) panel.focusRows() } } }
     }

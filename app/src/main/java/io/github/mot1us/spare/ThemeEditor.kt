@@ -18,6 +18,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Locale
 
@@ -41,6 +42,14 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         Preset("Arena", "Mint", "Broadcast", "Condensed bold", "Clean sports broadcast"),
         Preset("Warm", "Amber", "Soft", "Serif", "Warm colors · rounded panels"),
         Preset("Nostalgia", "Phosphor", "Nostalgia", "Monospace", "Retro green · pixel-inspired guide"),
+        Preset("Neon Night", "Neon", "Glass", "Default", "Electric cyan on deep navy glass"),
+        Preset("Synthwave", "Synthwave", "Rounded", "Default", "Hot pink on violet · rounded"),
+        Preset("Stadium", "Crimson", "Broadcast", "Condensed bold", "Red sports-broadcast graphics"),
+        Preset("Gilded", "Gold", "Cinema", "Serif", "Gold accents · cinematic panels"),
+        Preset("Aurora", "Aurora", "Soft", "Default", "Glowing teal on midnight blue"),
+        Preset("Ember", "Tangerine", "Flat", "Condensed bold", "Bold orange · flat edges"),
+        Preset("Emerald", "Emerald", "Outline", "Default", "Vivid green outlines"),
+        Preset("Ultraviolet", "Ultraviolet", "Glass", "Compact", "Purple glass · compact lettering"),
     )
     private val tabs = linkedMapOf<String, TextView>()
     private val controls = mutableListOf<View>()
@@ -92,7 +101,8 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
             tabRow.addView(tab, LayoutParams(0, dp(38), 1f).apply { if (index < pages.lastIndex) rightMargin = dp(3) })
         }
         editor.addView(tabRow, LayoutParams(-1, dp(38)))
-        editor.addView(rows, LayoutParams(-1, 0, 1f).apply { topMargin = dp(10) })
+        // Scrolls with the remote: the preset list and Advanced pages can be longer than the screen.
+        editor.addView(ScrollView(context).apply { isVerticalScrollBarEnabled = false; isFillViewport = true; addView(rows, LayoutParams(-1, -2)) }, LayoutParams(-1, 0, 1f).apply { topMargin = dp(10) })
         editor.addView(help.apply { textSize = 10f; setTextColor(0xFFBAC8DC.toInt()); setPadding(dp(6), dp(4), 0, 0) }, LayoutParams(-1, dp(32)))
         addView(editor, LayoutParams(0, -1, 1.1f))
         addView(preview, LayoutParams(0, -1, 1f).apply { leftMargin = dp(16) })
@@ -119,7 +129,13 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                     store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
                     store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1
                 }.apply { tag = "theme-preset:${preset.name}"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(8), 0); maxLines = 2 }
-                val swatch = GradientDrawable().apply { setColor(GuideTheme.palettes.first { it.name == preset.palette }.accent); cornerRadius = dp(3).toFloat(); setBounds(0, 0, dp(14), dp(22)) }
+                // Two-tone chip: the palette's background with its accent, so each preset's mood shows before applying it.
+                val colors = GuideTheme.palettes.first { it.name == preset.palette }
+                val swatch = android.graphics.drawable.LayerDrawable(arrayOf(
+                    GradientDrawable().apply { setColor(colors.background or 0xFF000000.toInt()); cornerRadius = dp(4).toFloat(); setStroke(dp(1), 0x33FFFFFF) },
+                    GradientDrawable().apply { setColor(colors.accent); cornerRadius = dp(3).toFloat() })).apply {
+                    setLayerInset(1, dp(14), dp(5), dp(4), dp(5)); setBounds(0, 0, dp(30), dp(26))
+                }
                 row.setCompoundDrawables(swatch, null, null, null); row.compoundDrawablePadding = dp(12)
                 updates.add {
                     val selected = store.theme == preset.palette && store.themeStyle == preset.style && store.font == preset.font && store.customAccent == 0 && store.customBackground == -1 && store.cornerRadius == -1 && store.borderWidth == -1 && store.guideTextScale == 100 && store.guideRowHeight == 32 && store.guideRowGap == 3 && store.guideOpacity == -1
