@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.36.0 — 2026-11-11
+
+- Give Library Movies and Series a streaming-app layout: a spotlight above the grid shows the focused title's backdrop, name, year, genre, runtime and plot, with seven posters per row below. Plot and backdrop are fetched once when the cursor settles on a poster and are reused by the details page.
+- Restyle the details page around the same spotlight: backdrop, title and facts above the poster, with Play and Back leading the column beside it. Series episode lists keep their series in the spotlight.
+- Make the cursor easy to find: the focused Library or Search poster gets a white ring and lifts slightly, and the focused Sports card lifts the same way.
+- Opening Library from the menu puts the cursor on the first poster as soon as it appears, instead of leaving it on the menu.
+- Opening Sports while games are loading leaves the cursor where it was and moves it to the first game when games arrive, instead of parking it on a league filter.
+
 ## 0.35.0 — 2026-11-11
 
 - Fill the programme guide for every channel quietly in the background, one request at a time, so categories you have not opened already show programmes and the guide is saved for the next launch. Favorites go first, then likely game networks, so Sports can match games from the saved guide instead of asking the provider each time. The fill waits for startup to settle, pauses for visible rows, and backs off when the provider errors or rate-limits.

@@ -3,7 +3,6 @@ package io.github.mot1us.spare
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
-import androidx.core.graphics.drawable.toDrawable
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -23,7 +22,10 @@ import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
-data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
+/** Richer text for the spotlight, fetched once when a poster settles under the cursor. */
+data class Spotlight(val meta: String, val plot: String, val backdrop: String)
+data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null,
+    val backdrop: String = "", val spotlight: (((Spotlight) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
 /** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
 @SuppressLint("ViewConstructor", "SetTextI18n")
@@ -41,8 +43,20 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var allCategoryTitle = "All"
     private val banner = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; visibility = GONE; tag = "library-series-art" }
     private var bannerUrl = ""
-    private val heading = label(22f).apply { tag = "library-heading" }
-    private val message = label(11f).apply { maxLines = 2; setTextColor(Color.LTGRAY); tag = "library-status" }
+    private val heading = label(16f).apply { tag = "library-heading"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+    private val message = label(11f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(Color.LTGRAY); tag = "library-status" }
+    // Spotlight: the focused title's artwork, name, details and plot above the grid, as streaming apps do.
+    private val spotArt = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = .6f; visibility = GONE; tag = "library-spot-art" }
+    private val spotScrim = View(context).apply { visibility = GONE }
+    private val spotTitle = label(24f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; tag = "library-spot-title" }
+    private val spotMeta = label(12f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFC9D1DB.toInt()); tag = "library-spot-meta" }
+    private val spotPlot = label(12f).apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFE3E8EE.toInt()); setLineSpacing(0f, 1.1f); tag = "library-spot-plot" }
+    private val spotlight = LinearLayout(context).apply { orientation = VERTICAL; tag = "library-spotlight"; visibility = GONE }
+    private var spotKey: String? = null
+    private val spotLater = Runnable { requestSpotDetails() }
+    private var spotRow: BrowserRow? = null
+    // Fixed heights: a wrap-content FrameLayout would stretch its full-bleed artwork to the whole screen.
+    private val hero = FrameLayout(context)
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     var globalSearch: ((String) -> Unit)? = null
     private val search = EditText(context).apply { hint = "Search channels, movies and series"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH; showSoftInputOnFocus = false }
@@ -54,7 +68,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val categoryButton = button("All categories ▾", ::openCategories).apply {
         tag = "library-category"; visibility = GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
     }
-    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items" }
+    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"
+        // Leave room for the focused poster's lift instead of clipping it at the grid edge.
+        clipChildren = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)) }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
@@ -84,6 +100,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Library visit after a restart draws saved artwork instead of downloading it again.
     // A 1080p tile is ~300x450 px: 480 px keeps posters sharp; 28 MB of RGB_565 holds ~90 of them (several screens).
     private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true)
+    private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
     private val body = LinearLayout(context)
@@ -155,19 +172,30 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             }
         }
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(heading, LayoutParams(-1, dp(36))); addView(message, LayoutParams(-1, dp(32))) }, LayoutParams(0, -2, 1f))
+        header.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(heading, LayoutParams(-1, dp(24))); addView(message, LayoutParams(-1, dp(18))) }, LayoutParams(0, -2, 1f))
         headerControls.forEach { control ->
             header.addView(control, LayoutParams(if (control === categoryButton) dp(156) else -2, dp(36)).apply { marginStart = dp(8) })
         }
-        header.addView(banner, LayoutParams(dp(48), dp(68)).apply { marginStart = dp(12) })
+        header.addView(banner, LayoutParams(dp(32), dp(48)).apply { marginStart = dp(12) })
+        spotlight.addView(spotTitle, LayoutParams(-1, -2))
+        spotlight.addView(spotMeta, LayoutParams(-1, -2).apply { topMargin = dp(2) })
+        spotlight.addView(spotPlot, LayoutParams(dp(520), -2).apply { topMargin = dp(6) })
+        hero.apply { tag = "library-hero"; clipChildren = true }
+        hero.addView(spotArt, FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(220) })
+        hero.addView(spotScrim, FrameLayout.LayoutParams(-1, -1))
+        hero.addView(LinearLayout(context).apply {
+            orientation = VERTICAL; setPadding(0, 0, 0, dp(8))
+            addView(header, LayoutParams(-1, dp(52)))
+            addView(spotlight, LayoutParams(-1, dp(96)))
+        }, FrameLayout.LayoutParams(-1, -2))
         body.orientation = VERTICAL
         body.addView(empty)
         body.addView(rows, LayoutParams(-1, 0, 1f))
         val content = LinearLayout(context).apply {
             orientation = VERTICAL; setPadding(dp(4), 0, 0, 0)
-            addView(header, LayoutParams(-1, dp(68)))
+            addView(hero, LayoutParams(-1, dp(HERO_COMPACT_DP)))
             addView(loading, LayoutParams(-1, dp(3)))
-            addView(search, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(10) })
+            addView(search, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(4) })
             addView(body, LayoutParams(-1, 0, 1f))
             addView(detailPane, LayoutParams(-1, 0, 1f))
         }
@@ -222,7 +250,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 if (grid) shownRows.getOrNull(position + columns * 2)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, artworkHttp) }
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
-                holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; if (item.description.isNotBlank()) message.text = item.description } }
+                holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; shownRows.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) } }
                 holder.box.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
@@ -270,7 +298,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         allCategoryTitle = "All"
         browse()
         grid = posters; columns = if (grid) PosterGridLayout.COLUMNS else 1
-        (rows.layoutManager as? GridLayoutManager)?.spanCount = columns
+        if (posters) seriesSpot = null
+        (rows.layoutManager as? GridLayoutManager)?.spanCount = columns; spotMode()
         if (reset) { group = null; search.setText(""); rememberedKey = null }
         contentsAvailable = true; rows.alpha = 1f
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
@@ -285,6 +314,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         // Filtering preserves provider order. A full Myers diff becomes quadratic when
         // a large catalog loses most entries; only visible holders need rebinding.
         ++focusEpoch; pending = null; rows.stopScroll()
+        if (!detailPane.isVisible && seriesSpot == null) { spotKey = null; spotMode() }
         shownRows = allRows.filter { (group == null || rowGroups[it.key] == group) && (query.isEmpty() || it.searchKey.contains(query)) }
         rows.adapter?.notifyDataSetChanged()
         empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
@@ -292,7 +322,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
 
     fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit, allTitle: String = "All") {
         allCategoryTitle = allTitle
-        browse(); grid = true; columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
+        grid = true; seriesSpot = null; browse(); columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
         if (catalogContext != key || catalogQuery == null) {
             if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key
             val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); changingSearch = false
@@ -322,6 +352,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             if (values.size > old.size) rows.adapter?.notifyItemRangeInserted(old.size, values.size - old.size)
         } else {
             ++focusEpoch; pending = null; rows.adapter?.notifyDataSetChanged()
+            // New contents (another category or search): the spotlight must not keep describing a title that left the grid.
+            if (!detailPane.isVisible && seriesSpot == null) { spotKey = null; spotMode() }
         }
         empty.visibility = if (values.isEmpty()) VISIBLE else GONE; empty.text = "No matching titles."
         if (!append && ((focus && !samePrefix) || catalogFocusRequested) && values.isNotEmpty()) { catalogFocusRequested = false; rememberedKey = restore; focusRows() }
@@ -344,6 +376,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         favoriteIds = ids; favoriteLabels = labels; rows.adapter?.notifyItemRangeChanged(0, shownRows.size)
     }
     fun seriesArtwork(item: OnDemand?) {
+        seriesSpotlight(item)
         bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
         val url = bannerUrl
         fun draw() { if (bannerUrl == url) banner.setImageBitmap(images.get(url, artworkHttp) {}) }
@@ -351,7 +384,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun refreshPosters() { rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
     fun archiveMode(value: Boolean) {
-        archive = value; archiveHome.isVisible = value
+        archive = value; archiveHome.isVisible = value; spotMode()
         sectionControls.filter { it !== archiveHome }.forEach { it.isVisible = !value }
         search.hint = if (value) "Search archived channels and programmes" else "Search channels, movies and series"
     }
@@ -387,6 +420,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             ++focusEpoch
             pending = null
         }
+    /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
+    fun requestContentFocus() { catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
     fun focusRows() { if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
@@ -403,39 +438,109 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun appearance(opacity: Int = -1) {
         background = GuideTheme.guideBackground(opacity); AppFont.apply(this)
         search.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000); search.setPadding(dp(12), 0, dp(12), 0); search.setTextColor(GuideTheme.ink())
-        heading.textSize = 22f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale
+        heading.textSize = 16f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale
+        spotTitle.textSize = 24f * GuideTheme.textScale; spotMeta.textSize = 12f * GuideTheme.textScale; spotPlot.textSize = 12f * GuideTheme.textScale
+        spotTitle.typeface = AppFont.face(true)
+        val base = (GuideTheme.current.background or 0xFF000000.toInt()) and 0xFFFFFF
+        fun shade(alpha: Int) = base or (alpha shl 24)
+        spotScrim.background = android.graphics.drawable.LayerDrawable(arrayOf(
+            android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(shade(0xFF), shade(0xE6), shade(0x40))),
+            android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(shade(0xFF), shade(0x00), shade(0x00)))))
         loading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
         categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1); rows.adapter?.notifyItemRangeChanged(0, shownRows.size)
     }
     fun allowArtworkHttp(value: Boolean) { artworkHttp = value }
-    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE; updateCategoryButton() }
+    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE; updateCategoryButton(); spotKey = null; spotMode() }
+    /** Spotlight shows in poster grids and on a details page; plain lists (episodes, archive) keep the compact header. */
+    private fun spotMode() {
+        val on = !archive && (detailPane.isVisible || (body.isVisible && (grid || seriesSpot != null)))
+        spotlight.isVisible = on
+        val height = dp(if (on) HERO_SPOTLIGHT_DP else HERO_COMPACT_DP)
+        if (hero.layoutParams != null && hero.layoutParams.height != height) hero.layoutParams = hero.layoutParams.apply { this.height = height }
+        if (!on) { clearSpot(); return }
+        spotPlot.isVisible = !detailPane.isVisible
+        if (!detailPane.isVisible && seriesSpot != null) { showSeriesSpot(); return }
+        if (spotKey == null) {
+            clearSpot()
+            // Keep the spotlight in step with a poster that already holds the cursor.
+            rows.focusedChild?.let(rows::getChildAdapterPosition)?.let { shownRows.getOrNull(it) }?.let(::showSpot)
+        }
+    }
+    private fun clearSpot() {
+        searchHandler.removeCallbacks(spotLater); spotKey = null; spotRow = null
+        spotTitle.text = ""; spotMeta.text = ""; spotPlot.text = ""; backdrops.bind(spotArt, ""); spotArt.visibility = GONE; spotScrim.visibility = GONE
+    }
+    private var seriesSpot: Pair<OnDemand, Spotlight?>? = null
+    /** An episode list keeps its series in the spotlight: backdrop, facts and plot. */
+    fun seriesSpotlight(series: OnDemand?, spot: Spotlight? = null) {
+        seriesSpot = series?.let { it to (spot ?: seriesSpot?.takeIf { old -> old.first.id == it.id }?.second) }
+        spotKey = null; spotMode()
+    }
+    private fun showSeriesSpot() {
+        val (series, spot) = seriesSpot ?: return
+        spotKey = series.id; spotRow = null; searchHandler.removeCallbacks(spotLater)
+        spotTitle.text = series.title
+        spotMeta.text = spot?.meta?.takeIf { it.isNotBlank() } ?: listOf(series.year, series.category).filter { it.isNotBlank() }.joinToString("  ·  ")
+        spotPlot.text = spot?.plot.orEmpty().ifBlank { series.description }
+        spotArtwork(spot?.backdrop.orEmpty().ifBlank { series.backdrop.ifBlank { series.poster } })
+    }
+    private fun showSpot(row: BrowserRow) {
+        if (!spotlight.isVisible || detailPane.isVisible || seriesSpot != null) return
+        if (spotKey == row.key) return
+        spotKey = row.key; spotRow = row
+        spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
+        spotArtwork(row.backdrop.ifBlank { row.poster })
+        // Wait for the cursor to settle so fast scrolling never queues provider requests.
+        searchHandler.removeCallbacks(spotLater)
+        if (row.spotlight != null) searchHandler.postDelayed(spotLater, 350)
+    }
+    private fun spotArtwork(url: String) {
+        if (url.isBlank()) { backdrops.bind(spotArt, ""); spotArt.visibility = GONE; spotScrim.visibility = GONE; return }
+        spotArt.visibility = VISIBLE; spotScrim.visibility = VISIBLE
+        backdrops.bind(spotArt, url, artworkHttp) { bitmap -> if (bitmap == null && spotArt.drawable == null) { spotArt.visibility = GONE; spotScrim.visibility = GONE } }
+    }
+    private fun requestSpotDetails() {
+        val row = spotRow ?: return; val key = row.key
+        row.spotlight?.invoke { spot ->
+            if (spotKey != key || detailPane.isVisible) return@invoke
+            if (spot.meta.isNotBlank()) spotMeta.text = spot.meta
+            if (spot.plot.isNotBlank()) spotPlot.text = spot.plot
+            if (spot.backdrop.isNotBlank()) spotArtwork(spot.backdrop)
+        }
+    }
     fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, back: () -> Unit, busy: Boolean) {
         val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
+        if (detailPane.visibility != VISIBLE) spotKey = null
         val focusedAction = detailPane.findFocus()?.tag
         val generation = ++detailGeneration
-        hideKeyboard(); closeCategories(restoreFocus = false); body.visibility = GONE; search.visibility = GONE; detailPane.visibility = VISIBLE; updateCategoryButton()
+        hideKeyboard(); closeCategories(restoreFocus = false); body.visibility = GONE; search.visibility = GONE; detailPane.visibility = VISIBLE; updateCategoryButton(); spotMode()
         // Keep focus on the toolbar while replacing focused detail controls.
         if (detailPane.hasFocus()) focusToolbar()
-        detailPane.removeAllViews(); detailPane.background = null; page(item.title, listOf(item.year, item.genre, item.runtime).filter { it.isNotBlank() }.joinToString(" · "), busy)
-        if (item.backdrop.isNotBlank()) {
-            fun background() { if (generation == detailGeneration && detailPane.isVisible) images.get(item.backdrop, artworkHttp) {}?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } } }
-            images.get(item.backdrop, artworkHttp, ::background)?.let { bitmap -> detailPane.background = bitmap.toDrawable(resources).apply { alpha = 40 } }
-        }
+        detailPane.removeAllViews(); detailPane.background = null
+        page(tabs.firstOrNull { it.second == selectedTab }?.first ?: "Library", if (busy) "Loading details…" else "", busy)
+        // The details page uses the spotlight for its backdrop, title and facts; the pane holds poster, plot and actions.
+        spotKey = item.id; spotRow = null; searchHandler.removeCallbacks(spotLater)
+        spotTitle.text = item.title
+        spotMeta.text = listOf(item.year, item.genre.substringBefore(',').trim(), item.runtime, item.category).filter { it.isNotBlank() }.distinct().joinToString("  ·  ")
+        spotArtwork(item.backdrop.ifBlank { item.poster })
         val hero = LinearLayout(context)
         val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
         fun redraw() { cover.setImageBitmap(images.get(item.poster, artworkHttp) {}) }
         cover.setImageBitmap(images.get(item.poster, artworkHttp, ::redraw)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
         val copy = LinearLayout(context).apply { orientation = VERTICAL }
-        copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 9 }, LayoutParams(-1, -2))
+        copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 8; setLineSpacing(0f, 1.15f) }, LayoutParams(-1, -2))
         if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
-        hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
+        // Actions lead the column beside the poster, so they stay in view above a long plot.
         val actions = LinearLayout(context)
-        val start = makeButton("Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(36)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back to catalog", back).apply { tag = "library-back" }, LayoutParams(-2, dp(36))); detailPane.addView(actions, LayoutParams(-1, dp(40)).apply { topMargin = dp(12) })
+        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back to catalog", back).apply { tag = "library-back" }, LayoutParams(-2, dp(38)))
+        copy.addView(actions, 0, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(14) })
+        hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
-    fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); ++focusEpoch; pending = null; images.pause() }
-    fun resumeImages() { images.resume() }
-    fun trimImages() = images.trim()
-    fun closeImages() { images.close() }
+    fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
+    fun resumeImages() { images.resume(); backdrops.resume() }
+    fun trimImages() { images.trim(); backdrops.trim() }
+    fun closeImages() { images.close(); backdrops.close() }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
+    private companion object { const val HERO_COMPACT_DP = 60; const val HERO_SPOTLIGHT_DP = 156 }
 }

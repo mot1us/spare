@@ -198,7 +198,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val item = entries.singleOrNull { it.season == target.first && it.episode == target.second } ?: return false
         episodeList = entries; playSelected(item); return true
     }
-    fun open(mode: String = if (kind == "catchup") "movie" else kind) {
+    fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false) {
         panel.archiveMode(mode == "catchup")
         fromBeginning = false; startEpisode = null
         pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
@@ -216,9 +216,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
             panel.submit(emptyList())
             val items = if (mode == "movie") guide().channels.filter { it.media }.map { OnDemand("m3u:${it.id}", it.name, it.group, it.url) } else emptyList()
             showItems(items, if (mode == "movie") "Movies" else "Series", "M3U movies require media=\"true\" entries. Series browsing requires an Xtream playlist.", false)
+            if (focusContent) panel.focusRows()
             return
         }
         catalog(selected, mode, false)
+        if (focusContent) panel.requestContentFocus()
     }
     private fun request(job: (Int) -> Unit) { task?.cancel(true); val token = ++epoch; task = worker.submit { if (!destroyed) job(token) } }
     private fun ui(token: Int, work: () -> Unit) { handler.post { if (!destroyed && token == epoch && opened) work() } }
@@ -385,7 +387,31 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
         if (item.kind == "episode") "Episode ${item.episode} · ${item.runtime}" else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
-        poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }, longPress = if (item.kind in setOf("movie", "series")) ({ toggleLibraryFavorite(item) }) else null) { select(posterMetadata.known(item)) }
+        poster = item.poster, description = item.description, requestPoster = { done -> posterMetadata.request(item, done) }, longPress = if (item.kind in setOf("movie", "series")) ({ toggleLibraryFavorite(item) }) else null,
+        backdrop = item.backdrop, spotlight = if (item.kind in setOf("movie", "series")) ({ done -> spotlightDetails(item, done) }) else null) { select(posterMetadata.known(item)) }
+    private val spotWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-spotlight") }
+    private var spotTask: java.util.concurrent.Future<*>? = null
+    private val seriesSpots = linkedMapOf<String, Spotlight>()
+    private fun spotlight(value: OnDemand) = Spotlight(listOf(value.year, value.genre.substringBefore(',').trim(), value.runtime, value.category).filter { it.isNotBlank() }.distinct().joinToString("  ·  "), value.description, value.backdrop)
+    /** One request at a time for the poster under the cursor; results are shared with the details page. */
+    private fun spotlightDetails(item: OnDemand, done: (Spotlight) -> Unit) {
+        val selected = selectedSource() ?: return
+        if (selected.kind != "xtream") return
+        val key = "${selected.id}:${item.id}"
+        details[key]?.let { done(spotlight(it.copy(category = item.category))); return }
+        seriesSpots[key]?.let { done(it); return }
+        spotTask?.cancel(true)
+        spotTask = spotWorker.submit {
+            val loaded = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) else VodCatalog.seriesDetails(selected, item) }.getOrNull() ?: return@submit
+            handler.post {
+                if (destroyed) return@post
+                val spot = spotlight(loaded.copy(category = item.category))
+                if (item.kind == "movie") { details[key] = loaded; while (details.size > 200) details.remove(details.keys.first()) }
+                else { seriesSpots[key] = spot; while (seriesSpots.size > 200) seriesSpots.remove(seriesSpots.keys.first()) }
+                done(spot)
+            }
+        }
+    }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query"
@@ -475,6 +501,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
             episodeList = entries; showItems(entries, series.title, series.description.ifBlank { "${entries.size} episodes · Back returns to Series" }, false); panel.seriesArtwork(posterMetadata.known(series)); presentFavorites(); if (!force) panel.focusRows()
+            spotlightDetails(series) { spot -> if (parentSeries?.id == series.id) panel.seriesSpotlight(posterMetadata.known(series), spot) }
             if (favoriteState.contains(series.id)) editFavorites(selected) { it.update(series, entries, System.currentTimeMillis()) }
             worker.execute {
                 val url = runCatching { store.metadataAddon() }.getOrDefault("")
@@ -563,6 +590,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
-    fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

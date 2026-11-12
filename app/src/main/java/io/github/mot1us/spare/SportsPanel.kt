@@ -401,7 +401,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             drawCard(holder, game)
             holder.stream.tag = "sports-coverage:${game.key}"
             renderCardText(holder, game, holder.box.hasFocus())
-            holder.box.setOnFocusChangeListener { _, active -> currentCardGame(holder)?.let { current -> renderCardText(holder, current, active); if (active) focusGame(current) } }
+            holder.box.setOnFocusChangeListener { box, active -> lift(box, active); currentCardGame(holder)?.let { current -> renderCardText(holder, current, active); if (active) focusGame(current) } }
             holder.box.setOnClickListener { currentCardGame(holder)?.let { openGame(it) } }; holder.box.setOnLongClickListener { currentCardGame(holder)?.let(::openGameActions); true }
             cardKeys(holder)
         }
@@ -435,6 +435,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
     }
     init {
+        rows.clipChildren = false; rows.clipToPadding = false; gridArea.clipChildren = false
         orientation = VERTICAL; tag = "sports-panel"; visibility = GONE
         // Rail: Up/Down between leagues and Settings, stay at the ends, Left app navigation, Right content.
         // Schedule: only Down moves to content. Picker: Up/Down options, Left or Back closes, Right stays.
@@ -565,7 +566,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         holder.logos.forEach { cardLogos.bind(it, "") }
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
         fun ink(active: Boolean) { holder.teamNames.forEach { it.setTextColor(if(active) GuideTheme.focusText else Color.WHITE) }; holder.date.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.stream.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.badge.setTextColor(if(active) GuideTheme.focusText else 0xFFF2D9D9.toInt()) }
-        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { _, active -> ink(active); if (active) { remembered = REDZONE; showRedZoneHero() } }
+        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { box, active -> lift(box, active); ink(active); if (active) { remembered = REDZONE; showRedZoneHero() } }
         holder.box.setOnClickListener { remembered = REDZONE; watchRedZone() }
         holder.box.setOnLongClickListener { remembered = REDZONE; actionsOpen = true; showRedZoneHero(); heroActions(true); chooseStreams.requestFocus(); true }
         cardKeys(holder)
@@ -807,9 +808,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     fun focusTeams() { gridFocus.cancel(); ++focusEpoch; teamsButton.requestFocus() }
     fun focusCalendar() { gridFocus.cancel(); ++focusEpoch; (scheduleOptions.firstOrNull { it.isSelected } ?: todayButton).requestFocus() }
     fun focusHero() = focusGames()
+    /** The focused card grows slightly, matching Library posters, so the cursor is easy to find from the couch. */
+    private fun lift(view: View, active: Boolean) {
+        view.animate().cancel()
+        view.animate().scaleX(if (active) 1.04f else 1f).scaleY(if (active) 1.04f else 1f).translationZ(if (active) dp(8).toFloat() else 0f).setDuration(120).start()
+    }
     fun focusGames() {
         when {
-            loadingGames && games.isEmpty() && !watchMode -> { pendingEnter = true; pendingInput = inputEpoch; focusLeagueFilter() }
+            // Wait for the first game instead of parking the cursor on a league chip while loading.
+            loadingGames && games.isEmpty() && !watchMode -> { pendingEnter = true; pendingInput = inputEpoch; if (!hasFocus()) return; focusLeagueFilter() }
             watchMode -> { pendingEnter = false; if (streamsList.isNotEmpty()) focusStream(0) else focusStreamsHeader() }
             actionsOpen -> findStreams.takeIf { it.isEnabled }?.requestFocus() ?: focusLeagueFilter()
             cards.itemCount > 0 -> { pendingEnter = false; val key = remembered ?: featured?.key ?: REDZONE; focusAt(gamePositions[key] ?: 0) }

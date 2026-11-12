@@ -2752,7 +2752,7 @@ class SpareDeviceTest {
                     var loadingHeroHeight = 0
                     scenario.onActivity { activity ->
                         assertEquals(0, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter!!.itemCount)
-                        assertTrue("Loading keeps focus in the filter row", activity.currentFocus?.tag.toString().startsWith("sports-league:"))
+                        assertFalse("Loading no longer parks the cursor on a league filter", activity.currentFocus?.tag.toString().startsWith("sports-league:"))
                         loadingHeroHeight = activity.window.decorView.findViewWithTag<View>("sports-hero").height
                     }
                     device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-loading.png")); scoresReady.countDown()
@@ -3531,6 +3531,8 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                // Entering Library from the menu puts the cursor on the first poster, not the menu or filters.
+                waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-item:") == true }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "library-posters.png"))
                 scenario.onActivity { activity ->
                     val tile = activity.window.decorView.findViewWithTag<View>("library-item:movie:101")
@@ -3582,6 +3584,9 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-panel").isShown && it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown != true }
                 scenario.onActivity { assertSame(samePlayer, find<PlayerView>(it.window.decorView)!!.player); it.window.decorView.findViewWithTag<View>("library-item:movie:101").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                // The details page carries the title and facts in the spotlight above poster, plot and actions.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-spot-title")?.let { title -> title.isShown && title.text.toString() == "Fixture movie" } == true && it.window.decorView.findViewWithTag<View>("library-details").isShown && it.window.decorView.findViewWithTag<View>("library-play").hasFocus() }
+                instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-details.png"))
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
                 waitFor(scenario) { store.libraryFavorites(source).contains("movie:101") }
                 scenario.onActivity { activity ->

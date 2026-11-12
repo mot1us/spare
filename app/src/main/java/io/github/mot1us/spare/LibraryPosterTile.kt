@@ -10,6 +10,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.drawable.toDrawable
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -17,8 +18,8 @@ import androidx.recyclerview.widget.RecyclerView
 internal class PosterGridLayout(context: Context, columns: Int = COLUMNS) : GridLayoutManager(context, columns) {
     override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
     companion object {
-        /** Five portrait posters per row keeps 2:3 artwork uncropped while two rows stay on screen. */
-        const val COLUMNS = 5
+        /** Seven portrait posters per row, like streaming apps, keeps 2:3 artwork uncropped below the spotlight. */
+        const val COLUMNS = 7
     }
 }
 
@@ -96,6 +97,13 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         val key = listOf(GuideTheme.signature, AppFont.face(true), AppFont.face(), resources.displayMetrics.density)
         if (key == appearanceKey) { tint(); return }
         appearanceKey = key
+        // A bright ring drawn over the artwork: the accent background alone is mostly hidden behind the poster.
+        foreground = android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density; setStroke(dp(3), Color.WHITE)
+            })
+            addState(intArrayOf(), Color.TRANSPARENT.toDrawable())
+        }
         background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000)
         title.typeface = AppFont.face(true); detail.typeface = AppFont.face()
         badge.typeface = AppFont.face(true); placeholder.typeface = AppFont.face(true)
@@ -137,6 +145,10 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         tint()
+        // Lift the focused poster so it stands out from its neighbours at TV viewing distance.
+        val lift = gainFocus && layout != Layout.LIST
+        animate().cancel()
+        animate().scaleX(if (lift) 1.07f else 1f).scaleY(if (lift) 1.07f else 1f).translationZ(if (lift) dp(8).toFloat() else 0f).setDuration(120).start()
     }
 
     private fun tint() {

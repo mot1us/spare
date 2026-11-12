@@ -117,6 +117,19 @@ object VodCatalog {
             runtime = info.optString("duration").take(40).ifBlank { item.runtime }, cast = info.optString("cast").take(1024).ifBlank { item.cast },
             externalId = externalId(info).ifBlank { item.externalId }, url = data?.let { playbackUrl(source, "movie", id, it, item.url) } ?: item.url)
     }
+    /** Spotlight/details text for a series without its episode list being needed by the caller. */
+    fun seriesDetails(source: Source, series: OnDemand, timeoutMs: Int = 6000): OnDemand {
+        if (source.kind != "xtream" || series.kind != "series") return series
+        val id = series.id.removePrefix("series:"); require(numeric.matches(id))
+        val root = JSONObject(Network.get(Importers.endpoint(source, "player_api.php", "get_series_info") + "&series_id=$id", source.allowHttp, 8 * 1024 * 1024, timeoutMs = timeoutMs).toString(Charsets.UTF_8))
+        val info = root.optJSONObject("info") ?: return series
+        return series.copy(description = info.optString("plot").take(4096).ifBlank { series.description },
+            backdrop = artwork(info.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source).ifBlank { series.backdrop },
+            poster = series.poster.ifBlank { artwork(info.optString("cover"), source) },
+            year = series.year.ifBlank { Regex("(?:19|20)[0-9]{2}").find(info.optString("releaseDate") + " " + info.optString("release_date"))?.value.orEmpty() },
+            genre = info.optString("genre").take(256).ifBlank { series.genre }, cast = info.optString("cast").take(1024).ifBlank { series.cast },
+            runtime = info.optString("episode_run_time").take(12).takeIf { it.isNotBlank() && it != "0" }?.let { "$it min episodes" } ?: series.runtime)
+    }
     /** One provider file per selection; never guess or probe alternate movie formats. */
     fun playbackUrl(source: Source, folder: String, id: String, data: JSONObject, fallback: String = ""): String {
         val direct = data.optString("direct_source").trim()
