@@ -70,6 +70,18 @@ class SecureStore(private val context: Context) {
             SecretKeySpec(raw, "AES")
         }
     } }
+    /** Seal one small value (a catalog row or label set) with the data key; IV travels in front of the ciphertext. */
+    fun seal(plain: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, dataKey) }
+        return cipher.iv + cipher.doFinal(plain)
+    }
+    fun open(sealed: ByteArray): ByteArray {
+        require(sealed.size >= 28)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, dataKey, GCMParameterSpec(128, sealed, 0, 12)) }
+        return cipher.doFinal(sealed, 12, sealed.size - 12)
+    }
+    /** The saved-category database; deleted with the rest of a provider's cache. */
+    val catalogDb: CatalogDb get() = CatalogDb.get(context)
     fun write(name: String, bytes: ByteArray) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, dataKey) }
@@ -270,7 +282,7 @@ class SecureStore(private val context: Context) {
         // An obsolete or repeated cleanup must not delete the replacement account's cache.
         if (preferences.getString("provider-identity-${source.id}", null) != source.providerKey() ||
             !preferences.getBoolean("provider-cache-pending-${source.id}", false)) return@synchronized
-        pruneCatalog("catalog-${source.id}-", emptySet())
+        pruneCatalog("catalog-${source.id}-", emptySet()); runCatching { catalogDb.deleteSource(source.id) }
         pruneProviderFiles("library-categories-${source.id}-")
         listOf("cache-${source.id}.enc", "lineup-${source.id}.enc", "epg-${source.id}.enc", "local-matches-${source.id}.enc", "guide-url-${source.id}.enc", "sports-replays-${source.id}.enc", "library-${source.id}-movie.enc", "library-${source.id}-series.enc").forEach(::delete)
         preferences.edit { remove("provider-cache-pending-${source.id}") }
@@ -282,7 +294,7 @@ class SecureStore(private val context: Context) {
         // Keep a non-secret tombstone: removing the identity would make a late
         // background writer look like a never-bound source and recreate deleted data.
         preferences.edit { putString("provider-identity-${source.id}", "") }
-        pruneCatalog("catalog-${source.id}-", emptySet())
+        pruneCatalog("catalog-${source.id}-", emptySet()); catalogDb.deleteSource(source.id)
         pruneProviderFiles("watch-${source.id}-"); pruneProviderFiles("library-favorites-${source.id}-"); pruneProviderFiles("library-followed-${source.id}-"); pruneProviderFiles("library-categories-${source.id}-")
         delete("cache-${source.id}.enc")
         delete("sports-replays-${source.id}.enc")

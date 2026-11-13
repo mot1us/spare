@@ -27,7 +27,9 @@ class LibraryCatalog(private val store: SecureStore) {
         }
     }
     data class Chunk(val file: String, val count: Int, val groups: List<String>, val keys: List<String> = emptyList(), val titles: List<Title> = emptyList())
-    data class Snapshot(val updated: Long, val chunks: List<Chunk>, val count: Int, val labels: Map<String, String>, val complete: Boolean = true, val scopeGroup: String? = null, val source: Source? = null) {
+    data class Snapshot(val updated: Long, val chunks: List<Chunk>, val count: Int, val labels: Map<String, String>, val complete: Boolean = true, val scopeGroup: String? = null, val source: Source? = null,
+        /** A saved category lives in [CatalogDb]: its titles are read a page at a time, never held in [chunks]. */
+        val dbScope: String? = null, val dbGen: String? = null) {
         fun label(group: String) = labels[group.removePrefix("Category ")] ?: group
         val categories: Map<String, String> get() = chunks.flatMap { it.groups }.distinct().associateWith(::label)
         val groups: List<String> get() = categories.values.distinct()
@@ -43,6 +45,7 @@ class LibraryCatalog(private val store: SecureStore) {
     private val restoreLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
     private fun lookupKey(source: Source, mode: String) = "${source.id}:${source.providerKey()}:$mode"
     fun invalidate(sourceId: String) {
+        runCatching { store.catalogDb.deleteSource(sourceId) }
         jobs.cancel { it.source.id == sourceId }; categoryJobs.cancel { it.source.id == sourceId }
         synchronized(publishLock) { writers.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         synchronized(snapshots) { snapshots.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
@@ -87,6 +90,13 @@ class LibraryCatalog(private val store: SecureStore) {
         val prefix = prefix(source, mode, scope)
         synchronized(snapshots) { snapshots[prefix]?.takeIf { it.source == source } }?.let { return it }
         val restoreBegan = Timings.now()
+        if (scope.isNotEmpty()) {
+            val key = store.catalogDb.scopeKey(source, mode, scope)
+            val meta = store.catalogDb.meta(key) ?: return null
+            if (meta.provider != source.providerKey()) return null
+            return Snapshot(meta.updated, emptyList(), meta.count, meta.labels, complete = meta.complete, source = source, dbScope = key, dbGen = meta.gen)
+                .also { remember(prefix, it); Timings.since("Saved category", restoreBegan) }
+        }
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
             val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..3)
@@ -141,6 +151,8 @@ class LibraryCatalog(private val store: SecureStore) {
         private val chunks = mutableListOf<Chunk>()
         private val pending = ArrayList<OnDemand>(512)
         private var count = 0
+        private val dbMode = scope.isNotEmpty()
+        private val dbKey = if (dbMode) store.catalogDb.scopeKey(source, mode, scope) else ""
         init { synchronized(publishLock) { writers[prefix] = generation } }
         private fun requireCurrent() {
             if (Thread.currentThread().isInterrupted || writers[prefix] != generation) throw java.io.InterruptedIOException("Catalog import superseded")
@@ -151,11 +163,20 @@ class LibraryCatalog(private val store: SecureStore) {
             require(entries.size <= 64)
             pending.addAll(entries)
             // Show the first handful immediately, then amortize encryption/fsync over larger pages.
-            if (chunks.isEmpty() || pending.size >= 512) flush()
+            if ((if (dbMode) count == 0 else chunks.isEmpty()) || pending.size >= 512) flush()
         }
         private fun flush() {
             if (pending.isEmpty()) return
             val pages = pending.toList().chunked(512); pending.clear()
+            if (dbMode) {
+                pages.forEach { entries ->
+                    val titles = entries.map { Title.from(it, source) }
+                    store.catalogDb.insert(dbKey, generation, count, titles)
+                    index(source, mode, titles)
+                    count += entries.size
+                }
+                return
+            }
             pages.forEach { entries ->
                 val file = if (indexOnly) "" else "$prefix$generation-${chunks.size}.enc"
                 if (!indexOnly) { store.write(file, JSONArray(entries.map { it.json() }).toString().toByteArray()); synchronized(memory) { memory[file] = entries } }
@@ -168,12 +189,21 @@ class LibraryCatalog(private val store: SecureStore) {
         fun snapshot(labels: Map<String, String>): Snapshot = synchronized(publishLock) {
             // Invalidation must cover partial memory publication as well as the final disk index.
             requireCurrent(); flush()
-            Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source).also { remember(prefix, it) }
+            (if (dbMode) Snapshot(stamp, emptyList(), count, labels, complete = false, source = source, dbScope = dbKey, dbGen = generation)
+            else Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source)).also { remember(prefix, it) }
         }
         fun checkpoint(labels: Map<String, String>): Snapshot = save(labels, false)
         fun finish(labels: Map<String, String>): Snapshot = save(labels, true)
         private fun save(labels: Map<String, String>, complete: Boolean): Snapshot {
             val value = snapshot(labels).copy(complete = complete)
+            if (dbMode) {
+                synchronized(publishLock) {
+                    requireCurrent()
+                    store.catalogDb.publish(dbKey, generation, stamp, complete, count, source.providerKey(), labels)
+                    remember(prefix, value)
+                }
+                return value
+            }
             val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("titles", JSONArray(it.titles.map(Title::json))) })
             synchronized(publishLock) {
                 requireCurrent()
@@ -192,6 +222,23 @@ class LibraryCatalog(private val store: SecureStore) {
         fun matches(other: Snapshot, group: String?, query: String, sort: String) = snapshot === other && this.group == group && this.query == query && this.sort == sort
     }
     @Volatile private var sorted: Sorted? = null
+    /** One saved category: read and decrypt only the rows a page needs. */
+    private fun queryStored(snapshot: Snapshot, query: String, cursor: Int, limit: Int): Page {
+        val source = snapshot.source!!; val key = ChannelSearch.key(query); val result = mutableListOf<OnDemand>(); var offset = cursor
+        while (true) {
+            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog query cancelled")
+            val rows = store.catalogDb.titles(snapshot.dbScope!!, snapshot.dbGen!!, offset, 160)
+            if (rows.isEmpty()) break
+            rows.forEachIndexed { index, title ->
+                if (available(source, title.id) && (key.isEmpty() || title.key.contains(key))) {
+                    result.add(title.item(source).let { it.copy(category = snapshot.label(it.category)) })
+                    if (result.size == limit) { val next = offset + index + 1; return Page(result, next, next < snapshot.count) }
+                }
+            }
+            offset += rows.size
+        }
+        return Page(result, snapshot.count, false)
+    }
     fun query(snapshot: Snapshot, group: String?, query: String, cursor: Int = 0, limit: Int = 80, sort: String = SORT_PROVIDER): Page {
         require(limit in 1..160 && sort in SORTS)
         if (sort != SORT_PROVIDER) {
@@ -203,6 +250,7 @@ class LibraryCatalog(private val store: SecureStore) {
             val end = minOf(all.size, cursor + limit)
             return Page(if (cursor < end) all.subList(cursor, end).toList() else emptyList(), end, end < all.size)
         }
+        if (snapshot.dbScope != null && snapshot.dbGen != null && snapshot.source != null) return queryStored(snapshot, query, cursor, limit)
         val key = ChannelSearch.key(query); val result = mutableListOf<OnDemand>(); var offset = 0
         val selectedGroup = group ?: snapshot.scopeGroup
         for (chunk in snapshot.chunks) {

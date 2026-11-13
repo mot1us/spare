@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.42.0 — 2026-11-12
+
+- Saved Movies and Series categories now live in an encrypted on-device database instead of one large file per category. Opening a saved category reads and decrypts only the page on screen, so a category with thousands of titles no longer has to be parsed whole before anything appears. Titles, artwork and stream paths are encrypted row by row with the same data key as the other caches; only the category, provider order and a generation id are readable.
+- A refreshed category replaces its old rows when it finishes, and removing or changing a playlist deletes its rows. Category files from earlier versions are removed the first time the database is created; each category is downloaded again once.
+
 ## 0.41.5 — 2026-11-12
 
 - Library posters are ready sooner: ten seconds after the guide loads, Spare quietly decodes the first screen of posters for Movies and Series, so the first visit shows them at once instead of waiting several seconds for them to arrive.
