@@ -450,7 +450,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
-        val sort = store.librarySort
+        // A category still downloading cannot be sorted yet; show it in provider order at once and sort when it finishes.
+        val sort = store.librarySort.takeIf { snapshot.complete } ?: LibraryCatalog.SORT_PROVIDER
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query:$sort"
         val version = "${snapshot.updated}:${snapshot.labels.hashCode()}"
         activeGroup = group; activeQuery = query

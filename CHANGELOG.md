@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.41.4 — 2026-11-12
+
+- Sorting Library by A–Z or Newest no longer recomputes every title's sort key on each comparison, which took far longer than the rest of opening a large category. While a category is still downloading, it shows in provider order immediately and sorts once it finishes.
+- Settings › Playlists › Refresh settings also shows how long a saved category took to read.
+
 ## 0.41.3 — 2026-11-12
 
 - Settings › Playlists › Refresh settings now also shows how long Movies and Series took to list categories and to show their first titles, to find what still delays the first Library open.

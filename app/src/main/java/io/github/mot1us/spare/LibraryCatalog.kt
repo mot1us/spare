@@ -86,6 +86,7 @@ class LibraryCatalog(private val store: SecureStore) {
     private fun restore(source: Source, mode: String, scope: String): Snapshot? {
         val prefix = prefix(source, mode, scope)
         synchronized(snapshots) { snapshots[prefix]?.takeIf { it.source == source } }?.let { return it }
+        val restoreBegan = Timings.now()
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
             val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..3)
@@ -103,6 +104,7 @@ class LibraryCatalog(private val store: SecureStore) {
             val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
             val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels, complete = json.optBoolean("complete", true), source = source)
             index(source, mode, chunks.flatMap { it.titles }); remember(prefix, snapshot)
+            Timings.since("Saved category", restoreBegan)
             if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
             return snapshot
         }
@@ -232,12 +234,11 @@ class LibraryCatalog(private val store: SecureStore) {
         /** A–Z ignores provider tags ("EN | ") and leading articles ("The Batman" sorts under B). */
         internal fun sortKey(title: String) = ChannelSearch.key(article.replace(providerPrefix.replace(title, ""), ""))
         internal fun sortTitles(items: List<OnDemand>, sort: String): List<OnDemand> {
-            fun titleKey(item: OnDemand) = sortKey(item.title)
-            return when (sort) {
-                SORT_TITLE -> items.sortedBy(::titleKey)
-                SORT_NEWEST -> items.sortedWith(compareByDescending<OnDemand> { it.year.toIntOrNull() ?: 0 }.thenBy(::titleKey))
-                else -> items
-            }
+            if (sort != SORT_TITLE && sort != SORT_NEWEST) return items
+            // sortedBy would recompute the key on every comparison (millions of regex runs for a big category).
+            class Keyed(val item: OnDemand, val key: String, val year: Int)
+            val keyed = items.map { Keyed(it, sortKey(it.title), if (sort == SORT_NEWEST) it.year.toIntOrNull() ?: 0 else 0) }
+            return (if (sort == SORT_TITLE) keyed.sortedBy { it.key } else keyed.sortedWith(compareByDescending<Keyed> { it.year }.thenBy { it.key })).map { it.item }
         }
     }
 }
