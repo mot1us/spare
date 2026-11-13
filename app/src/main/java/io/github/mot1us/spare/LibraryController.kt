@@ -53,7 +53,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val selected = selectedSource()
             if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null &&
                 // The rows home is a finished view of the catalog; a background refresh must not swap it for the grid.
-                panel.shelfCatalog == null) {
+                !homeActive()) {
                 repository.memory(selected, kind)?.let { activateCatalog(activeCatalog, it.copy(labels = categoryNames[activeCatalog] ?: it.labels), !it.complete) }
             }
         }
@@ -275,6 +275,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
     }
     private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.dbScope == null && it.count > 0 }
+    /** Set while the rows are being prepared off the UI thread: any other request (a new epoch) supersedes it. */
+    private var homeToken = -1
+    /** The rows are on screen or about to be: catalog updates and late grid pages must not replace them. */
+    private fun homeActive() = panel.shelfCatalog != null || homeToken == epoch
     private class Home(val stamp: Long, val shelves: Map<String, String>, val data: Map<String, CatalogShelves.Data>)
     private val homes = mutableMapOf<String, Home>()
     /** A category or search grid was opened from the rows home: Back returns to the rows. */
@@ -286,6 +290,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null
         val title = if (mode == "movie") "Movies" else "Series"
         fun show(home: Home, personal: Map<String, Pair<String, CatalogShelves.Data>>) {
+            homeToken = -1; pageTask?.cancel(true); ++pageEpoch
             if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
             panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, {}, {}, { id -> when {
@@ -309,6 +314,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val built = Home(full.updated, shelves, data)
             ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built, personal) }
         }
+        homeToken = epoch
     }
     /** Rows that lead the home: titles of this kind with a saved position, then this kind's Watchlist. Off the UI thread. */
     private fun personalShelves(selected: Source, mode: String): Map<String, Pair<String, CatalogShelves.Data>> {
@@ -483,7 +489,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun deliver(snapshot: LibraryCatalog.Snapshot, busy: Boolean) { handler.post {
             if (!destroyed && catalogGenerations[key] == generation) {
                 catalogs[key] = snapshot
-                if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) activateCatalog(key, snapshot, busy)
+                if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null && !homeActive()) activateCatalog(key, snapshot, busy)
             }
         } }
         catalogImports[key] = worker.submit {
@@ -592,7 +598,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 val rows = (if (more) old?.rows.orEmpty() else emptyList()) + entries.map(::browserRow)
                 BrowsePage(version, rows.distinctBy { it.key }, page.cursor, page.more, snapshot.count)
             }.onSuccess { page -> handler.post {
-                if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null) {
+                if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null && parentSeries == null && panel.shelfCatalog == null) {
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
