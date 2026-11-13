@@ -129,7 +129,8 @@ class LogoLoaderDeviceTest {
             await("The larger copy and the other host's poster are decoded") { bitmap(cover) != null && bitmap(plain) != null }
             bitmap(cover)!!.let { assertTrue("${it.width}x${it.height}", maxOf(it.width, it.height) in 400..480) }
             assertNotSame(bitmap(tile), bitmap(cover))
-            assertEquals("Other hosts are fetched exactly as supplied", other, fetched.last())
+            // The two loads run in parallel, so their order is not fixed.
+            assertEquals("Other hosts are fetched exactly as supplied; the larger copy reads the same w342 address", setOf("https://image.tmdb.org/t/p/w342/synthetic.jpg", other), fetched.toSet())
             // Rebinding the same poster at the same size is served from memory.
             val reads = fetched.size
             scenario.onActivity { loader.bind(plain, tmdb, dimension = 256) }
