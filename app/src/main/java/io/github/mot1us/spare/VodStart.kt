@@ -16,7 +16,8 @@ object VodStart {
     private val prefix = Regex("^(?:(?:US|USA|UK|EN|ENG|CA|AU|Movie|Film|Cinema)\\s*[|:]\\s*)+", RegexOption.IGNORE_CASE)
     private val quality = Regex("\\b(?:Dolby\\s*Vision|HDR10\\+?|HDR|SDR|DV|FHD|UHD|HD|SD|4K|1080[pi]|720p|2160p|HEVC|AVC|AV1|[HX]264|[HX]265)\\b", RegexOption.IGNORE_CASE)
     private fun clean(value: String) = quality.replace(year.replace(prefix.replace(value, ""), ""), "").trim(' ', '-', ':', '|', '(', ')', '[', ']')
-    private fun release(item: OnDemand) = Regex("(?:19|20)[0-9]{2}").find(item.year)?.value ?: year.find(item.title)?.groupValues?.get(1).orEmpty()
+    private val releaseYear = Regex("(?:19|20)[0-9]{2}")
+    private fun release(item: OnDemand) = releaseYear.find(item.year)?.value ?: year.find(item.title)?.groupValues?.get(1).orEmpty()
     fun titleKey(item: OnDemand): String {
         val stamp = release(item)
         val value = clean(item.title)

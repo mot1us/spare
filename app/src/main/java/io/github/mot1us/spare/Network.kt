@@ -13,7 +13,7 @@ object Network {
     private val reaper = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "spare-network-cancel").apply { isDaemon = true } }
         .apply { scheduleWithFixedDelay({ open.forEach { (connection, thread) -> if (thread.isInterrupted && open.remove(connection) != null) runCatching { connection.disconnect() } } }, 200, 200, java.util.concurrent.TimeUnit.MILLISECONDS) }
     internal val openConnections get() = open.size
-    fun allowed(value: String, http: Boolean): Boolean = runCatching {
+    fun allowed(value: String, http: Boolean): Boolean = value.isNotEmpty() && runCatching {
         val uri = URI(value)
         uri.host != null && uri.rawUserInfo == null && (uri.scheme.equals("https", true) || (http && uri.scheme.equals("http", true)))
     }.getOrDefault(false)

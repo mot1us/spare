@@ -7,20 +7,22 @@ import java.util.UUID
 /** Small encrypted index plus bounded encrypted pages. No catalog URLs reach plaintext storage. */
 class LibraryCatalog(private val store: SecureStore) {
     /** Only searchable/display fields. Reconstruct standard URLs instead of repeating credentials per title. */
-    data class Title(val id: String, val name: String, val category: String, val extension: String, val year: String, val poster: String, val direct: String, val externalId: String = "") {
+    data class Title(val id: String, val name: String, val category: String, val extension: String, val year: String, val poster: String, val direct: String, val externalId: String = "", val savedCanonical: String = "") {
         val key = ChannelSearch.key(name)
-        val canonical = VodStart.titleKey(OnDemand(id, name, category, year = year))
+        /** Computed once at import and saved; restoring a large catalog must not repeat the title cleanup per title. */
+        val canonical = savedCanonical.ifEmpty { VodStart.titleKey(OnDemand(id, name, category, year = year)) }
         fun item(source: Source) = OnDemand(id, name, category, if (id.startsWith("series:")) "" else direct.ifBlank { VodCatalog.streamUrl(source, "movie", id.substringAfter(':'), extension) }, id.substringBefore(':'), poster = poster, year = year, externalId = externalId, playlistId = source.id)
-        fun json() = JSONArray(listOf(id, name, category, extension, year, poster, direct, externalId))
+        fun json() = JSONArray(listOf(id, name, category, extension, year, poster, direct, externalId, canonical))
         companion object {
+            private val idPattern = Regex("(?:movie|series):[0-9]{1,20}")
             fun from(item: OnDemand, source: Source): Title {
                 val ext = item.url.substringBefore('?').substringAfterLast('.', "mp4").lowercase(java.util.Locale.ROOT)
                 val standard = if (item.kind == "movie") VodCatalog.streamUrl(source, "movie", item.id.substringAfter(':'), ext) else ""
                 return Title(item.id, item.title, item.category, ext, item.year, item.poster, item.url.takeUnless { it == standard }.orEmpty(), item.externalId)
             }
             fun from(json: JSONArray): Title {
-                require(json.length() in 7..8 && json.getString(0).matches(Regex("(?:movie|series):[0-9]{1,20}")))
-                return Title(json.getString(0), json.getString(1).take(256), json.getString(2).take(128), json.getString(3).take(16), json.getString(4).take(16), json.getString(5).take(4096), json.getString(6).take(16384), json.optString(7).take(128))
+                require(json.length() in 7..9 && json.getString(0).matches(idPattern))
+                return Title(json.getString(0), json.getString(1).take(256), json.getString(2).take(128), json.getString(3).take(16), json.getString(4).take(16), json.getString(5).take(4096), json.getString(6).take(16384), json.optString(7).take(128), json.optString(8).take(256))
             }
         }
     }
@@ -126,7 +128,7 @@ class LibraryCatalog(private val store: SecureStore) {
                 writer.append(batch)
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (published == 0L || now - published >= 750) { publish(writer.snapshot(labels)); published = now }
-                if (latest?.complete != true && now - checkpoint >= 5000) { writer.checkpoint(labels); checkpoint = now }
+                if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
             }
             writer.finish(labels).also(publish)
         }

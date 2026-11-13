@@ -21,6 +21,18 @@ data class WatchProgress(val item: OnDemand, val position: Long, val duration: L
 
 object VodCatalog {
     private val numeric = Regex("[0-9]{1,20}")
+    private val yearPattern = Regex("(?:19|20)[0-9]{2}")
+    private val imdbPattern = Regex("tt[0-9]{5,12}")
+    private val containers = setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m3u8", "webm")
+    private val moviePosterKeys = listOf("stream_icon", "cover_big", "poster", "movie_image", "stream_icon")
+    private val seriesPosterKeys = listOf("cover", "cover_big", "poster", "movie_image", "stream_icon")
+    private fun posterKeys(kind: String) = if (kind == "movie") moviePosterKeys else seriesPosterKeys
+    private class StreamBase(val url: String, val user: String, val password: String, val head: String, val tail: String)
+    @Volatile private var streamBase: StreamBase? = null
+    private fun base(source: Source): StreamBase {
+        streamBase?.let { if (it.url == source.url && it.user == source.username && it.password == source.password) return it }
+        return StreamBase(source.url, source.username, source.password, Importers.serverBase(source.url), "/${Importers.encoded(source.username)}/${Importers.encoded(source.password)}/").also { streamBase = it }
+    }
     /** Publish bounded batches while the response is arriving, rather than buffering the whole JSON document. */
     fun stream(source: Source, kind: String, category: String? = null, lean: Boolean = false, batch: (List<OnDemand>) -> Unit) {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
@@ -77,8 +89,8 @@ object VodCatalog {
             val id = j.optString(if (kind == "series") "series_id" else "stream_id")
             if (!numeric.matches(id)) return@mapNotNull null
             OnDemand("$kind:$id", j.optString("name").take(256).ifBlank { "Untitled" }, categories[j.optString("category_id")] ?: j.optString("category_id").take(80).let { if (it.isBlank()) "Other" else "Category $it" },
-                if (kind == "movie") playbackUrl(source, "movie", id, j) else "", kind, j.optString("plot").take(2048), poster = listOf(if (kind == "movie") "stream_icon" else "cover", "cover_big", "poster", "movie_image", "stream_icon").map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
-                backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { Regex("(?:19|20)[0-9]{2}").find(it)?.value }.firstOrNull().orEmpty(),
+                if (kind == "movie") playbackUrl(source, "movie", id, j) else "", kind, j.optString("plot").take(2048), poster = posterKeys(kind).asSequence().map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
+                backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { yearPattern.find(it)?.value }.firstOrNull().orEmpty(),
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
         }.distinctBy { it.id }
     }
@@ -144,12 +156,12 @@ object VodCatalog {
     }
     private fun artwork(value: String, source: Source) = value.take(4096).takeIf { Network.allowed(it, source.allowHttp) }.orEmpty()
     private fun externalId(info: JSONObject): String {
-        val imdb = info.optString("imdb_id"); if (imdb.matches(Regex("tt[0-9]{5,12}"))) return imdb
+        val imdb = info.optString("imdb_id"); if (imdb.matches(imdbPattern)) return imdb
         val tmdb = info.optString("tmdb_id").ifBlank { info.optString("tmdb") }; return if (tmdb.matches(numeric)) "tmdb:$tmdb" else ""
     }
     fun streamUrl(source: Source, folder: String, id: String, extension: String): String {
         require(folder in setOf("movie", "series") && numeric.matches(id))
-        val ext = extension.trim().lowercase(java.util.Locale.ROOT).takeIf { it in setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m3u8", "webm") } ?: "mp4"
-        return "${Importers.serverBase(source.url)}/$folder/${Importers.encoded(source.username)}/${Importers.encoded(source.password)}/$id.$ext"
+        val ext = extension.trim().lowercase(java.util.Locale.ROOT).takeIf { it in containers } ?: "mp4"
+        return base(source).let { "${it.head}/$folder${it.tail}$id.$ext" }
     }
 }
