@@ -241,6 +241,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun ui(token: Int, work: () -> Unit) { handler.post { if (!destroyed && token == epoch && opened) work() } }
     private val categoryNames = mutableMapOf<String, Map<String, String>>()
     @Volatile private var openBegan = 0L
+    private var lastProgressDisplay = 0L
     @Volatile private var firstTitlesRecorded = false
     private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
@@ -333,6 +334,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 // A restarted import must not replace a useful page with a smaller partial page.
                 if (!snapshot.complete && prior != null && snapshot.count < prior.count) return@post
                 catalogs[key] = snapshot
+                // A category still downloading publishes about every ¾ s; redrawing that often starves paging on slow TV hardware.
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (busy && prior != null && prior.count > 0 && now - lastProgressDisplay < 2500) return@post
+                if (busy) lastProgressDisplay = now
                 if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null) display(snapshot, busy)
             }
         } }
@@ -459,7 +464,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val catalogKey = activeCatalog; val stateKey = "$catalogKey:${group.orEmpty()}:$query:$sort"
         val version = "${snapshot.updated}:${snapshot.labels.hashCode()}"
         activeGroup = group; activeQuery = query
-        pageTask?.cancel(true); val token = ++pageEpoch
         val old = browsePages[stateKey]?.takeIf { it.version == version }
         if (!more && old != null && (old.rows.size >= 80 || old.available == snapshot.count)) {
             val updated = old.copy(more = if (sort == LibraryCatalog.SORT_PROVIDER) old.cursor < snapshot.count else old.more, available = snapshot.count)
@@ -475,6 +479,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             panel.page(activeCatalogTitle, "${counted(kept.rows.size, "title")} shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
             return
         }
+        // Cancel an in-flight page only when a new one replaces it; a download's progress updates must not starve "load more".
+        pageTask?.cancel(true); val token = ++pageEpoch
         panel.catalogBusy()
         pageTask = catalogReader.submit {
             runCatching {

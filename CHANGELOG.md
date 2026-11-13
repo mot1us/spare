@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.42.1 — 2026-11-12
+
+- Library no longer gets stuck on the first 80 titles while a big category is still downloading: progress updates no longer cancel a "load more" page you scrolled to, and the grid is redrawn at most every 2.5 seconds during a download instead of every ¾ second.
+
 ## 0.42.0 — 2026-11-12
 
 - Saved Movies and Series categories now live in an encrypted on-device database instead of one large file per category. Opening a saved category reads and decrypts only the page on screen, so a category with thousands of titles no longer has to be parsed whole before anything appears. Titles, artwork and stream paths are encrypted row by row with the same data key as the other caches; only the category, provider order and a generation id are readable.
