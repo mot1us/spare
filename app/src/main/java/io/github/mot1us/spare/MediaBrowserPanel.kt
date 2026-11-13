@@ -109,6 +109,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     /** Set while Movies/Series browse by category rows: the category picker opens a category (or, for All, the rows). */
     private var shelfPicked: ((String?) -> Unit)? = null
     private var shelfSearch: (() -> Unit)? = null
+    private var submittedList = ""
     private val shelvesShown get() = shelves.isVisible && body.isVisible
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
@@ -286,6 +287,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) images.quiet()
                     when (key) {
                     KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) {
                         val step = if (grid) columns else 1
@@ -325,9 +327,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.visibility = if (busy) VISIBLE else GONE }
     fun confirmation(value: String) { message.text = value; message.announceForAccessibility(value) }
     @SuppressLint("NotifyDataSetChanged")
-    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true) {
+    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true, initialGroup: String? = null, allTitle: String = "All") {
         stopCatalog(); showGrid(); shelfPicked = null
-        allCategoryTitle = "All"
+        allCategoryTitle = allTitle
         browse()
         grid = posters; columns = if (grid) PosterGridLayout.COLUMNS else 1
         if (posters) seriesSpot = null
@@ -336,6 +338,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         contentsAvailable = true; rows.alpha = 1f
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
         if (group !in categoryNames) group = null
+        // A different list (another series) starts on its suggested group; the same list keeps the viewer's choice.
+        val listKey = values.firstOrNull()?.key.orEmpty() + ":" + values.size
+        if (initialGroup != null && initialGroup in categoryNames && (group == null && listKey != submittedList)) group = initialGroup
+        submittedList = listKey
         updateCategoryButton()
         categories.adapter?.notifyDataSetChanged(); filter()
     }
@@ -528,7 +534,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         updateHint()
         val on = !archive && (detailPane.isVisible || (body.isVisible && (grid || seriesSpot != null)))
         spotlight.isVisible = on
-        val height = dp(if (on) HERO_SPOTLIGHT_DP else HERO_COMPACT_DP)
+        // A series page gets a taller hero: its artwork is the page, not a strip above a poster grid.
+        val height = dp(if (!on) HERO_COMPACT_DP else if (seriesSpot != null && !detailPane.isVisible) HERO_SERIES_DP else HERO_SPOTLIGHT_DP)
         if (hero.layoutParams != null && hero.layoutParams.height != height) hero.layoutParams = hero.layoutParams.apply { this.height = height }
         if (!on) { clearSpot(); return }
         spotPlot.isVisible = !detailPane.isVisible
@@ -623,5 +630,5 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun trimImages() { images.trim(); backdrops.trim() }
     fun closeImages() { images.close(); backdrops.close() }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
-    private companion object { const val HERO_COMPACT_DP = 60; const val HERO_SPOTLIGHT_DP = 156 }
+    private companion object { const val HERO_COMPACT_DP = 60; const val HERO_SPOTLIGHT_DP = 156; const val HERO_SERIES_DP = 236 }
 }

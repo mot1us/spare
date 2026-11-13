@@ -172,20 +172,33 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         private var tileEpoch = 0
         fun focus(position: Int) {
             val target = position.coerceIn(0, count() - 1); val epoch = ++tileEpoch
+            val manager = list.layoutManager as LinearLayoutManager
             fun tile() = if (list.isComputingLayout || list.hasPendingAdapterUpdates()) null else list.findViewHolderForAdapterPosition(target)?.itemView
-            tile()?.let { it.requestFocus(); TvFocus.center(list, it); return }
-            // The row may have just been rebound or shown again: wait for its layout instead of giving up after one frame.
-            list.scrollToPosition(target)
+            fun take(view: View) { view.requestFocus(); TvFocus.center(list, view) }
+            tile()?.let { take(it); return }
+            // The remembered tile is off-screen. Scroll by distance: unlike a position jump this lays the tiles out
+            // right now, and it still works when the row has just been shown again or had a tile refreshed.
+            fun reach() {
+                val first = manager.findFirstVisibleItemPosition(); val child = manager.findViewByPosition(first) ?: return
+                list.scrollBy((target - first) * (child.width + dp(2)), 0)
+            }
+            if (!list.isComputingLayout) { reach(); tile()?.let { take(it); return } }
             fun attempt(left: Int) {
                 if (epoch != tileEpoch || !list.isShown) return
                 val view = tile()
-                if (view != null) { view.requestFocus(); TvFocus.center(list, view) } else if (left > 0) list.postOnAnimation { attempt(left - 1) }
+                when {
+                    view != null -> take(view)
+                    left > 0 -> { if (!list.isComputingLayout) reach(); list.postOnAnimation { attempt(left - 1) } }
+                    // Never leave the cursor stranded outside the row: land on a tile that is there.
+                    else -> manager.findViewByPosition(manager.findFirstCompletelyVisibleItemPosition())?.let(::take)
+                }
             }
-            list.postOnAnimation { attempt(20) }
+            list.postOnAnimation { attempt(12) }
         }
         private fun key(view: View, position: Int, code: Int, event: KeyEvent): Boolean {
             val shelf = id ?: return false
             val index = shelves.indexOfFirst { it.id == shelf }
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) images.quiet()
             if (event.action != KeyEvent.ACTION_DOWN) return code in setOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)
             when (code) {
                 KeyEvent.KEYCODE_DPAD_UP -> { if (index <= 0) { if (event.repeatCount == 0) exitUp?.invoke() } else moveTo(index - 1) }

@@ -139,6 +139,24 @@ class LogoLoaderDeviceTest {
         } finally { instrumentation.runOnMainSync { loader.close() } }
     }
 
+    @Test fun heldKeyScrollingDefersPostersUntilItStops() = withActivity { scenario ->
+        val bytes = png(); val reads = AtomicInteger()
+        val loader = LogoLoader(files = object : ImageFiles {
+            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray { reads.incrementAndGet(); return bytes }
+        })
+        lateinit var image: ImageView
+        try {
+            scenario.onActivity { activity ->
+                image = ImageView(activity); activity.addContentView(image, FrameLayout.LayoutParams(64, 64))
+                loader.quiet(600); loader.bind(image, "https://images.example/held.png")
+            }
+            Thread.sleep(300)
+            assertEquals("Nothing is fetched while the key is held", 0, reads.get()); assertFalse(hasImage(image))
+            await("The visible poster loads once scrolling stops") { hasImage(image) }
+            assertEquals(1, reads.get())
+        } finally { instrumentation.runOnMainSync { loader.close() } }
+    }
+
     @Test fun queueRejectedLogoWaitsUntilVisibleThenRetriesWithoutRebinding() = withActivity { scenario ->
         val bytes = png(); val running = CountDownLatch(2); val release = CountDownLatch(1)
         val targetReads = AtomicInteger(); val target = "https://images.example/queue-target.png"

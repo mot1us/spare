@@ -247,7 +247,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     @Volatile private var firstTitlesRecorded = false
     private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
-        warm(selected, posters = false)
+        // Never re-import while someone is browsing: only fetch here when there is no catalog at all.
+        if (wholeCatalog(selected, "movie") == null || wholeCatalog(selected, "series") == null) warm(selected, posters = false)
         openBegan = Timings.now(); firstTitlesRecorded = false
         val title = if (mode == "movie") "Movies" else "Series"
         fun proceed(names: Map<String, String>) {
@@ -270,6 +271,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val names = categoriesFor(selected, mode, force)
             Timings.since("Category list", openBegan)
             // Joins the background import if it is already running; the rows home needs the whole catalog.
+            // A saved catalog of any age opens at once; it is refreshed in the background while Library is closed.
+            if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
             ui(token) { proceed(names) }
         }
@@ -387,7 +390,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 if (Thread.currentThread().isInterrupted || destroyed) return@submit
                 val names = runCatching { categoriesFor(selected, mode, false) }.getOrDefault(emptyMap())
                 val began = Timings.now()
-                runCatching { repository.load(selected, mode, "", false, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
+                val saved = runCatching { repository.cached(selected, mode) }.getOrNull()?.takeIf { it.complete && it.count > 0 }
+                val stale = saved == null || saved.schema < LibraryCatalog.SCHEMA || System.currentTimeMillis() - saved.updated !in 0 until CATALOG_REFRESH_MS
+                // Importing a large catalog keeps a small TV busy for a while: refresh a usable one only while Library is closed.
+                if (saved == null || (stale && !opened)) runCatching { repository.load(selected, mode, "", stale && saved != null, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
                 val first = names.keys.firstOrNull() ?: continue
                 if (!posters || opened) continue
                 // Library opens on rows: decode the first screen of them (the special rows and the first categories) now.
@@ -423,6 +429,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
             panel.page(title, "${counted(snapshot.shown, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
             loadCatalogPage(null, activeQuery, false)
         }
+        // With the whole catalog in memory a category is shown right here; it never waits for a worker or the provider.
+        if (!force) repository.category(selected, mode, scope, names)?.let { whole -> catalogs[key] = whole; Timings.since("Category", openBegan); display(whole, false); return }
         val memory = catalogs[key]
         if (memory != null) display(memory, !memory.complete) else { panel.catalogBusy(block = true); panel.page(title, "Loading this category…", true) }
         if (!force && catalogImports[key]?.isDone == false) return
@@ -609,7 +617,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun showItems(items: List<OnDemand>, title: String, detail: String, busy: Boolean) {
         panel.page(title, detail, busy)
-        panel.submit(items.map(::browserRow), items.associate { it.id to it.category }, reset = false, posters = items.firstOrNull()?.kind != "episode")
+        val episodes = items.firstOrNull()?.kind == "episode"
+        // A series opens on one season — the first with an unwatched episode — instead of every episode in one list.
+        val season = if (episodes) (items.firstOrNull { it.id !in favoriteState.watched } ?: items.first()).category else null
+        panel.submit(items.map(::browserRow), items.associate { it.id to it.category }, reset = false, posters = !episodes, initialGroup = season, allTitle = if (episodes) "All seasons" else "All")
     }
     private fun select(item: OnDemand) {
         val selected = selectedSource() ?: return
@@ -787,6 +798,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
     fun clearMetadata() { details.clear(); posterMetadata.clear(); panel.refreshPosters() }
+    /** Library from the main menu: back to the section, rows position, category grid or series you left. */
+    fun resume() {
+        val series = parentSeries; val before = kind
+        open(focusContent = true, keepCategory = true)
+        val selected = selectedSource() ?: return
+        if (series != null && selected.kind == "xtream" && kind == before && kind in setOf("series", "favorites")) episodes(selected, series)
+    }
     fun reopen(item: OnDemand? = null) {
         if (item?.playlistId?.isNotBlank() == true) selectPlaylist(resolveSource(item.playlistId))
         val selected = selectedSource()
@@ -829,5 +847,5 @@ class LibraryController(private val activity: Activity, private val store: Secur
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
     fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    companion object { const val CATALOG_REFRESH_MS = 24 * 3600000L; const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

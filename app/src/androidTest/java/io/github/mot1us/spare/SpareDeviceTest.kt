@@ -3752,6 +3752,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
+                scenario.onActivity { assertEquals("A series opens on a season, not every episode at once", "Season 1 ▾", it.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("library-favorite").text.toString() == "✓ In Watchlist" && store.libraryFavorites(source).contains("series:1") }
                 val beforeEpisodeRefresh = server.requests["/player_api.php"] ?: 0
@@ -4825,6 +4826,23 @@ class SpareDeviceTest {
                 waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 1 } && a.window.decorView.findViewWithTag<View>("library-item:movie:5077")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText("") }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && !it.window.decorView.findViewWithTag<View>("library-items").isShown }
+                // Leaving Library from a category grid and coming back returns to that grid, and Back still leads to the rows.
+                fun focusTag(): String { var tag = ""; scenario.onActivity { tag = it.currentFocus?.tag as? String ?: "" }; return tag }
+                scenario.onActivity { it.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel").requestContentFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").hasFocus() }
+                // Down the rows to the first category row (its 20 tiles are every third title from 5003), then along it to See all.
+                val categoryRow = (5003..5060 step 3).map { "library-item:movie:$it" }.toSet() + "library-shelf-more:1"
+                repeat(6) { if (focusTag() !in categoryRow) { device.pressDPadDown(); Thread.sleep(400) } }
+                assertTrue("Down reaches the category row, was on ${focusTag()}", focusTag() in categoryRow)
+                repeat(21) { if (focusTag() != "library-shelf-more:1") { device.pressDPadRight(); Thread.sleep(150) } }
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressDPadCenter()
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.hasFocus() } }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.hasFocus() } && a.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Fixture cinema" }
+                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
                 assertTrue("Browsing rows, a category and search asks the provider for no titles", server.catalogTargets.none { it.contains("get_vod_streams") })
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }

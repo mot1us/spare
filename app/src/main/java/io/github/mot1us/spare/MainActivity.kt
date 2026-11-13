@@ -1111,7 +1111,7 @@ class MainActivity : Activity() {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
         root.bringChildToFront(library.panel)
         if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
-        if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.open(focusContent = true) }
+        if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.resume() }
         showNavigation(if (archive) "guide-mode" else "library")
     }
     private fun reopenLibrary() {

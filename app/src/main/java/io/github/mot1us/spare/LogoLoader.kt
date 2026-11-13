@@ -26,6 +26,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
     private class Binding(val url: String, val http: Boolean, val dimension: Int, var loaded: ((Bitmap?) -> Unit)?) {
+        var deferred = false
         var waiting = false
         var complete = false
         var attempts = 0
@@ -53,8 +54,9 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             bindings.entries.toList().forEach { (view, binding) ->
                 if (!binding.waiting && !binding.complete && bindings[view] === binding) {
                     if (now > binding.deadline) forget(view, binding)
-                    else if (now >= binding.retryAt && visible(view) && checked < 4) {
-                        checked++; load(view, binding)
+                    else if (now >= binding.retryAt && visible(view) && (binding.deferred || checked < 4)) {
+                        if (!binding.deferred) checked++
+                        load(view, binding)
                     }
                 }
             }
@@ -111,6 +113,12 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 scheduleRetries()
             }
         }
+        // While a remote key is held the list is flying past: show placeholders and load what is on screen once it stops.
+        if (SystemClock.uptimeMillis() < quietUntil && cache.get(key(binding.url, binding.dimension)) == null) {
+            if (initial) { if (view.drawable != null) view.setImageDrawable(null); binding.loaded?.invoke(null) }
+            binding.deferred = true; binding.retryAt = quietUntil; scheduleRetries(); return
+        }
+        binding.deferred = false
         val bitmap = request(binding.url, binding.http, binding.dimension, ::apply) { binding.waiting = true; binding.attempts++ }
         if (bitmap != null) apply(bitmap)
         else if (initial) {
@@ -139,7 +147,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             // Hidden/detached views only get cleanup, never another network attempt.
             if (visible(view)) minOf(binding.retryAt, binding.deadline + 1) else binding.deadline + 1
         } ?: return
-        val whenReady = maxOf(now + 250, next)
+        val whenReady = maxOf(now + 60, next)
         if (retryPosted && retryWhen <= whenReady) return
         handler.removeCallbacks(retryImages)
         retryPosted = true
@@ -206,7 +214,10 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         return null
     }
     fun unavailable(url: String): Boolean = failed[url]?.let { SystemClock.uptimeMillis() < it.until } ?: false
-    fun prefetch(url: String, http: Boolean = false, dimension: Int = 0) { get(url, http, dimension) {} }
+    fun prefetch(url: String, http: Boolean = false, dimension: Int = 0) { if (SystemClock.uptimeMillis() >= quietUntil) get(url, http, dimension) {} }
+    @Volatile private var quietUntil = 0L
+    /** Hold new poster loads for [millis]; called on every repeat of a held remote key. Posters already in memory still show at once. */
+    fun quiet(millis: Long = 250) { quietUntil = SystemClock.uptimeMillis() + millis }
     /** Load into the caches while the panel is closed, so the next open shows posters at once. */
     fun warm(url: String, http: Boolean = false, dimension: Int = 0) { request(url, http, size(dimension), {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }

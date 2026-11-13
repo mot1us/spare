@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.45.0 — 2026-11-13
+
+- A series opens on one season — the first with an episode you have not watched — with the seasons listed on the left ("All seasons" stays first) and a taller hero image of the show above the episodes.
+- Library no longer re-imports the whole catalog while you browse. A saved catalog of any age opens at once; it is refreshed only while Library is closed, when it is more than a day old (or with Refresh). On a small TV a re-import could stall a category change for a minute.
+- Changing category with the catalog in memory is shown immediately, without waiting for a background worker.
+- Opening Library from the menu returns to where you left it: the same section, your place in the rows, the category grid you had open, or the series you were in.
+- Holding a direction key no longer starts a download for every poster that flies past: placeholders show while the key is held and the posters on screen load as soon as it is released. Posters already in memory still appear at once.
+- Fixed: after the rows were hidden and shown again, a row that remembered a tile far to the right could refuse the cursor, leaving Up/Down stuck on the neighbouring row.
+
 ## 0.44.0 — 2026-11-13
 
 - Library posters are lighter to download, decode and draw. Artwork hosted on TMDB (image.tmdb.org) is requested at the 342-pixel width instead of the 500-pixel-or-larger size providers usually list; other hosts are fetched as before. Tiles in the rows, the grids and Search are decoded at the size they are drawn (about 256 pixels tall on a 1080p TV, under a third of the memory of before), so roughly three times as many posters stay ready in memory; the title page still gets a sharper copy. Posters stay in the same encrypted on-device cache; TMDB posters saved by earlier versions are downloaded once more at the smaller size.
