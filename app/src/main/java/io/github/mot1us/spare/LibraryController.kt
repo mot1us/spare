@@ -245,6 +245,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     @Volatile private var firstTitlesRecorded = false
     private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
+        warm(selected, posters = false)
         openBegan = Timings.now(); firstTitlesRecorded = false
         val title = if (mode == "movie") "Movies" else "Series"
         panel.page(title, "Loading categories…", true)
@@ -289,14 +290,19 @@ class LibraryController(private val activity: Activity, private val store: Secur
      * category of Movies and Series — so the first visit reads saved pages instead of waiting
      * on the provider. Skipped while Library is open; never touches the player.
      */
-    fun prewarm(selected: Source) {
-        if (destroyed || opened || selected.kind != "xtream" || !selected.enabled || warmTask?.isDone == false) return
+    fun prewarm(selected: Source) { if (!opened) warm(selected, posters = true) }
+    /** Import (or restore) the whole Movies and Series catalogs off-screen, so browsing reads memory instead of the provider. */
+    private fun warm(selected: Source, posters: Boolean) {
+        if (destroyed || selected.kind != "xtream" || !selected.enabled || warmTask?.isDone == false) return
         warmTask = warming.submit {
             for (mode in listOf("movie", "series")) {
                 if (Thread.currentThread().isInterrupted || destroyed) return@submit
                 val names = runCatching { categoriesFor(selected, mode, false) }.getOrDefault(emptyMap())
+                val began = Timings.now()
+                runCatching { repository.load(selected, mode, "", false, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
                 val first = names.keys.firstOrNull() ?: continue
-                runCatching { repository.load(selected, mode, first, false, names) }.getOrNull()?.let { snapshot ->
+                if (!posters || opened) continue
+                (repository.category(selected, mode, first, names) ?: runCatching { repository.load(selected, mode, first, false, names) }.getOrNull())?.let { snapshot ->
                     // Decode the posters Library opens to now, so the first visit is not waiting on disk and network.
                     val urls = runCatching { repository.query(snapshot, null, "", 0, 21).entries.map { it.poster }.filter { it.isNotBlank() } }.getOrDefault(emptyList())
                     handler.post { if (!destroyed && !opened) panel.warmPosters(urls, selected.allowHttp) }
@@ -319,7 +325,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
             if (!firstTitlesRecorded && snapshot.count > 0) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             activeSnapshot = snapshot; catalogImporting = busy
-            panel.page(title, "${counted(snapshot.count, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
+            panel.page(title, "${counted(snapshot.shown, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
             loadCatalogPage(null, activeQuery, false)
         }
         val memory = catalogs[key]
@@ -342,6 +348,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
             }
         } }
         catalogImports[key] = worker.submit {
+            // The whole catalog is imported in the background; once it is in memory a category needs no provider request.
+            if (force) runCatching { repository.load(selected, mode, "", true, names) }
+            repository.category(selected, mode, scope, names)?.let { whole -> Timings.since("Category", openBegan); deliver(whole, false); return@submit }
             val cached = memory?.takeIf { it.complete } ?: runCatching {
                 // Only reuse an already-parsed full catalog here; decrypting a large saved one first delays the category.
                 repository.cached(selected, mode, scope) ?: repository.memory(selected, mode)?.takeIf { full ->
@@ -476,7 +485,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (previous != null && (sort == LibraryCatalog.SORT_PROVIDER || !snapshot.complete)) {
             val kept = previous.copy(version = version, more = if (sort == LibraryCatalog.SORT_PROVIDER) previous.cursor < snapshot.count else previous.more, available = snapshot.count)
             browsePages[stateKey] = kept; panel.catalogPage(kept.rows, false, kept.more)
-            panel.page(activeCatalogTitle, "${counted(kept.rows.size, "title")} shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+            panel.page(activeCatalogTitle, "${counted(kept.rows.size, "title")} shown · ${snapshot.shown} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
             return
         }
         // Cancel an in-flight page only when a new one replaces it; a download's progress updates must not starve "load more".
@@ -496,7 +505,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
-                    panel.page(activeCatalogTitle, "${counted(page.rows.size, "title")} shown · ${snapshot.count} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+                    panel.page(activeCatalogTitle, "${counted(page.rows.size, "title")} shown · ${snapshot.shown} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
                 }
             } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
         }

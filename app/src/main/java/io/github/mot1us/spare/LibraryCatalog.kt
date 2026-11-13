@@ -7,29 +7,32 @@ import java.util.UUID
 /** Small encrypted index plus bounded encrypted pages. No catalog URLs reach plaintext storage. */
 class LibraryCatalog(private val store: SecureStore) {
     /** Only searchable/display fields. Reconstruct standard URLs instead of repeating credentials per title. */
-    data class Title(val id: String, val name: String, val category: String, val extension: String, val year: String, val poster: String, val direct: String, val externalId: String = "", val savedCanonical: String = "") {
+    data class Title(val id: String, val name: String, val category: String, val extension: String, val year: String, val poster: String, val direct: String, val externalId: String = "", val savedCanonical: String = "", val added: Long = 0, val rating: Float = 0f) {
         val key = ChannelSearch.key(name)
         /** Computed once at import and saved; restoring a large catalog must not repeat the title cleanup per title. */
         val canonical = savedCanonical.ifEmpty { VodStart.titleKey(OnDemand(id, name, category, year = year)) }
-        fun item(source: Source) = OnDemand(id, name, category, if (id.startsWith("series:")) "" else direct.ifBlank { VodCatalog.streamUrl(source, "movie", id.substringAfter(':'), extension) }, id.substringBefore(':'), poster = poster, year = year, externalId = externalId, playlistId = source.id)
-        fun json() = JSONArray(listOf(id, name, category, extension, year, poster, direct, externalId, canonical))
+        fun item(source: Source) = OnDemand(id, name, category, if (id.startsWith("series:")) "" else direct.ifBlank { VodCatalog.streamUrl(source, "movie", id.substringAfter(':'), extension) }, id.substringBefore(':'), poster = poster, year = year, externalId = externalId, playlistId = source.id, added = added, rating = rating)
+        fun json() = JSONArray(listOf(id, name, category, extension, year, poster, direct, externalId, canonical, added.toString(), rating.toString()))
         companion object {
             private val idPattern = Regex("(?:movie|series):[0-9]{1,20}")
             fun from(item: OnDemand, source: Source): Title {
                 val ext = item.url.substringBefore('?').substringAfterLast('.', "mp4").lowercase(java.util.Locale.ROOT)
                 val standard = if (item.kind == "movie") VodCatalog.streamUrl(source, "movie", item.id.substringAfter(':'), ext) else ""
-                return Title(item.id, item.title, item.category, ext, item.year, item.poster, item.url.takeUnless { it == standard }.orEmpty(), item.externalId)
+                return Title(item.id, item.title, item.category, ext, item.year, item.poster, item.url.takeUnless { it == standard }.orEmpty(), item.externalId, added = item.added, rating = item.rating)
             }
             fun from(json: JSONArray): Title {
-                require(json.length() in 7..9 && json.getString(0).matches(idPattern))
-                return Title(json.getString(0), json.getString(1).take(256), json.getString(2).take(128), json.getString(3).take(16), json.getString(4).take(16), json.getString(5).take(4096), json.getString(6).take(16384), json.optString(7).take(128), json.optString(8).take(256))
+                require(json.length() in 7..11 && json.getString(0).matches(idPattern))
+                return Title(json.getString(0), json.getString(1).take(256), json.getString(2).take(128), json.getString(3).take(16), json.getString(4).take(16), json.getString(5).take(4096), json.getString(6).take(16384), json.optString(7).take(128), json.optString(8).take(256), json.optString(9).toLongOrNull() ?: 0L, json.optString(10).toFloatOrNull()?.takeIf { it.isFinite() } ?: 0f)
             }
         }
     }
     data class Chunk(val file: String, val count: Int, val groups: List<String>, val keys: List<String> = emptyList(), val titles: List<Title> = emptyList())
     data class Snapshot(val updated: Long, val chunks: List<Chunk>, val count: Int, val labels: Map<String, String>, val complete: Boolean = true, val scopeGroup: String? = null, val source: Source? = null,
         /** A saved category lives in [CatalogDb]: its titles are read a page at a time, never held in [chunks]. */
-        val dbScope: String? = null, val dbGen: String? = null) {
+        val dbScope: String? = null, val dbGen: String? = null,
+        /** Titles in [scopeGroup] when this is one category's view of the whole catalog; [count] stays the catalog total for paging. */
+        val scopeCount: Int? = null, val schema: Int = SCHEMA) {
+        val shown get() = scopeCount ?: count
         fun label(group: String) = labels[group.removePrefix("Category ")] ?: group
         val categories: Map<String, String> get() = chunks.flatMap { it.groups }.distinct().associateWith(::label)
         val groups: List<String> get() = categories.values.distinct()
@@ -62,6 +65,13 @@ class LibraryCatalog(private val store: SecureStore) {
     private val missing = java.util.concurrent.ConcurrentHashMap<String, Long>()
     var changed: (() -> Unit)? = null
     fun memory(source: Source, mode: String): Snapshot? = synchronized(snapshots) { snapshots[prefix(source, mode)]?.takeIf { it.source == source } }
+    /** One category read straight from the whole catalog already in memory: no provider request and nothing to decrypt. */
+    fun category(source: Source, mode: String, scope: String, names: Map<String, String>): Snapshot? {
+        val full = memory(source, mode)?.takeIf { it.complete && it.dbScope == null } ?: return null
+        val group = "Category $scope"
+        val size = full.chunks.sumOf { chunk -> if (group in chunk.groups) chunk.titles.count { it.category == group } else 0 }
+        return if (size == 0) null else full.copy(labels = names, scopeGroup = group, scopeCount = size)
+    }
     fun matches(source: Source, request: VodStart.Request): List<OnDemand> {
         val kinds = if (request.episode == null) listOf("movie", "series") else listOf("series")
         val key = ChannelSearch.key(request.query)
@@ -99,7 +109,7 @@ class LibraryCatalog(private val store: SecureStore) {
         }
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
-            val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..3)
+            val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..SCHEMA)
             if (json.has("provider")) { if (json.getString("provider") != source.providerKey()) return null }
             else if (!store.legacyProviderMatches(source)) return null
             val pages = json.getJSONArray("pages"); require(pages.length() <= 2000)
@@ -112,7 +122,7 @@ class LibraryCatalog(private val store: SecureStore) {
                 Chunk(p.getString("file"), count, List(groups.length()) { groups.getString(it) }, if (titles.isNotEmpty()) titles.map { it.key } else keys?.let { values -> List(values.length()) { values.getString(it) } }.orEmpty(), titles)
             }
             val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
-            val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels, complete = json.optBoolean("complete", true), source = source)
+            val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels, complete = json.optBoolean("complete", true), source = source, schema = json.getInt("schema"))
             index(source, mode, chunks.flatMap { it.titles }); remember(prefix, snapshot)
             Timings.since("Saved category", restoreBegan)
             if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
@@ -127,7 +137,7 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     /** Shared by background warming, explicit search and Library; consumers receive useful partial pages. */
     fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), progress: (Snapshot) -> Unit = {}): Snapshot {
-        fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && System.currentTimeMillis() - value.updated in 0 until 6 * 3600000L
+        fun fresh(value: Snapshot?) = value?.complete == true && value.schema >= SCHEMA && value.chunks.all { it.titles.size == it.count } && System.currentTimeMillis() - value.updated in 0 until 6 * 3600000L
         val saved = cached(source, mode, scope)
         if (saved != null) progress(saved)
         if (!force && fresh(saved)) return saved!!
@@ -207,7 +217,7 @@ class LibraryCatalog(private val store: SecureStore) {
             val pages = JSONArray(chunks.map { JSONObject().put("file", it.file).put("count", it.count).put("groups", JSONArray(it.groups)).put("titles", JSONArray(it.titles.map(Title::json))) })
             synchronized(publishLock) {
                 requireCurrent()
-                store.write("${prefix}index.enc", JSONObject().put("schema", 3).put("provider", source.providerKey()).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
+                store.write("${prefix}index.enc", JSONObject().put("schema", SCHEMA).put("provider", source.providerKey()).put("updated", stamp).put("complete", complete).put("pages", pages).put("labels", JSONObject(labels)).toString().toByteArray())
                 if (complete && scope.isEmpty()) {
                     lookup[lookupKey(source, mode)] = java.util.concurrent.ConcurrentHashMap(chunks.flatMap { it.titles }.groupBy { it.canonical })
                 }
@@ -273,6 +283,8 @@ class LibraryCatalog(private val store: SecureStore) {
         return Page(result, snapshot.count, false)
     }
     companion object {
+        /** 4 adds each title's provider "added" time and rating; older saved catalogs are refreshed once. */
+        const val SCHEMA = 4
         const val SORT_PROVIDER = "Provider order"
         const val SORT_TITLE = "A–Z"
         const val SORT_NEWEST = "Newest"

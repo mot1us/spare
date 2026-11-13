@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.43.0 — 2026-11-12
+
+- Library stage 1 of 3: the whole Movies and Series catalogs are imported in the background — ten seconds after the guide loads, and when Library opens — and kept in memory. Once imported, opening or switching a category asks the provider for nothing and shows its titles at once; the catalog refreshes itself when it is more than six hours old. Until the first import finishes, categories load as before.
+- Titles now keep the provider's "added" date and rating for the upcoming Recently added and Top rated rows. Saved catalogs from earlier versions are refreshed once.
+- Settings › Playlists › Refresh settings shows how long the whole-catalog imports took ("All movies", "All series").
+
 ## 0.42.1 — 2026-11-12
 
 - Library no longer gets stuck on the first 80 titles while a big category is still downloading: progress updates no longer cancel a "load more" page you scrolled to, and the grid is redrawn at most every 2.5 seconds during a download instead of every ¾ second.

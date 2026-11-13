@@ -5,7 +5,9 @@ import org.json.JSONObject
 
 /** URLs may contain credentials; serialize only inside SecureStore's encrypted files. */
 data class OnDemand(val id: String, val title: String, val category: String, val url: String = "", val kind: String = "movie",
-    val description: String = "", val seriesId: String = "", val season: Int = 0, val episode: Int = 0, val poster: String = "", val backdrop: String = "", val year: String = "", val genre: String = "", val runtime: String = "", val cast: String = "", val externalId: String = "", val playlistId: String = "") {
+    val description: String = "", val seriesId: String = "", val season: Int = 0, val episode: Int = 0, val poster: String = "", val backdrop: String = "", val year: String = "", val genre: String = "", val runtime: String = "", val cast: String = "", val externalId: String = "", val playlistId: String = "",
+    /** Provider "added" time in seconds and a 0–10 rating; catalog rows sort by them. Not saved with watch progress. */
+    val added: Long = 0, val rating: Float = 0f) {
     fun json() = JSONObject().put("id", id).put("title", title).put("category", category).put("url", url).put("kind", kind)
         .put("description", description).put("seriesId", seriesId).put("season", season).put("episode", episode).put("poster", poster).put("backdrop", backdrop).put("year", year).put("genre", genre).put("runtime", runtime).put("cast", cast).put("externalId", externalId).put("playlist", playlistId)
     companion object {
@@ -38,7 +40,7 @@ object VodCatalog {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
         val action = if (kind == "movie") "get_vod_streams" else "get_series"
         require(category == null || numeric.matches(category))
-        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "direct_source", "stream_icon", "cover", "cover_big", "poster", "movie_image", "year", "releaseDate", "release_date", "tmdb_id", "tmdb", "tvdb_id", "imdb_id") +
+        val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "direct_source", "stream_icon", "cover", "cover_big", "poster", "movie_image", "year", "releaseDate", "release_date", "added", "last_modified", "rating", "rating_5based", "tmdb_id", "tmdb", "tvdb_id", "imdb_id") +
             if (lean) emptySet() else setOf("plot", "backdrop_path", "genre", "cast")
         Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp, limit = if (lean) 64 * 1024 * 1024 else 24 * 1024 * 1024) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
@@ -91,7 +93,9 @@ object VodCatalog {
             OnDemand("$kind:$id", j.optString("name").take(256).ifBlank { "Untitled" }, categories[j.optString("category_id")] ?: j.optString("category_id").take(80).let { if (it.isBlank()) "Other" else "Category $it" },
                 if (kind == "movie") playbackUrl(source, "movie", id, j) else "", kind, j.optString("plot").take(2048), poster = posterKeys(kind).asSequence().map { artwork(j.optString(it), source) }.firstOrNull { it.isNotBlank() }.orEmpty(),
                 backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { yearPattern.find(it)?.value }.firstOrNull().orEmpty(),
-                genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j))
+                genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j),
+                added = (j.optString("added").toLongOrNull() ?: j.optString("last_modified").toLongOrNull() ?: 0L).coerceIn(0, 99999999999L),
+                rating = (j.optString("rating").toFloatOrNull()?.takeIf { it.isFinite() && it > 0f } ?: j.optString("rating_5based").toFloatOrNull()?.takeIf { it.isFinite() }?.times(2f) ?: 0f).coerceIn(0f, 10f))
         }.distinctBy { it.id }
     }
     fun episodes(source: Source, series: OnDemand, timeoutMs: Int = 6000): List<OnDemand> = parseEpisodes(seriesRoot(source, series, timeoutMs), source, series)

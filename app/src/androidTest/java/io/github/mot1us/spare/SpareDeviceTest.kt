@@ -3595,7 +3595,7 @@ class SpareDeviceTest {
                     val guide = MainActivity::class.java.getDeclaredField("guidePanel").apply { isAccessible = true }.get(activity) as View
                     assertEquals("Library must use the Guide palette and opacity", colors(guide), colors(activity.window.decorView.findViewWithTag<View>("library-panel")))
                 }
-                assertTrue("Initial browsing requests only one category", server.catalogTargets.any { it.contains("category_id=1") })
+                assertTrue("Initial browsing requests its category or the whole catalog, never other categories", server.catalogTargets.any { it.contains("category_id=1") || !it.contains("category_id=") })
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").requestFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
@@ -4743,6 +4743,30 @@ class SpareDeviceTest {
     private fun selectSportsSchedule(activity: MainActivity, option: String) {
         val root = activity.window.decorView
         root.findViewWithTag<View>(option).apply { requestFocus(); performClick() }
+    }
+
+    @Test fun importedCatalogOpensCategoriesWithoutAskingTheProvider() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                lateinit var library: LibraryController
+                scenario.onActivity { activity ->
+                    library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
+                    library.prewarm(source)
+                }
+                waitFor(scenario) { library.repository.memory(source, "movie")?.complete == true && library.repository.memory(source, "series")?.complete == true }
+                val before = server.catalogTargets.size
+                assertEquals("The whole movie catalog is requested once", 1, server.catalogTargets.count { it.contains("get_vod_streams") && !it.contains("category_id=") })
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
+                assertEquals("Browsing imported categories asks the provider for nothing", before, server.catalogTargets.size)
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
     }
 
     private fun chooseLibraryCategory(scenario: ActivityScenario<MainActivity>, position: Int) {
