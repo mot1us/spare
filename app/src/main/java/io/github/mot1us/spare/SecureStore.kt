@@ -13,6 +13,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class SecureStore(private val context: Context) {
     private val preferences = context.getSharedPreferences("view-state", Context.MODE_PRIVATE)
@@ -50,20 +51,39 @@ class SecureStore(private val context: Context) {
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
         }.generateKey()
     } }
+    /** Large caches use a random data key wrapped once by the Android Keystore key. Keystore AES over tens of megabytes
+     * is very slow on TV hardware; the unwrapped key lets the normal, hardware-accelerated provider do the bulk work. */
+    private val dataKey: SecretKey by lazy { synchronized(keyLock) {
+        val file = AtomicFile(File(context.filesDir, "datakey.bin"))
+        val existing = if (file.baseFile.exists()) runCatching {
+            val bytes = file.openRead().use { it.readBytes() }
+            require(bytes.size == 1 + 12 + 32 + 16 && bytes[0] == 1.toByte())
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(1, 13))) }
+            SecretKeySpec(cipher.doFinal(bytes, 13, bytes.size - 13), "AES")
+        }.getOrNull() else null
+        existing ?: run {
+            val raw = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+            val output = file.startWrite()
+            try { output.write(byteArrayOf(1)); output.write(cipher.iv); output.write(cipher.doFinal(raw)); file.finishWrite(output) }
+            catch (e: Exception) { file.failWrite(output); throw e }
+            SecretKeySpec(raw, "AES")
+        }
+    } }
     fun write(name: String, bytes: ByteArray) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, dataKey) }
         val file = AtomicFile(File(context.filesDir, name)); val output = file.startWrite()
-        try { output.write(byteArrayOf(1)); output.write(cipher.iv); output.write(cipher.doFinal(bytes)); file.finishWrite(output) }
+        try { output.write(byteArrayOf(2)); output.write(cipher.iv); output.write(cipher.doFinal(bytes)); file.finishWrite(output) }
         catch (e: Exception) { file.failWrite(output); throw e }
     }
     private fun writeEncrypted(name: String, body: (java.io.OutputStream) -> Unit) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key) }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, dataKey) }
         val file = AtomicFile(File(context.filesDir, name))
         val output = file.startWrite()
         try {
-            output.write(byteArrayOf(1)); output.write(cipher.iv)
+            output.write(byteArrayOf(2)); output.write(cipher.iv)
             val sink = object : java.io.OutputStream() {
                 override fun write(value: Int) = write(byteArrayOf(value.toByte()), 0, 1)
                 override fun write(bytes: ByteArray, offset: Int, length: Int) { cipher.update(bytes, offset, length)?.let(output::write) }
@@ -79,11 +99,17 @@ class SecureStore(private val context: Context) {
         val file = AtomicFile(File(context.filesDir, name))
         if (!file.baseFile.exists()) return@synchronized null
         val bytes = file.openRead().use { Network.readLimited(it, 128 * 1024 * 1024) }
-        require(bytes.size >= 29 && bytes[0] == 1.toByte())
+        require(bytes.size >= 29 && (bytes[0] == 1.toByte() || bytes[0] == 2.toByte()))
+        val legacy = bytes[0] == 1.toByte()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
+            init(Cipher.DECRYPT_MODE, if (legacy) key else dataKey, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
         }
-        cipher.doFinal(bytes, 13, bytes.size - 13)
+        val decryptBegan = Timings.now()
+        val plain = cipher.doFinal(bytes, 13, bytes.size - 13)
+        if (bytes.size > 256 * 1024) Timings.since("Decrypt ${name.substringBefore('-').substringBefore('.')}", decryptBegan)
+        // Rewrite large Keystore-encrypted files once so every later start uses the fast key.
+        if (legacy && bytes.size > 256 * 1024) runCatching { write(name, plain) }
+        plain
     }
     fun delete(name: String) = synchronized(fileLock(name)) {
         require(name.matches(Regex("[a-zA-Z0-9_.-]+")))
@@ -133,14 +159,16 @@ class SecureStore(private val context: Context) {
             read("lineup-${source.id}.enc")?.let { it to false } ?: read("cache-${source.id}.enc")?.let { it to true }
         } ?: return null
         // Parse outside the account-transition lock; a large guide must not hold up UI binding.
-        return GuideDisk.lineup(saved.first).also { if (saved.second) saveLineup(source, it) }
+        val parseBegan = Timings.now()
+        return GuideDisk.lineup(saved.first).also { Timings.since("Parse lineup", parseBegan) }.also { if (saved.second) saveLineup(source, it) }
     }
     fun cachedProgrammes(source: Source): Map<String, List<Programme>> {
         val saved = synchronized(cacheLock) {
             if (!providerCurrent(source)) return emptyMap()
             read("epg-${source.id}.enc")?.let { it to false } ?: read("cache-${source.id}.enc")?.let { it to true }
         } ?: return emptyMap()
-        val entries = GuideDisk.programmes(saved.first)
+        val parseBegan = Timings.now()
+        val entries = GuideDisk.programmes(saved.first).also { Timings.since("Parse guide", parseBegan) }
         if (saved.second) {
             cacheProgrammes(source, entries, System.currentTimeMillis())
             synchronized(cacheLock) {

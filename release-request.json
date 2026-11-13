@@ -1,13 +1,7 @@
 {
-  "versionName": "0.40.1",
-  "versionCode": 126,
-  "attempt": 3,
+  "versionName": "0.41.0",
+  "versionCode": 127,
+  "attempt": 1,
   "macos": false,
-  "tvSuite": "focused",
-  "tvTests": [
-    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive",
-    "gameReminderOverlayKeepsPlaybackAndDismissesWithBack",
-    "guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes",
-    "sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable"
-  ]
+  "tvSuite": "full"
 }

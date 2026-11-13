@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.41.0 — 2026-11-12
+
+- Faster start: saved channels, guide and Library files are now encrypted with a random data key that the Android Keystore protects, instead of running every byte through the Keystore. Large files used to take several seconds to open on TV hardware. Existing files are converted the first time they are read, so the first start after updating is still slow once.
+- Settings › Playlists › Refresh settings now splits "Last start" into decrypt and parse times for the channel lineup and the guide, to show what remains slow.
+
 ## 0.40.1 — 2026-11-12
 
 - Library opens a single saved category grid with categories always visible on the left. Switching categories cancels abandoned requests; opening Library stops its background warming. Search, sorting, Up next and Watchlist remain available.
