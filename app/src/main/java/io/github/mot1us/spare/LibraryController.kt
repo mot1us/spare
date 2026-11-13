@@ -240,8 +240,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun request(job: (Int) -> Unit) { task?.cancel(true); val token = ++epoch; task = worker.submit { if (!destroyed) job(token) } }
     private fun ui(token: Int, work: () -> Unit) { handler.post { if (!destroyed && token == epoch && opened) work() } }
     private val categoryNames = mutableMapOf<String, Map<String, String>>()
+    @Volatile private var openBegan = 0L
+    @Volatile private var firstTitlesRecorded = false
     private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
+        openBegan = Timings.now(); firstTitlesRecorded = false
         val title = if (mode == "movie") "Movies" else "Series"
         panel.page(title, "Loading categories…", true)
         fun bind(names: Map<String, String>) {
@@ -253,6 +256,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
         request { token ->
             val names = categoriesFor(selected, mode, force)
+            Timings.since("Category list", openBegan)
             ui(token) { if (names.isEmpty()) bulkCatalog(selected, mode, force) else bind(names) }
         }
     }
@@ -308,6 +312,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val title = names[scope].orEmpty()
         activeCatalogTitle = title
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
+            if (!firstTitlesRecorded && snapshot.count > 0) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             activeSnapshot = snapshot; catalogImporting = busy
             panel.page(title, "${counted(snapshot.count, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
             loadCatalogPage(null, activeQuery, false)

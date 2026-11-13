@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.41.3 — 2026-11-12
+
+- Settings › Playlists › Refresh settings now also shows how long Movies and Series took to list categories and to show their first titles, to find what still delays the first Library open.
+
 ## 0.41.2 — 2026-11-12
 
 - Library loads a category much faster: reading a saved category is about five times quicker, and importing one from the provider about twice as quick, by removing repeated work for every title (compiled patterns, a plain-text fast path for search keys, a saved title key, cached stream address prefix). Saved partial progress while a very large category downloads is written every 20 seconds instead of 5.

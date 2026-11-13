@@ -1,7 +1,10 @@
 {
-  "versionName": "0.41.2",
-  "versionCode": 129,
+  "versionName": "0.41.3",
+  "versionCode": 130,
   "attempt": 1,
   "macos": false,
-  "tvSuite": "full"
+  "tvSuite": "focused",
+  "tvTests": [
+    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive"
+  ]
 }
