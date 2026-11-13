@@ -64,6 +64,7 @@ object SportsSchedule {
             }
         } }
         if (events.isNotEmpty()) partial(LiveSportsSnapshot(events.values.toList(), now, emptySet()))
+        val revisions = mutableMapOf<String, Long>()
         val completedBoards = mutableMapOf<String, Int>(); val expectedBoards = urls.groupingBy { it.first }.eachCount()
         val pool = Executors.newFixedThreadPool(4) { task -> Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, "spare-scoreboard").apply { priority = Thread.MIN_PRIORITY } }
         try {
@@ -80,7 +81,13 @@ object SportsSchedule {
                         completedBoards[league] = (completedBoards[league] ?: 0) + 1
                         if (!calendarOnly || completedBoards[league] == expectedBoards[league]) leagues.add(league)
                     }
-                    entries.forEach { event -> if (event.scoreboard || events["${event.league}:${event.id}"]?.scoreboard != true) events["${event.league}:${event.id}"] = event }
+                    val revision = if (url.contains("/scoreboard")) boardCache[url]?.first ?: now else now
+                    entries.forEach { event ->
+                        val key = "${event.league}:${event.id}"
+                        if (preferEvent(events[key], revisions[key] ?: Long.MIN_VALUE, event, revision)) {
+                            events[key] = event; revisions[key] = revision
+                        }
+                    }
                     if (url.contains("/teams/")) {
                         val code = url.substringAfter("/teams/").substringBefore('/').uppercase(java.util.Locale.ROOT)
                         SportsCatalog.teams.firstOrNull { league in it.competitions && (it.apiId == code || it.id.substringAfter(':').equals(code, true)) }?.let { teamCache["$league:${it.id}"] = now to entries }
@@ -90,6 +97,14 @@ object SportsSchedule {
             }
         } finally { pool.shutdownNow() }
         return LiveSportsSnapshot(events.values.toList(), now, leagues)
+    }
+    /** Multiple endpoints can describe the same game. Arrival order is not freshness. */
+    internal fun preferEvent(previous: LiveEvent?, previousChecked: Long, incoming: LiveEvent, incomingChecked: Long): Boolean {
+        if (previous == null) return true
+        if (previous.scoreboard != incoming.scoreboard) return incoming.scoreboard
+        if (incomingChecked != previousChecked) return incomingChecked > previousChecked
+        fun stage(event: LiveEvent) = when (event.state) { "post" -> 2; "in" -> 1; else -> 0 }
+        return stage(incoming) >= stage(previous)
     }
     private fun scoreboard(league: String, url: String, now: Long, get: (String) -> String, maxCacheMs: Long = Long.MAX_VALUE): List<LiveEvent> {
         val cached = boardCache[url]

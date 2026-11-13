@@ -79,6 +79,7 @@ class MainActivity : Activity() {
     private var reminderCheckedAt = 0L
     private var reminderChecking = false
     private var reminderReturnFocus: View? = null
+    private var reminderBackPressed = false
     private val hideReminder = Runnable { dismissGameReminder() }
     private var cachedStartup = false
     private var startupPlaybackPending = false
@@ -2209,9 +2210,12 @@ class MainActivity : Activity() {
         if (reminderPending == null && reminderGame == null) due.firstOrNull()?.let { reminderPending = it to now }
         reminderPending?.let { (game, checked) ->
             if (!reminders.has(game) || due.none { it.key == game.key } || now - checked > 120000L) reminderPending = null
-            else if (reminderGame == null && !guideVisible && !gameWatchPanel.isVisible && !library.opened && settingsPanel?.opened != true && sportsManager?.opened != true && sportsCalendar?.opened != true && !details.isVisible && player.playWhenReady && (current != null || onDemand != null)) {
+            else if (reminderGame == null && !gameWatchPanel.isVisible && !vodStartPanel.isVisible &&
+                sportsLeaguePicker?.isShown != true && android.os.SystemClock.elapsedRealtime() - lastInputAt >= 800L &&
+                (currentFocus?.rootView === window.decorView || currentFocus == null) &&
+                player.playWhenReady && (current != null || onDemand != null)) {
                 reminderGame = game; reminderReturnFocus = currentFocus
-                reminders.delivered(game); saveGameReminders(); root.bringChildToFront(reminderBanner); reminderBanner.show(game)
+                reminderBackPressed = false; root.bringChildToFront(reminderBanner); reminderBanner.show(game)
                 handler.removeCallbacks(hideReminder); handler.postDelayed(hideReminder, 30000)
                 reminderPending = null
             }
@@ -2239,7 +2243,8 @@ class MainActivity : Activity() {
     private fun dismissGameReminder() {
         handler.removeCallbacks(hideReminder)
         if (::reminderBanner.isInitialized) reminderBanner.visibility = View.GONE
-        reminderGame = null
+        reminderGame?.let { reminders.delivered(it); saveGameReminders() }
+        reminderGame = null; reminderBackPressed = false
         reminderReturnFocus?.takeIf { it.isShown }?.requestFocus(); reminderReturnFocus = null
     }
     private fun watchGameReminder() {
@@ -3523,6 +3528,18 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
+        if (::reminderBanner.isInitialized && reminderBanner.isShown) {
+            reminderBanner.focusActions()
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) reminderBackPressed = true
+                if (event.action == KeyEvent.ACTION_UP) {
+                    if (reminderBackPressed && !event.isCanceled) dismissGameReminder()
+                    reminderBackPressed = false
+                }
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         if (::gameWatchPanel.isInitialized && gameWatchPanel.isVisible) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) cancelReminderWatch(); return true }
             return super.dispatchKeyEvent(event)
@@ -3543,10 +3560,6 @@ class MainActivity : Activity() {
         if (sportsCalendar?.opened == true) return sportsCalendar!!.dispatchKeyEvent(event)
         sportsManager?.takeIf { it.opened }?.let { panel ->
             if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) { if (event.keyCode == KeyEvent.KEYCODE_MENU) closeSportsManager() else panel.back() }; return true }
-            return super.dispatchKeyEvent(event)
-        }
-        if (::reminderBanner.isInitialized && reminderBanner.isShown) {
-            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP) dismissGameReminder(); return true }
             return super.dispatchKeyEvent(event)
         }
         if (::multiview.isInitialized && multiview.visible) {

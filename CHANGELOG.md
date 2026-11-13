@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.1 — 2026-11-12
+
+- Library opens a single saved category grid with categories always visible on the left. Switching categories cancels abandoned requests; opening Library stops its background warming. Search, sorting, Up next and Watchlist remain available.
+- Game reminders can appear while browsing after a brief input pause. A Back release from the previous screen cannot dismiss a new reminder, and remote focus stays inside its actions.
+- Overlapping daily and weekly scoreboards choose the fresher result, preventing a cached upcoming listing from overwriting a live game.
+
 ## 0.40.0 — 2026-11-12
 
 - Movies and Series open on category rows, like streaming apps: one row per provider category with its first 20 posters and a "See all" tile. Up/Down moves between categories (each row remembers its place), Left/Right within a row, OK opens a title. Only rows on screen download, two categories at a time, and each is saved on the TV for the next visit.

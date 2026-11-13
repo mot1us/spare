@@ -959,7 +959,7 @@ class SpareDeviceTest {
                     scenario.onActivity { activity ->
                         playing = find<PlayerView>(activity.window.decorView)!!.player
                         writes = MainActivity::class.java.getDeclaredField("cacheWrites").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
-                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
+                        MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
                         val due = GameReminders().apply { toggle(game.copy(start = System.currentTimeMillis() - 1000)) }
                         MainActivity::class.java.getDeclaredField("reminders").apply { isAccessible = true }.set(activity, due)
                         MainActivity::class.java.getDeclaredField("reminderChecking").apply { isAccessible = true }.setBoolean(activity, true)
@@ -968,6 +968,8 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
                     scenario.onActivity { activity ->
                         assertEquals("reminder-watch", activity.currentFocus?.tag)
+                        activity.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+                        assertTrue("A Back release from the underlying page cannot dismiss a new reminder", activity.window.decorView.findViewWithTag<View>("game-reminder").isShown)
                         assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player); assertTrue(playing!!.isPlaying)
                     }
                     device.pressBack()
@@ -976,12 +978,14 @@ class SpareDeviceTest {
                     val releaseReminderSearch = java.util.concurrent.CountDownLatch(1)
                     try {
                         scenario.onActivity { activity ->
+                            MainActivity::class.java.getDeclaredMethod("showGuide", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, false)
                             val worker = MainActivity::class.java.getDeclaredField("sportsMatchWorker").apply { isAccessible = true }.get(activity) as java.util.concurrent.ExecutorService
                             worker.submit { releaseReminderSearch.await(20, java.util.concurrent.TimeUnit.SECONDS) }
                             val due = GameReminders().apply { toggle(game.copy(start = System.currentTimeMillis() - 1000)) }
                             MainActivity::class.java.getDeclaredField("reminders").apply { isAccessible = true }.set(activity, due)
                             MainActivity::class.java.getDeclaredMethod("checkGameReminders").apply { isAccessible = true }.invoke(activity)
                         }
+                        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-reminder").isShown }
                         device.pressDPadCenter()
                         waitFor(scenario) { it.window.decorView.findViewWithTag<View>("game-watch-panel").isShown }
                         scenario.onActivity { activity ->
@@ -3567,7 +3571,7 @@ class SpareDeviceTest {
                     val tile = activity.window.decorView.findViewWithTag<View>("library-item:movie:101")
                     // Category rows show portrait 2:3 artwork, never a square crop.
                     assertTrue("Poster tile ${tile.width}x${tile.height} must be portrait", tile.height > tile.width * 1.4f)
-                    assertNotNull("Movies open on category rows", activity.window.decorView.findViewWithTag<View>("library-shelf:1"))
+                    assertTrue("Categories stay visible beside the grid", activity.window.decorView.findViewWithTag<View>("library-categories").isShown)
                     assertNull(activity.window.decorView.findViewWithTag<View>("library-tab:catchup"))
                     assertEquals("Watchlist", activity.window.decorView.findViewWithTag<android.widget.Button>("library-tab:favorites").text.toString())
                     store.theme = "Ocean"; store.themeStyle = "Flat"; store.guideOpacity = 85
@@ -3586,21 +3590,12 @@ class SpareDeviceTest {
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
                 device.pressDPadUp(); device.pressDPadRight()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-shelves").hasFocus() }
-                // Down moves to the next category row and Up returns to the remembered tile of the first.
-                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-item:movie:20") == true }
-                device.pressDPadRight(); device.pressDPadUp(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:101" }
-                // See all opens the whole category; Back returns to the rows on the same tile.
-                device.pressDPadRight(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
-                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").let { grid -> grid.isShown && grid.hasFocus() } }
-                scenario.onActivity { assertEquals("Fixture cinema ▾", it.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
-                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
-                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
-                device.pressDPadUp(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-category").hasFocus() }
-                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-search").hasFocus() }
-                device.pressDPadUp(); device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                device.pressDPadLeft()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
-                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-category").hasFocus() && !it.window.decorView.findViewWithTag<View>("library-categories").isShown }
+                device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                assertTrue("Browsing one category must not download other categories", server.catalogTargets.none { it.contains("category_id=2") || it.contains("category_id=3") })
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
                 scenario.onActivity { activity -> assertEquals("Action ▾", activity.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
@@ -3620,7 +3615,9 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Comedy" }
                 server.finishActionCatalog.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:3001")?.isShown == true }
-                scenario.onActivity { activity -> assertTrue(activity.window.decorView.findViewWithTag<View>("library-category").hasFocus()) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                chooseLibraryCategory(scenario, 0)
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Movies" && it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 chooseLibraryCategory(scenario, 1)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 device.pressMenu(); activateSetting(scenario, "Time format"); activateSetting(scenario, "24 hour · 19:30")
@@ -3721,11 +3718,9 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
                 scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
-                // Back from a category opened from the rows returns to the rows, then to the Library sections.
+                // Back reaches the category rail, then exits Library without an intermediate shelf page.
                 device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-shelves").let { rows -> rows.isShown && rows.hasFocus() } }
-                device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
                 device.pressBack()
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }

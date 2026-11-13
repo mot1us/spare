@@ -143,7 +143,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                         val visible = sectionControls.filter { it.isVisible }
                         val step = if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
                         val next = visible.indexOf(control) + step
-                        if (next < 0) focusHeader() else visible.getOrNull(next)?.requestFocus()
+                        if (next < 0) search.requestFocus() else if (next >= visible.size && categories.isVisible) focusCategories() else visible.getOrNull(next)?.requestFocus()
                     }
                     true
                 }
@@ -157,6 +157,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 else -> false
             } }
         }
+        sectionRail.addView(categories, LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
         val headerControls = listOf(categoryButton, sortButton, refreshButton, saveTitle, markWatched)
         headerControls.forEach { control ->
             control.setOnKeyListener { _, key, event ->
@@ -218,7 +219,6 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             addView(sectionRail, LayoutParams(dp(TvFocus.BROWSE_RAIL_WIDTH_DP), -1))
             addView(FrameLayout(context).apply {
                 addView(content, FrameLayout.LayoutParams(-1, -1))
-                addView(categories, FrameLayout.LayoutParams(dp(280), dp(310), Gravity.TOP or Gravity.END).apply { topMargin = dp(64) })
             }, LayoutParams(0, -1, 1f))
         }, LayoutParams(-1, 0, 1f))
         categories.adapter = object : RecyclerView.Adapter<Holder>() {
@@ -232,18 +232,31 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 val name = if (position == 0) null else categoryNames[position - 1]
                 holder.text.text = name?.let { categoryLabels[it] ?: it } ?: allCategoryTitle; holder.text.isSelected = group == name
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
+                holder.text.tag = "library-category:${name ?: "all"}"
                 holder.text.setOnClickListener {
                     shelfPicked?.let { picked -> closeCategories(); picked(name); return@setOnClickListener }
                     val before = if (group == null) 0 else categoryNames.indexOf(group).plus(1)
                     catalogFocusRequested = false; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]
                     updateCategoryButton(); closeCategories(); filter()
                     if (before in 0 until itemCount) notifyItemChanged(before); notifyItemChanged(position)
+                    focusRows()
                 }
                 holder.text.setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pending = null; catalogFocusRequested = false } }
                 holder.text.setOnKeyListener { _, key, event ->
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
-                    TvFocus.pickerKey(key, event.action, { focusAt(categories, position + it) }) { closeCategories() }
+                    when (key) {
+                        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                            if (event.action == KeyEvent.ACTION_DOWN) {
+                                val next = position + if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
+                                if (next < 0) sectionControls.lastOrNull { it.isVisible }?.requestFocus() else focusAt(categories, next)
+                            }
+                            true
+                        }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusRows(); true }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) navigation?.invoke(); true }
+                        else -> false
+                    }
                 }
             }
         }
@@ -276,7 +289,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                         val next = position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) step else -step
                         if (next < 0) { if (event.repeatCount == 0) search.requestFocus() } else focusAt(rows, next.coerceAtMost(shownRows.lastIndex))
                     }; true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusToolbar() else focusAt(rows, position - 1) }; true }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusBrowseRail() else focusAt(rows, position - 1) }; true }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && grid && position % columns < columns - 1) focusAt(rows, position + 1); true }
                     // Page and Channel keys jump a screen of posters at a time through long catalogs.
                     KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { if (event.action == KeyEvent.ACTION_DOWN && shownRows.isNotEmpty()) {
@@ -337,6 +350,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         empty.visibility = if (shownRows.isEmpty()) VISIBLE else GONE; empty.text = if (allRows.isEmpty()) "No titles to show." else "No matching titles."
     }
 
+    fun clearCategorySelection() {
+        rememberAnchor(); group = null; rememberedKey = null
+        contexts[catalogContext] = null to search.text.toString()
+    }
     fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit, allTitle: String = "All", initialGroup: String? = null, picked: ((String?) -> Unit)? = null) {
         allCategoryTitle = allTitle; showGrid(); shelfPicked = picked
         grid = true; seriesSpot = null; browse(); columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
@@ -345,7 +362,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); changingSearch = false
             rememberedKey = anchors[anchorKey()]
         }
-        if (initialGroup != null && group != initialGroup) { rememberAnchor(); group = initialGroup; rememberedKey = anchors[anchorKey()] }
+        if (initialGroup != null && group != initialGroup) { rememberAnchor(); group = initialGroup; rememberedKey = anchors[anchorKey()]; categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1) }
         catalogQuery = query; catalogMore = more; catalogLabels(groups); filter()
     }
     private fun showGrid() { if (shelves.isVisible) { shelves.visibility = GONE; rows.visibility = VISIBLE } }
@@ -435,7 +452,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun focusRailFromContent(): Boolean {
         if (archive || !hasFocus() || sectionRail.hasFocus()) return false
-        focusToolbar()
+        focusBrowseRail()
         return sectionRail.hasFocus()
     }
     private fun focusHeader() = (if (categoryButton.isVisible) categoryButton else refreshButton).requestFocus()
@@ -443,24 +460,19 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val label = group?.let { categoryLabels[it] ?: it } ?: allCategoryTitle.takeUnless { it == "All" } ?: "All categories"
         categoryButton.text = "$label ▾"
         categoryButton.contentDescription = "Category, $label"
-        categoryButton.isVisible = body.isVisible && categoryNames.isNotEmpty()
+        categoryButton.isVisible = false
+        categories.isVisible = body.isVisible && categoryNames.isNotEmpty()
         sortButton.isVisible = body.isVisible && catalogQuery != null
         if (!categoryButton.isVisible) closeCategories(restoreFocus = false)
     }
-    private fun openCategories() {
-        if (categoryNames.isEmpty()) return
+    private fun focusBrowseRail() { if (categories.isVisible) focusCategories() else focusToolbar() }
+    private fun focusCategories() {
         hideKeyboard(); ++focusEpoch; pending = null; catalogFocusRequested = false
-        categories.background = GuideTheme.guideBackground(100)
-        TvFocus.openPicker(categories) {
-            categories.requestFocus()
-            focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
-        }
+        focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
     }
-    fun closeCategories(restoreFocus: Boolean = true): Boolean =
-        TvFocus.closePicker(categories, categoryButton.takeIf { restoreFocus }) {
-            ++focusEpoch
-            pending = null
-        }
+    private fun openCategories() { if (categories.isVisible) focusCategories() }
+    // Categories are a persistent rail, not a modal picker.
+    fun closeCategories(restoreFocus: Boolean = true): Boolean = false
     /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
     fun requestContentFocus() { if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
     fun focusRows() { if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
@@ -499,7 +511,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             detailPane.isVisible -> "OK Play    ← Library sections    Back Catalog"
             seriesSpot != null -> "OK Play episode    ↑ Search    Back Series"
             shelvesShown -> "OK Details    Hold OK Watchlist    ↑ ↓ Categories    ← Sections"
-            grid -> "OK Details    Hold OK Watchlist    CH+ / CH− Page    ← Sections    ↑ Search"
+            grid -> "OK Details    Hold OK Watchlist    CH+ / CH− Page    ← Categories    ↑ Search"
             else -> "OK Open    ← Library sections    ↑ Search"
         }
     }
