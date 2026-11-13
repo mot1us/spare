@@ -3715,6 +3715,9 @@ class SpareDeviceTest {
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").isShown }
+                // Focus after a category pick is timing dependent on a slow runner; start from the grid explicitly.
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").requestFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
                 device.pressDPadRight()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
