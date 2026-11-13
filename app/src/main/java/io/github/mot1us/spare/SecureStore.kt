@@ -107,8 +107,9 @@ class SecureStore(private val context: Context) {
         val decryptBegan = Timings.now()
         val plain = cipher.doFinal(bytes, 13, bytes.size - 13)
         if (bytes.size > 256 * 1024) Timings.since("Decrypt ${name.substringBefore('-').substringBefore('.')}", decryptBegan)
-        // Rewrite large Keystore-encrypted files once so every later start uses the fast key.
-        if (legacy && bytes.size > 256 * 1024) runCatching { write(name, plain) }
+        // Rewrite Keystore-encrypted files once so every later read uses the fast key. Cached posters are read
+        // by several threads at once, and each Keystore call is a slow cross-process request.
+        if (legacy) runCatching { write(name, plain) }
         plain
     }
     fun delete(name: String) = synchronized(fileLock(name)) {

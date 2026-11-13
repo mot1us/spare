@@ -59,14 +59,14 @@ class SpareDeviceTest {
             val file = File(context.filesDir, "test-security.enc")
             assertFalse(file.readBytes().toString(Charsets.UTF_8).contains(secret))
             assertEquals(secret, store.read("test-security.enc")!!.toString(Charsets.UTF_8))
-            // Files written before 0.41.0 used the Keystore key directly; a large one is read, then re-saved with the fast data key.
+            // Files written before 0.41.0 used the Keystore key directly; one is read, then re-saved with the fast data key.
             val legacyKey = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey("spare-v1", null) as javax.crypto.SecretKey
-            val legacyPlain = ByteArray(300 * 1024) { (it % 251).toByte() }
+            val legacyPlain = ByteArray(40 * 1024) { (it % 251).toByte() }
             val legacyCipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").apply { init(javax.crypto.Cipher.ENCRYPT_MODE, legacyKey) }
             val legacyFile = File(context.filesDir, "test-legacy.enc")
             legacyFile.writeBytes(byteArrayOf(1) + legacyCipher.iv + legacyCipher.doFinal(legacyPlain))
             assertArrayEquals(legacyPlain, store.read("test-legacy.enc"))
-            assertEquals("A large legacy file moves to the data key", 2.toByte(), legacyFile.readBytes()[0])
+            assertEquals("A legacy file moves to the data key", 2.toByte(), legacyFile.readBytes()[0])
             assertArrayEquals(legacyPlain, SecureStore(context).read("test-legacy.enc"))
             store.delete("test-legacy.enc")
             val corrupt = file.readBytes(); corrupt[corrupt.lastIndex] = (corrupt.last().toInt() xor 1).toByte(); file.writeBytes(corrupt)

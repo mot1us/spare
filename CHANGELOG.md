@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.41.1 — 2026-11-12
+
+- Cached posters and logos (small files) are now converted to the fast data-key format on first read, as the large cache files were in 0.41.0. Library scrolling no longer waits on slow Keystore calls for each saved poster.
+
 ## 0.41.0 — 2026-11-12
 
 - Faster start: saved channels, guide and Library files are now encrypted with a random data key that the Android Keystore protects, instead of running every byte through the Keystore. Large files used to take several seconds to open on TV hardware. Existing files are converted the first time they are read, so the first start after updating is still slow once.
