@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.41.5 — 2026-11-12
+
+- Library posters are ready sooner: ten seconds after the guide loads, Spare quietly decodes the first screen of posters for Movies and Series, so the first visit shows them at once instead of waiting several seconds for them to arrive.
+
 ## 0.41.4 — 2026-11-12
 
 - Sorting Library by A–Z or Newest no longer recomputes every title's sort key on each comparison, which took far longer than the rest of opening a large category. While a category is still downloading, it shows in provider order immediately and sorts once it finishes.

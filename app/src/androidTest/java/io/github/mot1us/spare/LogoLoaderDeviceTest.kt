@@ -83,6 +83,25 @@ class LogoLoaderDeviceTest {
         } finally { instrumentation.runOnMainSync { paused.close() } }
     }
 
+    @Test fun warmedPosterIsDecodedWhilePausedAndShownWithoutAnotherFetch() = withActivity { scenario ->
+        val bytes = png(); val reads = AtomicInteger(); val url = "https://images.example/warm.png"
+        val loader = LogoLoader(files = object : ImageFiles {
+            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray { reads.incrementAndGet(); return bytes }
+        })
+        try {
+            instrumentation.runOnMainSync { loader.pause() }
+            loader.warm(url)
+            await("A paused loader still warms the requested poster") { reads.get() == 1 && loader.get(url, false) {} != null }
+            lateinit var image: ImageView
+            scenario.onActivity { activity ->
+                loader.resume(); image = ImageView(activity); activity.addContentView(image, FrameLayout.LayoutParams(64, 64))
+                loader.bind(image, url)
+            }
+            await("The warmed poster binds from memory") { hasImage(image) }
+            assertEquals("Opening Library must not fetch the warmed poster again", 1, reads.get())
+        } finally { instrumentation.runOnMainSync { loader.close() } }
+    }
+
     @Test fun queueRejectedLogoWaitsUntilVisibleThenRetriesWithoutRebinding() = withActivity { scenario ->
         val bytes = png(); val running = CountDownLatch(2); val release = CountDownLatch(1)
         val targetReads = AtomicInteger(); val target = "https://images.example/queue-target.png"

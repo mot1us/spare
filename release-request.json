@@ -1,10 +1,11 @@
 {
-  "versionName": "0.41.4",
-  "versionCode": 131,
+  "versionName": "0.41.5",
+  "versionCode": 132,
   "attempt": 1,
   "macos": false,
   "tvSuite": "focused",
   "tvTests": [
-    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive"
+    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive",
+    "warmedPosterIsDecodedWhilePausedAndShownWithoutAnotherFetch"
   ]
 }

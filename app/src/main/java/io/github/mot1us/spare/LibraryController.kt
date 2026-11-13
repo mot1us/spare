@@ -295,7 +295,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 if (Thread.currentThread().isInterrupted || destroyed) return@submit
                 val names = runCatching { categoriesFor(selected, mode, false) }.getOrDefault(emptyMap())
                 val first = names.keys.firstOrNull() ?: continue
-                runCatching { repository.load(selected, mode, first, false, names) }
+                runCatching { repository.load(selected, mode, first, false, names) }.getOrNull()?.let { snapshot ->
+                    // Decode the posters Library opens to now, so the first visit is not waiting on disk and network.
+                    val urls = runCatching { repository.query(snapshot, null, "", 0, 21).entries.map { it.poster }.filter { it.isNotBlank() } }.getOrDefault(emptyList())
+                    handler.post { if (!destroyed && !opened) panel.warmPosters(urls, selected.allowHttp) }
+                }
             }
         }
     }

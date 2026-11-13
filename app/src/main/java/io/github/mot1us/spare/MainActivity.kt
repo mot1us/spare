@@ -1572,7 +1572,7 @@ class MainActivity : Activity() {
                                     Timings.since("Saved guide", began)
                                     status.text = store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "Using saved guide · $it" }.orEmpty()
                                     scheduleEpg(); autoRefresh(selected, true)
-                                    handler.removeCallbacks(prewarmLibrary); handler.postDelayed(prewarmLibrary, 20000)
+                                    handler.removeCallbacks(prewarmLibrary); handler.postDelayed(prewarmLibrary, 10000)
                                 }
                             }
                         }

@@ -138,10 +138,10 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         handler.postDelayed(retryImages, whenReady - now)
     }
 
-    private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit, queued: () -> Unit = {}): Bitmap? {
+    private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit, warm: Boolean = false, queued: () -> Unit = {}): Bitmap? {
         if (url.isBlank() || !Network.allowed(url, http)) return null
         cache.get(url)?.let { return it }
-        if (closed || paused || !Network.allowed(url, http) || unavailable(url)) return null
+        if (closed || (paused && !warm) || !Network.allowed(url, http) || unavailable(url)) return null
         synchronized(pending) {
             pending[url]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
             if (workers.queue.size >= 48) return null
@@ -150,7 +150,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         val token = generation
         workers.execute {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            if (closed || paused || token != generation) return@execute
+            if (closed || (paused && !warm) || token != generation) return@execute
             val bitmap = runCatching {
                 val fetch = { Network.get(url, http, 2 * 1024 * 1024, timeoutMs = 4000) }
                 val bytes = files?.bytes(url, fetch) ?: fetch()
@@ -193,6 +193,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     }
     fun unavailable(url: String): Boolean = failed[url]?.let { SystemClock.uptimeMillis() < it.until } ?: false
     fun prefetch(url: String, http: Boolean = false) { get(url, http) {} }
+    /** Load into the caches while the panel is closed, so the next open shows posters at once. */
+    fun warm(url: String, http: Boolean = false) { request(url, http, {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
     fun trim() { cache.evictAll() }
     fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }

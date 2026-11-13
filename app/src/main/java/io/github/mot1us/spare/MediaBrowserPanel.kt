@@ -602,6 +602,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
     fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
+    fun warmPosters(urls: List<String>, http: Boolean) { urls.forEach { images.warm(it, http) } }
     fun resumeImages() { images.resume(); backdrops.resume() }
     fun trimImages() { images.trim(); backdrops.trim() }
     fun closeImages() { images.close(); backdrops.close() }
