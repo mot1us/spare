@@ -63,6 +63,7 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
     private var identity = ""
     private var bound: Content? = null
     private var boundHttp = false
+    private var boundDecode = 0
 
     init {
         isFocusableInTouchMode = true; isClickable = true
@@ -114,7 +115,8 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         tint()
     }
 
-    fun bind(key: String, content: Content, images: LogoLoader, http: Boolean, requestPoster: (((String) -> Unit) -> Unit)? = null) {
+    /** [decode] is the size the artwork is decoded at (see [posterDecodeSize]); 0 leaves it to the loader. */
+    fun bind(key: String, content: Content, images: LogoLoader, http: Boolean, requestPoster: (((String) -> Unit) -> Unit)? = null, decode: Int = 0) {
         val previous = bound
         title.text = content.title
         detail.text = content.subtitle
@@ -122,20 +124,20 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         badge.text = content.badge
         badge.visibility = if (content.badge.isBlank()) GONE else VISIBLE
         art.visibility = if (layout == Layout.LIST && content.poster.isBlank()) GONE else VISIBLE
-        if (key == identity && content == previous && http == boundHttp) return
-        identity = key; bound = content; boundHttp = http
+        if (key == identity && content == previous && http == boundHttp && decode == boundDecode) return
+        identity = key; bound = content; boundHttp = http; boundDecode = decode
         val request = ++generation
         placeholder.text = content.initials
         placeholder.visibility = VISIBLE
         var requested = false
-        images.bind(image, content.poster, http) { bitmap ->
+        images.bind(image, content.poster, http, decode) { bitmap ->
             if (generation == request) {
                 placeholder.visibility = if (bitmap == null) VISIBLE else INVISIBLE
                 if (bitmap == null && !requested && requestPoster != null && (content.poster.isBlank() || images.unavailable(content.poster))) {
                     requested = true
                     requestPoster { fallback ->
                         if (generation == request && fallback.isNotBlank() && fallback != content.poster) {
-                            images.bind(image, fallback, http) { found ->
+                            images.bind(image, fallback, http, decode) { found ->
                                 if (generation == request) placeholder.visibility = if (found == null) VISIBLE else INVISIBLE
                             }
                         }
@@ -166,6 +168,18 @@ internal fun gridHeight(width: Int, density: Float): Int {
     val art = ((width - padding).coerceAtLeast(0) * 3) / 2
     return art + (43 * density).toInt() + padding
 }
+
+/**
+ * Decode size for poster tiles, from the screen rather than a laid-out view so tiles, preloading and the
+ * startup warm-up all ask for the same bitmap. Grid and row tiles are within a few pixels of each other;
+ * rounding up to 64 px gives them one size (256 px on a 1080p TV, where a tile's artwork is about 168×252).
+ */
+internal fun posterDecodeSize(metrics: android.util.DisplayMetrics): Int {
+    val content = metrics.widthPixels - ((TvFocus.BROWSE_RAIL_WIDTH_DP + 76) * metrics.density).toInt()
+    val art = content / PosterGridLayout.COLUMNS - (22 * metrics.density).toInt()
+    return posterDecodeSize(art * 3 / 2)
+}
+internal fun posterDecodeSize(artHeight: Int) = ((artHeight.coerceAtLeast(0) + 63) / 64 * 64).coerceIn(128, 480)
 
 /** Library and Search share one encrypted, bounded poster cache, separate from guide logos. */
 internal fun posterFiles(context: Context) = GuideLogoFiles(context, "poster-art-", 600, 64L * 1024 * 1024)

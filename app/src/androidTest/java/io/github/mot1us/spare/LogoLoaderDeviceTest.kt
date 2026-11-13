@@ -102,6 +102,42 @@ class LogoLoaderDeviceTest {
         } finally { instrumentation.runOnMainSync { loader.close() } }
     }
 
+    @Test fun postersFetchTheSmallTmdbRenditionAndDecodeAtTheRequestedTileSize() = withActivity { scenario ->
+        // A 600x900 poster, as a provider or TMDB's w780 would send it.
+        val bytes = ByteArrayOutputStream().also { output ->
+            Bitmap.createBitmap(600, 900, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED); compress(Bitmap.CompressFormat.JPEG, 80, output); recycle() }
+        }.toByteArray()
+        val fetched = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val loader = LogoLoader(480, 8 * 1024 * 1024, object : ImageFiles {
+            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray { fetched.add(url); return bytes }
+        }, opaque = true, source = PosterUrls::sized)
+        val tmdb = "https://image.tmdb.org/t/p/w780/synthetic.jpg"; val other = "https://images.example/t/p/w780/synthetic.jpg"
+        fun bitmap(image: ImageView): Bitmap? { var value: Bitmap? = null; instrumentation.runOnMainSync { value = (image.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap }; return value }
+        try {
+            lateinit var tile: ImageView; lateinit var cover: ImageView; lateinit var plain: ImageView
+            scenario.onActivity { activity ->
+                tile = ImageView(activity); cover = ImageView(activity); plain = ImageView(activity)
+                listOf(tile, cover, plain).forEach { activity.addContentView(it, FrameLayout.LayoutParams(64, 96)) }
+                loader.bind(tile, tmdb, dimension = 256)
+            }
+            await("The tile-sized poster is decoded") { bitmap(tile) != null }
+            assertEquals("TMDB artwork is requested and saved at w342, whatever size the provider listed", listOf("https://image.tmdb.org/t/p/w342/synthetic.jpg"), fetched.toList())
+            bitmap(tile)!!.let { assertTrue("Decoded near the 256 px tile, not at 480: ${it.width}x${it.height}", maxOf(it.width, it.height) in 192..288); assertEquals(Bitmap.Config.RGB_565, it.config) }
+            assertNotNull("The tile's copy can stand in for the details cover", loader.peek(tmdb, 256)); assertNull("No larger copy was decoded for it", loader.peek(tmdb))
+            // The details cover asks for the loader's full size: a separate, larger bitmap of the same saved image.
+            scenario.onActivity { loader.bind(cover, tmdb); loader.bind(plain, other, dimension = 256) }
+            await("The larger copy and the other host's poster are decoded") { bitmap(cover) != null && bitmap(plain) != null }
+            bitmap(cover)!!.let { assertTrue("${it.width}x${it.height}", maxOf(it.width, it.height) in 400..480) }
+            assertNotSame(bitmap(tile), bitmap(cover))
+            assertEquals("Other hosts are fetched exactly as supplied", other, fetched.last())
+            // Rebinding the same poster at the same size is served from memory.
+            val reads = fetched.size
+            scenario.onActivity { loader.bind(plain, tmdb, dimension = 256) }
+            await("Bound from memory") { bitmap(plain) === bitmap(tile) }
+            assertEquals(reads, fetched.size)
+        } finally { instrumentation.runOnMainSync { loader.close() } }
+    }
+
     @Test fun queueRejectedLogoWaitsUntilVisibleThenRetriesWithoutRebinding() = withActivity { scenario ->
         val bytes = png(); val running = CountDownLatch(2); val release = CountDownLatch(1)
         val targetReads = AtomicInteger(); val target = "https://images.example/queue-target.png"

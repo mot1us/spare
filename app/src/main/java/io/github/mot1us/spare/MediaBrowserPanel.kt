@@ -100,10 +100,12 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var grid = true
     // Posters are kept encrypted on disk (provider URLs can carry account details) so a
     // Library visit after a restart draws saved artwork instead of downloading it again.
-    // A 1080p tile is ~300x450 px: 480 px keeps posters sharp; 28 MB of RGB_565 holds ~90 of them (several screens).
-    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4)
+    // Tiles decode at the size they are drawn (about 170x256 px on a 1080p TV, ~90 KB in RGB_565), so 28 MB holds
+    // some 300 posters; only the details page asks for the larger 480 px copy. TMDB artwork is fetched at w342.
+    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4, source = PosterUrls::sized)
+    private val tileDecode = posterDecodeSize(resources.displayMetrics)
     private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
-    private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)) }
+    private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)); decode = tileDecode }
     /** Set while Movies/Series browse by category rows: the category picker opens a category (or, for All, the rows). */
     private var shelfPicked: ((String?) -> Unit)? = null
     private var shelfSearch: (() -> Unit)? = null
@@ -275,9 +277,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
                 holder.box.bind(item.key, LibraryPosterTile.Content(
                     (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster,
-                ), images, artworkHttp, item.requestPoster)
+                ), images, artworkHttp, item.requestPoster, tileDecode)
                 // Decode the rows the remote is about to reach before they scroll into view.
-                if (grid) shownRows.getOrNull(position + columns * 2)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, artworkHttp) }
+                if (grid) shownRows.getOrNull(position + columns * 2)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, artworkHttp, tileDecode) }
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; shownRows.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) } }
@@ -443,8 +445,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         seriesSpotlight(item)
         bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
         val url = bannerUrl
-        fun draw() { if (bannerUrl == url) banner.setImageBitmap(images.get(url, artworkHttp) {}) }
-        banner.setImageBitmap(images.get(url, artworkHttp, ::draw))
+        fun draw() { if (bannerUrl == url) banner.setImageBitmap(images.get(url, artworkHttp, tileDecode) {}) }
+        banner.setImageBitmap(images.get(url, artworkHttp, tileDecode, ::draw))
     }
     fun refreshPosters() { rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
     fun archiveMode(value: Boolean) {
@@ -596,8 +598,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotArtwork(item.backdrop.ifBlank { item.poster })
         val hero = LinearLayout(context)
         val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
-        fun redraw() { cover.setImageBitmap(images.get(item.poster, artworkHttp) {}) }
-        cover.setImageBitmap(images.get(item.poster, artworkHttp, ::redraw)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
+        fun redraw() { images.get(item.poster, artworkHttp) {}?.let(cover::setImageBitmap) }
+        // The tile's copy fills the cover at once; the sharper one replaces it a moment later.
+        cover.setImageBitmap(images.get(item.poster, artworkHttp, redraw = ::redraw) ?: images.peek(item.poster, tileDecode)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
         val copy = LinearLayout(context).apply { orientation = VERTICAL }
         copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 8; setLineSpacing(0f, 1.15f) }, LayoutParams(-1, -2))
         if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
@@ -609,7 +612,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
     fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
-    fun warmPosters(urls: List<String>, http: Boolean) { urls.forEach { images.warm(it, http) } }
+    fun warmPosters(urls: List<String>, http: Boolean) { urls.forEach { images.warm(it, http, tileDecode) } }
+    /** Frame times are counted only while Library is actually on screen (see [LibraryFrames]). */
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        val window = (context as? android.app.Activity)?.window
+        if (isVisible && window != null) LibraryFrames.start(window, display?.refreshRate ?: 0f) else LibraryFrames.stop()
+    }
     fun resumeImages() { images.resume(); backdrops.resume() }
     fun trimImages() { images.trim(); backdrops.trim() }
     fun closeImages() { images.close(); backdrops.close() }

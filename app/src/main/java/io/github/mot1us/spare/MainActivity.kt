@@ -3341,7 +3341,8 @@ class MainActivity : Activity() {
         fun saved(value: Long) = if (value <= 0) "Not refreshed yet" else GuideClock.sportsDate(value)
         return (if (PlaylistRefresh.running(selected.id)) PlaylistRefresh.stage(selected.id) + "\n" else "") + "Playlist: ${saved(store.playlistRefreshed(selected))}\nEPG refresh: ${saved(store.epgRefreshed(selected))}" + store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "\n$it · Saved data is kept." }.orEmpty() +
             Timings.summary(listOf("Channels", "Saved guide", "Decrypt lineup", "Parse lineup", "Decrypt epg", "Parse guide")).takeIf { it.isNotBlank() }?.let { "\nLast start: $it" }.orEmpty() +
-            Timings.summary(listOf("All movies", "All series", "Category list", "First titles", "Category", "Movie details", "Series info")).takeIf { it.isNotBlank() }?.let { "\nProvider replies: $it" }.orEmpty()
+            Timings.summary(listOf("All movies", "All series", "Category list", "First titles", "Category", "Movie details", "Series info")).takeIf { it.isNotBlank() }?.let { "\nProvider replies: $it" }.orEmpty() +
+            LibraryFrames.summary()?.let { "\nLibrary frames (last visit): $it" }.orEmpty()
     }
     private fun renderRefreshSettings(selected: Source, focus: String? = null) {
         val panel = settingsPanel ?: return; val policy = store.refreshPolicy(selected)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.44.0 — 2026-11-13
+
+- Library posters are lighter to download, decode and draw. Artwork hosted on TMDB (image.tmdb.org) is requested at the 342-pixel width instead of the 500-pixel-or-larger size providers usually list; other hosts are fetched as before. Tiles in the rows, the grids and Search are decoded at the size they are drawn (about 256 pixels tall on a 1080p TV, under a third of the memory of before), so roughly three times as many posters stay ready in memory; the title page still gets a sharper copy. Posters stay in the same encrypted on-device cache; TMDB posters saved by earlier versions are downloaded once more at the smaller size.
+- The rows keep decoding ahead of the remote: the tile just past the right edge, the first tiles of the next row down, and — ten seconds after the guide loads — the first screen of the Movies and Series rows.
+- Movies and Series rows now start with Continue watching (titles stopped part-way; for Series, one tile per series with its latest episode) and Watchlist, when there is something to show. OK on a movie opens its page with Play / Resume; OK on an episode resumes it. Both rows are read again each time the rows are shown, and show See all when they hold more than 20 titles.
+- Settings › Playlists › Refresh settings shows a "Library frames (last visit)" line: how many frames Library drew, how many were slow, about how many screen refreshes were dropped, and the worst frame. It counts only while Library is on screen, starts again on each visit, and is kept in memory only.
+
 ## 0.43.0 — 2026-11-12
 
 - Movies and Series open on a rows home, like streaming apps: Recently added, Top rated, then one row per provider category with its first 20 posters and a See all tile. Up/Down moves between rows (each remembers its place), Left/Right within a row, OK opens a title. See all opens that category's grid with Sort and the category list, whose first entry is Home; Back from a grid, a title or a search returns to the rows on the same tile. Typing in Search on the rows searches the whole catalog, and clearing the text returns to the rows.

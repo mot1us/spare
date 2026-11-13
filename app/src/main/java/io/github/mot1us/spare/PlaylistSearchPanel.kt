@@ -52,7 +52,8 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         gravity = Gravity.CENTER_VERTICAL
     }
     private val artwork = GuideLogoFiles(context)
-    private val posters = LogoLoader(512, 8 * 1024 * 1024, posterFiles(context))
+    // Same tile size and TMDB rendition as Library, so both read the same saved poster files.
+    private val posters = LogoLoader(posterDecodeSize(context.resources.displayMetrics), 8 * 1024 * 1024, posterFiles(context), source = PosterUrls::sized)
     private val logos = LogoLoader(96, 2 * 1024 * 1024, artwork)
     private val filters = LinearLayout(context)
     private val message = label(11f)

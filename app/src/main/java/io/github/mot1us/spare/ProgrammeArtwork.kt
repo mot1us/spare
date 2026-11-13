@@ -17,7 +17,7 @@ class ProgrammeArtwork(private val image: ImageView) {
         if (url.isBlank()) return
         task = Runnable {
             fun draw() { if (key == next) { val bitmap = pictures.get(url, http) {}; image.setImageBitmap(bitmap); image.isVisible = bitmap != null } }
-            val bitmap = pictures.get(url, http, ::draw); image.setImageBitmap(bitmap); image.isVisible = bitmap != null
+            val bitmap = pictures.get(url, http, redraw = ::draw); image.setImageBitmap(bitmap); image.isVisible = bitmap != null
         }.also { handler.postDelayed(it, 250) }
     }
     fun pause() { key = ""; task?.let(handler::removeCallbacks); pictures.pause() }

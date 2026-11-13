@@ -40,7 +40,7 @@ class RecentChannels(context: Context, private val watch: (Channel) -> Unit, pri
             group.addView(tile, LayoutParams(dp(138), dp(60)))
             entries.addView(group, LayoutParams(-2, -1))
             fun draw() { if (channel in shown) logo.setImageBitmap(images.get(channel.logo, http) {}) }
-            logo.setImageBitmap(images.get(channel.logo, http, ::draw))
+            logo.setImageBitmap(images.get(channel.logo, http, redraw = ::draw))
         }
     }
     fun resume() { images.resume(); val previous = shown; shown = emptyList(); bind(previous, http) }

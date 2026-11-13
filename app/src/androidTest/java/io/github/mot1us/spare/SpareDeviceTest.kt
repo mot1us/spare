@@ -4830,6 +4830,61 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun libraryHomeLeadsWithContinueWatchingAndWatchlistAndCountsFrames() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            val titles = (1..240).map { n -> OnDemand("movie:${5000 + n}", "Home title $n", "Category ${1 + n % 3}", "${server.base}/movie/test/test-secret/${5000 + n}.mp4", "movie", poster = "${server.base}/logo.png", year = "2024", added = 1_700_000_000L + n, rating = (n % 10).toFloat()) }
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie").apply { titles.chunked(64).forEach(::append); finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy")) }
+            seeded.close()
+            // A movie stopped part-way, an episode (which belongs to the Series rows, not Movies) and one Watchlist movie.
+            store.saveWatchProgress(source, titles[4], 60_000, 600_000)
+            store.saveWatchProgress(source, OnDemand("episode:9001", "Pilot", "", "${server.base}/series/test/test-secret/9001.mp4", "episode", seriesId = "series:1", season = 1, episode = 1), 90_000, 600_000)
+            store.editLibraryFavorites(source) { it.save(titles[8], true) }
+            fun shelfOf(view: View?): String? { var at: View? = view; while (at != null) { (at.tag as? String)?.takeIf { it.startsWith("library-shelf:") }?.let { return it }; at = at.parent as? View }; return null }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                // The rows open on Continue watching, above everything from the catalog.
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5005" && shelfOf(it.currentFocus) == "library-shelf:continue" }
+                scenario.onActivity { activity ->
+                    val root = activity.window.decorView
+                    assertEquals("Resume at 1:00", root.findViewWithTag<TextView>("library-spot-meta").text.toString())
+                    assertNull("Episodes resume from the Series rows", root.findViewWithTag<View>("library-item:episode:9001"))
+                    assertNull("A short row has no See all tile", root.findViewWithTag<View>("library-shelf-more:continue"))
+                    val rows = root.findViewWithTag<RecyclerView>("library-shelves")
+                    assertEquals(listOf("library-shelf:continue", "library-shelf:watchlist", "library-shelf:recent"),
+                        (0 until rows.childCount).map { rows.getChildAt(it) }.sortedBy { it.top }.take(3).map { it.tag })
+                }
+                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5009" && shelfOf(it.currentFocus) == "library-shelf:watchlist" }
+                scenario.onActivity { assertTrue(it.currentFocus?.contentDescription.toString(), it.currentFocus?.contentDescription.toString().endsWith("In Watchlist")) }
+                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" && shelfOf(it.currentFocus) == "library-shelf:recent" }
+                device.pressDPadUp(); device.pressDPadUp(); waitFor(scenario) { shelfOf(it.currentFocus) == "library-shelf:continue" }
+                // OK opens the title's page (Play / Resume); Back lands on the same tile of the same row.
+                device.pressDPadCenter(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-details")?.isShown == true }
+                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5005" && shelfOf(it.currentFocus) == "library-shelf:continue" }
+                // Removing the title from the Watchlist removes its row the next time the rows are shown.
+                store.editLibraryFavorites(source) { it.save(titles[8], false) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:movie").performClick() }
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-shelves").let { it.isShown && a.window.decorView.findViewWithTag<View>("library-shelf:watchlist") == null && a.window.decorView.findViewWithTag<View>("library-shelf:continue") != null } }
+                // Moving through the rows drew frames; the count is kept for Settings after Library closes.
+                waitFor(scenario) { LibraryFrames.summary() != null }
+                assertTrue("Rows, resume points and the Watchlist ask the provider for no titles", server.catalogTargets.none { it.contains("get_vod_streams") })
+                device.pressBack(); device.pressBack(); device.pressBack()
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
+                val counted = LibraryFrames.summary(); Thread.sleep(500)
+                assertEquals("Nothing is counted once Library is off screen", counted, LibraryFrames.summary())
+                scenario.onActivity { activity ->
+                    val summary = MainActivity::class.java.getDeclaredMethod("refreshSummary", Source::class.java).apply { isAccessible = true }.invoke(activity, source) as String
+                    assertTrue(summary, Regex("\\nLibrary frames \\(last visit\\): [0-9]+ drawn · [0-9]+ slow \\([0-9.]+%\\) · about [0-9]+ dropped · worst [0-9]+ ms").containsMatchIn(summary))
+                }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     private fun chooseLibraryCategory(scenario: ActivityScenario<MainActivity>, position: Int) {
         scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-category").performClick() }
         waitFor(scenario) {

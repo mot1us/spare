@@ -14,11 +14,18 @@ import android.util.LruCache
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-/** Posters pass [opaque] = true: RGB_565 halves memory (twice as many fit in the cache) and they never need mipmaps. */
-class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false, threads: Int = 2) {
+/**
+ * Posters pass [opaque] = true: RGB_565 halves memory (twice as many fit in the cache) and they never need mipmaps.
+ * [source] maps the catalog's address to the one actually downloaded and saved (a smaller rendition of the same image).
+ * Callers that draw the same image at different sizes pass a decode size below [maxDimension]; each size is cached on its own.
+ */
+class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false, threads: Int = 2,
+    private val source: (String) -> String = { it }) {
+    private fun size(dimension: Int) = if (dimension <= 0) maxDimension else dimension.coerceAtMost(maxDimension)
+    private fun key(url: String, dimension: Int) = if (dimension == maxDimension) url else "$url\n$dimension"
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
-    private class Binding(val url: String, val http: Boolean, var loaded: ((Bitmap?) -> Unit)?) {
+    private class Binding(val url: String, val http: Boolean, val dimension: Int, var loaded: ((Bitmap?) -> Unit)?) {
         var waiting = false
         var complete = false
         var attempts = 0
@@ -54,18 +61,20 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             scheduleRetries()
         }
     }
-    fun get(url: String, http: Boolean, redraw: () -> Unit): Bitmap? = request(url, http, { redraw() })
+    fun get(url: String, http: Boolean, dimension: Int = 0, redraw: () -> Unit): Bitmap? = request(url, http, size(dimension), { redraw() })
+    /** An already decoded copy at this size, without starting a load. */
+    fun peek(url: String, dimension: Int = 0): Bitmap? = if (url.isBlank()) null else cache.get(key(url, size(dimension)))
 
     /** Deliver the decoded bitmap to this binding, even if the memory cache evicts it.
      * A completed image never triggers another card's fetch or whole-rail redraw. */
-    fun bind(view: ImageView, url: String, http: Boolean = false, loaded: ((Bitmap?) -> Unit)? = null) {
+    fun bind(view: ImageView, url: String, http: Boolean = false, dimension: Int = 0, loaded: ((Bitmap?) -> Unit)? = null) {
         val previous = bindings[view]
-        if (previous?.url == url && previous.http == http) return
+        if (previous?.url == url && previous.http == http && previous.dimension == size(dimension)) return
         if (previous != null) forget(view, previous)
         if (closed || paused || url.isBlank() || !Network.allowed(url, http)) {
             view.setImageDrawable(null); loaded?.invoke(null); return
         }
-        val binding = Binding(url, http, loaded); bindings[view] = binding
+        val binding = Binding(url, http, size(dimension), loaded); bindings[view] = binding
         binding.attached = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
                 binding.deadline = SystemClock.uptimeMillis() + 30000
@@ -102,7 +111,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 scheduleRetries()
             }
         }
-        val bitmap = request(binding.url, binding.http, ::apply) { binding.waiting = true; binding.attempts++ }
+        val bitmap = request(binding.url, binding.http, binding.dimension, ::apply) { binding.waiting = true; binding.attempts++ }
         if (bitmap != null) apply(bitmap)
         else if (initial) {
             if (view.drawable != null) view.setImageDrawable(null)
@@ -138,22 +147,24 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         handler.postDelayed(retryImages, whenReady - now)
     }
 
-    private fun request(url: String, http: Boolean, redraw: (Bitmap?) -> Unit, warm: Boolean = false, queued: () -> Unit = {}): Bitmap? {
+    private fun request(url: String, http: Boolean, dimension: Int, redraw: (Bitmap?) -> Unit, warm: Boolean = false, queued: () -> Unit = {}): Bitmap? {
         if (url.isBlank() || !Network.allowed(url, http)) return null
-        cache.get(url)?.let { return it }
+        val key = key(url, dimension)
+        cache.get(key)?.let { return it }
         if (closed || (paused && !warm) || !Network.allowed(url, http) || unavailable(url)) return null
         synchronized(pending) {
-            pending[url]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
+            pending[key]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
             if (workers.queue.size >= 48) return null
-            pending[url] = mutableListOf(redraw); queued()
+            pending[key] = mutableListOf(redraw); queued()
         }
         val token = generation
         workers.execute {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             if (closed || (paused && !warm) || token != generation) return@execute
             val bitmap = runCatching {
-                val fetch = { Network.get(url, http, 2 * 1024 * 1024, timeoutMs = 4000) }
-                val bytes = files?.bytes(url, fetch) ?: fetch()
+                val address = source(url).takeIf { it == url || Network.allowed(it, http) } ?: url
+                val fetch = { Network.get(address, http, 2 * 1024 * 1024, timeoutMs = 4000) }
+                val bytes = files?.bytes(address, fetch) ?: fetch()
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                 require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
                 // Round sampling up: rounding down can decode an image larger than its
@@ -161,23 +172,26 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 val options = BitmapFactory.Options().apply {
                     if (opaque) inPreferredConfig = Bitmap.Config.RGB_565
                     inSampleSize = 1
-                    while ((maxOf(bounds.outWidth, bounds.outHeight) + inSampleSize - 1) / inSampleSize > maxDimension) inSampleSize *= 2
+                    while ((maxOf(bounds.outWidth, bounds.outHeight) + inSampleSize - 1) / inSampleSize > dimension) inSampleSize *= 2
                 }
                 val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                 // Power-of-two sampling can land far below the target (700 px -> 44 px). Decode
                 // one step larger and scale smoothly instead, so small logos stay crisp.
-                val sized = if (decoded != null && options.inSampleSize > 1 && maxOf(decoded.width, decoded.height) < maxDimension * 3 / 4) {
+                val sized = if (decoded != null && options.inSampleSize > 1 && maxOf(decoded.width, decoded.height) < dimension * 3 / 4) {
                     val larger = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = options.inSampleSize / 2; if (opaque) inPreferredConfig = Bitmap.Config.RGB_565 })
-                    if (larger == null) decoded else {
+                    if (larger == null) decoded
+                    // Within an eighth of the target (a 342 px poster halved for a 256 px tile): a second scaling pass buys nothing.
+                    else if (maxOf(larger.width, larger.height) <= dimension + dimension / 8) { decoded.recycle(); larger }
+                    else {
                         decoded.recycle()
-                        val scale = maxDimension.toFloat() / maxOf(larger.width, larger.height)
+                        val scale = dimension.toFloat() / maxOf(larger.width, larger.height)
                         larger.scale(maxOf(1, (larger.width * scale).toInt()), maxOf(1, (larger.height * scale).toInt()), filter = true)
                             .also { if (it !== larger) larger.recycle() }
                     }
                 } else decoded
                 sized?.apply { if (!opaque) setHasMipMap(true) }
             }.getOrNull()
-            if (bitmap != null && !closed) cache.put(url, bitmap)
+            if (bitmap != null && !closed) cache.put(key, bitmap)
             if (token == generation) {
                 if (bitmap == null) {
                     val attempts = ((failed[url]?.attempts ?: 0) + 1).coerceAtMost(3)
@@ -185,16 +199,16 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                     failed[url] = Failure(SystemClock.uptimeMillis() + delay, attempts)
                 } else failed.remove(url)
                 while (failed.size > 256) failed.keys.firstOrNull()?.let(failed::remove)
-                val callbacks = synchronized(pending) { pending.remove(url).orEmpty() }
+                val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
                 handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(bitmap) } }
             }
         }
         return null
     }
     fun unavailable(url: String): Boolean = failed[url]?.let { SystemClock.uptimeMillis() < it.until } ?: false
-    fun prefetch(url: String, http: Boolean = false) { get(url, http) {} }
+    fun prefetch(url: String, http: Boolean = false, dimension: Int = 0) { get(url, http, dimension) {} }
     /** Load into the caches while the panel is closed, so the next open shows posters at once. */
-    fun warm(url: String, http: Boolean = false) { request(url, http, {}, warm = true) }
+    fun warm(url: String, http: Boolean = false, dimension: Int = 0) { request(url, http, size(dimension), {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
     fun trim() { cache.evictAll() }
     fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }

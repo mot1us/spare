@@ -285,23 +285,58 @@ class LibraryController(private val activity: Activity, private val store: Secur
         activeCatalog = root; gridFromHome = false; homeSearch = false; shelfCategory = null
         pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null
         val title = if (mode == "movie") "Movies" else "Series"
-        fun show(home: Home) {
+        fun show(home: Home, personal: Map<String, Pair<String, CatalogShelves.Data>>) {
             if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
-            panel.showShelves(root, home.shelves, {}, {}, { id -> if (id in names) { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) } },
+            panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, {}, {}, { id -> when {
+                    id == HOME_CONTINUE -> open("continue"); id == HOME_WATCHLIST -> open("favorites")
+                    id in names -> { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) }
+                } },
                 { next -> if (next != null && next in names) { gridFromHome = true; openCategory(selected, mode, root, names, next, focus = true) } }, focus,
-                initial = home.data, rail = emptyMap(), search = { gridFromHome = true; homeSearch = true; activateCatalog(root, full, false) })
+                initial = personal.mapValues { it.value.second } + home.data, rail = emptyMap(), search = { gridFromHome = true; homeSearch = true; activateCatalog(root, full, false) })
         }
-        homes[root]?.takeIf { it.stamp == full.updated }?.let { show(it); return }
-        panel.page(title, "Getting your library ready…", true)
+        val ready = homes[root]?.takeIf { it.stamp == full.updated }
+        if (ready == null) panel.page(title, "Getting your library ready…", true)
         request { token ->
+            // Continue watching and Watchlist change with every visit: two small saved files, read each time the rows are shown.
+            val personal = personalShelves(selected, mode)
+            if (ready != null) { ui(token) { show(ready, personal) }; return@request }
             val rows = repository.home(full, names)
             val shelves = linkedMapOf<String, String>(); val data = HashMap<String, CatalogShelves.Data>()
             if (rows.recent.isNotEmpty()) { shelves[HOME_RECENT] = "Recently added"; data[HOME_RECENT] = CatalogShelves.Data(rows.recent.map(::browserRow), 0, busy = false, more = false) }
             if (rows.top.isNotEmpty()) { shelves[HOME_TOP] = "Top rated"; data[HOME_TOP] = CatalogShelves.Data(rows.top.map(::browserRow), 0, busy = false, more = false) }
             rows.categories.forEach { (id, items) -> shelves[id] = names[id].orEmpty(); data[id] = CatalogShelves.Data(items.map(::browserRow), rows.counts[id] ?: items.size, busy = false) }
             val built = Home(full.updated, shelves, data)
-            ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built) }
+            ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built, personal) }
+        }
+    }
+    /** Rows that lead the home: titles of this kind with a saved position, then this kind's Watchlist. Off the UI thread. */
+    private fun personalShelves(selected: Source, mode: String): Map<String, Pair<String, CatalogShelves.Data>> {
+        val result = linkedMapOf<String, Pair<String, CatalogShelves.Data>>()
+        val favorites = runCatching { store.libraryFavorites(selected) }.getOrDefault(LibraryFavorites())
+        val progress = runCatching { store.watchProgress(selected).sortedByDescending { it.updated } }.getOrDefault(emptyList())
+        val resumed = if (mode == "movie") progress.filter { it.item.kind == "movie" }.map { entry -> browserRow(entry.item).copy(detail = "Resume at ${duration(entry.position)}") }
+        else {
+            // One tile per series: its most recently watched episode.
+            val series = runCatching { (store.followedSeries(selected).entries + favorites.entries).map { it.item }.filter { it.kind == "series" }.associateBy { it.id } }.getOrDefault(emptyMap())
+            progress.filter { it.item.kind == "episode" }.distinctBy { it.item.seriesId.ifBlank { it.item.id } }.map { continueRow(selected, it, series) }
+        }
+        fun shelf(id: String, title: String, rows: List<BrowserRow>) {
+            // See all (only when the row is cut short) opens the full list in its own Library section.
+            if (rows.isNotEmpty()) result[id] = title to CatalogShelves.Data(rows.take(HOME_PERSONAL), if (rows.size > HOME_PERSONAL) rows.size else 0, busy = false, more = rows.size > HOME_PERSONAL)
+        }
+        shelf(HOME_CONTINUE, "Continue watching", resumed)
+        shelf(HOME_WATCHLIST, "Watchlist", favorites.entries.filter { it.item.kind == mode }.map { entry -> browserRow(entry.item).copy(detail = entry.label(favorites.watched)) })
+        return result
+    }
+    /** Episodes are shown as their series: its poster and name, with the episode code and resume point. */
+    private fun continueRow(selected: Source, entry: WatchProgress, series: Map<String, OnDemand>): BrowserRow {
+        val item = entry.item; val show = series[item.seriesId].takeIf { item.kind == "episode" }
+        val resume = "Resume at ${duration(entry.position)}"
+        return BrowserRow(item.id, show?.title ?: item.title, if (item.kind == "episode" && item.season > 0) "S${item.season} E${item.episode} · $resume" else resume,
+            poster = item.poster.ifBlank { show?.poster.orEmpty() }, description = if (show != null) item.title else item.description, backdrop = show?.backdrop.orEmpty()) {
+            if (show != null) { parentSeries = show; episodeList = episodeCache["${selected.id}:${show.id}"].orEmpty() }
+            select(item)
         }
     }
     private fun returnHome(focus: Boolean = true) {
@@ -349,6 +384,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 runCatching { repository.load(selected, mode, "", false, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
                 val first = names.keys.firstOrNull() ?: continue
                 if (!posters || opened) continue
+                // Library opens on rows: decode the first screen of them (the special rows and the first categories) now.
+                wholeCatalog(selected, mode)?.let { full ->
+                    val urls = runCatching { repository.home(full, names, perRow = CatalogShelves.COLUMNS, special = CatalogShelves.COLUMNS).let { it.recent + it.top + it.categories.values.take(2).flatten() } }
+                        .getOrDefault(emptyList()).map { it.poster }.filter { it.isNotBlank() }.distinct().take(3 * CatalogShelves.COLUMNS)
+                    handler.post { if (!destroyed && !opened) panel.warmPosters(urls, selected.allowHttp) }
+                    continue
+                }
                 (repository.category(selected, mode, first, names) ?: runCatching { repository.load(selected, mode, first, false, names) }.getOrNull())?.let { snapshot ->
                     // Decode the posters Library opens to now, so the first visit is not waiting on disk and network.
                     val urls = runCatching { repository.query(snapshot, null, "", 0, 21).entries.map { it.poster }.filter { it.isNotBlank() } }.getOrDefault(emptyList())
@@ -699,19 +741,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.submit(emptyList()); panel.page("Continue watching", "Loading saved positions…", true)
         request { token ->
             val entries = runCatching { store.watchProgress(selected).sortedByDescending { it.updated } }.getOrDefault(emptyList())
-            // Episodes are shown as their series: its poster and name, with the episode code and resume point.
             val series = runCatching { (store.followedSeries(selected).entries + store.libraryFavorites(selected).entries).map { it.item }.filter { it.kind == "series" }.associateBy { it.id } }.getOrDefault(emptyMap())
             ui(token) {
                 panel.page("Continue watching", "Saved on this TV for ${selected.name}. Finished titles disappear automatically.", false)
-                panel.submit(entries.map { entry ->
-                    val item = entry.item; val show = series[item.seriesId].takeIf { item.kind == "episode" }
-                    val resume = "Resume at ${duration(entry.position)}"
-                    BrowserRow(item.id, show?.title ?: item.title, if (item.kind == "episode" && item.season > 0) "S${item.season} E${item.episode} · $resume" else resume,
-                        poster = item.poster.ifBlank { show?.poster.orEmpty() }, description = if (show != null) item.title else item.description, backdrop = show?.backdrop.orEmpty()) {
-                        if (show != null) { parentSeries = show; episodeList = episodeCache["${selected.id}:${show.id}"].orEmpty() }
-                        select(item)
-                    }
-                }); panel.focusRows()
+                panel.submit(entries.map { continueRow(selected, it, series) }); panel.focusRows()
             }
         }
     }
@@ -790,5 +823,5 @@ class LibraryController(private val activity: Activity, private val store: Secur
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
     fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

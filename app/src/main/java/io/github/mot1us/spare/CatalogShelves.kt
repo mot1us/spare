@@ -29,6 +29,8 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     var exitLeft: (() -> Unit)? = null
     var focused: ((BrowserRow) -> Unit)? = null
     var http = false
+    /** Decode size for tile artwork; the panel sets the size its grid uses so both share decoded posters. */
+    var decode = 0
     var favoriteIds = emptySet<String>()
     var favoriteLabels = emptyMap<String, String>()
 
@@ -55,7 +57,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         visibility = VISIBLE
         if (catalog == key && values == shelves) {
             // Unchanged rows are left alone: touching a row's tiles here would disturb the position it is about to be focused at.
-            initial.forEach { (id, value) -> val before = data[id]; if (before == null || before.total != value.total || before.rows.size != value.rows.size || before.rows.indices.any { before.rows[it].key != value.rows[it].key }) update(id, value) }
+            initial.forEach { (id, value) -> val before = data[id]; if (before == null || before.total != value.total || before.more != value.more || before.rows.size != value.rows.size || before.rows.indices.any { before.rows[it].key != value.rows[it].key || before.rows[it].detail != value.rows[it].detail }) update(id, value) }
             return
         }
         if (catalog != key) { data.clear(); positions.clear(); current = null; scrollToPosition(0) }
@@ -111,6 +113,8 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             holder.bind(shelf, data[shelf.id])
             // Unloaded, interrupted (still marked busy) or failed-empty rows ask again; a running download is not restarted.
             data[shelf.id].let { if (it == null || it.busy || it.failed && it.rows.isEmpty()) load?.invoke(shelf.id) }
+            // Down is the next key press: have the row after this one decoded before it scrolls in.
+            shelves.getOrNull(position + 1)?.let { next -> data[next.id]?.rows?.take(COLUMNS)?.forEach { row -> if (row.poster.isNotBlank()) images.prefetch(row.poster, http, decode) } }
         }
         override fun onViewRecycled(holder: ShelfHolder) { holder.id?.let { id -> if (data[id]?.busy != false) release?.invoke(id) } }
     }
@@ -212,8 +216,9 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
                     holder.box.appearance()
                     holder.box.tag = "library-item:${item.key}"
                     holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
-                    holder.box.bind(item.key, LibraryPosterTile.Content((if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster), images, http, item.requestPoster)
-                    items.getOrNull(position + COLUMNS)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, http) }
+                    holder.box.bind(item.key, LibraryPosterTile.Content((if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster), images, http, item.requestPoster, decode)
+                    // Right is the next key press: keep the tile just past the screen edge decoded.
+                    items.getOrNull(position + COLUMNS)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, http, decode) }
                     view.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() }
                     view.setOnLongClickListener { items.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                     view.setOnFocusChangeListener { _, active -> if (active) { val at = holder.bindingAdapterPosition; id?.let { positions[it] = at; current = it }; items.getOrNull(at)?.let { focused?.invoke(it) } } }
