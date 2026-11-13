@@ -20,7 +20,7 @@ import androidx.recyclerview.widget.RecyclerView
 @SuppressLint("ViewConstructor", "NotifyDataSetChanged", "SetTextI18n")
 internal class CatalogShelves(context: Context, private val images: LogoLoader) : RecyclerView(context) {
     data class Shelf(val id: String, val title: String)
-    data class Data(val rows: List<BrowserRow>, val total: Int, val busy: Boolean, val failed: Boolean = false)
+    data class Data(val rows: List<BrowserRow>, val total: Int, val busy: Boolean, val failed: Boolean = false, val more: Boolean = true)
 
     var load: ((String) -> Unit)? = null
     var release: ((String) -> Unit)? = null
@@ -51,11 +51,15 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     }
 
     /** Keeps rows, loaded titles and positions when the same catalog is shown again (Back from details or a grid). */
-    fun show(catalog: String, values: List<Shelf>) {
+    fun show(catalog: String, values: List<Shelf>, initial: Map<String, Data> = emptyMap()) {
         visibility = VISIBLE
-        if (catalog == key && values == shelves) return
+        if (catalog == key && values == shelves) {
+            // Unchanged rows are left alone: touching a row's tiles here would disturb the position it is about to be focused at.
+            initial.forEach { (id, value) -> val before = data[id]; if (before == null || before.total != value.total || before.rows.size != value.rows.size || before.rows.indices.any { before.rows[it].key != value.rows[it].key }) update(id, value) }
+            return
+        }
         if (catalog != key) { data.clear(); positions.clear(); current = null; scrollToPosition(0) }
-        key = catalog; shelves = values
+        key = catalog; shelves = values; data.putAll(initial)
         adapter?.notifyDataSetChanged()
     }
     fun clear() { data.clear(); adapter?.notifyDataSetChanged() }
@@ -160,13 +164,20 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             }
         }
         fun refresh() { list.adapter?.notifyItemRangeChanged(0, count()) }
-        fun count() = items.size + 1
+        fun count() = items.size + if (more?.more == false && items.isNotEmpty()) 0 else 1
+        private var tileEpoch = 0
         fun focus(position: Int) {
-            val target = position.coerceIn(0, count() - 1)
-            val view = list.findViewHolderForAdapterPosition(target)?.itemView
-            if (view != null) { view.requestFocus(); TvFocus.center(list, view); return }
+            val target = position.coerceIn(0, count() - 1); val epoch = ++tileEpoch
+            fun tile() = if (list.isComputingLayout || list.hasPendingAdapterUpdates()) null else list.findViewHolderForAdapterPosition(target)?.itemView
+            tile()?.let { it.requestFocus(); TvFocus.center(list, it); return }
+            // The row may have just been rebound or shown again: wait for its layout instead of giving up after one frame.
             list.scrollToPosition(target)
-            list.post { list.findViewHolderForAdapterPosition(target)?.itemView?.let { it.requestFocus(); TvFocus.center(list, it) } }
+            fun attempt(left: Int) {
+                if (epoch != tileEpoch || !list.isShown) return
+                val view = tile()
+                if (view != null) { view.requestFocus(); TvFocus.center(list, view) } else if (left > 0) list.postOnAnimation { attempt(left - 1) }
+            }
+            list.postOnAnimation { attempt(20) }
         }
         private fun key(view: View, position: Int, code: Int, event: KeyEvent): Boolean {
             val shelf = id ?: return false

@@ -72,6 +72,26 @@ class LibraryCatalog(private val store: SecureStore) {
         val size = full.chunks.sumOf { chunk -> if (group in chunk.groups) chunk.titles.count { it.category == group } else 0 }
         return if (size == 0) null else full.copy(labels = names, scopeGroup = group, scopeCount = size)
     }
+    class HomeRows(val recent: List<OnDemand>, val top: List<OnDemand>, val categories: Map<String, List<OnDemand>>, val counts: Map<String, Int>)
+    /** Everything the rows home needs from one pass over the catalog in memory: newest, best rated and each category's first titles. */
+    fun home(snapshot: Snapshot, names: Map<String, String>, perRow: Int = 20, special: Int = 40): HomeRows {
+        val source = snapshot.source ?: return HomeRows(emptyList(), emptyList(), emptyMap(), emptyMap())
+        val first = HashMap<String, MutableList<Title>>(); val counts = HashMap<String, Int>(); val dated = ArrayList<Title>(); val rated = ArrayList<Title>()
+        for (chunk in snapshot.chunks) for (title in chunk.titles) {
+            if (!available(source, title.id)) continue
+            val scope = title.category.removePrefix("Category ")
+            counts[scope] = (counts[scope] ?: 0) + 1
+            first.getOrPut(scope) { ArrayList(perRow) }.let { if (it.size < perRow) it.add(title) }
+            if (title.added > 0) dated.add(title)
+            if (title.rating > 0f) rated.add(title)
+        }
+        fun items(values: List<Title>) = values.map { title -> title.item(source).let { it.copy(category = names[it.category.removePrefix("Category ")] ?: it.category) } }
+        return HomeRows(
+            items(dated.sortedByDescending { it.added }.take(special)),
+            // A rating alone ranks obscure titles first on many providers; newer titles break ties.
+            items(rated.sortedWith(compareByDescending<Title> { it.rating }.thenByDescending { it.added }).take(special)),
+            names.keys.filter { first[it] != null }.associateWith { items(first.getValue(it)) }, counts)
+    }
     fun matches(source: Source, request: VodStart.Request): List<OnDemand> {
         val kinds = if (request.episode == null) listOf("movie", "series") else listOf("series")
         val key = ChannelSearch.key(request.query)

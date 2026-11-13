@@ -106,6 +106,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)) }
     /** Set while Movies/Series browse by category rows: the category picker opens a category (or, for All, the rows). */
     private var shelfPicked: ((String?) -> Unit)? = null
+    private var shelfSearch: (() -> Unit)? = null
     private val shelvesShown get() = shelves.isVisible && body.isVisible
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
@@ -338,7 +339,12 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     @SuppressLint("NotifyDataSetChanged")
     private fun filter() {
-        if (shelvesShown) return
+        if (shelvesShown) {
+            // Typing on the rows home searches the whole catalog: hand the text to the grid that replaces the rows.
+            val text = search.text.toString()
+            if (text.isNotBlank()) shelfSearch?.let { go -> contexts[shelves.catalog] = null to text; go() }
+            return
+        }
         val query = ChannelSearch.key(search.text.toString())
         catalogQuery?.let { ++focusEpoch; pending = null; hasMore = false; it(group, query); return }
         // Filtering preserves provider order. A full Myers diff becomes quadratic when
@@ -359,7 +365,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         grid = true; seriesSpot = null; browse(); columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
         if (catalogContext != key || catalogQuery == null) {
             if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key
-            val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); changingSearch = false
+            val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); search.setSelection(search.text.length); changingSearch = false
             rememberedKey = anchors[anchorKey()]
         }
         if (initialGroup != null && group != initialGroup) { rememberAnchor(); group = initialGroup; rememberedKey = anchors[anchorKey()]; categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1) }
@@ -368,18 +374,19 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private fun showGrid() { if (shelves.isVisible) { shelves.visibility = GONE; rows.visibility = VISIBLE } }
     /** Category rows for Movies or Series; rows keep their titles and positions when shown again for the same catalog. */
     @SuppressLint("NotifyDataSetChanged")
-    fun showShelves(key: String, groups: Map<String, String>, load: (String) -> Unit, release: (String) -> Unit, open: (String) -> Unit, picked: (String?) -> Unit, focus: Boolean) {
+    internal fun showShelves(key: String, groups: Map<String, String>, load: (String) -> Unit, release: (String) -> Unit, open: (String) -> Unit, picked: (String?) -> Unit, focus: Boolean,
+        initial: Map<String, CatalogShelves.Data> = emptyMap(), rail: Map<String, String> = groups, search: (() -> Unit)? = null) {
         stopCatalog(); browse()
-        allCategoryTitle = "All"; group = null; shelfPicked = picked
-        grid = true; seriesSpot = null; contentsAvailable = true
-        changingSearch = true; search.setText(""); changingSearch = false
+        allCategoryTitle = "All"; group = null; shelfPicked = picked; shelfSearch = search
+        grid = true; seriesSpot = null; contentsAvailable = true; contexts.remove(key)
+        changingSearch = true; this.search.setText(""); changingSearch = false
         rows.visibility = GONE; empty.visibility = GONE
         // The hidden grid releases its tiles (and their bitmaps) while the rows are shown.
         if (shownRows.isNotEmpty() || allRows.isNotEmpty()) { ++focusEpoch; pending = null; shownRows = emptyList(); allRows = emptyList(); hasMore = false; rows.adapter?.notifyDataSetChanged() }
         shelves.load = load; shelves.release = release; shelves.open = open; shelves.http = artworkHttp
         shelves.favoriteIds = favoriteIds; shelves.favoriteLabels = favoriteLabels
-        shelves.show(key, groups.map { (id, title) -> CatalogShelves.Shelf(id, title) })
-        catalogLabels(groups); spotMode()
+        shelves.show(key, groups.map { (id, title) -> CatalogShelves.Shelf(id, title) }, initial)
+        catalogLabels(rail); spotMode()
         if (focus || catalogFocusRequested) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() } }
     }
     internal fun shelf(id: String, value: CatalogShelves.Data) = shelves.update(id, value)

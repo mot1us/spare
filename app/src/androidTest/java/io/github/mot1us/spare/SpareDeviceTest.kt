@@ -3574,8 +3574,13 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
-                // Entering Library from the menu puts the cursor on the first poster, not the menu or filters.
+                // Entering Library from the menu puts the cursor on the first poster of the rows home, not the menu or filters.
                 waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-item:") == true }
+                scenario.onActivity { assertTrue("Library opens on rows", it.window.decorView.findViewWithTag<View>("library-shelves").isShown) }
+                // See all opens the category grid, where the rest of this flow runs.
+                device.pressDPadRight(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressDPadCenter()
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.hasFocus() } }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "library-posters.png"))
                 scenario.onActivity { activity ->
                     val tile = activity.window.decorView.findViewWithTag<View>("library-item:movie:101")
@@ -3626,10 +3631,11 @@ class SpareDeviceTest {
                 server.finishActionCatalog.countDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:3001")?.isShown == true }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                // The first entry of the category list is Home: back to the rows, on the tile the grid was opened from.
                 chooseLibraryCategory(scenario, 0)
-                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Movies" && it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
-                chooseLibraryCategory(scenario, 1)
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == "Movies" && it.window.decorView.findViewWithTag<View>("library-shelves").isShown && (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressDPadCenter()
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.hasFocus() } && a.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
                 device.pressMenu(); activateSetting(scenario, "Time format"); activateSetting(scenario, "24 hour · 19:30")
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel").isShown && store.clock24 }
                 leaveSettings(scenario)
@@ -3733,9 +3739,11 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
                 scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
-                // Back reaches the category rail, then exits Library without an intermediate shelf page.
+                // Back from a grid opened from the rows returns to the rows, then to the Library sections, then leaves Library.
                 device.pressBack()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
                 device.pressBack()
                 waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
@@ -4765,6 +4773,59 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
                 assertEquals("Browsing imported categories asks the provider for nothing", before, server.catalogTargets.size)
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun libraryHomeShowsRowsFromTheImportedCatalogAndReturnsFromGridsAndSearch() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            // The whole catalog as a background import leaves it: three categories, with provider "added" times and ratings.
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie").apply {
+                (1..240).map { n -> OnDemand("movie:${5000 + n}", "Home title $n", "Category ${1 + n % 3}", "${server.base}/movie/test/test-secret/${5000 + n}.mp4", "movie", poster = "${server.base}/logo.png", year = "2024", added = 1_700_000_000L + n, rating = (n % 10).toFloat()) }
+                    .chunked(64).forEach(::append)
+                finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy"))
+            }
+            seeded.close()
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                // Library opens on rows, with the cursor on the newest title.
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }
+                scenario.onActivity { activity ->
+                    val root = activity.window.decorView
+                    assertNotNull(root.findViewWithTag<View>("library-shelf:recent")); assertNotNull(root.findViewWithTag<View>("library-shelf:top"))
+                    assertFalse("Rows use the full width; the category list belongs to the grid", root.findViewWithTag<View>("library-categories").isShown)
+                    assertNull("Special rows have no See all tile", root.findViewWithTag<View>("library-shelf-more:recent"))
+                }
+                assertTrue("Rows come from the saved catalog, not the provider", server.catalogTargets.none { it.contains("get_vod_streams") })
+                Thread.sleep(1200); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-home.png"))
+                // Down: Top rated (best rating first), then the first provider category.
+                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5239" }
+                device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5003" }
+                // The category row ends with See all, which opens the category grid; Back returns to the rows on the same tile.
+                repeat(20) { device.pressDPadRight(); Thread.sleep(120) }
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                device.pressDPadCenter()
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 80 } && a.window.decorView.findViewWithTag<View>("library-categories").isShown }
+                scenario.onActivity { assertEquals("Fixture cinema", it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString()) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
+                // Each row remembers its place: back up to the newest title.
+                device.pressDPadUp(); device.pressDPadUp(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }
+                // Opening a title from a row and pressing Back lands on that tile again.
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-details")?.isShown == true }
+                device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }
+                // Typing searches the whole catalog in a grid; clearing the text returns to the rows.
+                scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText("Home title 77") }
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 1 } && a.window.decorView.findViewWithTag<View>("library-item:movie:5077")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText("") }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && !it.window.decorView.findViewWithTag<View>("library-items").isShown }
+                assertTrue("Browsing rows, a category and search asks the provider for no titles", server.catalogTargets.none { it.contains("get_vod_streams") })
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
     }

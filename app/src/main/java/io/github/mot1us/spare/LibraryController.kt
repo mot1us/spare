@@ -51,7 +51,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!destroyed) {
             catalogChanged?.invoke()
             val selected = selectedSource()
-            if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null) {
+            if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null &&
+                // The rows home is a finished view of the catalog; a background refresh must not swap it for the grid.
+                panel.shelfCatalog == null) {
                 repository.memory(selected, kind)?.let { activateCatalog(activeCatalog, it.copy(labels = categoryNames[activeCatalog] ?: it.labels), !it.complete) }
             }
         }
@@ -208,7 +210,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
         warmTask?.cancel(true); warmTask = null
         spotTask?.cancel(true)
-        if (!keepCategory || mode != kind) shelfCategory = null
+        if (!keepCategory || mode != kind) { shelfCategory = null; gridFromHome = false; homeSearch = false }
         // A hidden tab cannot keep a category download ahead of the selected tab.
         if (mode != kind) {
             catalogImports.values.forEach { it.cancel(true) }; catalogImports.clear(); catalogGenerations.clear()
@@ -248,19 +250,64 @@ class LibraryController(private val activity: Activity, private val store: Secur
         warm(selected, posters = false)
         openBegan = Timings.now(); firstTitlesRecorded = false
         val title = if (mode == "movie") "Movies" else "Series"
-        panel.page(title, "Loading categories…", true)
-        fun bind(names: Map<String, String>) {
+        fun proceed(names: Map<String, String>) {
             categoryNames[root] = names
-            val scope = shelfCategory?.takeIf { it in names } ?: selectedCategories[root]?.takeIf { it in names } ?: names.keys.first()
-            openCategory(selected, mode, root, names, scope, force, focus)
+            val full = wholeCatalog(selected, mode)
+            when {
+                names.isEmpty() -> bulkCatalog(selected, mode, force)
+                // Returning from a title or its episodes: back to the grid it was opened from.
+                full != null && homeSearch -> activateCatalog(root, full, false)
+                full != null && shelfCategory?.let { it in names } == true -> openCategory(selected, mode, root, names, shelfCategory!!, force, focus)
+                full != null -> home(selected, mode, root, names, full, focus)
+                // The whole catalog could not be imported: browse one category at a time, as before.
+                else -> openCategory(selected, mode, root, names, shelfCategory?.takeIf { it in names } ?: selectedCategories[root]?.takeIf { it in names } ?: names.keys.first(), force, focus)
+            }
         }
         val memory = categoryNames[root]
-        if (!force && !memory.isNullOrEmpty()) { bind(memory); return }
+        if (!force && !memory.isNullOrEmpty() && wholeCatalog(selected, mode) != null) { proceed(memory); return }
+        panel.page(title, "Getting your library ready…", true)
         request { token ->
             val names = categoriesFor(selected, mode, force)
             Timings.since("Category list", openBegan)
-            ui(token) { if (names.isEmpty()) bulkCatalog(selected, mode, force) else bind(names) }
+            // Joins the background import if it is already running; the rows home needs the whole catalog.
+            if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
+            ui(token) { proceed(names) }
         }
+    }
+    private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.dbScope == null && it.count > 0 }
+    private class Home(val stamp: Long, val shelves: Map<String, String>, val data: Map<String, CatalogShelves.Data>)
+    private val homes = mutableMapOf<String, Home>()
+    /** A category or search grid was opened from the rows home: Back returns to the rows. */
+    private var gridFromHome = false
+    private var homeSearch = false
+    /** Movies or Series as rows — Recently added, Top rated, then every provider category — read from the catalog in memory. */
+    private fun home(selected: Source, mode: String, root: String, names: Map<String, String>, full: LibraryCatalog.Snapshot, focus: Boolean) {
+        activeCatalog = root; gridFromHome = false; homeSearch = false; shelfCategory = null
+        pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null
+        val title = if (mode == "movie") "Movies" else "Series"
+        fun show(home: Home) {
+            if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
+            panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
+            panel.showShelves(root, home.shelves, {}, {}, { id -> if (id in names) { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) } },
+                { next -> if (next != null && next in names) { gridFromHome = true; openCategory(selected, mode, root, names, next, focus = true) } }, focus,
+                initial = home.data, rail = emptyMap(), search = { gridFromHome = true; homeSearch = true; activateCatalog(root, full, false) })
+        }
+        homes[root]?.takeIf { it.stamp == full.updated }?.let { show(it); return }
+        panel.page(title, "Getting your library ready…", true)
+        request { token ->
+            val rows = repository.home(full, names)
+            val shelves = linkedMapOf<String, String>(); val data = HashMap<String, CatalogShelves.Data>()
+            if (rows.recent.isNotEmpty()) { shelves[HOME_RECENT] = "Recently added"; data[HOME_RECENT] = CatalogShelves.Data(rows.recent.map(::browserRow), 0, busy = false, more = false) }
+            if (rows.top.isNotEmpty()) { shelves[HOME_TOP] = "Top rated"; data[HOME_TOP] = CatalogShelves.Data(rows.top.map(::browserRow), 0, busy = false, more = false) }
+            rows.categories.forEach { (id, items) -> shelves[id] = names[id].orEmpty(); data[id] = CatalogShelves.Data(items.map(::browserRow), rows.counts[id] ?: items.size, busy = false) }
+            val built = Home(full.updated, shelves, data)
+            ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built) }
+        }
+    }
+    private fun returnHome(focus: Boolean = true) {
+        gridFromHome = false; homeSearch = false; shelfCategory = null
+        val selected = selectedSource() ?: return
+        catalog(selected, kind, false, focus)
     }
     private fun categoriesFor(selected: Source, mode: String, force: Boolean): Map<String, String> {
         val file = "library-categories-${selected.id}-${selected.providerKey().take(16)}-$mode.enc"
@@ -279,8 +326,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.bindCatalog(root, names, { group, query ->
             val target = group ?: scope; val reload = refreshPending; refreshPending = false
             scopedCatalog(selected, mode, root, target, names, query, reload)
-        }, { loadCatalogPage(null, activeQuery, true) }, "All categories", initialGroup = scope,
-            picked = { next -> if (next == null) { shelfCategory = null; panel.clearCategorySelection(); bulkCatalog(selected, mode, false) } else openCategory(selected, mode, root, names, next, focus = true) })
+        }, { loadCatalogPage(null, activeQuery, true) }, if (wholeCatalog(selected, mode) != null) "Home" else "All categories", initialGroup = scope,
+            picked = { next -> if (next == null) { shelfCategory = null; panel.clearCategorySelection(); if (wholeCatalog(selected, mode) != null) returnHome() else bulkCatalog(selected, mode, false) } else openCategory(selected, mode, root, names, next, focus = true) })
         if (focus) panel.requestContentFocus()
     }
     private val warming = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-warm") }
@@ -423,6 +470,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.page(if (kind == "movie") "Movies" else "Series", counted(snapshot.count, "title") + if (busy) " · Loading more in the background…" else "", busy)
         val groups = snapshot.categories + snapshot.labels.mapKeys { "Category ${it.key}" }
         panel.bindCatalog(key, groups, { group, query ->
+            // Clearing a search started on the rows home returns to the rows.
+            if (homeSearch && group == null && query.isEmpty()) { handler.post { if (!destroyed && opened && homeSearch) returnHome(focus = false) }; return@bindCatalog }
             val selected = selectedSource(); val scope = group?.removePrefix("Category ")
             if (selected != null && scope != null && scope.matches(Regex("[0-9]{1,20}"))) {
                 shelfCategory = scope; selectedCategories["${selected.id}:$kind"] = scope
@@ -721,6 +770,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             detailItem != null -> closeDetails()
             archive != null -> catchupChannels()
             parentSeries != null -> open(if (kind == "favorites") "favorites" else "series", focusContent = true, keepCategory = true)
+            gridFromHome && kind in setOf("movie", "series") && selectedSource()?.let { wholeCatalog(it, kind) } != null -> returnHome()
             panel.focusRailFromContent() -> Unit
             else -> { dismiss(); closed() }
         }
@@ -740,5 +790,5 @@ class LibraryController(private val activity: Activity, private val store: Secur
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
     fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); posterMetadata.close(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

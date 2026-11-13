@@ -2,9 +2,9 @@
 
 ## 0.43.0 — 2026-11-12
 
-- Library stage 1 of 3: the whole Movies and Series catalogs are imported in the background — ten seconds after the guide loads, and when Library opens — and kept in memory. Once imported, opening or switching a category asks the provider for nothing and shows its titles at once; the catalog refreshes itself when it is more than six hours old. Until the first import finishes, categories load as before.
-- Titles now keep the provider's "added" date and rating for the upcoming Recently added and Top rated rows. Saved catalogs from earlier versions are refreshed once.
-- Settings › Playlists › Refresh settings shows how long the whole-catalog imports took ("All movies", "All series").
+- Movies and Series open on a rows home, like streaming apps: Recently added, Top rated, then one row per provider category with its first 20 posters and a See all tile. Up/Down moves between rows (each remembers its place), Left/Right within a row, OK opens a title. See all opens that category's grid with Sort and the category list, whose first entry is Home; Back from a grid, a title or a search returns to the rows on the same tile. Typing in Search on the rows searches the whole catalog, and clearing the text returns to the rows.
+- The rows need no provider request: the whole Movies and Series catalogs are imported in the background — ten seconds after the guide loads, and when Library opens — and kept in memory. Once imported, rows, categories and search read memory; the catalog refreshes itself when it is more than six hours old. Recently added and Top rated appear only when the provider supplies "added" dates and ratings. If the import fails, Library falls back to browsing one category at a time.
+- Saved catalogs from earlier versions are refreshed once. Settings › Playlists › Refresh settings shows how long the whole-catalog imports took ("All movies", "All series").
 
 ## 0.42.1 — 2026-11-12
 
