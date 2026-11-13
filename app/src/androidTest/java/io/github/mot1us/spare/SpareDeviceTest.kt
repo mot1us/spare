@@ -470,7 +470,7 @@ class SpareDeviceTest {
             assertEquals(channels.size, lineup.size)
             channels.zip(lineup).forEach { (expected, actual) -> assertEquals(expected.id, expected, actual) }
             val file = File(context.filesDir, "epg-${source.id}.enc"); val bytes = file.readBytes()
-            assertEquals(1, bytes.first().toInt()); bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte(); file.writeBytes(bytes)
+            assertEquals(2, bytes.first().toInt()); bytes[bytes.lastIndex] = (bytes.last().toInt() xor 1).toByte(); file.writeBytes(bytes)
             assertTrue("Streaming writes keep authenticated encryption", runCatching { store.cachedProgrammes(source) }.isFailure)
         } finally { store.saveSources(emptyList()); store.removeCache(source) }
     }
