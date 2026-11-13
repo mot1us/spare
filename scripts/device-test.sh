@@ -57,4 +57,4 @@ if [ -n "$classes" ]; then args+=(-e class "$classes"); fi
 if [ "$shards" -gt 1 ]; then args+=(-e numShards "$shards" -e shardIndex "$shard"); fi
 printf 'TV suite: %s, shard %s of %s (%s checks)\n' "$suite" "$((shard + 1))" "$shards" "$count"
 "$adb" -s "$serial" shell am instrument "${args[@]}" io.github.mot1us.spare.debug.test/io.github.mot1us.spare.SpareTestRunner | tee app/build/reports/device/results.txt
-grep -q "^OK ($count tests)" app/build/reports/device/results.txt
+grep -Eq "^OK \($count tests?\)" app/build/reports/device/results.txt

@@ -3714,7 +3714,9 @@ class SpareDeviceTest {
                 }
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 12500 }
-                device.pressDPadLeft(); device.pressDPadRight()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").isShown }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
+                device.pressDPadRight()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadDown()
                 scenario.onActivity { assertNull(it.window.decorView.findViewWithTag<View>("library-live")) }
