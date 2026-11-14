@@ -54,6 +54,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val spotlight = LinearLayout(context).apply { orientation = VERTICAL; tag = "library-spotlight"; visibility = GONE }
     private var spotKey: String? = null
     private val spotLater = Runnable { requestSpotDetails() }
+    private var spotWaiting: BrowserRow? = null
+    private val spotApply = Runnable { spotWaiting?.let { spotWaiting = null; showSpot(it) } }
     private var spotRow: BrowserRow? = null
     // Fixed heights: a wrap-content FrameLayout would stretch its full-bleed artwork to the whole screen.
     private val hero = FrameLayout(context)
@@ -68,7 +70,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val categoryButton = button("All categories ▾", ::openCategories).apply {
         tag = "library-category"; visibility = GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
     }
-    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"
+    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"; recycledViewPool.setMaxRecycledViews(0, PosterGridLayout.COLUMNS * 4)
         // Leave room for the focused poster's lift instead of clipping it at the grid edge.
         clipChildren = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)) }
     // Same remote-hint line as the Guide and Sports, so long-press actions are discoverable here too.
@@ -547,7 +549,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
     }
     private fun clearSpot() {
-        searchHandler.removeCallbacks(spotLater); spotKey = null; spotRow = null
+        searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); spotKey = null; spotRow = null
         spotTitle.text = ""; spotMeta.text = ""; spotPlot.text = ""; backdrops.bind(spotArt, ""); spotArt.visibility = GONE; spotScrim.visibility = GONE
     }
     private var seriesSpot: Pair<OnDemand, Spotlight?>? = null
@@ -558,7 +560,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     private fun showSeriesSpot() {
         val (series, spot) = seriesSpot ?: return
-        spotKey = series.id; spotRow = null; searchHandler.removeCallbacks(spotLater)
+        spotKey = series.id; spotRow = null; searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
         spotTitle.text = series.title
         spotMeta.text = spot?.meta?.takeIf { it.isNotBlank() } ?: listOf(series.year, series.category).filter { it.isNotBlank() }.joinToString("  ·  ")
         spotPlot.text = spot?.plot.orEmpty().ifBlank { series.description }
@@ -566,12 +568,16 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     private fun showSpot(row: BrowserRow) {
         if (!spotlight.isVisible || detailPane.isVisible || seriesSpot != null) return
+        // While a key is held the cursor is only passing through: the banner and its text change once it stops.
+        val held = images.quietFor()
+        if (held > 0) { spotWaiting = row; searchHandler.removeCallbacks(spotApply); searchHandler.postDelayed(spotApply, held + 20); return }
+        spotWaiting = null
         if (spotKey == row.key) return
         spotKey = row.key; spotRow = row
         spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
         spotArtwork(row.backdrop.ifBlank { row.poster })
         // Wait for the cursor to settle so fast scrolling never queues provider requests.
-        searchHandler.removeCallbacks(spotLater)
+        searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
         if (row.spotlight != null) searchHandler.postDelayed(spotLater, 350)
     }
     private fun spotArtwork(url: String) {
@@ -599,7 +605,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         detailPane.removeAllViews(); detailPane.background = null
         page(tabs.firstOrNull { it.second == selectedTab }?.first ?: "Library", if (busy) "Loading details…" else "", busy)
         // The details page uses the spotlight for its backdrop, title and facts; the pane holds poster, plot and actions.
-        spotKey = item.id; spotRow = null; searchHandler.removeCallbacks(spotLater)
+        spotKey = item.id; spotRow = null; searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
         spotTitle.text = item.title
         spotMeta.text = listOf(item.year, item.genre.substringBefore(',').trim(), item.runtime, item.category).filter { it.isNotBlank() }.distinct().joinToString("  ·  ")
         spotArtwork(item.backdrop.ifBlank { item.poster })
@@ -618,7 +624,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
-    fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
+    fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
     fun warmPosters(urls: List<String>, http: Boolean) { urls.forEach { images.warm(it, http, tileDecode) } }
     /** Frame times are counted only while Library is actually on screen (see [LibraryFrames]). */
     override fun onVisibilityAggregated(isVisible: Boolean) {

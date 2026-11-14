@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.45.1 — 2026-11-13
+
+- Smoother Library scrolling. Category rows now share one stock of poster tiles: a row scrolling in reuses the tiles of the row that left, where it used to build most of its tiles again each time.
+- A row keeps two tiles ready past each edge instead of a whole extra screen on both sides, so showing a row is about a third of the work and off-screen posters no longer queue ahead of the ones you can see.
+- While a direction key is held, the banner at the top (image, title and description) waits for the cursor to stop instead of changing on every step.
+- The category grid keeps enough spare tiles to scroll a full row of posters without building new ones.
+
 ## 0.45.0 — 2026-11-13
 
 - A series opens on one season — the first with an episode you have not watched — with the seasons listed on the left ("All seasons" stays first) and a taller hero image of the show above the episodes.

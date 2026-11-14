@@ -41,6 +41,8 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     private val positions = mutableMapOf<String, Int>()
     private var current: String? = null
     private var focusEpoch = 0
+    /** Every row draws from one stock of poster tiles, so a row scrolling in reuses the tiles of the row that left instead of building new ones. */
+    private val tilePool = RecycledViewPool().apply { setMaxRecycledViews(0, COLUMNS * 10); setMaxRecycledViews(1, 8) }
 
     init {
         tag = "library-shelves"; visibility = GONE; itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
@@ -134,7 +136,13 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(8), 0, dp(8), 0); gravity = Gravity.CENTER_VERTICAL
         }
         val list = RecyclerView(context).apply {
-            layoutManager = TvFocus.HorizontalLayout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
+            // Two tiles past each edge are kept ready; a whole extra screen each side tripled the work of showing a row.
+            layoutManager = object : LinearLayoutManager(context, HORIZONTAL, false) {
+                override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
+                override fun calculateExtraLayoutSpace(state: State, extra: IntArray) { extra[0] = width / 4; extra[1] = width / 4 }
+            }.apply { initialPrefetchItemCount = COLUMNS + 2 }
+            setRecycledViewPool(tilePool); setHasFixedSize(true)
+            itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
             clipChildren = false; clipToPadding = false; setPadding(dp(2), dp(8), dp(2), dp(8)); isFocusable = false
         }
         init {
@@ -149,6 +157,9 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             heading.typeface = AppFont.face(true); heading.textSize = 13f * GuideTheme.textScale
             heading.text = shelf.title + (value?.total?.takeIf { it > 0 }?.let { "  ·  $it" } ?: "")
             items = value?.rows.orEmpty(); more = value; total = value?.total ?: 0
+            // A fixed height keeps a row's own updates from re-measuring every other row.
+            val height = posterHeight(tileWidth()) + dp(16)
+            if (list.layoutParams.height != height) list.layoutParams = list.layoutParams.apply { this.height = height }
             list.adapter?.notifyDataSetChanged()
             list.scrollToPosition((positions[shelf.id] ?: 0).coerceAtMost(maxOf(0, count() - 1)))
         }
@@ -221,11 +232,12 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             override fun onBindViewHolder(holder: ViewHolder, position: Int) {
                 val width = tileWidth(); val height = posterHeight(width)
                 val view = holder.itemView
-                view.layoutParams = RecyclerView.LayoutParams(width, height).apply { marginEnd = dp(2) }
+                if (holder is PosterHolder) holder.box.configure(LibraryPosterTile.Layout.ROW)
+                val params = view.layoutParams
+                if (params !is RecyclerView.LayoutParams || params.width != width || params.height != height || params.marginEnd != dp(2) || params.bottomMargin != 0)
+                    view.layoutParams = RecyclerView.LayoutParams(width, height).apply { marginEnd = dp(2) }
                 if (holder is PosterHolder) {
                     val item = items[position]; val favorite = item.key in favoriteIds
-                    holder.box.configure(LibraryPosterTile.Layout.ROW)
-                    holder.box.layoutParams = RecyclerView.LayoutParams(width, height).apply { marginEnd = dp(2) }
                     holder.box.appearance()
                     holder.box.tag = "library-item:${item.key}"
                     holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""

@@ -143,6 +143,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private fun scheduleRetries() {
         if (closed || paused) return
         val now = SystemClock.uptimeMillis()
+        // A check is already due as soon as one may run: looking at every image again cannot bring it forward.
+        if (retryPosted && retryWhen <= now + 60) return
         val next = bindings.entries.asSequence().filter { !it.value.waiting && !it.value.complete }.minOfOrNull { (view, binding) ->
             // Hidden/detached views only get cleanup, never another network attempt.
             if (visible(view)) minOf(binding.retryAt, binding.deadline + 1) else binding.deadline + 1
@@ -218,6 +220,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     @Volatile private var quietUntil = 0L
     /** Hold new poster loads for [millis]; called on every repeat of a held remote key. Posters already in memory still show at once. */
     fun quiet(millis: Long = 250) { quietUntil = SystemClock.uptimeMillis() + millis }
+    /** Milliseconds until held-key scrolling is considered over; 0 when it already is. */
+    fun quietFor(): Long = (quietUntil - SystemClock.uptimeMillis()).coerceAtLeast(0)
     /** Load into the caches while the panel is closed, so the next open shows posters at once. */
     fun warm(url: String, http: Boolean = false, dimension: Int = 0) { request(url, http, size(dimension), {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
