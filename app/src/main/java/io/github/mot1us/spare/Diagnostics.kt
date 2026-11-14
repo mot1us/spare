@@ -85,9 +85,13 @@ internal object Diagnostics {
 
     @Synchronized private fun posterLine() = if (posters == 0) null else "Posters: $posters loaded · waited ${posterWait / posters} ms · took ${posterWork / posters} ms each (worst $posterWorst) · $posterFailed failed"
 
+    /** What is playing right now (format, buffer, dropped frames, display rate); set by the activity, read on the UI thread. */
+    var playback: (() -> String)? = null
     fun report(): String {
         val lines = ArrayList<String>()
-        lines += "Running ${clock()} · ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE}"
+        val runtime = Runtime.getRuntime()
+        lines += "Running ${clock()} · ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} · memory ${(runtime.totalMemory() - runtime.freeMemory()) / 1048576}/${runtime.maxMemory() / 1048576} MB"
+        runCatching { playback?.invoke() }.getOrNull()?.takeIf { it.isNotBlank() }?.let { text -> lines += "Playing now: " + text.lines().filter { it.isNotBlank() }.joinToString(" | ") }
         LibraryFrames.summary()?.let { lines += "Library frames: $it" }
         LibraryFrames.phases()?.let { lines += "Slow frames spent: $it" }
         posterLine()?.let { lines += it }

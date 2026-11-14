@@ -20,6 +20,12 @@ class LibraryCatalog(private val store: SecureStore) {
                 val standard = if (item.kind == "movie") VodCatalog.streamUrl(source, "movie", item.id.substringAfter(':'), ext) else ""
                 return Title(item.id, item.title, item.category, ext, item.year, item.poster, item.url.takeUnless { it == standard }.orEmpty(), item.externalId, added = item.added, rating = item.rating)
             }
+            /** One saved title as its list of text fields (see [json]); older catalogs have fewer of them. */
+            fun from(values: List<String>): Title {
+                require(values.size in 7..11 && values[0].matches(idPattern))
+                fun at(index: Int) = values.getOrNull(index).orEmpty()
+                return Title(values[0], values[1].take(256), values[2].take(128), values[3].take(16), values[4].take(16), values[5].take(4096), values[6].take(16384), at(7).take(128), at(8).take(256), at(9).toLongOrNull() ?: 0L, at(10).toFloatOrNull()?.takeIf { it.isFinite() } ?: 0f)
+            }
             fun from(json: JSONArray): Title {
                 require(json.length() in 7..11 && json.getString(0).matches(idPattern))
                 return Title(json.getString(0), json.getString(1).take(256), json.getString(2).take(128), json.getString(3).take(16), json.getString(4).take(16), json.getString(5).take(4096), json.getString(6).take(16384), json.optString(7).take(128), json.optString(8).take(256), json.optString(9).toLongOrNull() ?: 0L, json.optString(10).toFloatOrNull()?.takeIf { it.isFinite() } ?: 0f)
@@ -129,20 +135,51 @@ class LibraryCatalog(private val store: SecureStore) {
         }
         val bytes = store.read("${prefix}index.enc")
         if (bytes != null) {
-            val json = JSONObject(bytes.toString(Charsets.UTF_8)); require(json.getInt("schema") in 1..SCHEMA)
-            if (json.has("provider")) { if (json.getString("provider") != source.providerKey()) return null }
-            else if (!store.legacyProviderMatches(source)) return null
-            val pages = json.getJSONArray("pages"); require(pages.length() <= 2000)
-            val chunks = List(pages.length()) { i ->
-                val p = pages.getJSONObject(i); val groups = p.getJSONArray("groups"); val keys = p.optJSONArray("keys")
-                val count = p.getInt("count"); require(count in 1..512 && (keys == null || keys.length() == count))
-                val records = p.optJSONArray("titles")
-                require(records == null || records.length() == count)
-                val titles = records?.let { values -> List(values.length()) { Title.from(values.getJSONArray(it)) } }.orEmpty()
-                Chunk(p.getString("file"), count, List(groups.length()) { groups.getString(it) }, if (titles.isNotEmpty()) titles.map { it.key } else keys?.let { values -> List(values.length()) { values.getString(it) } }.orEmpty(), titles)
+            // Read straight from the bytes, one title at a time. Building the whole file as one string and one object
+            // tree first took 7–8 s on a TV and several times the catalog's size in memory while a channel was playing.
+            var schema = 0; var provider: String? = null; var updated = 0L; var complete = true
+            val chunks = ArrayList<Chunk>(); val labels = LinkedHashMap<String, String>()
+            fun strings(reader: android.util.JsonReader, limit: Int): List<String> {
+                val values = ArrayList<String>(); reader.beginArray()
+                while (reader.hasNext()) { require(values.size < limit); if (reader.peek() == android.util.JsonToken.NULL) { reader.nextNull(); values.add("") } else values.add(reader.nextString()) }
+                reader.endArray(); return values
             }
-            val names = json.getJSONObject("labels"); val labels = names.keys().asSequence().associateWith { names.getString(it) }
-            val snapshot = Snapshot(json.getLong("updated"), chunks, chunks.sumOf { it.count }, labels, complete = json.optBoolean("complete", true), source = source, schema = json.getInt("schema"))
+            android.util.JsonReader(bytes.inputStream().reader(Charsets.UTF_8)).use { reader ->
+                reader.beginObject()
+                while (reader.hasNext()) when (reader.nextName()) {
+                    "schema" -> schema = reader.nextInt()
+                    "provider" -> provider = reader.nextString()
+                    "updated" -> updated = reader.nextLong()
+                    "complete" -> complete = reader.nextBoolean()
+                    "labels" -> { reader.beginObject(); while (reader.hasNext()) { val name = reader.nextName(); labels[name] = reader.nextString() }; reader.endObject() }
+                    "pages" -> {
+                        reader.beginArray()
+                        while (reader.hasNext()) {
+                            require(chunks.size < 2000)
+                            var file = ""; var count = 0; var groups = emptyList<String>(); var keys: List<String>? = null; var titles: List<Title>? = null
+                            reader.beginObject()
+                            while (reader.hasNext()) when (reader.nextName()) {
+                                "file" -> file = reader.nextString()
+                                "count" -> count = reader.nextInt()
+                                "groups" -> groups = strings(reader, 512)
+                                "keys" -> keys = strings(reader, 512)
+                                "titles" -> { val read = ArrayList<Title>(); reader.beginArray(); while (reader.hasNext()) { require(read.size < 512); read.add(Title.from(strings(reader, 11))) }; reader.endArray(); titles = read }
+                                else -> reader.skipValue()
+                            }
+                            reader.endObject()
+                            require(count in 1..512 && (keys == null || keys.size == count) && (titles == null || titles.size == count))
+                            chunks.add(Chunk(file, count, groups, if (!titles.isNullOrEmpty()) titles.map { it.key } else keys.orEmpty(), titles.orEmpty()))
+                        }
+                        reader.endArray()
+                    }
+                    else -> reader.skipValue()
+                }
+                reader.endObject()
+            }
+            require(schema in 1..SCHEMA)
+            if (provider != null) { if (provider != source.providerKey()) return null }
+            else if (!store.legacyProviderMatches(source)) return null
+            val snapshot = Snapshot(updated, chunks, chunks.sumOf { it.count }, labels, complete = complete, source = source, schema = schema)
             index(source, mode, chunks.flatMap { it.titles }); remember(prefix, snapshot)
             Timings.since("Saved category", restoreBegan)
             if (scope.isNotEmpty()) store.pruneCatalog(prefix, chunks.map { it.file }.toSet() + "${prefix}index.enc")
@@ -164,18 +201,21 @@ class LibraryCatalog(private val store: SecureStore) {
         return (if (scope.isEmpty()) jobs else categoryJobs).await(LoadKey(source.copy(name = ""), mode, scope), progress) { publish ->
             val latest = cached(source, mode, scope)
             if (!force && fresh(latest)) return@await latest!!
-            val writer = Writer(source, mode, scope = scope, indexOnly = true)
+            // Refreshing a complete catalog happens out of sight: Library keeps reading the complete copy in memory until
+            // the new one is whole. Showing the half-downloaded copy pushed every screen onto its slow path for a minute.
+            val quiet = scope.isEmpty() && latest?.complete == true && latest.schema >= SCHEMA && latest.count > 0
+            val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
             var published = 0L; var checkpoint = 0L
             VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
                 writer.append(batch)
                 val now = android.os.SystemClock.elapsedRealtime()
-                if (published == 0L || now - published >= 750) { publish(writer.snapshot(labels)); published = now }
+                if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
                 if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
             }
             writer.finish(labels).also(publish)
         }
     }
-    inner class Writer(private val source: Source, private val mode: String, private val stamp: Long = System.currentTimeMillis(), private val scope: String = "", private val indexOnly: Boolean = false) {
+    inner class Writer(private val source: Source, private val mode: String, private val stamp: Long = System.currentTimeMillis(), private val scope: String = "", private val indexOnly: Boolean = false, private val quiet: Boolean = false) {
         private val prefix = prefix(source, mode, scope)
         private val generation = UUID.randomUUID().toString()
         private val chunks = mutableListOf<Chunk>()
@@ -220,7 +260,7 @@ class LibraryCatalog(private val store: SecureStore) {
             // Invalidation must cover partial memory publication as well as the final disk index.
             requireCurrent(); flush()
             (if (dbMode) Snapshot(stamp, emptyList(), count, labels, complete = false, source = source, dbScope = dbKey, dbGen = generation)
-            else Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source)).also { remember(prefix, it) }
+            else Snapshot(stamp, chunks.toList(), count, labels, complete = false, source = source)).also { if (!quiet) remember(prefix, it) }
         }
         fun checkpoint(labels: Map<String, String>): Snapshot = save(labels, false)
         fun finish(labels: Map<String, String>): Snapshot = save(labels, true)

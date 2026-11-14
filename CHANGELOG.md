@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.46.2 — 2026-11-14
+
+Fixes found with the Performance report from an onn 4K Pro:
+
+- Refreshing the Movies and Series catalog no longer slows Library down. The half-downloaded copy used to replace the complete one in memory while the refresh ran, so every Library screen fell back to its slow path (over a minute in the report). Library now keeps using the complete copy until the new one is whole.
+- Loading the saved catalog reads it one title at a time instead of building the whole file in memory first (7–8 s per catalog in the report, and a memory spike that coincided with dropped video frames).
+- The Performance report now also shows what is playing (format, buffer, dropped frames, display rate) and memory in use.
+
 ## 0.46.1 — 2026-11-14
 
 - New: Settings › About Spare › Performance report. It shows what the app was doing when it felt slow, measured on the TV itself: which code blocked the screen and for how long, where slow Library frames spent their time, how long posters waited and took to load, and for each playback hiccup how much of the stream was buffered, how much memory was in use and what else the app was running. Use the app until it stutters, open the page and photograph it. It is kept in memory only and never leaves the TV.
