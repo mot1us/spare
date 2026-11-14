@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.46.1 — 2026-11-14
+
+- New: Settings › About Spare › Performance report. It shows what the app was doing when it felt slow, measured on the TV itself: which code blocked the screen and for how long, where slow Library frames spent their time, how long posters waited and took to load, and for each playback hiccup how much of the stream was buffered, how much memory was in use and what else the app was running. Use the app until it stutters, open the page and photograph it. It is kept in memory only and never leaves the TV.
+- The published build now keeps readable code names so the report can name what was slow (about 75 KB larger).
+
 ## 0.46.0 — 2026-11-14
 
 - Library navigation is rebuilt on Leanback, Google's own list engine for TV remotes (`androidx.leanback:leanback-grid`, the same engine well-known open-source TV apps use). The Movies and Series rows, the category grid, episode lists and the category/season list now let that engine move the cursor, keep it on screen, scroll while a key is held and put it back when titles change. The hand-written cursor code these screens used is gone.

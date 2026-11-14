@@ -36,18 +36,33 @@ internal object LibraryFrames {
     private var window: Window? = null
     private var thread: HandlerThread? = null
     @Volatile private var periodNs = 16_666_667L
+    // Where slow frames spent their time: the app's own work (input, layout, draw) or the device's (upload, GPU, waiting).
+    private val phaseNames = listOf("waiting" to FrameMetrics.UNKNOWN_DELAY_DURATION, "input" to FrameMetrics.INPUT_HANDLING_DURATION, "animation" to FrameMetrics.ANIMATION_DURATION,
+        "layout" to FrameMetrics.LAYOUT_MEASURE_DURATION, "draw" to FrameMetrics.DRAW_DURATION, "upload" to FrameMetrics.SYNC_DURATION, "render" to FrameMetrics.COMMAND_ISSUE_DURATION, "swap" to FrameMetrics.SWAP_BUFFERS_DURATION)
+    private val phaseNs = LongArray(phaseNames.size + 1)
     private val listener = Window.OnFrameMetricsAvailableListener { _, data, _ ->
         // The first frame of a new layout includes inflating it; it is not a scrolling hitch.
         if (data.getMetric(FrameMetrics.FIRST_DRAW_FRAME) != 1L) {
-            val deadline = if (Build.VERSION.SDK_INT >= 31) data.getMetric(FrameMetrics.DEADLINE) else -1L
-            tally.record(data.getMetric(FrameMetrics.TOTAL_DURATION), deadline.takeIf { it > 0 } ?: periodNs, periodNs)
+            val deadline = (if (Build.VERSION.SDK_INT >= 31) data.getMetric(FrameMetrics.DEADLINE) else -1L).takeIf { it > 0 } ?: periodNs
+            val total = data.getMetric(FrameMetrics.TOTAL_DURATION)
+            tally.record(total, deadline, periodNs)
+            if (total > deadline) synchronized(phaseNs) {
+                phaseNames.forEachIndexed { index, phase -> phaseNs[index] += data.getMetric(phase.second).coerceAtLeast(0) }
+                if (Build.VERSION.SDK_INT >= 31) phaseNs[phaseNames.size] += data.getMetric(FrameMetrics.GPU_DURATION).coerceAtLeast(0)
+            }
         }
+    }
+    /** Share of slow-frame time per stage, largest first; null when no frame was slow. */
+    fun phases(): String? = synchronized(phaseNs) {
+        val named = phaseNames.mapIndexed { index, phase -> phase.first to phaseNs[index] } + ("gpu" to phaseNs[phaseNames.size])
+        val sum = named.sumOf { it.second }
+        if (sum <= 0) null else named.filter { it.second * 100 / sum >= 3 }.sortedByDescending { it.second }.joinToString(" · ") { "${it.first} ${it.second * 100 / sum}%" }
     }
 
     /** Main thread only. */
     fun start(target: Window, refreshRate: Float) {
         if (window === target) return
-        stop(); tally.reset()
+        stop(); tally.reset(); synchronized(phaseNs) { phaseNs.fill(0) }
         if (refreshRate.isFinite() && refreshRate >= 1f) periodNs = (1_000_000_000.0 / refreshRate).toLong()
         val worker = HandlerThread("spare-library-frames").apply { start() }
         runCatching { target.addOnFrameMetricsAvailableListener(listener, Handler(worker.looper)) }

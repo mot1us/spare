@@ -779,6 +779,7 @@ class MainActivity : Activity() {
                 if (state != player.playbackState) return
                 if (state == Player.STATE_BUFFERING && firstFrame && hasPlayedChannel && player.playWhenReady) {
                     playbackRebuffers++; journal(PlaybackJournal.Event.BUFFERING)
+                    Diagnostics.hiccup("Stream stalled", player.totalBufferedDuration)
                     if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime()) }
                 }
                 // Rebuffering only defers new Sports searches (prefetchSportsStream waits for READY).
@@ -795,6 +796,7 @@ class MainActivity : Activity() {
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
                     playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
+                    if (droppedFrames >= 5) Diagnostics.hiccup("Dropped $droppedFrames frames", player.totalBufferedDuration)
                     journal(PlaybackJournal.Event.DROPPED_FRAMES, droppedFrames)
                 }
             }
@@ -3166,6 +3168,7 @@ class MainActivity : Activity() {
         val parent = when (page) {
             "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Developer tools" -> "Playback diagnostics"
+            "Performance report" -> "About Spare"
             "Sports overlay" -> "Sports"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
@@ -3332,7 +3335,12 @@ class MainActivity : Activity() {
             }
             "Temporarily hidden channels" -> { panel.page(page, "${unavailable.snapshot().size} channels are temporarily hidden after confirmed missing-stream responses. They return automatically after 15 minutes."); panel.action("Restore channels") { unavailable.clear(); saveUnavailable(); applyFilter(); refresh() } }
             "Refresh playlist & guide" -> { source?.let { renderRefreshSettings(it) } ?: panel.page(page, "Add a playlist first.") }
-            "About Spare" -> panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage.")
+            "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage."); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
+            "Performance report" -> {
+                panel.page(page, "What Spare was doing when it felt slow. Use the app until it stutters or drags, then open this page and send a photo of it. Nothing here leaves this TV.")
+                panel.note(Diagnostics.report(), "performance-report")
+                panel.action("Start over") { Diagnostics.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
+            }
             "Open-source licenses" -> { panel.page(page, ""); panel.note(listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { assets.open("licenses/$it").bufferedReader().use { reader -> reader.readText() } }) }
             "Exit Spare" -> { panel.page(page, "Close the player."); panel.action("Exit Spare") { finish() } }
         }
@@ -3692,7 +3700,7 @@ class MainActivity : Activity() {
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -3717,6 +3725,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() {
+        Diagnostics.stop()
         performanceOverlay?.close()
         performanceOverlay = null
         scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()

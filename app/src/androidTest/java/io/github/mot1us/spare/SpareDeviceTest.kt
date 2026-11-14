@@ -4757,6 +4757,20 @@ class SpareDeviceTest {
         root.findViewWithTag<View>(option).apply { requestFocus(); performClick() }
     }
 
+    @Test fun performanceReportRecordsStallsHiccupsAndPosterTimes() {
+        Diagnostics.reset(); Diagnostics.start()
+        try {
+            // A blocked screen is noticed and named by the method that blocked it.
+            instrumentation.runOnMainSync { blockTheScreenBriefly() }
+            Diagnostics.hiccup("Dropped 9 frames", 4200); Diagnostics.poster(12, 34, true); Diagnostics.job("Parse lineup", 1000, 3000)
+            Thread.sleep(400)
+            val report = Diagnostics.report()
+            assertTrue(report, report.contains("blockTheScreenBriefly") && report.contains("Screen stalls (what blocked the screen)"))
+            assertTrue(report, report.contains("Dropped 9 frames · buffer 4.2 s") && report.contains("Posters: 1 loaded") && report.contains("Parse lineup"))
+        } finally { Diagnostics.stop(); Diagnostics.reset() }
+    }
+    private fun blockTheScreenBriefly() { Thread.sleep(600) }
+
     @Test fun importedCatalogOpensCategoriesWithoutAskingTheProvider() {
         FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

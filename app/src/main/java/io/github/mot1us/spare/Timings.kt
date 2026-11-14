@@ -4,6 +4,6 @@ package io.github.mot1us.spare
 object Timings {
     private val values = java.util.concurrent.ConcurrentHashMap<String, Long>()
     fun now() = android.os.SystemClock.elapsedRealtime()
-    fun since(name: String, began: Long) { values[name] = (now() - began).coerceAtLeast(0) }
+    fun since(name: String, began: Long) { val ended = now(); values[name] = (ended - began).coerceAtLeast(0); Diagnostics.job(name, began, ended) }
     fun summary(names: List<String>) = names.mapNotNull { name -> values[name]?.let { "$name ${"%.1f".format(java.util.Locale.ROOT, it / 1000.0)} s" } }.joinToString(" · ")
 }

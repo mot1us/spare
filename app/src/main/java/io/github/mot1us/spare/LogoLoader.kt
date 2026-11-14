@@ -167,10 +167,11 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (workers.queue.size >= 48) return null
             pending[key] = mutableListOf(redraw); queued()
         }
-        val token = generation
+        val token = generation; val queuedAt = SystemClock.uptimeMillis()
         workers.execute {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             if (closed || (paused && !warm) || token != generation) return@execute
+            val startedAt = SystemClock.uptimeMillis()
             val bitmap = runCatching {
                 val address = source(url).takeIf { it == url || Network.allowed(it, http) } ?: url
                 val fetch = { Network.get(address, http, 2 * 1024 * 1024, timeoutMs = 4000) }
@@ -202,6 +203,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
                 sized?.apply { if (!opaque) setHasMipMap(true) }
             }.getOrNull()
             if (bitmap != null && !closed) cache.put(key, bitmap)
+            if (opaque) Diagnostics.poster(startedAt - queuedAt, SystemClock.uptimeMillis() - startedAt, bitmap != null)
             if (token == generation) {
                 if (bitmap == null) {
                     val attempts = ((failed[url]?.attempts ?: 0) + 1).coerceAtMost(3)
