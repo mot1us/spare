@@ -392,8 +392,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 val began = Timings.now()
                 val saved = runCatching { repository.cached(selected, mode) }.getOrNull()?.takeIf { it.complete && it.count > 0 }
                 val stale = saved == null || saved.schema < LibraryCatalog.SCHEMA || System.currentTimeMillis() - saved.updated !in 0 until CATALOG_REFRESH_MS
-                // Importing a large catalog keeps a small TV busy for a while: refresh a usable one only while Library is closed.
-                if (saved == null || (stale && !opened)) runCatching { repository.load(selected, mode, "", stale && saved != null, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
+                // Re-downloading a large catalog competes with the stream being watched: live TV froze every half minute on a
+                // small TV. A usable catalog is refreshed only once Library has been opened; the first import still runs early.
+                if (saved == null || (stale && opened)) runCatching { repository.load(selected, mode, "", stale && saved != null, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
                 val first = names.keys.firstOrNull() ?: continue
                 if (!posters || opened) continue
                 // Library opens on rows: decode the first screen of them (the special rows and the first categories) now.

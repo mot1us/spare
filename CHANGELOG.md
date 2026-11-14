@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.2 — 2026-11-14
+
+- Live TV no longer competes with a Library catalog refresh. A saved Movies and Series catalog more than a day old was being downloaded again in the background while a channel played, which could freeze the picture for a second or two every half minute. The refresh now waits until Library is opened; the very first import still runs shortly after start.
+
 ## 0.45.1 — 2026-11-13
 
 - Smoother Library scrolling. Category rows now share one stock of poster tiles: a row scrolling in reuses the tiles of the row that left, where it used to build most of its tiles again each time.
