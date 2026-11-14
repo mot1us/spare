@@ -3779,7 +3779,10 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.contentDescription?.toString()?.contains("All caught up") == true && store.libraryFavorites(source).watched == setOf("episode:201", "episode:202") }
                 assertEquals(setOf("episode:201", "episode:202"), store.libraryFavorites(source).watched)
                 scenario.onActivity { assertNull("Catch-up is no longer a Library tab", it.window.decorView.findViewWithTag<View>("library-tab:catchup")) }
-                device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                // The cursor is on the Watchlist titles: Back steps out to the side list first, then leaves Library.
+                fun guideShown(): Boolean { var shown = false; scenario.onActivity { shown = channelList(it)?.isShown == true }; return shown }
+                repeat(3) { if (!guideShown()) { device.pressBack(); Thread.sleep(700) } }
+                waitFor(scenario) { channelList(it)?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-catchup").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:xc:1")?.isShown == true }
                 scenario.onActivity {
@@ -4814,6 +4817,17 @@ class SpareDeviceTest {
                 waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 80 } && a.window.decorView.findViewWithTag<View>("library-categories").isShown }
                 scenario.onActivity { assertEquals("Fixture cinema", it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString()) }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                // Picking another category from the list puts the cursor on its first title, and it stays there:
+                // it must not end up on the Movies/Series buttons when the new titles replace the old ones.
+                fun heading(): String { var text = ""; scenario.onActivity { text = it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() }; return text }
+                fun onTitle(): Boolean { var tag = ""; scenario.onActivity { tag = it.currentFocus?.tag as? String ?: "" }; return tag.startsWith("library-item:") }
+                for ((step, expected) in listOf(1 to "Action", -1 to "Fixture cinema")) {
+                    device.pressDPadLeft(); waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-category:") == true }
+                    if (step > 0) device.pressDPadDown() else device.pressDPadUp()
+                    Thread.sleep(300); device.pressDPadCenter()
+                    waitFor(scenario) { a -> a.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() == expected && (a.currentFocus?.tag as? String)?.startsWith("library-item:") == true }
+                    Thread.sleep(1500); assertTrue("The cursor stays on the titles of $expected", onTitle() && heading() == expected)
+                }
                 device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
                 // Each row remembers its place: back up to the newest title.
                 device.pressDPadUp(); device.pressDPadUp(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }

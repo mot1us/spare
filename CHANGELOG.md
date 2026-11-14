@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.45.3 — 2026-11-14
+
+- Picking a category in Library puts the cursor on that category's first title. While the titles loaded, the cursor could be handed to the Movies/Series buttons, which also cancelled the move to the titles; that hand-off is now recognised and the cursor continues to the titles. Pressing a direction key yourself always wins.
+
 ## 0.45.2 — 2026-11-14
 
 - Live TV no longer competes with a Library catalog refresh. A saved Movies and Series catalog more than a day old was being downloaded again in the background while a channel played, which could freeze the picture for a second or two every half minute. The refresh now waits until Library is opened; the very first import still runs shortly after start.

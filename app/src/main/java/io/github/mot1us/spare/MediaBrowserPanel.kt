@@ -81,6 +81,18 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var categoryNames = emptyList<String>()
     private var categoryLabels = emptyMap<String, String>()
     private var catalogFocusRequested = false
+    // When the tile under the cursor is replaced (a category was picked and its titles arrive), Android hands focus to the
+    // first control it finds: the Movies/Series buttons. That is not the viewer navigating there, so the cursor is sent on
+    // to the titles it was heading for. Any direction key the viewer presses afterwards ends this.
+    private var contentWantedAt = 0L
+    private var navKeyAt = 0L
+    private fun drifted() = navKeyAt <= contentWantedAt && (catalogFocusRequested || pending === rows || android.os.SystemClock.uptimeMillis() - contentWantedAt < 1500)
+    private fun wantContent() { contentWantedAt = android.os.SystemClock.uptimeMillis() }
+    private val recoverFocus = Runnable { if (isShown && drifted() && !rows.hasFocus() && !shelves.hasFocus() && !detailPane.isVisible) focusRows() }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_DPAD_CENTER && event.keyCode != KeyEvent.KEYCODE_ENTER) navKeyAt = android.os.SystemClock.uptimeMillis()
+        return super.dispatchKeyEvent(event)
+    }
     private var contentsAvailable = true
     private var rowGroups = emptyMap<String, String>()
     private var group: String? = null
@@ -141,7 +153,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             control.textSize = 11f
             sectionRail.addView(control, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(5) })
             control.setOnFocusChangeListener { _, active ->
-                if (active) { ++focusEpoch; pending = null; catalogFocusRequested = false }
+                if (active && drifted()) { searchHandler.removeCallbacks(recoverFocus); searchHandler.post(recoverFocus) }
+                else if (active) { ++focusEpoch; pending = null; catalogFocusRequested = false }
             }
             control.setOnKeyListener { _, key, event -> when (key) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -240,7 +253,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
                 holder.text.tag = "library-category:${name ?: "all"}"
                 holder.text.setOnClickListener {
-                    shelfPicked?.let { picked -> closeCategories(); picked(name); return@setOnClickListener }
+                    shelfPicked?.let { picked -> closeCategories(); wantContent(); picked(name); return@setOnClickListener }
                     val before = if (group == null) 0 else categoryNames.indexOf(group).plus(1)
                     catalogFocusRequested = false; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]
                     updateCategoryButton(); closeCategories(); filter()
@@ -464,7 +477,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun focusToolbar() {
         closeCategories(restoreFocus = false)
-        ++focusEpoch; pending = null; catalogFocusRequested = false; hideKeyboard()
+        ++focusEpoch; pending = null; catalogFocusRequested = false; contentWantedAt = 0; hideKeyboard()
         (if (archive) archiveHome else sectionControls.firstOrNull { it.tag == "library-tab:$selectedTab" })?.requestFocus()
     }
     fun focusRailFromContent(): Boolean {
@@ -491,8 +504,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Categories are a persistent rail, not a modal picker.
     fun closeCategories(restoreFocus: Boolean = true): Boolean = false
     /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
-    fun requestContentFocus() { if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
-    fun focusRows() { if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
+    fun requestContentFocus() { wantContent(); if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
+    fun focusRows() { wantContent(); if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     private fun focusAt(list: RecyclerView, position: Int) {
         if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
         val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
