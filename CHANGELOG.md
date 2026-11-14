@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.46.0 — 2026-11-14
+
+- Library navigation is rebuilt on Leanback, Google's own list engine for TV remotes (`androidx.leanback:leanback-grid`, the same engine well-known open-source TV apps use). The Movies and Series rows, the category grid, episode lists and the category/season list now let that engine move the cursor, keep it on screen, scroll while a key is held and put it back when titles change. The hand-written cursor code these screens used is gone.
+- The screens look the same and the keys do the same things: Up from the top leads to search, Left from the first column leads to the side list, each row remembers its place, and CH+/CH− still jump a screen of posters.
+- Starting the app is gentler on live TV: loading the saved Movies and Series catalog into memory now waits 45 seconds after start instead of 10, so it no longer lands on top of the guide loading while a channel has just begun playing. Opening Library sooner still loads it right away.
+
 ## 0.45.3 — 2026-11-14
 
 - Picking a category in Library puts the cursor on that category's first title. While the titles loaded, the cursor could be handed to the Movies/Series buttons, which also cancelled the move to the titles; that hand-off is now recognised and the cursor continues to the titles. Pressing a direction key yourself always wins.

@@ -3,7 +3,7 @@ Copyright (c) 2026 mot1us
 MIT License
 https://github.com/mot1us/spare
 
-AndroidX Core, RecyclerView, Media3, and supporting AndroidX components
+AndroidX Core, RecyclerView, Leanback Grid, Media3, and supporting AndroidX components
 The Android Open Source Project and AndroidX contributors
 Apache License, Version 2.0
 https://android.googlesource.com/platform/frameworks/support/

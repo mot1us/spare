@@ -15,11 +15,11 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.view.isVisible
-import androidx.recyclerview.widget.GridLayoutManager
+import androidx.leanback.widget.BaseGridView
+import androidx.leanback.widget.VerticalGridView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
 /** Richer text for the spotlight, fetched once when a poster settles under the cursor. */
@@ -62,15 +62,16 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     var globalSearch: ((String) -> Unit)? = null
     private val search = EditText(context).apply { hint = "Search channels, movies and series"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH; showSoftInputOnFocus = false }
-    private val categories = RecyclerView(context).apply {
-        layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
+    // Leanback lists (Google's TV list engine) move the cursor and scroll; this panel only says where their edges lead.
+    private val categories = VerticalGridView(context).apply {
+        setNumColumns(1); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
         tag = "library-categories"; visibility = GONE; isFocusableInTouchMode = true; isClickable = true
         setPadding(dp(8), dp(8), dp(8), dp(8)); elevation = dp(8).toFloat()
     }
     private val categoryButton = button("All categories ▾", ::openCategories).apply {
         tag = "library-category"; visibility = GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
     }
-    private val rows = RecyclerView(context).apply { preserveFocusAfterLayout = false; layoutManager = TvFocus.Layout(context); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"; recycledViewPool.setMaxRecycledViews(0, PosterGridLayout.COLUMNS * 4)
+    private val rows = VerticalGridView(context).apply { preserveFocusAfterLayout = false; setNumColumns(PosterGridLayout.COLUMNS); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"; recycledViewPool.setMaxRecycledViews(0, PosterGridLayout.COLUMNS * 4)
         // Leave room for the focused poster's lift instead of clipping it at the grid edge.
         clipChildren = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)) }
     // Same remote-hint line as the Guide and Sports, so long-press actions are discoverable here too.
@@ -265,13 +266,6 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                     val position = holder.bindingAdapterPosition
                     if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
                     when (key) {
-                        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            if (event.action == KeyEvent.ACTION_DOWN) {
-                                val next = position + if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
-                                if (next < 0) sectionControls.lastOrNull { it.isVisible }?.requestFocus() else focusAt(categories, next)
-                            }
-                            true
-                        }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN) focusRows(); true }
                         KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) navigation?.invoke(); true }
                         else -> false
@@ -299,33 +293,36 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; shownRows.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) } }
-                holder.box.setOnKeyListener { _, key, event ->
-                    val position = holder.bindingAdapterPosition
-                    if (position == RecyclerView.NO_POSITION) return@setOnKeyListener true
-                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) images.quiet()
-                    when (key) {
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) {
-                        val step = if (grid) columns else 1
-                        val next = position + if (key == KeyEvent.KEYCODE_DPAD_DOWN) step else -step
-                        if (next < 0) { if (event.repeatCount == 0) search.requestFocus() } else focusAt(rows, next.coerceAtMost(shownRows.lastIndex))
-                    }; true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) { if (!grid || position % columns == 0) focusBrowseRail() else focusAt(rows, position - 1) }; true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (event.action == KeyEvent.ACTION_DOWN && grid && position % columns < columns - 1) focusAt(rows, position + 1); true }
-                    // Page and Channel keys jump a screen of posters at a time through long catalogs.
-                    KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { if (event.action == KeyEvent.ACTION_DOWN && shownRows.isNotEmpty()) {
-                        val layout = rows.layoutManager as GridLayoutManager
-                        val page = ((layout.findLastVisibleItemPosition() - layout.findFirstVisibleItemPosition()) / columns).coerceAtLeast(1) * columns
-                        val down = key == KeyEvent.KEYCODE_PAGE_DOWN || key == KeyEvent.KEYCODE_CHANNEL_DOWN
-                        focusAt(rows, (position + if (down) page else -page).coerceIn(0, shownRows.lastIndex))
-                    }; true }
-                    else -> false
-                } }
             }
         }
-        rows.layoutManager = PosterGridLayout(context, columns)
+        categories.setOnKeyInterceptListener { event ->
+            // Up from the first category leaves for the Movies/Series buttons.
+            if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_UP && categories.selectedPosition <= 0) { if (event.repeatCount == 0) sectionControls.lastOrNull { it.isVisible }?.requestFocus(); true } else false
+        }
+        rows.setOnKeyInterceptListener { event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyInterceptListener false
+            // While a key is held the grid is flying past: posters wait until it stops.
+            if (event.repeatCount > 0) images.quiet()
+            val position = rows.selectedPosition
+            when (event.keyCode) {
+                // Up from the top row leaves for the search box; a held key stops at the top instead.
+                KeyEvent.KEYCODE_DPAD_UP -> if (position < columns) { if (event.repeatCount == 0) search.requestFocus(); true } else false
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (!grid || position % columns == 0) { if (event.repeatCount == 0) focusBrowseRail(); true } else false
+                // Page and Channel keys jump a screen of posters at a time through long catalogs.
+                KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { if (shownRows.isNotEmpty()) {
+                    val tile = rows.getChildAt(0)?.height?.takeIf { it > 0 } ?: rows.height
+                    val page = (rows.height / tile).coerceAtLeast(1) * columns
+                    val down = event.keyCode == KeyEvent.KEYCODE_PAGE_DOWN || event.keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN
+                    focusAt(rows, (position + if (down) page else -page).coerceIn(0, shownRows.lastIndex))
+                }; true }
+                else -> false
+            }
+        }
+        rows.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ -> if (right - left != oldRight - oldLeft) rows.post(::sizeColumns) }
         rows.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(list: RecyclerView, dx: Int, dy: Int) {
-                if (hasMore && (list.layoutManager as GridLayoutManager).findLastVisibleItemPosition() >= shownRows.size - 16) { hasMore = false; catalogMore?.invoke() }
+                val last = (0 until list.childCount).maxOfOrNull { list.getChildAdapterPosition(list.getChildAt(it)) } ?: return
+                if (hasMore && last >= shownRows.size - 16) { hasMore = false; catalogMore?.invoke() }
             }
         })
         search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (!changingSearch) { searchHandler.removeCallbacks(searchLater); searchHandler.postDelayed(searchLater, 180) } }; override fun afterTextChanged(s: Editable?) {} })
@@ -348,7 +345,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         browse()
         grid = posters; columns = if (grid) PosterGridLayout.COLUMNS else 1
         if (posters) seriesSpot = null
-        (rows.layoutManager as? GridLayoutManager)?.spanCount = columns; spotMode()
+        sizeColumns(); spotMode()
         if (reset) { group = null; search.setText(""); rememberedKey = null }
         contentsAvailable = true; rows.alpha = 1f
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
@@ -385,7 +382,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun bindCatalog(key: String, groups: Map<String, String>, query: (String?, String) -> Unit, more: () -> Unit, allTitle: String = "All", initialGroup: String? = null, picked: ((String?) -> Unit)? = null) {
         allCategoryTitle = allTitle; showGrid(); shelfPicked = picked
-        grid = true; seriesSpot = null; browse(); columns = PosterGridLayout.COLUMNS; (rows.layoutManager as GridLayoutManager).spanCount = columns
+        grid = true; seriesSpot = null; browse(); columns = PosterGridLayout.COLUMNS; sizeColumns()
         if (catalogContext != key || catalogQuery == null) {
             if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogContext = key
             val saved = contexts[key]; group = saved?.first?.takeIf { it in groups }; changingSearch = true; search.setText(saved?.second.orEmpty()); search.setSelection(search.text.length); changingSearch = false
@@ -506,16 +503,19 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
     fun requestContentFocus() { wantContent(); if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
     fun focusRows() { wantContent(); if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
-    private fun focusAt(list: RecyclerView, position: Int) {
-        if (position !in 0 until (list.adapter?.itemCount ?: 0) || pending != null) return
-        val epoch = ++focusEpoch; val item = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
-        if (item != null) { item.requestFocus(); TvFocus.center(list, item); return }
-        pending = list; list.stopScroll(); (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, list.height / 2 - if (list === categories) dp(21) else if (grid) gridHeight(list.width / columns - dp(8), resources.displayMetrics.density) / 2 else dp(28))
-        fun attempt(left: Int) {
-            if (!isShown || epoch != focusEpoch) return
-            val row = if (list.hasPendingAdapterUpdates() || list.isComputingLayout) null else list.findViewHolderForAdapterPosition(position)?.itemView
-            if (row != null) { pending = null; row.requestFocus(); TvFocus.center(list, row) } else if (left > 0) list.postOnAnimation { attempt(left - 1) } else pending = null
-        }; list.postOnAnimation { attempt(25) }
+    /** Seven posters across (or one list row): each column gets an equal share of the grid's width. */
+    private fun sizeColumns() {
+        rows.setNumColumns(columns)
+        val available = (if (rows.width > 0) rows.width else resources.displayMetrics.widthPixels - dp(TvFocus.BROWSE_RAIL_WIDTH_DP + 80)) - rows.paddingLeft - rows.paddingRight
+        rows.setColumnWidth((available / columns).coerceAtLeast(dp(72)))
+    }
+    /** Select a tile or category and give it the cursor as soon as the list has it on screen. */
+    private fun focusAt(list: BaseGridView, position: Int) {
+        if (position !in 0 until (list.adapter?.itemCount ?: 0)) return
+        val epoch = ++focusEpoch; pending = list
+        list.setSelectedPosition(position) { holder ->
+            if (epoch == focusEpoch) { pending = null; if (isShown && list.isShown) holder.itemView.requestFocus() }
+        }
     }
     fun hideKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0) }
     fun appearance(opacity: Int = -1) {

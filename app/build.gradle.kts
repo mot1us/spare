@@ -52,6 +52,8 @@ dependencyLocking { lockAllConfigurations() }
 dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
+    // Google's TV list engine (rows and grids that move the cursor and scroll for a remote); the Library is built on it.
+    implementation("androidx.leanback:leanback-grid:1.0.0")
     val media3 = "1.11.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")

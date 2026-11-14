@@ -9,16 +9,21 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.core.view.isEmpty
+import androidx.leanback.widget.HorizontalGridView
+import androidx.leanback.widget.VerticalGridView
 import androidx.recyclerview.widget.RecyclerView
 
 /**
  * Movies and Series home: one row per provider category, like streaming apps. Each row asks for its own
  * category only while it is on screen, shows the first titles, and ends with a "See all" tile that opens
  * the full grid. Up/Down moves between categories (each row remembers its position), Left/Right within one.
+ *
+ * Both directions are Leanback grids (Google's TV list engine): they move the cursor, keep it on screen, scroll
+ * while a key is held and put it back after a row's titles change. This class only says where the edges lead.
  */
-@SuppressLint("ViewConstructor", "NotifyDataSetChanged", "SetTextI18n")
-internal class CatalogShelves(context: Context, private val images: LogoLoader) : RecyclerView(context) {
+@SuppressLint("ViewConstructor", "NotifyDataSetChanged", "SetTextI18n", "RestrictedApi")
+internal class CatalogShelves(context: Context, private val images: LogoLoader) : VerticalGridView(context) {
     data class Shelf(val id: String, val title: String)
     data class Data(val rows: List<BrowserRow>, val total: Int, val busy: Boolean, val failed: Boolean = false, val more: Boolean = true)
 
@@ -46,11 +51,22 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
 
     init {
         tag = "library-shelves"; visibility = GONE; itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
-        layoutManager = object : LinearLayoutManager(context) {
-            override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
-            override fun calculateExtraLayoutSpace(state: State, extra: IntArray) { extra[0] = height / 3; extra[1] = height / 3 }
-        }
+        setNumColumns(1); setHasFixedSize(true)
+        // The focused category row sits at the top of the list, with the next row peeking below it.
+        windowAlignment = WINDOW_ALIGN_LOW_EDGE; windowAlignmentOffset = 0; windowAlignmentOffsetPercent = WINDOW_ALIGN_OFFSET_PERCENT_DISABLED
+        itemAlignmentOffset = 0; itemAlignmentOffsetPercent = ITEM_ALIGN_OFFSET_PERCENT_DISABLED
+        setWindowAlignmentPreferKeyLineOverHighEdge(true)
+        // Keep the row below the screen laid out so Down does not have to build it. Leanback marks this setter as
+        // library-internal in this version although it is public and stable; the version is pinned in the lockfile.
+        extraLayoutSpace = dp(140); verticalSpacing = dp(4)
         clipChildren = false; clipToPadding = false
+        setOnKeyInterceptListener { event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyInterceptListener false
+            // While a key is held the rows are flying past: posters wait until it stops.
+            if (event.repeatCount > 0) images.quiet()
+            // Up from the first row leaves for the search box; a held key stops at the top instead.
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP && selectedPosition <= 0) { if (event.repeatCount == 0) exitUp?.invoke(); true } else false
+        }
         adapter = Rows()
     }
 
@@ -62,7 +78,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             initial.forEach { (id, value) -> val before = data[id]; if (before == null || before.total != value.total || before.more != value.more || before.rows.size != value.rows.size || before.rows.indices.any { before.rows[it].key != value.rows[it].key || before.rows[it].detail != value.rows[it].detail }) update(id, value) }
             return
         }
-        if (catalog != key) { data.clear(); positions.clear(); current = null; scrollToPosition(0) }
+        if (catalog != key) { data.clear(); positions.clear(); current = null; selectedPosition = 0 }
         key = catalog; shelves = values; data.putAll(initial)
         adapter?.notifyDataSetChanged()
     }
@@ -79,31 +95,22 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     }
     fun refreshTiles() { for (i in 0 until childCount) (getChildViewHolder(getChildAt(i)) as? ShelfHolder)?.refresh() }
 
-    /** Focus the remembered row and tile; Up/Down and Back land where the viewer left off. */
+    /** Focus the remembered row and tile; Back lands where the viewer left off. */
     fun focusCurrent(): Boolean {
         if (shelves.isEmpty()) return false
         val index = shelves.indexOfFirst { it.id == current }.coerceAtLeast(0)
-        moveTo(index); return true
-    }
-
-    private fun moveTo(index: Int) {
-        val shelf = shelves.getOrNull(index) ?: return
         val epoch = ++focusEpoch
-        current = shelf.id
+        current = shelves[index].id
+        // The grid brings the row on screen; the row then hands the cursor to the tile it remembers.
         fun attempt(left: Int) {
             if (epoch != focusEpoch || !isShown) return
-            val holder = if (isComputingLayout || hasPendingAdapterUpdates()) null else findViewHolderForAdapterPosition(index) as? ShelfHolder
-            if (holder != null && holder.id == shelf.id) {
-                align(holder.itemView)
-                holder.focus(positions[shelf.id] ?: 0)
-            } else if (left > 0) postOnAnimation { attempt(left - 1) }
+            if (selectedPosition != index) selectedPosition = index
+            val holder = if (isComputingLayout) null else findViewHolderForAdapterPosition(index) as? ShelfHolder
+            if (holder != null && holder.id == shelves[index].id && holder.focus()) return
+            if (left > 0) postOnAnimation { attempt(left - 1) }
         }
-        val visible = findViewHolderForAdapterPosition(index)
-        if (visible == null) (layoutManager as LinearLayoutManager).scrollToPositionWithOffset(index, 0)
-        attempt(25)
+        attempt(25); return true
     }
-    /** The focused category row sits at the top of the list, with the next row peeking below it. */
-    private fun align(row: View) { val delta = row.top - paddingTop; if (delta != 0) smoothScrollBy(0, delta) }
 
     private inner class Rows : Adapter<ShelfHolder>() {
         init { setHasStableIds(true) }
@@ -135,21 +142,22 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             textSize = 13f * GuideTheme.textScale; setTextColor(Color.WHITE); typeface = AppFont.face(true); maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(8), 0, dp(8), 0); gravity = Gravity.CENTER_VERTICAL
         }
-        val list = RecyclerView(context).apply {
-            // Two tiles past each edge are kept ready; a whole extra screen each side tripled the work of showing a row.
-            layoutManager = object : LinearLayoutManager(context, HORIZONTAL, false) {
-                override fun requestChildRectangleOnScreen(parent: RecyclerView, child: View, rect: android.graphics.Rect, immediate: Boolean, focusedChildVisible: Boolean) = false
-                override fun calculateExtraLayoutSpace(state: State, extra: IntArray) { extra[0] = width / 4; extra[1] = width / 4 }
-            }.apply { initialPrefetchItemCount = COLUMNS + 2 }
+        val list = HorizontalGridView(context).apply {
+            setNumRows(1); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; horizontalSpacing = dp(2)
+            // The first tiles sit at the left edge; further along, the cursor stays mid-row and the tiles move under it.
+            windowAlignment = WINDOW_ALIGN_BOTH_EDGE; windowAlignmentOffsetPercent = 50f
             setRecycledViewPool(tilePool); setHasFixedSize(true)
-            itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
-            clipChildren = false; clipToPadding = false; setPadding(dp(2), dp(8), dp(2), dp(8)); isFocusable = false
+            clipChildren = false; clipToPadding = false; setPadding(dp(2), dp(8), dp(2), dp(8))
+            setOnKeyInterceptListener { event ->
+                // Left from a row's first tile leaves for the Movies/Series buttons.
+                if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && selectedPosition <= 0) { if (event.repeatCount == 0) exitLeft?.invoke(); true } else false
+            }
         }
         init {
             root.orientation = LinearLayout.VERTICAL; root.clipChildren = false; root.clipToPadding = false
             root.addView(heading, LinearLayout.LayoutParams(-1, dp(22)))
             root.addView(list, LinearLayout.LayoutParams(-1, -2))
-            root.layoutParams = LayoutParams(-1, -2).apply { bottomMargin = dp(4) }
+            root.layoutParams = LayoutParams(-1, -2)
             list.adapter = Tiles()
         }
         fun bind(shelf: Shelf, value: Data?) {
@@ -158,10 +166,11 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             heading.text = shelf.title + (value?.total?.takeIf { it > 0 }?.let { "  ·  $it" } ?: "")
             items = value?.rows.orEmpty(); more = value; total = value?.total ?: 0
             // A fixed height keeps a row's own updates from re-measuring every other row.
-            val height = posterHeight(tileWidth()) + dp(16)
+            val tile = posterHeight(tileWidth()); val height = tile + dp(16)
+            list.setRowHeight(tile); list.extraLayoutSpace = tileWidth() * 2
             if (list.layoutParams.height != height) list.layoutParams = list.layoutParams.apply { this.height = height }
             list.adapter?.notifyDataSetChanged()
-            list.scrollToPosition((positions[shelf.id] ?: 0).coerceAtMost(maxOf(0, count() - 1)))
+            list.selectedPosition = (positions[shelf.id] ?: 0).coerceIn(0, maxOf(0, count() - 1))
         }
         fun apply(before: Data?, value: Data) {
             val focusedAt = list.focusedChild?.let(list::getChildAdapterPosition)
@@ -175,50 +184,17 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
                 list.adapter?.notifyItemChanged(count() - 1)
             } else {
                 list.adapter?.notifyDataSetChanged()
-                if (focusedAt != null) { positions[shelf.id] = 0; list.post { focus(0) } }
+                if (focusedAt != null) { positions[shelf.id] = 0; list.selectedPosition = 0; list.post { if (!list.hasFocus() && this@CatalogShelves.hasFocus()) focus() } }
             }
         }
         fun refresh() { list.adapter?.notifyItemRangeChanged(0, count()) }
         fun count() = items.size + if (more?.more == false && items.isNotEmpty()) 0 else 1
-        private var tileEpoch = 0
-        fun focus(position: Int) {
-            val target = position.coerceIn(0, count() - 1); val epoch = ++tileEpoch
-            val manager = list.layoutManager as LinearLayoutManager
-            fun tile() = if (list.isComputingLayout || list.hasPendingAdapterUpdates()) null else list.findViewHolderForAdapterPosition(target)?.itemView
-            fun take(view: View) { view.requestFocus(); TvFocus.center(list, view) }
-            tile()?.let { take(it); return }
-            // The remembered tile is off-screen. Scroll by distance: unlike a position jump this lays the tiles out
-            // right now, and it still works when the row has just been shown again or had a tile refreshed.
-            fun reach() {
-                val first = manager.findFirstVisibleItemPosition(); val child = manager.findViewByPosition(first) ?: return
-                list.scrollBy((target - first) * (child.width + dp(2)), 0)
-            }
-            if (!list.isComputingLayout) { reach(); tile()?.let { take(it); return } }
-            fun attempt(left: Int) {
-                if (epoch != tileEpoch || !list.isShown) return
-                val view = tile()
-                when {
-                    view != null -> take(view)
-                    left > 0 -> { if (!list.isComputingLayout) reach(); list.postOnAnimation { attempt(left - 1) } }
-                    // Never leave the cursor stranded outside the row: land on a tile that is there.
-                    else -> manager.findViewByPosition(manager.findFirstCompletelyVisibleItemPosition())?.let(::take)
-                }
-            }
-            list.postOnAnimation { attempt(12) }
-        }
-        private fun key(view: View, position: Int, code: Int, event: KeyEvent): Boolean {
-            val shelf = id ?: return false
-            val index = shelves.indexOfFirst { it.id == shelf }
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount > 0) images.quiet()
-            if (event.action != KeyEvent.ACTION_DOWN) return code in setOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)
-            when (code) {
-                KeyEvent.KEYCODE_DPAD_UP -> { if (index <= 0) { if (event.repeatCount == 0) exitUp?.invoke() } else moveTo(index - 1) }
-                KeyEvent.KEYCODE_DPAD_DOWN -> if (index < shelves.lastIndex) moveTo(index + 1)
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (position <= 0) exitLeft?.invoke() else focus(position - 1)
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (position < count() - 1) focus(position + 1)
-                else -> return false
-            }
-            return true
+        /** Hand the cursor to this row's remembered tile; false while the row has no tile laid out yet. */
+        fun focus(): Boolean {
+            if (list.isComputingLayout || list.isEmpty()) return false
+            val target = (positions[id] ?: 0).coerceIn(0, count() - 1)
+            if (list.selectedPosition != target) list.selectedPosition = target
+            return list.requestFocus() && list.hasFocus()
         }
 
         private inner class Tiles : Adapter<ViewHolder>() {
@@ -234,8 +210,8 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
                 val view = holder.itemView
                 if (holder is PosterHolder) holder.box.configure(LibraryPosterTile.Layout.ROW)
                 val params = view.layoutParams
-                if (params !is RecyclerView.LayoutParams || params.width != width || params.height != height || params.marginEnd != dp(2) || params.bottomMargin != 0)
-                    view.layoutParams = RecyclerView.LayoutParams(width, height).apply { marginEnd = dp(2) }
+                if (params !is RecyclerView.LayoutParams || params.width != width || params.height != height || params.marginEnd != 0 || params.bottomMargin != 0)
+                    view.layoutParams = RecyclerView.LayoutParams(width, height)
                 if (holder is PosterHolder) {
                     val item = items[position]; val favorite = item.key in favoriteIds
                     holder.box.appearance()
@@ -264,7 +240,6 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
                     view.setOnLongClickListener(null)
                     view.setOnFocusChangeListener { _, active -> if (active) id?.let { positions[it] = holder.bindingAdapterPosition; current = it } }
                 }
-                view.setOnKeyListener { v, code, event -> key(v, holder.bindingAdapterPosition, code, event) }
             }
         }
     }
