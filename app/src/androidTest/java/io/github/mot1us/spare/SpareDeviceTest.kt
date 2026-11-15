@@ -4932,7 +4932,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5005" && shelfOf(it.currentFocus) == "library-shelf:continue" }
                 scenario.onActivity { activity ->
                     val root = activity.window.decorView
-                    assertEquals("Resume at 1:00", root.findViewWithTag<TextView>("library-spot-meta").text.toString())
+                    // The tile carries the resume point; the banner may already show the provider's fuller details.
+                    assertTrue(root.findViewWithTag<View>("library-item:movie:5005").contentDescription.toString().endsWith("Resume at 1:00"))
                     assertNull("Episodes resume from the Series rows", root.findViewWithTag<View>("library-item:episode:9001"))
                     assertNull("A short row has no See all tile", root.findViewWithTag<View>("library-shelf-more:continue"))
                     val rows = root.findViewWithTag<RecyclerView>("library-shelves")
