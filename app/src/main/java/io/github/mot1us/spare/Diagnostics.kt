@@ -56,14 +56,19 @@ internal object Diagnostics {
 
     // Playback hiccups, each with the buffer left and the app threads that were busy.
     private val hiccups = ArrayDeque<String>()
-    private var hiccupAt = 0L
+    @Volatile private var hiccupAt = 0L
+    private val recorder = java.util.concurrent.Executors.newSingleThreadExecutor { task -> Thread(task, "spare-diagnostics-record").apply { isDaemon = true; priority = Thread.MIN_PRIORITY } }
+    /** Called from the player's callbacks on the main thread: the snapshot of other threads is taken on a worker. */
     fun hiccup(kind: String, bufferedMs: Long) {
         val now = SystemClock.elapsedRealtime()
         if (now - hiccupAt < 1500) return
         hiccupAt = now
+        recorder.execute { record(kind, bufferedMs, now) }
+    }
+    private fun record(kind: String, bufferedMs: Long, now: Long) {
         val busy = runCatching {
             Thread.getAllStackTraces().entries.filter { (thread, stack) ->
-                thread !== Looper.getMainLooper().thread && thread.state == Thread.State.RUNNABLE && thread.name != "spare-diagnostics" &&
+                thread !== Looper.getMainLooper().thread && thread.state == Thread.State.RUNNABLE && !thread.name.startsWith("spare-diagnostics") &&
                     stack.any { it.className.startsWith(OURS) } && stack.firstOrNull()?.let { !it.isNativeMethod || !it.methodName.contains("poll", true) && !it.methodName.contains("park", true) } == true
             }.map { (thread, stack) -> thread.name.take(24) + "@" + place(stack) }.sorted().take(4)
         }.getOrDefault(emptyList())

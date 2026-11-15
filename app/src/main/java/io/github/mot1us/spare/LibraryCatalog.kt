@@ -281,6 +281,8 @@ class LibraryCatalog(private val store: SecureStore) {
             var published = 0L; var checkpoint = 0L
             VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
                 writer.append(batch)
+                // A refresh nobody is waiting for goes slowly, so a playing channel keeps the processor (64 titles per pause).
+                if (quiet) Thread.sleep(40)
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
                 if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.47.2 — 2026-11-14
+
+- Fixed a stall caused by the Performance report itself: when video frames dropped, it looked up what every part of the app was doing on the screen's own thread (about 0.2 s each time). That now happens in the background.
+- A Movies or Series catalog refresh that nobody is waiting for runs slowly, pausing briefly between batches, so a playing channel keeps the processor. The first import of a new playlist still runs at full speed.
+
 ## 0.47.1 — 2026-11-14
 
 - Sports fetches the guide listings of the channels carrying today's games first. The scoreboard names each game's networks; any channel named for one of them is checked right away, so its listing can confirm the game. Before, only channels with sports words in their names (ESPN, Fox, NBC…) were checked early, and a channel such as "Big Ten Network" could wait behind thousands of others.
