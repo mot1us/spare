@@ -3,6 +3,8 @@
 
 A minimal, free, open-source IPTV player for Android TV. Native, lightweight, and built for a remote. MIT licensed.
 
+Spare is free and always will be. If it's useful to you, you can support it on [Ko-fi](https://ko-fi.com/mot1us).
+
 ## Features
 
 - M3U and Xtream Codes playlists enabled together, with collapsible provider categories and shared Search/Sports.

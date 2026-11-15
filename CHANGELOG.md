@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.50.1 — 2026-11-15
+
+- Settings → About Spare shows where to support Spare: ko-fi.com/mot1us. The GitHub page has a Ko-fi button and a line in the README. There are no pop-ups or reminders; Spare stays free.
+
 ## 0.50.0 — 2026-11-15
 
 - Sports opens on Live now: live games from all your leagues together. Choosing a league shows that league's whole day (live, upcoming and results); Today and Calendar use the last league you chose.
