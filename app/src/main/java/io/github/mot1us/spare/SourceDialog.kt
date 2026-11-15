@@ -67,26 +67,38 @@ object SourceDialog {
         }
         form.addView(showPassword)
         val epg = input("Optional XMLTV URL (overrides provider guide)", existing?.epgUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        val backup = input("Optional backup server URL (used when the main server can't be reached)", existing?.backupUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        val agent = input("Optional User-Agent (only if your provider asks for one)", existing?.userAgent.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         val allow = CheckBox(activity).apply { id = View.generateViewId(); text = "Allow HTTP-only links from this provider"; isChecked = existing?.allowHttp == true }
         form.addView(allow)
         form.addView(TextView(activity).apply {
             text = "This option does not change your HTTPS server address. Leave it off unless the provider needs HTTP links. HTTP can expose credentials and viewing requests.\n\nUse the TV keyboard or paired Google TV phone remote."; textSize = 13f
         })
+        // Rarely needed options stay folded away, so the everyday form is unchanged; they open when already in use.
+        val advanced = CheckBox(activity).apply { id = View.generateViewId(); tag = "playlist-advanced"; text = "Show advanced options"
+            isChecked = existing?.backupUrl.orEmpty().isNotBlank() || existing?.userAgent.orEmpty().isNotBlank() }
+        form.addView(advanced)
+        val backup = input("Optional backup server URL (used when the main server can't be reached)", existing?.backupUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val agent = input("Optional User-Agent (only if your provider asks for one)", existing?.userAgent.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         val error = TextView(activity).apply { textSize = 14f }; form.addView(error)
+        fun showAdvanced() {
+            val isXtream = kinds.checkedRadioButtonId == xtream.id
+            mapOf(backup to (advanced.isChecked && isXtream), agent to advanced.isChecked).forEach { (field, shown) ->
+                field.visibility = if (shown) View.VISIBLE else View.GONE
+                form.getChildAt(form.indexOfChild(field) - 1).visibility = field.visibility
+            }
+        }
         var updateFocus: () -> Unit = {}
         kinds.setOnCheckedChangeListener { _, checked ->
             val isXtream = checked == xtream.id
             addressLabel.text = if (isXtream) "Server URL (include the provider's port)" else "Playlist URL"
-            listOf(user, password, backup).forEach { field ->
+            listOf(user, password).forEach { field ->
                 field.visibility = if (isXtream) View.VISIBLE else View.GONE
                 form.getChildAt(form.indexOfChild(field) - 1).visibility = field.visibility
             }
             showPassword.visibility = if (isXtream) View.VISIBLE else View.GONE
-            updateFocus()
+            showAdvanced(); updateFocus()
         }
         kinds.check(if (existing?.kind == "xtream") xtream.id else m3u.id)
+        advanced.setOnCheckedChangeListener { _, _ -> showAdvanced(); updateFocus() }
         val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add playlist" else "Edit playlist")
             .setView(ScrollView(activity).apply { addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
             .apply { if (existing != null) setNeutralButton("Remove") { _, _ -> remove(existing) } }.create()
@@ -97,9 +109,10 @@ object SourceDialog {
             val cancelButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
             updateFocus = {
                 val isXtream = kinds.checkedRadioButtonId == xtream.id
-                val fields = listOf(name, url) + (if (isXtream) listOf(user, password) else emptyList()) + listOf(epg) + (if (isXtream) listOf(backup) else emptyList()) + agent
+                val extras = if (advanced.isChecked) (if (isXtream) listOf(backup) else emptyList()) + agent else emptyList()
+                val fields = listOf(name, url) + (if (isXtream) listOf(user, password) else emptyList()) + listOf(epg) + extras
                 val controls = listOf<View>(name, if (isXtream) xtream else m3u, url) +
-                    (if (isXtream) listOf(user, password, showPassword) else emptyList()) + listOf(epg) + (if (isXtream) listOf(backup) else emptyList()) + listOf(agent, allow, saveButton)
+                    (if (isXtream) listOf(user, password, showPassword) else emptyList()) + listOf(epg, allow, advanced) + extras + saveButton
                 controls.forEachIndexed { index, view ->
                     view.isFocusableInTouchMode = true
                     val before = controls[(index - 1).coerceAtLeast(0)]

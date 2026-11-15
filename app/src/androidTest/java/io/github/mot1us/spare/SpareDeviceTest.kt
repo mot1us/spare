@@ -707,16 +707,19 @@ class SpareDeviceTest {
                     root.findViewWithTag<CheckBox>("playlist-show-password").performClick()
                     assertTrue(password.transformationMethod is android.text.method.PasswordTransformationMethod)
                     fun httpConsent(view: View): CheckBox? {
-                        if (view is CheckBox && view.tag != "playlist-show-password") return view
+                        if (view is CheckBox && view.tag != "playlist-show-password" && view.tag != "playlist-advanced") return view
                         if (view is ViewGroup) for (i in 0 until view.childCount) httpConsent(view.getChildAt(i))?.let { return it }
                         return null
                     }
                     val allow = httpConsent(root)!!
                     allow.performClick()
                     assertEquals(https.url, root.findViewWithTag<EditText>("Playlist URL").text.toString())
-                    // Xtream playlists offer a backup server, then every playlist an optional User-Agent; Next walks them in order.
+                    // Advanced options start folded away; opened, Xtream offers a backup server, then an optional User-Agent.
                     val backup = root.findViewWithTag<EditText>("Optional backup server URL (used when the main server can't be reached)")
                     val agent = root.findViewWithTag<EditText>("Optional User-Agent (only if your provider asks for one)")
+                    assertFalse(backup.isShown || agent.isShown)
+                    root.findViewWithTag<CheckBox>("playlist-advanced").performClick()
+                    assertTrue(backup.isShown && agent.isShown)
                     epg.requestFocus(); epg.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
                     assertTrue("Keyboard Next from the guide URL reaches the backup server", backup.hasFocus())
                     backup.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
@@ -5292,7 +5295,8 @@ class SpareDeviceTest {
                 device.pressDPadCenter()
             }
             assertTrue("Fixture requires explicit HTTP consent", consent.isChecked)
-            device.pressDPadDown()
+            // Down passes the folded "Show advanced options" box on its way to Save.
+            repeat(2) { if (!button("Save").isFocused) device.pressDPadDown() }
             assertTrue("Focus reached Save", button("Save").isFocused)
             device.pressDPadCenter()
             val firstChannel = By.pkg(releasePackage).descStartsWith("Test Channel 1.")

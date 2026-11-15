@@ -1,9 +1,5 @@
 # Changelog
 
-## 0.50.1 — 2026-11-15
-
-- Settings → About Spare shows where to support Spare: ko-fi.com/mot1us. The GitHub page has a Ko-fi button and a line in the README. There are no pop-ups or reminders; Spare stays free.
-
 ## 0.50.0 — 2026-11-15
 
 - Sports opens on Live now: live games from all your leagues together. Choosing a league shows that league's whole day (live, upcoming and results); Today and Calendar use the last league you chose.
@@ -15,8 +11,9 @@
 - Startup no longer unpacks your other playlists while the first channel is still settling. On an onn 4K Pro, unpacking a large second playlist took about seven seconds of processor right after launch. Opening Sports during that time froze the menu briefly and made the picture stutter. Other playlists now load once the channel has played smoothly for about ten seconds and the remote is idle, or after 45 seconds at most. Until then, Sports and Search only see the playlist you are watching.
 - Sports cards show the cursor as a border in your theme's accent colour instead of growing. A grown card in the first column ran under the main menu and was cut off.
 - The guide now sits over the playing channel at 50% opacity by default. Settings → Theme can still change it.
-- Playlists can name a User-Agent (Edit playlist → Optional User-Agent), for providers that only answer certain players. Spare sends it to that playlist's servers for channel lists, guides and playback. Leave it blank to keep Spare's own.
-- Xtream playlists can name a backup server address. When the main server can't be reached, Spare loads the channel list from the backup, and those channels play from it until the main server answers again. Wrong usernames or passwords never switch servers.
+- Playlists can name a User-Agent (Edit playlist → Show advanced options → Optional User-Agent), for providers that only answer certain players. Spare sends it to that playlist's servers for channel lists, guides and playback. Leave it blank to keep Spare's own.
+- Xtream playlists can name a backup server address, also under Show advanced options. When the main server can't be reached, Spare loads the channel list from the backup, and those channels play from it until the main server answers again. Wrong usernames or passwords never switch servers.
+- Settings → About Spare shows where to support Spare: ko-fi.com/mot1us. The GitHub page has a Ko-fi button and a line in the README. There are no pop-ups or reminders; Spare stays free.
 - Large playlist, guide and catalog downloads now fail only when they stall (less than 32 KB arriving in 20 seconds), with a 10-minute ceiling. A slow but healthy provider could previously be cut off after one minute.
 
 ## 0.49.3 — 2026-11-15

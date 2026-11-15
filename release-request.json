@@ -1,9 +1,6 @@
 {
-  "versionName": "0.50.1",
-  "versionCode": 157,
-  "attempt": 1,
-  "tvSuite": "focused",
-  "tvTests": [
-    "performanceReportRecordsStallsHiccupsAndPosterTimes"
-  ]
+  "versionName": "0.50.0",
+  "versionCode": 156,
+  "attempt": 3,
+  "tvSuite": "full"
 }
