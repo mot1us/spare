@@ -352,7 +352,8 @@ class SecureStore(private val context: Context) {
         get() = preferences.getBoolean("sports-followed-only", false)
         set(value) { preferences.edit { putBoolean("sports-followed-only", value) } }
     var sportsAutoPlay: Boolean
-        get() = preferences.getBoolean("sports-auto-play", false)
+        // OK on a live game plays it; holding OK still offers streams and actions.
+        get() = preferences.getBoolean("sports-auto-play", true)
         set(value) { preferences.edit { putBoolean("sports-auto-play", value) } }
     var sportsTeam: String
         get() = preferences.getString("sports-team-selected", "").orEmpty()

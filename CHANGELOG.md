@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.50.2 — 2026-11-15
+
+- OK on a live game card plays the game, choosing the best stream. Before, it opened a "Watch live" button first. Hold OK still offers other streams and actions, and Sports settings can turn this off ("Play best stream on selection" is now on by default, including after a Sports reset).
+- Removed a half-second freeze after changing channel: Spare worked out which game the new channel is showing on the screen thread. It now does that in the background and updates playback details when ready.
+- When the TV runs short of memory while Spare is open, Spare now frees the pictures of screens that aren't showing (Library, Sports, Search, details). Measured on an onn 4K Pro with several other apps open, Android was compressing memory so hard that every app, Spare included, slowed down.
+
 ## 0.50.1 — 2026-11-15
 
 - OK on Sports in the main menu now moves straight into Sports. While scores were still loading, the cursor stayed in the menu, so OK seemed to do nothing until the games arrived. The cursor now rests on Live now and moves to the games when they load.

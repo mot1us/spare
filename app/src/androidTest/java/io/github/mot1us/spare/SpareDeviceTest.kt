@@ -2454,6 +2454,29 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun lowMemoryWhileWatchingFreesHiddenPicturesAndKeepsPlaying() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Low memory fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                    var player: Player? = null
+                    scenario.onActivity { activity ->
+                        player = find<PlayerView>(activity.window.decorView)!!.player
+                        @Suppress("DEPRECATION") activity.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
+                    }
+                    Thread.sleep(500)
+                    scenario.onActivity { activity ->
+                        assertSame("Playback is untouched", player, find<PlayerView>(activity.window.decorView)!!.player)
+                        assertTrue(player!!.isPlaying); assertTrue("The guide on screen stays", channelList(activity)?.isShown == true)
+                    }
+                }
+            } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -3118,7 +3141,7 @@ class SpareDeviceTest {
                         manager.findViewWithTag<View>("settings-option:Reset Sports settings").performClick(); manager.findViewWithTag<View>("settings-option:Reset Sports").performClick()
                         assertTrue(store.followedTeams.isEmpty()); assertEquals(SportsLeagues.byId.keys, store.sportsLeagues)
                         assertFalse("Reset asks for leagues again", store.sportsLeaguesChosen)
-                        assertFalse(store.sportsFollowedOnly); assertFalse(SecureStore(context).sportsAutoPlay); assertEquals(GuideFilters(), store.sportsFilters(source)); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
+                        assertFalse(store.sportsFollowedOnly); assertTrue("OK plays live games by default", SecureStore(context).sportsAutoPlay); assertEquals(GuideFilters(), store.sportsFilters(source)); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
                         assertEquals(source.id, store.active)
                     }
                     device.pressBack(); device.pressBack()

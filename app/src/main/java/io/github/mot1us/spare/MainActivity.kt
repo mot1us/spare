@@ -2640,7 +2640,7 @@ class MainActivity : Activity() {
         panel.action("Cancel") { panel.refresh("Reset Sports settings") }
         panel.action("Reset Sports") {
             store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; scoreStripOpen = false; cancelScoreTune(); scoreStrip.suspend()
-            store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.hideCompletedScores = true; store.sportsTeam = "today"; store.resetScoreDelays(); scoreDelayChanged()
+            store.followedTeams = emptySet(); store.sportsLeagues = SportsLeagues.byId.keys; store.sportsFollowedOnly = false; store.sportsAutoPlay = true; store.hideCompletedScores = true; store.sportsTeam = "today"; store.resetScoreDelays(); scoreDelayChanged()
             saveSportsFilters(GuideFilters())
             store.resetSportsLeagues(); sportsBrowseLeague = null
             sportsTeam = "today"; reminders = GameReminders(); saveGameReminders(); reminderPending = null; dismissGameReminder()
@@ -2973,7 +2973,12 @@ class MainActivity : Activity() {
         watchingSports = context
         return true
     }
-    private fun playbackGame(): GameStreams? {
+    /**
+     * The game on the playing channel. Reading team names took half a second on an onn 4K Pro, so the screen thread
+     * only reads a remembered answer; a new channel or listing is worked out in the background, then the views that
+     * show it refresh. [immediate] = true (an explicit remote action) works it out immediately instead.
+     */
+    private fun playbackGame(immediate: Boolean = false): GameStreams? {
         if (onDemand != null) return null
         val channel = current ?: return null
         val now = System.currentTimeMillis()
@@ -2983,22 +2988,44 @@ class MainActivity : Activity() {
         // Reading team names costs real time on a TV and this runs on the screen thread several times a minute:
         // remember the answer for this channel and listing.
         playbackGameMemo?.takeIf { it.channel === channel && it.programme === programme }?.let { return it.result }
-        val title = Programme(guide.key(channel), channel.name, now, now + 3 * 3600000L)
-        val listing = programme?.takeIf { SportsGuide.teams(it, channel.group) != null } ?: title
-        val teams = SportsGuide.teams(listing, channel.group)
-        val result = teams?.let { GameStreams(SportsGame(it, listing.start, listing.end, listOf(SportsBroadcast(channel, listing))), listOf(channel)) }
-        playbackGameMemo = PlaybackGameMemo(channel, programme, result)
-        return result
+        val key = guide.key(channel)
+        if (immediate) return findPlaybackGame(channel, programme, key, System.currentTimeMillis()).also { playbackGameMemo = PlaybackGameMemo(channel, programme, it) }
+        if (playbackGamePending?.let { it.channel === channel && it.programme === programme } != true) {
+            val pending = PlaybackGameMemo(channel, programme, null); playbackGamePending = pending
+            val at = System.currentTimeMillis()
+            imports.execute {
+                val result = runCatching { findPlaybackGame(channel, programme, key, at) }.getOrNull()
+                handler.post {
+                    if (closed || playbackGamePending !== pending) return@post
+                    playbackGamePending = null; playbackGameMemo = PlaybackGameMemo(channel, programme, result)
+                    if (result != null) playbackGameKnown()
+                }
+            }
+        }
+        return null
     }
+    private fun findPlaybackGame(channel: Channel, programme: Programme?, key: String, now: Long): GameStreams? {
+        val title = Programme(key, channel.name, now, now + 3 * 3600000L)
+        val listing = programme?.takeIf { SportsGuide.teams(it, channel.group) != null } ?: title
+        val teams = SportsGuide.teams(listing, channel.group) ?: return null
+        return GameStreams(SportsGame(teams, listing.start, listing.end, listOf(SportsBroadcast(channel, listing))), listOf(channel))
+    }
+    /** Views that name the playing game catch up once it is known. */
+    private fun playbackGameKnown() {
+        scoreDelayPlayingKey = if (onDemand == null) playbackGame()?.game?.key else null
+        if (::details.isInitialized && details.isVisible) refreshDetails()
+        retryPanel.findViewWithTag<View>("sports-other-streams")?.let { if (retryPanel.isVisible) it.isVisible = true }
+    }
+    private var playbackGamePending: PlaybackGameMemo? = null
     private class PlaybackGameMemo(val channel: Channel, val programme: Programme?, val result: GameStreams?)
     private var playbackGameMemo: PlaybackGameMemo? = null
     private fun showOtherGameStreams() {
         if (watchingRedZone) { sportsVisible = true; applyFilter(); showGuide(true); findRedZone(false); return }
-        val context = playbackGame() ?: return
+        val context = playbackGame(immediate = true) ?: return
         showGameStreamChoices(context, "Choose another stream for ${context.game.title}")
     }
     private fun showSportsAlternatives(message: String) {
-        val context = playbackGame() ?: sportsPlaybackPlan?.let { GameStreams(it.game, it.candidates) } ?: return
+        val context = playbackGame(immediate = true) ?: sportsPlaybackPlan?.let { GameStreams(it.game, it.candidates) } ?: return
         showGameStreamChoices(context, message)
     }
     private fun showGameStreamChoices(context: GameStreams, message: String) {
@@ -3904,9 +3931,20 @@ class MainActivity : Activity() {
         scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); handler.removeCallbacks(restoreAdditionalLater); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
         super.onStop()
     }
+    @Suppress("DEPRECATION") // The running-low levels are still delivered to apps on screen.
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return
+        if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            // The TV is short of memory while Spare is on screen (seen on an onn 4K Pro with several apps open: Android
+            // was compressing memory and every app slowed). Free the pictures of screens that are not showing.
+            if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+            if (::library.isInitialized && !library.opened) library.panel.trimImages()
+            if (::sportsPanel.isInitialized && !(sportsVisible && guideVisible)) sportsPanel.trimImages()
+            if (::searchPanel.isInitialized && !searchPanel.isVisible) searchPanel.trimImages()
+            if (::details.isInitialized && !details.isVisible) details.trimImages()
+            if (::programmeArtwork.isInitialized && !guideVisible) programmeArtwork.trim()
+            return
+        }
         if (::logos.isInitialized) logos.trim()
         if (::programmeArtwork.isInitialized) programmeArtwork.trim()
         if (::details.isInitialized) details.trimImages()
