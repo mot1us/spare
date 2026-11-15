@@ -59,25 +59,6 @@ class SportsCoverageTest {
         val targets = SportsStreams.confirmationTargets(basketball, Guide(generic + a + b + radio, emptyMap()), generic, emptySet(), emptyMap(), now)
         assertEquals(setOf(a, b), targets.take(2).toSet()); assertFalse(radio in targets); assertTrue(targets.size <= 12)
     }
-    @Test fun watchBestCanTryTheAdvertisedBroadcasterButNeverKnownOtherGamesOrReplays() {
-        val espn = channel("network", "USA ESPN 4K")
-        val other = channel("other", "USA ESPN 2 4K")
-        val mascot = channel("mascot", "Seattle Seahawks TV")
-        val quality = listOf(espn, other, mascot).associate { it.id to VideoInfo(3840, 2160, 59.94f) }
-        val possible = game.copy(candidates = listOf(espn, other, mascot))
-        assertNull("A broadcaster name alone cannot trigger automatic tuning", SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, Guide.EMPTY, now))
-        val confirmedGuide = Guide(listOf(espn), mapOf(espn.id to listOf(Programme(espn.id, game.title, game.start, game.end))))
-        assertEquals(espn, SportsStreams.bestBroadcaster(possible, listOf(mascot, espn), quality, confirmedGuide, now))
-        assertNull(SportsStreams.bestBroadcaster(possible, listOf(other, mascot), quality, Guide.EMPTY, now))
-        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn.copy(name = "ESPN+ 4K")), quality, Guide.EMPTY, now))
-        assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = listOf("ESPN+")), listOf(espn), quality, Guide.EMPTY, now))
-        val different = Programme(espn.id, "NFL: Buffalo Bills vs Kansas City Chiefs", now - 60000, now + 3600000)
-        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), quality, Guide(listOf(espn), mapOf(espn.id to listOf(different))), now))
-        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), quality, Guide(listOf(espn), mapOf(espn.id to listOf(different.copy(title = "NFL Highlights")))), now))
-        assertNull(SportsStreams.bestBroadcaster(possible, listOf(espn), emptyMap(), Guide.EMPTY, now))
-        assertNull(SportsStreams.bestBroadcaster(possible.copy(state = "pre"), listOf(espn), quality, Guide.EMPTY, now))
-        assertNull(SportsStreams.bestBroadcaster(possible.copy(networks = emptyList()), listOf(espn, mascot), quality, Guide.EMPTY, now))
-    }
     @Test fun krakenGuideMatchBeatsUnconfirmedFourKAndKeepsHdThirtyAndUnknownFpsPlayable() {
         val hockey = game.copy(teams = listOf("nhl:TOR", "nhl:SEA").map { SportsCatalog.byId.getValue(it) }, competition = "NHL")
         val correct = channel("nhl7", "NHL 07 HD").copy(group = "NHL", reportedQuality = VideoInfo(1280, 720, 30f))
@@ -119,18 +100,14 @@ class SportsCoverageTest {
         val matched = SportsSchedule.match(football, after, emptySet(), now)
         assertEquals(listOf(uhd, hd), SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), after, now))
     }
-    @Test fun watchBestUsesTheSameProviderQualityAsFiltersAndExplainsMissingEvidence() {
+    @Test fun missingEvidenceIsExplainedWithTheSameProviderQualityAsFilters() {
         val reported = channel("reported", "ESPN 4K").copy(reportedQuality = VideoInfo(3840, 2160, 59.94f))
         val listing = Programme(reported.id, game.title, now - 60000, now + 3600000)
         val matched = game.copy(broadcasts = listOf(SportsBroadcast(reported, listing)))
         val ranked = SportsStreams.rank(matched, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap())
-        assertEquals(reported, SportsStreams.bestConfirmed(matched, ranked, emptyMap(), now))
-        assertNull(SportsStreams.bestConfirmed(matched, ranked, mapOf(reported.id to VideoInfo(3840, 2160, 50f)), now))
         val unknown = reported.copy(reportedQuality = VideoInfo(3840, 2160, 0f))
-        assertNull(SportsStreams.bestConfirmed(matched, listOf(unknown), emptyMap(), now))
         assertTrue(SportsStreams.unavailableReason(matched, listOf(unknown), emptyMap(), now).contains("FPS is learned during playback"))
         val possible = game.copy(candidates = listOf(reported))
-        assertNull(SportsStreams.bestConfirmed(possible, ranked, emptyMap(), now))
         assertTrue(SportsStreams.unavailableReason(possible, ranked, emptyMap(), now).contains("coverage unconfirmed"))
     }
     @Test fun identicalProviderNamesKeepBothOwnersInsideTheLookupBudget() {
@@ -185,11 +162,11 @@ class SportsCoverageTest {
         assertFalse(result.candidates.contains(replay)); assertTrue(result.candidates.contains(generic))
         val quality = mapOf(good.id to VideoInfo(3840, 2160, 59.94f))
         val ranked = SportsStreams.rank(result, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), quality)
-        assertEquals(good, SportsStreams.bestConfirmed(result, ranked, quality, now))
+        assertEquals(good, ranked.first())
         val epgFhd = channel("epg", "ESPN FHD")
         val combined = result.copy(broadcasts = listOf(SportsBroadcast(epgFhd, Programme(epgFhd.id, game.title, now - 60000, now + 3600000))))
         val both = quality + (epgFhd.id to VideoInfo(1920, 1080, 60f))
-        assertEquals("A 4K/60 title match outranks an FHD/60 EPG match", good, SportsStreams.bestConfirmed(combined, SportsStreams.rank(combined, GuideFilters(), both), both, now))
+        assertEquals("A 4K/60 title match outranks an FHD/60 EPG match", good, SportsStreams.rank(combined, GuideFilters(), both).first())
         assertTrue(SportsSchedule.match(game.copy(state = "pre", start = now + 3600000), Guide(listOf(good), emptyMap()), emptySet(), now).titleMatches.isEmpty())
     }
     @Test fun largeLineupChecksCurrentEntriesAndUsesOnlyRelevantTeamDescriptions() {

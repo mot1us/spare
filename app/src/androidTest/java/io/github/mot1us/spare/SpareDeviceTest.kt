@@ -3619,8 +3619,10 @@ class SpareDeviceTest {
                 assertTrue("Initial browsing requests its category or the whole catalog, never other categories", server.catalogTargets.any { it.contains("category_id=1") || !it.contains("category_id=") })
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").requestFocus() }
                 device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
-                device.pressDPadDown(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
-                device.pressDPadUp(); device.pressDPadRight()
+                // The tabs run along the top: Right walks them, Down enters the titles.
+                device.pressDPadRight(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:series").hasFocus() }
+                device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-tab:movie").hasFocus() }
+                device.pressDPadDown()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
                 device.pressDPadLeft()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-categories").hasFocus() }
@@ -3629,7 +3631,7 @@ class SpareDeviceTest {
                 assertTrue("Browsing one category must not download other categories", server.catalogTargets.none { it.contains("category_id=2") || it.contains("category_id=3") })
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
-                scenario.onActivity { activity -> assertEquals("Action ▾", activity.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
+                scenario.onActivity { activity -> assertEquals("Action", activity.window.decorView.findViewWithTag<TextView>("library-heading").text.toString()) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
                 device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)
                 waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition)?.let { it >= PosterGridLayout.COLUMNS } == true } }
@@ -3768,7 +3770,11 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:series:1").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true }
-                scenario.onActivity { assertEquals("A series opens on a season, not every episode at once", "Season 1 ▾", it.window.decorView.findViewWithTag<TextView>("library-category").text.toString()) }
+                scenario.onActivity { activity ->
+                    val seasons = activity.window.decorView.findViewWithTag<RecyclerView>("library-categories")
+                    val chosen = (0 until seasons.childCount).map { seasons.getChildAt(it) as TextView }.filter { it.isSelected }.map { it.text.toString() }
+                    assertEquals("A series opens on a season, not every episode at once", listOf("Season 1"), chosen)
+                }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.Button>("library-favorite").text.toString() == "✓ In Watchlist" && store.libraryFavorites(source).contains("series:1") }
                 val beforeEpisodeRefresh = server.requests["/player_api.php"] ?: 0
@@ -4840,6 +4846,16 @@ class SpareDeviceTest {
                 }
                 assertTrue("Rows come from the saved catalog, not the provider", server.catalogTargets.none { it.contains("get_vod_streams") })
                 Thread.sleep(1200); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-home.png"))
+                // The main menu rests as icons and widens with labels over the screen when the cursor enters it.
+                scenario.onActivity { activity ->
+                    val rail = activity.window.decorView.findViewWithTag<NavigationRail>("app-navigation")
+                    assertFalse(rail.wide); val resting = rail.width
+                    activity.window.decorView.findViewWithTag<View>("library").requestFocus()
+                    rail.post { assertTrue(rail.wide); assertTrue("The open menu shows labels", rail.width > resting * 2) }
+                }
+                Thread.sleep(500); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-menu.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:movie:5240").requestFocus() }
+                waitFor(scenario) { a -> !a.window.decorView.findViewWithTag<NavigationRail>("app-navigation").wide && (a.currentFocus?.tag as? String) == "library-item:movie:5240" }
                 // Down: Top rated (best rating first), then the first provider category.
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5239" }
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5003" }
@@ -4951,7 +4967,6 @@ class SpareDeviceTest {
     }
 
     private fun chooseLibraryCategory(scenario: ActivityScenario<MainActivity>, position: Int) {
-        scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-category").performClick() }
         waitFor(scenario) {
             val categories = it.window.decorView.findViewWithTag<RecyclerView>("library-categories")
             categories.isShown && categories.findViewHolderForAdapterPosition(position) != null

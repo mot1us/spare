@@ -48,6 +48,8 @@ device timezone/locale and the saved 12/24-hour preference.
   on-demand controls take precedence over these live shortcuts.
 - The hidden dock opens through deliberate navigation and must not steal focus
   during automatic Android focus restoration. Right returns to section content.
+- The always-open dock rests as a 56 dp column of icons; while it holds focus it
+  widens with labels over the screen, so screens beside it never move or re-lay out.
 - Remote repeats keep the focused row visible. Guide looping is configurable;
   deferred focus restoration must not override a newer user navigation action.
 - Guide/preview layout, Settings, theme changes, and programme refresh must not

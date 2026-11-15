@@ -3,8 +3,6 @@ package io.github.mot1us.spare
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -28,7 +26,6 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
     private var renderPending = false
     private val renderSelection = Runnable { if (opened && renderPending) { renderPending = false; render(selected) } }
     private var detailBack: (() -> Unit)? = null
-    val currentPage get() = selected
     val opened get() = isVisible
     init {
         orientation = HORIZONTAL; visibility = GONE; tag = "settings-panel"; setPadding(dp(28), dp(24), dp(24), dp(24))

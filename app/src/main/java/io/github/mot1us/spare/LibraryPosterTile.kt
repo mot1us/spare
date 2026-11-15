@@ -171,12 +171,12 @@ internal fun gridHeight(width: Int, density: Float): Int {
 
 /**
  * Decode size for poster tiles, from the screen rather than a laid-out view so tiles, preloading and the
- * startup warm-up all ask for the same bitmap. Grid and row tiles are within a few pixels of each other;
- * rounding up to 64 px gives them one size (256 px on a 1080p TV, where a tile's artwork is about 168×252).
+ * startup warm-up all ask for the same bitmap. Sized for the full-width rows, whose tiles are the largest
+ * (about 190×285 px of artwork on a 1080p TV, so 320 px); grid tiles beside the category list reuse it.
  */
 internal fun posterDecodeSize(metrics: android.util.DisplayMetrics): Int {
-    val content = metrics.widthPixels - ((TvFocus.BROWSE_RAIL_WIDTH_DP + 76) * metrics.density).toInt()
-    val art = content / PosterGridLayout.COLUMNS - (22 * metrics.density).toInt()
+    val content = metrics.widthPixels - (CatalogShelves.CONTENT_INSET_DP * metrics.density).toInt()
+    val art = content / CatalogShelves.COLUMNS - (10 * metrics.density).toInt()
     return posterDecodeSize(art * 3 / 2)
 }
 internal fun posterDecodeSize(artHeight: Int) = ((artHeight.coerceAtLeast(0) + 63) / 64 * 64).coerceIn(128, 480)

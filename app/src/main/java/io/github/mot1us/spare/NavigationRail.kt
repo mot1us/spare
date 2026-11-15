@@ -14,7 +14,10 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** Fixed geometry and one focus column across Guide, Sports, Library and Settings. */
+/**
+ * One focus column across Guide, Sports, Library and Settings. Resting, it is a slim column of icons; when the
+ * cursor enters, it widens over the screen with labels, as Google TV does, so the screens beside it never move.
+ */
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sports: () -> Unit,
     library: () -> Unit, settings: () -> Unit, private val enter: () -> Unit, private val focused: () -> Unit) : LinearLayout(context) {
@@ -28,8 +31,27 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     private var motionEpoch = 0
     private var hiddenDock = false
     var expansionChanged: (() -> Unit)? = null
+    private val glyphs = mutableMapOf<Button, android.graphics.drawable.Drawable>()
+    /** True while the cursor is in the menu: icons and labels over a glass panel. */
+    var wide = false
+        private set
+    fun setWide(open: Boolean) {
+        if (open == wide && layoutParams?.width == dp(if (open) WIDE_DP else NARROW_DP)) return
+        wide = open
+        controls.forEach { control ->
+            val glyph = glyphs[control]
+            control.text = if (open) control.contentDescription else ""
+            // The icon stays where it is; opening only adds the label beside it. Resting, it is centred in the slot.
+            control.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            control.setPadding(dp(13), 0, dp(4), 0); control.compoundDrawablePadding = dp(if (open) 14 else 0)
+            control.setCompoundDrawables(glyph, null, null, null)
+        }
+        background = if (open || hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
+        elevation = if (open || hiddenDock) dp(10).toFloat() else 0f
+        layoutParams?.let { it.width = dp(if (open) WIDE_DP else NARROW_DP); layoutParams = it }
+    }
     fun configure(hidden: Boolean) {
-        hiddenDock = hidden; background = if (hidden) GuideTheme.glass(resources.displayMetrics.density) else null
+        hiddenDock = hidden; background = if (hidden || wide) GuideTheme.glass(resources.displayMetrics.density) else null
         elevation = if (hidden) dp(10).toFloat() else 0f
         setExpanded(!hidden || hasFocus(), animated = false)
     }
@@ -55,9 +77,9 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
     fun focusChanged(inside: Boolean) {
         if (inside && contentHasFocus && !deliberateFocus) return
         if (!inside) deliberateFocus = false
-        setExpanded(inside)
+        setWide(inside); setExpanded(inside)
     }
-    fun prepareForContent() { deliberateFocus = false; clearFocus(); setExpanded(false, animated = false) }
+    fun prepareForContent() { deliberateFocus = false; clearFocus(); setWide(false); setExpanded(false, animated = false) }
 
     private fun item(label: String, key: String, icon: Int, click: () -> Unit): Button {
         val control = object : Button(context) {
@@ -69,10 +91,11 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         }.apply {
             text = label; tag = key; contentDescription = label; id = View.generateViewId()
             isFocusableInTouchMode = true; isAllCaps = false; textSize = 10f; typeface = AppFont.face()
-            maxLines = 1; gravity = Gravity.CENTER; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-            setPadding(dp(5), dp(7), dp(5), dp(5)); compoundDrawablePadding = dp(3); stateListAnimator = null
+            maxLines = 1; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+            stateListAnimator = null; textSize = 14f
             val glyph = context.getDrawable(icon)!!.mutate().apply { setBounds(0, 0, dp(22), dp(22)) }
-            setCompoundDrawables(null, glyph, null, null)
+            glyphs[this] = glyph; setCompoundDrawables(glyph, null, null, null); text = ""
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL; setPadding(dp(13), 0, dp(4), 0)
             setOnClickListener { click() }
             setOnFocusChangeListener { _, active -> if (active) { remembered = this; focused() } }
             setOnKeyListener { _, keyCode, event -> when (keyCode) {
@@ -87,7 +110,7 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         }
         controls.add(control)
         val slot = FrameLayout(context).apply { addView(control, FrameLayout.LayoutParams(-1, -1)) }
-        addView(slot, LayoutParams(-1, dp(62)).apply { bottomMargin = dp(8) })
+        addView(slot, LayoutParams(-1, dp(48)).apply { bottomMargin = dp(10) })
         return control
     }
     val search = item("Search", "search", R.drawable.ic_search, search)
@@ -114,9 +137,10 @@ class NavigationRail(context: Context, search: () -> Unit, guide: () -> Unit, sp
         if (contentHasFocus && !hasFocus() && !deliberateFocus) return false
         return super.onRequestFocusInDescendants(direction, previouslyFocusedRect)
     }
-    fun focusCurrent() { deliberateFocus = true; setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
+    fun focusCurrent() { deliberateFocus = true; setWide(true); setExpanded(true); (controls.firstOrNull { it.isSelected } ?: remembered ?: guide).requestFocus() }
     fun appearance() {
-        background = if (hiddenDock) GuideTheme.glass(resources.displayMetrics.density) else null
+        background = if (hiddenDock || wide) GuideTheme.glass(resources.displayMetrics.density) else null
         controls.forEach { it.background = GuideTheme.background(resources.displayMetrics.density, 0x440B1018); it.setTextColor(GuideTheme.ink()); it.compoundDrawableTintList = GuideTheme.ink(); it.invalidate() }
     }
+    companion object { const val NARROW_DP = 56; const val WIDE_DP = 172 }
 }

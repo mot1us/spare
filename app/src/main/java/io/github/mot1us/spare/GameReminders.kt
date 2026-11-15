@@ -153,13 +153,6 @@ object SportsStreams {
         }
         return if (confirmed.isNotEmpty()) confirmed.sortedWith(preferenceComparator(filters, quality)) else suggestions
     }
-    fun bestConfirmed(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): Channel? = ranked.firstOrNull { channel ->
-        game.live(now) && (game.broadcasts.any { it.channel.id == channel.id && now in it.programme.start until it.programme.end } || game.titleMatches.any { it.id == channel.id }) &&
-            qualifies(channel, quality[channel.id])
-    }
-    fun bestBroadcaster(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, guide: Guide, now: Long): Channel? {
-        return ranked.firstOrNull { channel -> qualifies(channel, quality[channel.id]) && advertisedCoverage(game, channel, guide, now) }
-    }
     private fun advertisedCoverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Boolean {
         if (!game.live(now)) return false
         val target = game.teams.map { it.id }.toSet()

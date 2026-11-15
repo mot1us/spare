@@ -13,7 +13,6 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
@@ -520,7 +519,6 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         heroDetail.maxLines = 1
         heroTitle.maxLines = if (visible) 1 else 2
     }
-    private fun tileKey(position: Int) = gameKeys.getOrNull(position) ?: REDZONE
     private fun cardKeys(holder: GameCard) { holder.box.setOnKeyListener { _, key, event ->
         if (key !in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) false else {
             if (event.action == KeyEvent.ACTION_DOWN) {
@@ -805,7 +803,6 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         }
         return false
     }
-    fun focusTeams() { gridFocus.cancel(); ++focusEpoch; teamsButton.requestFocus() }
     fun focusCalendar() { gridFocus.cancel(); ++focusEpoch; (scheduleOptions.firstOrNull { it.isSelected } ?: todayButton).requestFocus() }
     fun focusHero() = focusGames()
     /** The focused card grows slightly, matching Library posters, so the cursor is easy to find from the couch. */

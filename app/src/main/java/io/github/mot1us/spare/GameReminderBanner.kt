@@ -3,7 +3,6 @@ package io.github.mot1us.spare
 import android.content.Context
 import android.annotation.SuppressLint
 import android.graphics.Color
-import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView

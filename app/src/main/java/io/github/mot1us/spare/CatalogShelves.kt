@@ -5,7 +5,6 @@ import android.content.Context
 import android.graphics.Color
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -64,7 +63,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyInterceptListener false
             // While a key is held the rows are flying past: posters wait until it stops.
             if (event.repeatCount > 0) images.quiet()
-            // Up from the first row leaves for the search box; a held key stops at the top instead.
+            // Up from the first row leaves for the tab line; a held key stops at the top instead.
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP && selectedPosition <= 0) { if (event.repeatCount == 0) exitUp?.invoke(); true } else false
         }
         adapter = Rows()
@@ -82,8 +81,6 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         key = catalog; shelves = values; data.putAll(initial)
         adapter?.notifyDataSetChanged()
     }
-    fun clear() { data.clear(); adapter?.notifyDataSetChanged() }
-    val currentShelf get() = current
     val catalog get() = key
 
     fun update(id: String, value: Data) {
@@ -129,7 +126,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     }
 
     private fun tileWidth(): Int {
-        val available = (if (width > 0) width else resources.displayMetrics.widthPixels - dp(TvFocus.BROWSE_RAIL_WIDTH_DP + 56)) - paddingLeft - paddingRight
+        val available = (if (width > 0) width else resources.displayMetrics.widthPixels - dp(CONTENT_INSET_DP)) - paddingLeft - paddingRight
         return (available / COLUMNS).coerceAtLeast(dp(72))
     }
 
@@ -149,7 +146,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             setRecycledViewPool(tilePool); setHasFixedSize(true)
             clipChildren = false; clipToPadding = false; setPadding(dp(2), dp(8), dp(2), dp(8))
             setOnKeyInterceptListener { event ->
-                // Left from a row's first tile leaves for the Movies/Series buttons.
+                // Left from a row's first tile opens the main menu.
                 if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && selectedPosition <= 0) { if (event.repeatCount == 0) exitLeft?.invoke(); true } else false
             }
         }
@@ -246,5 +243,9 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
 
     private fun posterHeight(width: Int): Int { val padding = dp(5) * 2; return ((width - padding).coerceAtLeast(0) * 3) / 2 + padding }
 
-    companion object { const val COLUMNS = 8 }
+    companion object {
+        const val COLUMNS = 8
+        /** Screen width the rows do not get: the main menu's inset, the Library panel's right padding and the rows' own padding. */
+        const val CONTENT_INSET_DP = 84 + 24 + 16
+    }
 }

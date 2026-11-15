@@ -10,16 +10,22 @@ class GuideLogoFiles(context: Context, private val prefix: String = "guide-logo-
     init { require(prefix.matches(Regex("[a-z-]+-"))) }
     private val store = SecureStore(context.applicationContext)
     private val directory = context.applicationContext.filesDir
+    private fun name(url: String) = "$prefix${Channel.stableId(url)}.enc"
+    private fun lock(name: String) = locks[(name.hashCode() and Int.MAX_VALUE) % locks.size]
+    private fun read(name: String, now: Long): ByteArray? {
+        val file = File(directory, name)
+        if (file.length() !in 38..2097189) return null
+        val saved = runCatching { store.read(name) }.getOrNull() ?: return null
+        if (saved.size <= 8 || now - ByteBuffer.wrap(saved, 0, 8).long !in 0 until 7 * 86400000L) return null
+        file.setLastModified(now)
+        return saved.copyOfRange(8, saved.size)
+    }
+    override fun saved(url: String): ByteArray? { val name = name(url); return synchronized(lock(name)) { read(name, System.currentTimeMillis()) } }
     override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
-        val name = "$prefix${Channel.stableId(url)}.enc"
-        return synchronized(locks[(name.hashCode() and Int.MAX_VALUE) % locks.size]) {
-            val now = System.currentTimeMillis(); val file = File(directory, name)
-            if (file.length() in 38..2097189) runCatching { store.read(name) }.getOrNull()?.let { saved ->
-                if (saved.size > 8 && now - ByteBuffer.wrap(saved, 0, 8).long in 0 until 7 * 86400000L) {
-                    file.setLastModified(now)
-                    return@synchronized saved.copyOfRange(8, saved.size)
-                }
-            }
+        val name = name(url)
+        return synchronized(lock(name)) {
+            val now = System.currentTimeMillis()
+            read(name, now)?.let { return@synchronized it }
             val bytes = fetch(); require(bytes.size in 1..2097152)
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)

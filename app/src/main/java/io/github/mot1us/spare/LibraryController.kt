@@ -842,7 +842,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
     fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind == "upnext" && parentSeries == null -> upNext(selected, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
     fun back() {
         when {
-            panel.closeCategories() -> Unit
             directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }
             detailItem != null -> closeDetails()
             archive != null -> catchupChannels()

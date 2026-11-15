@@ -22,6 +22,20 @@ progress selection. `PlaylistSearch` searches provider catalogs, while
 `PlaylistLiveSearch` searches the current merged guide. `MainActivity` hands a
 selected item to the existing primary player under the [playback contract](playback.md).
 
+## Layout and remote
+
+- A tab line across the top holds Movies, Series, Up next, Watchlist and Continue
+  watching, then the page's actions (sort, Watchlist, Search, Refresh). Left/Right
+  walk the line, Left from its first entry opens the main dock, Down enters the titles.
+- Under it, a banner shows the focused title's artwork, name, facts and plot; its
+  text fades in as the cursor moves and waits while a key is held.
+- Movies and Series open on full-width rows. A category grid keeps the category list
+  on its left. Up from the first row or grid line returns to the tab line; Left from
+  a row's first tile opens the main dock. Back from the titles goes to the tab line,
+  and Back again leaves Library.
+- Poster artwork that arrives after its tile is drawn fades in. Posters already saved
+  on the TV are read and decoded on their own threads, never queued behind downloads.
+
 ## Catalog loading and bounds
 
 - Xtream movies and series use separate endpoints. Movie playback uses the

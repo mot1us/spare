@@ -1,7 +1,6 @@
 package io.github.mot1us.spare
 
 import android.net.Uri
-import androidx.media3.common.C
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Format
 import androidx.media3.common.util.ExperimentalApi

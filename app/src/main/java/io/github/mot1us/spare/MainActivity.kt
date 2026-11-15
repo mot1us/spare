@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
@@ -944,7 +943,7 @@ class MainActivity : Activity() {
         }
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
         guidePanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(104), dp(18), dp(18), dp(14))
+            orientation = LinearLayout.VERTICAL; setPadding(dp(DOCK_INSET_DP), dp(18), dp(18), dp(14))
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xF20B1018.toInt(), 0xC90B1018.toInt()))
         }
         root.addView(guidePanel, FrameLayout.LayoutParams(-1, -1))
@@ -1150,9 +1149,9 @@ class MainActivity : Activity() {
                 }
             }
         }
-        library.panel.setPadding(dp(104), dp(18), dp(24), dp(18))
+        library.panel.setPadding(dp(DOCK_INSET_DP), dp(18), dp(24), dp(18))
         root.addView(library.panel, FrameLayout.LayoutParams(-1, -1))
-        root.addView(navigationRail, FrameLayout.LayoutParams(dp(76), -1, Gravity.START).apply { marginStart = dp(14); topMargin = dp(18); bottomMargin = dp(14) })
+        root.addView(navigationRail, FrameLayout.LayoutParams(dp(NavigationRail.NARROW_DP), -1, Gravity.START).apply { marginStart = dp(14); topMargin = dp(18); bottomMargin = dp(14) })
         dockHint = View(this).apply {
             tag = "navigation-handle"; contentDescription = "Left for navigation"; isClickable = true
             background = GradientDrawable().apply { setColor(0x80FFFFFF.toInt()); cornerRadius = dp(3).toFloat() }
@@ -1372,15 +1371,15 @@ class MainActivity : Activity() {
         }
     }
     private fun applyDockPreference() {
-        val inset = if (store.hiddenDock) 24 else 104
+        val inset = if (store.hiddenDock) 24 else DOCK_INSET_DP
         guidePanel.setPadding(dp(inset), dp(18), dp(18), dp(14))
         library.panel.setPadding(dp(inset), dp(18), dp(24), dp(18))
-        settingsPanel?.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24))
+        settingsPanel?.setPadding(dp(if (store.hiddenDock) 28 else DOCK_INSET_DP), dp(24), dp(24), dp(24))
         navigationRail.configure(store.hiddenDock); updateDockHint()
     }
     private fun updateDockHint() {
         if (!::dockHint.isInitialized) return
-        val inset = if (!store.hiddenDock || navigationRail.expanded || navigationRail.moving) 104 else 24
+        val inset = if (!store.hiddenDock || navigationRail.expanded || navigationRail.moving) DOCK_INSET_DP else 24
         guidePanel.setPadding(dp(inset), dp(18), dp(18), dp(14))
         if (::library.isInitialized) library.panel.setPadding(dp(inset), dp(18), dp(24), dp(18))
         dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded && !navigationRail.moving
@@ -3206,7 +3205,7 @@ class MainActivity : Activity() {
         suspendSportsOverlay()
         settingsReturnGuide = guideVisible; settingsReturnLibrary = library.opened; ++focusEpoch; handler.removeCallbacks(backHold)
         showGuide(false); nowPlaying.hide(immediate = true); previewCaption.visibility = View.GONE
-        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else 104), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        val panel = existing ?: SettingsPanel(this, ::renderSettingsPage, ::closeSettings).also { settingsPanel = it; it.setPadding(dp(if (store.hiddenDock) 28 else DOCK_INSET_DP), dp(24), dp(24), dp(24)); it.leaveNavigation = { settingsButton.requestFocus() }; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         root.bringChildToFront(panel)
         showNavigation("settings")
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
@@ -3902,3 +3901,6 @@ class MainActivity : Activity() {
         handler.removeCallbacks(commitChannelDigits); handler.postDelayed(commitChannelDigits, 1500)
     }
 }
+
+/** Where screens start beside the resting main menu: its margin, its slim icon column and a gap. */
+private const val DOCK_INSET_DP = 84

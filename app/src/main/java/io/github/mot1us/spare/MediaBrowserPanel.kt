@@ -13,6 +13,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import androidx.core.view.isVisible
 import androidx.leanback.widget.BaseGridView
@@ -27,7 +28,10 @@ data class Spotlight(val meta: String, val plot: String, val backdrop: String)
 data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null,
     val backdrop: String = "", val spotlight: (((Spotlight) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
-/** Bounded native TV lists, including large provider catalogs. Search remains inside the page. */
+/**
+ * Library, laid out like streaming apps: a tab line (Movies, Series, Watchlist…) over a large artwork banner that
+ * describes the title under the cursor, then full-width poster rows or a grid. The main menu sits to the left.
+ */
 @SuppressLint("ViewConstructor", "SetTextI18n")
 class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button, private val mode: (String) -> Unit,
     refresh: () -> Unit) : LinearLayout(context) {
@@ -48,9 +52,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Spotlight: the focused title's artwork, name, details and plot above the grid, as streaming apps do.
     private val spotArt = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = .6f; visibility = GONE; tag = "library-spot-art" }
     private val spotScrim = View(context).apply { visibility = GONE }
-    private val spotTitle = label(24f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; tag = "library-spot-title" }
-    private val spotMeta = label(12f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFC9D1DB.toInt()); tag = "library-spot-meta" }
-    private val spotPlot = label(12f).apply { maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFE3E8EE.toInt()); setLineSpacing(0f, 1.1f); tag = "library-spot-plot" }
+    private val spotTitle = label(28f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; tag = "library-spot-title" }
+    private val spotMeta = label(13f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFC9D1DB.toInt()); tag = "library-spot-meta" }
+    private val spotPlot = label(13f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFE3E8EE.toInt()); setLineSpacing(0f, 1.1f); tag = "library-spot-plot" }
     private val spotlight = LinearLayout(context).apply { orientation = VERTICAL; tag = "library-spotlight"; visibility = GONE }
     private var spotKey: String? = null
     private val spotLater = Runnable { requestSpotDetails() }
@@ -59,23 +63,21 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var spotRow: BrowserRow? = null
     // Fixed heights: a wrap-content FrameLayout would stretch its full-bleed artwork to the whole screen.
     private val hero = FrameLayout(context)
+    /** The page's name and state ("Fixture cinema · 80 titles") between the banner and the titles. */
+    private val titleLine = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; tag = "library-title-line" }
     private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     var globalSearch: ((String) -> Unit)? = null
-    private val search = EditText(context).apply { hint = "Search channels, movies and series"; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH; showSoftInputOnFocus = false }
+    // The search box only shows while it holds text, or as the archive filter; the tab line's search icon opens Search.
+    private val search = EditText(context).apply { hint = "Search archived channels and programmes"; visibility = GONE; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH; showSoftInputOnFocus = false }
     // Leanback lists (Google's TV list engine) move the cursor and scroll; this panel only says where their edges lead.
     private val categories = VerticalGridView(context).apply {
         setNumColumns(1); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER
         tag = "library-categories"; visibility = GONE; isFocusableInTouchMode = true; isClickable = true
         setPadding(dp(8), dp(8), dp(8), dp(8)); elevation = dp(8).toFloat()
     }
-    private val categoryButton = button("All categories ▾", ::openCategories).apply {
-        tag = "library-category"; visibility = GONE; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-    }
     private val rows = VerticalGridView(context).apply { preserveFocusAfterLayout = false; setNumColumns(PosterGridLayout.COLUMNS); itemAnimator = null; overScrollMode = OVER_SCROLL_NEVER; tag = "library-items"; recycledViewPool.setMaxRecycledViews(0, PosterGridLayout.COLUMNS * 4)
         // Leave room for the focused poster's lift instead of clipping it at the grid edge.
         clipChildren = false; clipToPadding = false; setPadding(dp(12), dp(12), dp(12), dp(12)) }
-    // Same remote-hint line as the Guide and Sports, so long-press actions are discoverable here too.
-    private val hint = label(10f).apply { setTextColor(Color.LTGRAY); maxLines = 1; tag = "library-hint"; setPadding(dp(4), dp(6), 0, 0) }
     private val empty = label(13f).apply { setPadding(dp(14), dp(16), dp(14), dp(16)); tag = "library-empty" }
     private var allRows = emptyList<BrowserRow>()
     private var shownRows = emptyList<BrowserRow>()
@@ -115,9 +117,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var grid = true
     // Posters are kept encrypted on disk (provider URLs can carry account details) so a
     // Library visit after a restart draws saved artwork instead of downloading it again.
-    // Tiles decode at the size they are drawn (about 170x256 px on a 1080p TV, ~90 KB in RGB_565), so 28 MB holds
-    // some 300 posters; only the details page asks for the larger 480 px copy. TMDB artwork is fetched at w342.
-    private val images = LogoLoader(480, 28 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4, source = PosterUrls::sized)
+    // Tiles decode at the size they are drawn (about 213x320 px on a 1080p TV, ~135 KB in RGB_565), so 36 MB holds
+    // some 270 posters; only the details page asks for the larger 480 px copy. TMDB artwork is fetched at w342.
+    private val images = LogoLoader(480, 36 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4, source = PosterUrls::sized)
     private val tileDecode = posterDecodeSize(resources.displayMetrics)
     private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
     private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)); decode = tileDecode }
@@ -129,13 +131,21 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
     private val body = LinearLayout(context)
+    private val lists = LinearLayout(context).apply { orientation = VERTICAL }
     private var artworkHttp = false
     private var rememberedKey: String? = null
-    private val sectionRail = LinearLayout(context).apply {
-        tag = "library-section-rail"; orientation = VERTICAL; setPadding(0, dp(4), dp(8), 0)
-    }
+    /** Movies, Series, Watchlist, Up next and Continue watching, then this page's actions, on one line: Left/Right walk it. */
+    private val tabStrip = LinearLayout(context).apply { tag = "library-section-rail"; orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     private val sectionControls = mutableListOf<Button>()
-    private val refreshButton = button("Refresh", refresh).apply { tag = "library-refresh" }
+    private fun iconButton(icon: Int, name: String, click: () -> Unit) = ImageButton(context).apply {
+        setImageResource(icon); contentDescription = name; scaleType = ImageView.ScaleType.CENTER; isFocusableInTouchMode = true
+        setPadding(dp(8), dp(8), dp(8), dp(8)); setOnClickListener { click() }
+    }
+    private val refreshButton = iconButton(R.drawable.ic_refresh, "Refresh", refresh).apply { tag = "library-refresh" }
+    private val searchButton = iconButton(R.drawable.ic_search, "Search") {
+        if (archive) { search.requestFocus(); (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
+        else globalSearch?.invoke(search.text.toString())
+    }.apply { tag = "library-search-button" }
     /** OK cycles the order of the Movies and Series grids; the choice is remembered. */
     var sortAction: (() -> String)? = null
     private val sortButton = button("Sort") { sortAction?.invoke()?.let(::sortLabel) }.apply { tag = "library-sort"; visibility = GONE; maxLines = 1 }
@@ -150,97 +160,67 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             sectionControls.add(button(title) { selectTab(key); hideKeyboard(); mode(key) }.apply { tag = "library-tab:$key" })
         }
         sectionControls.add(archiveHome)
-        sectionControls.forEach { control ->
-            control.textSize = 11f
-            sectionRail.addView(control, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(5) })
+        val actions = listOf<View>(sortButton, saveTitle, markWatched, searchButton, refreshButton)
+        sectionControls.forEach { control -> control.textSize = 13f; tabStrip.addView(control, LayoutParams(-2, dp(34)).apply { marginEnd = dp(4) }) }
+        tabStrip.addView(View(context), LayoutParams(0, 1, 1f))
+        actions.forEach { control -> tabStrip.addView(control, LayoutParams(if (control is ImageButton) dp(36) else -2, dp(34)).apply { marginStart = dp(6) }) }
+        (sectionControls + actions).forEach { control ->
+            // Only the tabs can be where Android drops the cursor when the titles under it are replaced; actions never are.
             control.setOnFocusChangeListener { _, active ->
-                if (active && drifted()) { searchHandler.removeCallbacks(recoverFocus); searchHandler.post(recoverFocus) }
+                if (active && control in sectionControls && drifted()) { searchHandler.removeCallbacks(recoverFocus); searchHandler.post(recoverFocus) }
                 else if (active) { ++focusEpoch; pending = null; catalogFocusRequested = false }
             }
             control.setOnKeyListener { _, key, event -> when (key) {
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (event.action == KeyEvent.ACTION_DOWN) {
-                        val visible = sectionControls.filter { it.isVisible }
-                        val step = if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
-                        val next = visible.indexOf(control) + step
-                        if (next < 0) search.requestFocus() else if (next >= visible.size && categories.isVisible) focusCategories() else visible.getOrNull(next)?.requestFocus()
+                        val visible = (sectionControls + actions).filter { it.isVisible }
+                        val next = visible.indexOf(control) + if (key == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1
+                        if (next < 0) navigation?.invoke() else visible.getOrNull(next)?.requestFocus()
                     }
                     true
                 }
-                KeyEvent.KEYCODE_DPAD_LEFT -> { if (event.action == KeyEvent.ACTION_DOWN) navigation?.invoke(); true }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (event.action == KeyEvent.ACTION_DOWN) {
-                        if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else focusRows()
+                        hideKeyboard()
+                        when { detailPane.isVisible -> detailPane.findViewWithTag<View>("library-play")?.requestFocus(); search.isVisible -> search.requestFocus(); else -> focusRows() }
                     }
                     true
                 }
+                KeyEvent.KEYCODE_DPAD_UP -> true
                 else -> false
             } }
         }
-        sectionRail.addView(categories, LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
-        val headerControls = listOf(categoryButton, sortButton, refreshButton, saveTitle, markWatched)
-        headerControls.forEach { control ->
-            control.setOnKeyListener { _, key, event ->
-                when (key) {
-                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            val visible = headerControls.filter { it.isVisible }
-                            val step = if (key == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1
-                            val next = visible.indexOf(control) + step
-                            if (next < 0) focusToolbar() else visible.getOrNull(next)?.requestFocus()
-                        }
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            if (detailPane.isVisible) detailPane.findViewWithTag<View>("library-play")?.requestFocus() else search.requestFocus()
-                        }
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_UP -> true
-                    else -> false
-                }
-            }
-        }
-        val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(LinearLayout(context).apply { orientation = VERTICAL; addView(heading, LayoutParams(-1, dp(24))); addView(message, LayoutParams(-1, dp(18))) }, LayoutParams(0, -2, 1f))
-        headerControls.forEach { control ->
-            header.addView(control, LayoutParams(if (control === categoryButton) dp(156) else -2, dp(36)).apply { marginStart = dp(8) })
-        }
-        header.addView(banner, LayoutParams(dp(32), dp(48)).apply { marginStart = dp(12) })
+        titleLine.addView(heading, LayoutParams(-2, -2))
+        titleLine.addView(message, LayoutParams(0, -2, 1f).apply { marginStart = dp(12) })
+        titleLine.addView(banner, LayoutParams(dp(18), dp(26)).apply { marginStart = dp(8) })
         spotlight.addView(spotTitle, LayoutParams(-1, -2))
-        spotlight.addView(spotMeta, LayoutParams(-1, -2).apply { topMargin = dp(2) })
-        spotlight.addView(spotPlot, LayoutParams(dp(520), -2).apply { topMargin = dp(6) })
+        spotlight.addView(spotMeta, LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        spotlight.addView(spotPlot, LayoutParams(dp(470), -2).apply { topMargin = dp(8) })
         hero.apply { tag = "library-hero"; clipChildren = true }
-        hero.addView(spotArt, FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(220) })
+        // The artwork fills the right of the banner; the scrim fades it into the page under the text on the left.
+        hero.addView(spotArt, FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(260) })
         hero.addView(spotScrim, FrameLayout.LayoutParams(-1, -1))
         hero.addView(LinearLayout(context).apply {
-            orientation = VERTICAL; setPadding(0, 0, 0, dp(8))
-            addView(header, LayoutParams(-1, dp(52)))
-            addView(spotlight, LayoutParams(-1, dp(96)))
-        }, FrameLayout.LayoutParams(-1, -2))
-        body.orientation = VERTICAL
-        body.addView(empty)
-        body.addView(rows, LayoutParams(-1, 0, 1f))
-        body.addView(shelves, LayoutParams(-1, 0, 1f))
-        shelves.exitUp = { search.requestFocus() }
-        shelves.exitLeft = { focusToolbar() }
+            orientation = VERTICAL; setPadding(0, 0, 0, dp(10))
+            addView(tabStrip, LayoutParams(-1, dp(40)))
+            addView(View(context), LayoutParams(-1, 0, 1f))
+            addView(spotlight, LayoutParams(-1, -2).apply { marginStart = dp(6) })
+        }, FrameLayout.LayoutParams(-1, -1))
+        body.orientation = HORIZONTAL
+        body.addView(categories, LayoutParams(dp(CATEGORY_WIDTH_DP), -1).apply { marginEnd = dp(8) })
+        lists.addView(empty)
+        lists.addView(rows, LayoutParams(-1, 0, 1f))
+        lists.addView(shelves, LayoutParams(-1, 0, 1f))
+        body.addView(lists, LayoutParams(0, -1, 1f))
+        shelves.exitUp = { if (search.isVisible) search.requestFocus() else focusToolbar() }
+        shelves.exitLeft = { navigation?.invoke() }
         shelves.focused = { row -> rememberedKey = row.key; ++focusEpoch; pending = null; showSpot(row) }
-        val content = LinearLayout(context).apply {
-            orientation = VERTICAL; setPadding(dp(4), 0, 0, 0)
-            addView(hero, LayoutParams(-1, dp(HERO_COMPACT_DP)))
-            addView(loading, LayoutParams(-1, dp(3)))
-            addView(search, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(4) })
-            addView(body, LayoutParams(-1, 0, 1f))
-            addView(detailPane, LayoutParams(-1, 0, 1f))
-            addView(hint, LayoutParams(-1, dp(22)))
-        }
-        addView(LinearLayout(context).apply {
-            addView(sectionRail, LayoutParams(dp(TvFocus.BROWSE_RAIL_WIDTH_DP), -1))
-            addView(FrameLayout(context).apply {
-                addView(content, FrameLayout.LayoutParams(-1, -1))
-            }, LayoutParams(0, -1, 1f))
-        }, LayoutParams(-1, 0, 1f))
+        addView(hero, LayoutParams(-1, dp(HERO_COMPACT_DP)))
+        addView(loading, LayoutParams(-1, dp(3)))
+        addView(titleLine, LayoutParams(-1, dp(28)).apply { leftMargin = dp(6) })
+        addView(search, LayoutParams(-1, dp(36)).apply { bottomMargin = dp(4) })
+        addView(body, LayoutParams(-1, 0, 1f))
+        addView(detailPane, LayoutParams(-1, 0, 1f))
         categories.adapter = object : RecyclerView.Adapter<Holder>() {
             init { setHasStableIds(true) }
             override fun getItemId(position: Int) = (if (position == 0) "All" else categoryNames[position - 1]).hashCode().toLong()
@@ -254,10 +234,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.text.contentDescription = "Category · ${name ?: "All"}"
                 holder.text.tag = "library-category:${name ?: "all"}"
                 holder.text.setOnClickListener {
-                    shelfPicked?.let { picked -> closeCategories(); wantContent(); picked(name); return@setOnClickListener }
+                    shelfPicked?.let { picked -> wantContent(); picked(name); return@setOnClickListener }
                     val before = if (group == null) 0 else categoryNames.indexOf(group).plus(1)
                     catalogFocusRequested = false; rememberAnchor(); group = name; rememberedKey = anchors[anchorKey()]
-                    updateCategoryButton(); closeCategories(); filter()
+                    updateBrowseControls(); filter()
                     if (before in 0 until itemCount) notifyItemChanged(before); notifyItemChanged(position)
                     focusRows()
                 }
@@ -296,8 +276,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             }
         }
         categories.setOnKeyInterceptListener { event ->
-            // Up from the first category leaves for the Movies/Series buttons.
-            if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_UP && categories.selectedPosition <= 0) { if (event.repeatCount == 0) sectionControls.lastOrNull { it.isVisible }?.requestFocus(); true } else false
+            // Up from the first category leaves for the tab line.
+            if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_UP && categories.selectedPosition <= 0) { if (event.repeatCount == 0) focusToolbar(); true } else false
         }
         rows.setOnKeyInterceptListener { event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyInterceptListener false
@@ -305,8 +285,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             if (event.repeatCount > 0) images.quiet()
             val position = rows.selectedPosition
             when (event.keyCode) {
-                // Up from the top row leaves for the search box; a held key stops at the top instead.
-                KeyEvent.KEYCODE_DPAD_UP -> if (position < columns) { if (event.repeatCount == 0) search.requestFocus(); true } else false
+                // Up from the top row leaves for the search box or the tab line; a held key stops at the top instead.
+                KeyEvent.KEYCODE_DPAD_UP -> if (position < columns) { if (event.repeatCount == 0) { if (search.isVisible) search.requestFocus() else focusToolbar() }; true } else false
                 KeyEvent.KEYCODE_DPAD_LEFT -> if (!grid || position % columns == 0) { if (event.repeatCount == 0) focusBrowseRail(); true } else false
                 // Page and Channel keys jump a screen of posters at a time through long catalogs.
                 KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { if (shownRows.isNotEmpty()) {
@@ -325,10 +305,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 if (hasMore && last >= shownRows.size - 16) { hasMore = false; catalogMore?.invoke() }
             }
         })
-        search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { if (!changingSearch) { searchHandler.removeCallbacks(searchLater); searchHandler.postDelayed(searchLater, 180) } }; override fun afterTextChanged(s: Editable?) {} })
+        search.addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {} ; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { showSearchBox(); if (!changingSearch) { searchHandler.removeCallbacks(searchLater); searchHandler.postDelayed(searchLater, 180) } }; override fun afterTextChanged(s: Editable?) {} })
         search.setOnEditorActionListener { _, _, _ -> hideKeyboard(); focusAt(rows, 0); true }
         search.setOnClickListener { if (!archive) globalSearch?.invoke(search.text.toString()) else (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(search, InputMethodManager.SHOW_IMPLICIT) }
-        search.setOnKeyListener { _, key, event -> when (key) { KeyEvent.KEYCODE_DPAD_CENTER -> if (!archive && globalSearch != null) { if (event.action == KeyEvent.ACTION_UP) globalSearch?.invoke(search.text.toString()); true } else false; KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusRows() }; true }; KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusHeader() }; true }; else -> false } }
+        search.setOnKeyListener { _, key, event -> when (key) { KeyEvent.KEYCODE_DPAD_CENTER -> if (!archive && globalSearch != null) { if (event.action == KeyEvent.ACTION_UP) globalSearch?.invoke(search.text.toString()); true } else false; KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusRows() }; true }; KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); focusToolbar() }; true }; else -> false } }
     }
     private fun cell(size: Float, height: Int) = label(size).apply {
         isFocusableInTouchMode = true; isClickable = true; gravity = Gravity.CENTER_VERTICAL; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
@@ -354,7 +334,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val listKey = values.firstOrNull()?.key.orEmpty() + ":" + values.size
         if (initialGroup != null && initialGroup in categoryNames && (group == null && listKey != submittedList)) group = initialGroup
         submittedList = listKey
-        updateCategoryButton()
+        updateBrowseControls()
         categories.adapter?.notifyDataSetChanged(); filter()
     }
     @SuppressLint("NotifyDataSetChanged")
@@ -410,14 +390,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (focus || catalogFocusRequested) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() } }
     }
     internal fun shelf(id: String, value: CatalogShelves.Data) = shelves.update(id, value)
-    fun resetShelves() = shelves.clear()
     val shelfCatalog get() = shelves.catalog.takeIf { shelvesShown }
     @SuppressLint("NotifyDataSetChanged")
     fun catalogLabels(groups: Map<String, String>) {
         val names = groups.keys.toList()
         if (categoryNames != names) { categoryNames = names; categoryLabels = groups; categories.adapter?.notifyDataSetChanged() }
         else if (categoryLabels != groups) { categoryLabels = groups; categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1) }
-        updateCategoryButton()
+        updateBrowseControls()
     }
     @SuppressLint("NotifyDataSetChanged")
     fun catalogPage(values: List<BrowserRow>, append: Boolean, more: Boolean) {
@@ -444,7 +423,6 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
     fun selectTab(key: String) {
-        closeCategories(restoreFocus = false)
         selectedTab = key
         sectionControls.forEach { it.isSelected = it.tag == "library-tab:$key" }
     }
@@ -470,43 +448,40 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun archiveMode(value: Boolean) {
         archive = value; archiveHome.isVisible = value; spotMode()
         sectionControls.filter { it !== archiveHome }.forEach { it.isVisible = !value }
-        search.hint = if (value) "Search archived channels and programmes" else "Search channels, movies and series"
+        showSearchBox()
     }
     fun focusToolbar() {
-        closeCategories(restoreFocus = false)
         ++focusEpoch; pending = null; catalogFocusRequested = false; contentWantedAt = 0; hideKeyboard()
         (if (archive) archiveHome else sectionControls.firstOrNull { it.tag == "library-tab:$selectedTab" })?.requestFocus()
     }
+    /** Back from the titles goes to the tab line first; Back again leaves Library. */
     fun focusRailFromContent(): Boolean {
-        if (archive || !hasFocus() || sectionRail.hasFocus()) return false
-        focusBrowseRail()
-        return sectionRail.hasFocus()
+        if (archive || !hasFocus() || tabStrip.hasFocus()) return false
+        focusToolbar()
+        return tabStrip.hasFocus()
     }
-    private fun focusHeader() = (if (categoryButton.isVisible) categoryButton else refreshButton).requestFocus()
-    private fun updateCategoryButton() {
-        val label = group?.let { categoryLabels[it] ?: it } ?: allCategoryTitle.takeUnless { it == "All" } ?: "All categories"
-        categoryButton.text = "$label ▾"
-        categoryButton.contentDescription = "Category, $label"
-        categoryButton.isVisible = false
+    /** The search box shows as the archive filter, or while it holds text a search put there. */
+    private fun showSearchBox() {
+        val shown = !detailPane.isVisible && (archive || search.text.isNotEmpty())
+        if (search.isVisible == shown) return
+        if (!shown && search.hasFocus()) { search.visibility = GONE; focusRows() } else search.visibility = if (shown) VISIBLE else GONE
+    }
+    private fun updateBrowseControls() {
         categories.isVisible = body.isVisible && categoryNames.isNotEmpty()
         sortButton.isVisible = body.isVisible && catalogQuery != null
-        if (!categoryButton.isVisible) closeCategories(restoreFocus = false)
     }
-    private fun focusBrowseRail() { if (categories.isVisible) focusCategories() else focusToolbar() }
+    private fun focusBrowseRail() { if (categories.isVisible) focusCategories() else navigation?.invoke() }
     private fun focusCategories() {
         hideKeyboard(); ++focusEpoch; pending = null; catalogFocusRequested = false
         focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
     }
-    private fun openCategories() { if (categories.isVisible) focusCategories() }
-    // Categories are a persistent rail, not a modal picker.
-    fun closeCategories(restoreFocus: Boolean = true): Boolean = false
     /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
     fun requestContentFocus() { wantContent(); if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
     fun focusRows() { wantContent(); if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     /** Seven posters across (or one list row): each column gets an equal share of the grid's width. */
     private fun sizeColumns() {
         rows.setNumColumns(columns)
-        val available = (if (rows.width > 0) rows.width else resources.displayMetrics.widthPixels - dp(TvFocus.BROWSE_RAIL_WIDTH_DP + 80)) - rows.paddingLeft - rows.paddingRight
+        val available = (if (rows.width > 0) rows.width else resources.displayMetrics.widthPixels - dp(LIBRARY_INSET_DP + (if (categories.isVisible) CATEGORY_WIDTH_DP + 8 else 0))) - rows.paddingLeft - rows.paddingRight
         rows.setColumnWidth((available / columns).coerceAtLeast(dp(72)))
     }
     /** Select a tile or category and give it the cursor as soon as the list has it on screen. */
@@ -521,9 +496,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun appearance(opacity: Int = -1) {
         background = GuideTheme.guideBackground(opacity); AppFont.apply(this)
         search.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000); search.setPadding(dp(12), 0, dp(12), 0); search.setTextColor(GuideTheme.ink())
-        heading.textSize = 16f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale
-        hint.textSize = 10f * GuideTheme.textScale; spotTitle.textSize = 24f * GuideTheme.textScale; spotMeta.textSize = 12f * GuideTheme.textScale; spotPlot.textSize = 12f * GuideTheme.textScale
-        spotTitle.typeface = AppFont.face(true)
+        heading.textSize = 15f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale
+        spotTitle.textSize = 28f * GuideTheme.textScale; spotMeta.textSize = 13f * GuideTheme.textScale; spotPlot.textSize = 13f * GuideTheme.textScale
+        spotTitle.typeface = AppFont.face(true); heading.typeface = AppFont.face(true)
+        // Tabs read as text on the banner: a soft fill marks the open one, the accent marks the cursor.
+        val density = resources.displayMetrics.density
+        sectionControls.forEach { it.background = GuideTheme.background(density); it.setTextColor(GuideTheme.ink()); it.setPadding(dp(14), 0, dp(14), 0); it.minWidth = 0; it.minimumWidth = 0 }
+        listOf(refreshButton, searchButton).forEach { it.background = GuideTheme.background(density, 0x33000000); it.imageTintList = GuideTheme.ink() }
         val base = (GuideTheme.current.background or 0xFF000000.toInt()) and 0xFFFFFF
         fun shade(alpha: Int) = base or (alpha shl 24)
         spotScrim.background = android.graphics.drawable.LayerDrawable(arrayOf(
@@ -533,20 +512,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1); rows.adapter?.notifyItemRangeChanged(0, shownRows.size); shelves.refreshTiles()
     }
     fun allowArtworkHttp(value: Boolean) { artworkHttp = value; shelves.http = value }
-    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; search.visibility = VISIBLE; updateCategoryButton(); spotKey = null; spotMode() }
+    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; showSearchBox(); updateBrowseControls(); spotKey = null; spotMode() }
     /** Spotlight shows in poster grids and on a details page; plain lists (episodes, archive) keep the compact header. */
-    private fun updateHint() {
-        hint.text = when {
-            archive -> "OK Open    ← Library sections    Back Live TV"
-            detailPane.isVisible -> "OK Play    ← Library sections    Back Catalog"
-            seriesSpot != null -> "OK Play episode    ↑ Search    Back Series"
-            shelvesShown -> "OK Details    Hold OK Watchlist    ↑ ↓ Categories    ← Sections"
-            grid -> "OK Details    Hold OK Watchlist    CH+ / CH− Page    ← Categories    ↑ Search"
-            else -> "OK Open    ← Library sections    ↑ Search"
-        }
-    }
     private fun spotMode() {
-        updateHint()
         val on = !archive && (detailPane.isVisible || (body.isVisible && (grid || seriesSpot != null)))
         spotlight.isVisible = on
         // A series page gets a taller hero: its artwork is the page, not a strip above a poster grid.
@@ -588,6 +556,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (spotKey == row.key) return
         spotKey = row.key; spotRow = row
         spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
+        // The new title's words fade in rather than snapping, as the cursor moves along a row.
+        spotlight.animate().cancel(); spotlight.alpha = .35f; spotlight.animate().alpha(1f).setDuration(180).start()
         spotArtwork(row.backdrop.ifBlank { row.poster })
         // Wait for the cursor to settle so fast scrolling never queues provider requests.
         searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
@@ -612,7 +582,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (detailPane.visibility != VISIBLE) spotKey = null
         val focusedAction = detailPane.findFocus()?.tag
         val generation = ++detailGeneration
-        hideKeyboard(); closeCategories(restoreFocus = false); body.visibility = GONE; search.visibility = GONE; detailPane.visibility = VISIBLE; updateCategoryButton(); spotMode()
+        hideKeyboard(); body.visibility = GONE; if (search.hasFocus()) focusToolbar(); search.visibility = GONE; detailPane.visibility = VISIBLE; updateBrowseControls(); spotMode()
         // Keep focus on the toolbar while replacing focused detail controls.
         if (detailPane.hasFocus()) focusToolbar()
         detailPane.removeAllViews(); detailPane.background = null
@@ -637,7 +607,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
-    fun pauseImages() { closeCategories(restoreFocus = false); rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
+    fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
     fun warmPosters(urls: List<String>, http: Boolean) { urls.forEach { images.warm(it, http, tileDecode) } }
     /** Frame times are counted only while Library is actually on screen (see [LibraryFrames]). */
     override fun onVisibilityAggregated(isVisible: Boolean) {
@@ -649,5 +619,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun trimImages() { images.trim(); backdrops.trim() }
     fun closeImages() { images.close(); backdrops.close() }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
-    private companion object { const val HERO_COMPACT_DP = 60; const val HERO_SPOTLIGHT_DP = 156; const val HERO_SERIES_DP = 236 }
+    private companion object {
+        const val HERO_COMPACT_DP = 44; const val HERO_SPOTLIGHT_DP = 200; const val HERO_SERIES_DP = 250; const val CATEGORY_WIDTH_DP = 200
+        /** The panel's own left and right padding beside the main menu, plus the grid's padding. */
+        const val LIBRARY_INSET_DP = 84 + 24 + 32
+    }
 }

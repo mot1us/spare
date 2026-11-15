@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.49.0 — 2026-11-14
+
+- Library redesigned like a streaming app. The second column of Movies, Series, Up next, Watchlist and Continue watching buttons is now a tab line across the top, with Search and Refresh as icons at its right. Below it, a larger banner shows the focused title's artwork, name, details and plot, and its text fades in as you move. Movies and Series rows use the full width of the screen. The search box only appears while it holds a search, and the remote-hint line is gone.
+- Remote in Library: Left/Right move along the tabs, Down enters the titles, and Up from the first row returns to the tabs. Left from a row's first poster opens the main menu. Back from the titles goes to the tabs, and Back again leaves Library.
+- The main menu rests as a slim column of icons and widens with labels over the screen when you move onto it. Guide, Sports, Library and Settings gain the space it used to take.
+- Posters: artwork that arrives after its tile is drawn fades in instead of popping. Posters already saved on the TV are read on their own threads, so they no longer wait behind downloads, which can take seconds each. Tiles are larger, so posters are decoded at 320 px and the poster memory cache grows to 36 MB.
+- Removed unused code: helpers for an old popup picker, the hidden category button, two Sports "best stream" functions the app no longer called (and tests that only covered them), settings markers nothing read, unused imports and a leftover macOS icon script.
+
 ## 0.48.0 — 2026-11-14
 
 - Tunneled playback (Settings › Playback), on by default: the TV's own video hardware times each frame and keeps it in sync with the sound, so the picture no longer depends on the app keeping up. Before, scrolling, opening Library or the app's own background work could make video stutter while audio stayed smooth. The same approach is offered by OwnTV.

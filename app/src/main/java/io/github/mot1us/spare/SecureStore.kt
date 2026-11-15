@@ -222,7 +222,6 @@ class SecureStore(private val context: Context) {
         require(entries.length() <= Importers.MAX_CHANNELS)
         return root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
     }
-    fun richCatalog(source: Source, kind: String) = preferences.getInt("catalog-schema-${source.id}-$kind", 0) >= 2
     fun metadataAddon(): String = read("metadata-addon.enc")?.toString(Charsets.UTF_8).orEmpty()
     fun saveMetadataAddon(value: String) { write("metadata-addon.enc", value.toByteArray()) }
     fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) = synchronized(cacheLock) {
@@ -255,10 +254,6 @@ class SecureStore(private val context: Context) {
         if (next != before) write(providerFile("library-followed", source), next.json().toString().toByteArray())
         return next
     }
-    fun providerQualityReady(source: Source) = preferences.getBoolean("provider-quality-${source.id}", false)
-    fun markProviderQuality(source: Source) { preferences.edit { putBoolean("provider-quality-${source.id}", true) } }
-    fun libraryMetadataReady(source: Source) = preferences.getBoolean("library-metadata-${source.id}", false)
-    fun markLibraryMetadata(source: Source) { preferences.edit { putBoolean("library-metadata-${source.id}", true); putBoolean("provider-quality-${source.id}", true) } }
     /** Preserve user preferences, but never reuse derived data from a different server/account. */
     fun bindProvider(source: Source): Boolean = synchronized(cacheLock) {
         val key = "provider-identity-${source.id}"; val value = source.providerKey(); val old = preferences.getString(key, null)

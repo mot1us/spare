@@ -1,7 +1,6 @@
 package io.github.mot1us.spare
 
 import org.json.JSONArray
-import org.json.JSONObject
 import java.util.UUID
 
 /**
