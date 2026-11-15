@@ -8,6 +8,10 @@ import java.net.URI
 import java.util.zip.GZIPInputStream
 
 object Network {
+    /** Large downloads (playlists, guides) may run up to ten minutes of network time, as long as they never stall. */
+    const val LARGE_DEADLINE_MS = 600_000L
+    /** A large download must bring at least this much in each read-timeout window (20 s by default). */
+    const val STALL_BYTES = 32 * 1024
     /** Socket reads ignore Thread.interrupt(); close a cancelled request's connection so its worker is released at once. */
     private val open = java.util.concurrent.ConcurrentHashMap<HttpURLConnection, Thread>()
     private val reaper = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "spare-network-cancel").apply { isDaemon = true } }
@@ -33,13 +37,14 @@ object Network {
         return result.toByteArray()
     }
 
-    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000, progress: ((Long, Long) -> Unit)? = null): ByteArray {
-        return consume(url, http, limit, timeoutMs, progress) { readLimited(it, limit) }
+    fun get(url: String, http: Boolean = false, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000, progress: ((Long, Long) -> Unit)? = null, large: Boolean = false): ByteArray {
+        return if (large) consume(url, http, limit, timeoutMs, progress, networkTimeOnly = true, deadlineMs = LARGE_DEADLINE_MS, stallBytes = STALL_BYTES) { readLimited(it, limit) }
+        else consume(url, http, limit, timeoutMs, progress) { readLimited(it, limit) }
     }
 
     internal fun <T> consume(url: String, http: Boolean, limit: Int = 24 * 1024 * 1024, timeoutMs: Int = 20000,
         progress: ((Long, Long) -> Unit)? = null, networkTimeOnly: Boolean = false,
-        nanoTime: () -> Long = System::nanoTime, deadlineMs: Long = minOf(60000L, timeoutMs * 3L), read: (InputStream) -> T): T {
+        nanoTime: () -> Long = System::nanoTime, deadlineMs: Long = minOf(60000L, timeoutMs * 3L), stallBytes: Int = 0, read: (InputStream) -> T): T {
         var destination = url
         repeat(6) {
             if (!allowed(destination, http)) throw SourceFailure(
@@ -63,16 +68,16 @@ object Network {
                 } else {
                     if (status !in 200..299) throw HttpFailure(status)
                     if (connection.contentLengthLong > limit) throw SourceFailure(SourceProblem.LIMIT)
-                    val deadline = DownloadDeadline(deadlineMs, networkTimeOnly, nanoTime)
+                    val deadline = DownloadDeadline(deadlineMs, networkTimeOnly, nanoTime, stallBytes, timeoutMs * 1_000_000L)
                     val total = connection.contentLengthLong
                     progress?.invoke(0, total)
                     val bounded = object : java.io.FilterInputStream(deadline.socketRead { connection.inputStream }) {
                         var consumed = 0L
                         var lastProgress = 0L
                         fun count(amount: Int) {
-                            if (amount > 0) consumed += amount
+                            if (amount > 0) { consumed += amount; deadline.received(amount) }
                             if (consumed > limit) throw SourceFailure(SourceProblem.LIMIT)
-                            deadline.check()
+                            deadline.check(arrived = amount > 0)
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")
                             val now = System.nanoTime()
                             if (now - lastProgress > 100000000L) { progress?.invoke(consumed, total); lastProgress = now }
@@ -104,10 +109,19 @@ object Network {
         error("Too many redirects")
     }
 
-    private class DownloadDeadline(deadlineMs: Long, private val networkTimeOnly: Boolean, private val now: () -> Long) {
+    /**
+     * The whole-download limit. With [stallBytes], a large download (a playlist, a guide, a catalog) instead fails only
+     * when it stalls: each [windowNanos] must bring at least that many bytes, so a slow but healthy transfer can finish
+     * while a trickle that will never complete still stops. The deadline then remains as a generous outer cap.
+     */
+    private class DownloadDeadline(deadlineMs: Long, private val networkTimeOnly: Boolean, private val now: () -> Long,
+        private val stallBytes: Int = 0, private val windowNanos: Long = 20_000_000_000L) {
         private val budget = deadlineMs * 1_000_000
         private val started = now()
         private var networkNanos = 0L
+        private var windowStart = 0L
+        private var windowBytes = 0L
+        fun received(amount: Int) { windowBytes += amount }
 
         inline fun <T> socketRead(read: () -> T): T {
             if (!networkTimeOnly) return read()
@@ -115,9 +129,14 @@ object Network {
             return read().also { networkNanos += now() - before }
         }
 
-        fun check() {
+        /** [arrived] is false for the end of the stream and for decoded-side checks, which never judge a stall. */
+        fun check(arrived: Boolean = false) {
             val elapsed = if (networkTimeOnly) networkNanos else now() - started
             if (elapsed > budget) throw SocketTimeoutException("Download deadline exceeded")
+            if (arrived && stallBytes > 0 && elapsed - windowStart >= windowNanos) {
+                if (windowBytes < stallBytes) throw SocketTimeoutException("Download stalled")
+                windowStart = elapsed; windowBytes = 0
+            }
         }
     }
 

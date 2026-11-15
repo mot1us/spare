@@ -1,8 +1,16 @@
 # Changelog
 
-## 0.49.4 — 2026-11-15
+## 0.50.0 — 2026-11-15
 
+- Sports opens on Live now: live games from all your leagues together. Choosing a league shows that league's whole day (live, upcoming and results); Today and Calendar use the last league you chose.
+- Fewer wrong channels for a game. When the guide doesn't confirm a game, Sports used to offer every channel named after its broadcaster, such as CBS or FOX. On a Sunday, each local station carries its own region's game. Sports now drops a station whose guide names a different matchup at that time.
+- Team names Sports missed are now recognised: New York Rangers vs Islanders, several MLS clubs (Inter Miami, NYCFC, Red Bull New York, Sporting Kansas City, St. Louis CITY), "Man City" and "Inter Milan". A title whose extra words suggested a third team (the city "New York", "CF", "Man") used to be rejected; the two clear names now win. These were found with a new check of Spare's team names against ESPN's complete team lists (developer tool; the app makes no extra requests).
+- OK on the RedZone card plays the best feed Spare already knows immediately. Before, it first asked provider guides for a sharper feed, which could take several seconds while nothing seemed to happen.
+- Fewer half-second screen freezes during Sports: the team-name index is built in the background at startup, and the playing channel's game is worked out once instead of several times a minute.
 - Startup no longer unpacks your other playlists while the first channel is still settling. On an onn 4K Pro, unpacking a large second playlist took about seven seconds of processor right after launch. Opening Sports during that time froze the menu briefly and made the picture stutter. Other playlists now load once the channel has played smoothly for about ten seconds and the remote is idle, or after 45 seconds at most. Until then, Sports and Search only see the playlist you are watching.
+- Sports cards show the cursor as a border in your theme's accent colour instead of growing. A grown card in the first column ran under the main menu and was cut off.
+- The guide now sits over the playing channel at 50% opacity by default. Settings → Theme can still change it.
+- Large playlist, guide and catalog downloads now fail only when they stall (less than 32 KB arriving in 20 seconds), with a 10-minute ceiling. A slow but healthy provider could previously be cut off after one minute.
 
 ## 0.49.3 — 2026-11-15
 

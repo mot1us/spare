@@ -2106,6 +2106,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 fun sports() {
                     scenario.onActivity {
+                        // This layout check browses one league's whole day (Today), not Live now.
+                        MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(it, "today")
                         MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, true)
                         it.window.decorView.findViewWithTag<SportsPanel>("sports-panel").home()
                     }
@@ -2317,6 +2319,9 @@ class SpareDeviceTest {
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    // Live now ignores the team setting; a league's day respects it.
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL")?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NFL").performClick() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-context")?.text?.toString() == "Today · Showing only your teams · 1 other game hidden" }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-live").performClick() }
                     // Live now shows every live game whatever the team setting, as before.
@@ -2325,6 +2330,44 @@ class SpareDeviceTest {
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)
                 store.sportsFollowedOnly = false; store.followedTeams = emptySet(); store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun sportsOpensOnLiveNowAcrossLeaguesAndALeagueShowsItsDay() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Live first fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL", "NBA"); store.sportsLastLeague = "NBA"
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
+                        LiveEvent("live-nfl", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL"),
+                        LiveEvent("live-nba", setOf("nba:LAL", "nba:BOS"), now - 300000, league = "NBA"),
+                        LiveEvent("later-nfl", setOf("nfl:SEA", "nfl:SF"), now + 3 * 3600000L, "pre", league = "NFL")), now, setOf("NFL", "NBA")) }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    // Live now: both leagues' live games (and RedZone), not the later game; no league chosen.
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 && it.window.decorView.findViewWithTag<View>("sports-live").isSelected }
+                    scenario.onActivity { activity ->
+                        val root = activity.window.decorView
+                        assertNotNull(root.findViewWithTag<View>("NFL:live-nfl")); assertNotNull(root.findViewWithTag<View>("NBA:live-nba"))
+                        assertFalse(root.findViewWithTag<View>("sports-league:NFL").isSelected || root.findViewWithTag<View>("sports-league:NBA").isSelected)
+                        root.findViewWithTag<View>("sports-league:NFL").performClick()
+                    }
+                    // A league shows its day: the live game, the later game and RedZone.
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").isSelected && it.window.decorView.findViewWithTag<View>("NFL:later-nfl")?.isShown == true }
+                    scenario.onActivity { activity -> assertNull(activity.window.decorView.findViewWithTag<View>("NBA:live-nba")) }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
             }
         }
     }
@@ -2356,10 +2399,12 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     assertFalse("Nothing is hidden before the first league", activity.window.decorView.findViewWithTag<View>("sports-league-more-left").isShown)
                 }
-                // Games take focus once they load; Up returns to the selected league like a real remote.
+                // Live now spans every league; choosing NFL shows that league's day and keeps the cursor on it.
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                 device.pressDPadUp()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL").hasFocus() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-live").hasFocus() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:NFL").apply { requestFocus(); performClick() } }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:NFL").hasFocus() && it.window.decorView.findViewWithTag<View>("sports-today").isSelected }
                 // Walk right with the remote to the last league; the row scrolls and the cues swap sides.
                 repeat(SportsLeagues.all.size - 1) { device.pressDPadRight() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:${SportsLeagues.all.last().id}")?.hasFocus() == true }
@@ -2497,6 +2542,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 var samePlayer: Player? = null; scenario.onActivity { samePlayer = find<PlayerView>(it.window.decorView)!!.player }
                 device.pressBack(); scenario.onActivity { fixtureLiveSports(it); it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:MLB")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:MLB").performClick(); it.window.decorView.findViewWithTag<SportsPanel>("sports-panel").home() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:mlb-fixture")?.text?.let { label -> label.startsWith("ESPN") || label.startsWith("YES") } == true }
                 val entered = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
@@ -3143,6 +3190,9 @@ class SpareDeviceTest {
                         MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, finals)
                         activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
                         MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "date:${java.time.Instant.ofEpochMilli(now - 7200000).atZone(java.time.ZoneId.systemDefault()).toLocalDate()}")
+                        // As the Calendar does: a date shows one league, then the games take the cursor.
+                        MainActivity::class.java.getDeclaredMethod("ensureSportsLeague").apply { isAccessible = true }.invoke(activity)
+                        activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel").home()
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text == "Score hidden" && it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NFL:sports-archive")?.text?.contains("Play replay") == true }
@@ -3241,6 +3291,9 @@ class SpareDeviceTest {
                         scoreboard.copy(checked = System.currentTimeMillis())
                     }
                     activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                    // Upcoming games belong to a league's day: Today, rather than Live now.
+                    activity.window.decorView.findViewWithTag<View>("sports-today").performClick()
+                    activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel").home()
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 2 }
                 firstBatchDrawn.countDown()

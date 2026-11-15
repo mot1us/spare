@@ -713,7 +713,9 @@ class MainActivity : Activity() {
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
         logos = LogoLoader(160, 12 * 1024 * 1024, GuideLogoFiles(this))
-        configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "today"
+        configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "live"
+        // Build the team-name index off the screen thread; its first use there froze the screen for about half a second.
+        imports.execute { runCatching { SportsGuide.teams(Programme("warm", "NFL: Buffalo Bills at New York Jets", 0, 1)) } }
         buildUi()
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
@@ -1045,7 +1047,10 @@ class MainActivity : Activity() {
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             ++sportsMatchEpoch; sportsMatchTask?.cancel(true); clearSportsPlayback()
-            val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty(); if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
+            val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty()
+            // Live now spans every chosen league; Today and dates return to the last league.
+            sportsBrowseLeague = if (team == "live") null else sportsBrowseLeague ?: store.sportsLastLeague; ensureSportsLeague()
+            if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
         sportsPanel.leagueSelected = ::selectSportsLeague
@@ -1360,8 +1365,10 @@ class MainActivity : Activity() {
         settingsPanel?.visibility = View.GONE
         if (library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
-        if (sports) { sportsTeam = "today"; liveSportsQuickRetries = SPORTS_QUICK_RETRIES; sportsPanel.home() }
+        if (sports) { sportsTeam = "live"; sportsBrowseLeague = null; liveSportsQuickRetries = SPORTS_QUICK_RETRIES }
         switchMode(sports)
+        // After the league reset in switchMode, which cancels a pending entry: games take the cursor once they load.
+        if (sports) sportsPanel.home()
     }
     private fun enterNavigationContent() {
         // Right returns to the current screen. Only OK activates a highlighted destination.
@@ -2409,7 +2416,7 @@ class MainActivity : Activity() {
                 if (liveSnapshot !== liveSports || selectedTeam != sportsTeam || selectedLeague != sportsBrowseLeague) { sportsDirty = false; scheduleSports(); return@post }
                 val browsing = sportsPanel.browsingGames
                 if (browsing) selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
-                val scanning = checkingSnapshot && selectedLeague !in liveSnapshot.leagues
+                val scanning = checkingSnapshot && (selectedLeague?.let { it !in liveSnapshot.leagues } ?: liveSnapshot.leagues.isEmpty())
                 val progress = when {
                     scanning -> "Updating sports…"
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
@@ -2452,14 +2459,21 @@ class MainActivity : Activity() {
             if (!Thread.currentThread().isInterrupted) handler.post { if (!closed && generation == sourceEpoch && epoch == sportsEpoch && sportsVisible) sportsPanel.updateRedZone(redZone, quality) }
         }
     }
-    private fun ensureSportsLeague(): String {
-        if (sportsBrowseLeague !in store.sportsLeagues) sportsBrowseLeague = store.sportsLastLeague
+    /**
+     * Live now browses every chosen league at once (no league selected). Today and Calendar show one league,
+     * the last one chosen, so its upcoming games and results stay readable.
+     */
+    private fun ensureSportsLeague(): String? {
+        if (sportsBrowseLeague != null && sportsBrowseLeague !in store.sportsLeagues) sportsBrowseLeague = null
+        if (sportsBrowseLeague == null && sportsTeam != "live") sportsBrowseLeague = store.sportsLastLeague
         sportsPanel.setAvailableLeagues(store.sportsLeagues)
         sportsPanel.setLeagueFilter(sportsBrowseLeague)
-        return sportsBrowseLeague!!
+        return sportsBrowseLeague
     }
     private fun selectSportsLeague(league: String) {
-        if (league !in store.sportsLeagues || league == sportsBrowseLeague) return
+        if (league !in store.sportsLeagues || league == sportsBrowseLeague && sportsTeam != "live") return
+        // Choosing a league from Live now shows that league's whole day: live, upcoming and results.
+        if (sportsTeam == "live") { sportsTeam = "today"; store.sportsTeam = "today" }
         // Browsing another league preserves the current stream's recovery plan.
         stopSportsPrefetch(); ++sportsMatchEpoch; sportsMatchTask?.cancel(true)
         sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsUpgradeKeys = emptySet(); replayDiscovery?.pause()
@@ -2481,7 +2495,7 @@ class MainActivity : Activity() {
         suspendSportsOverlay()
         showGuide(false); nowPlaying.hide(immediate = true)
         val panel = sportsCalendar ?: SportsCalendarPanel(this, ::button, { day ->
-            sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty(); sportsPanel.home()
+            sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty(); ensureSportsLeague(); sportsPanel.home()
             closeSportsCalendar(); sportsPanel.loading("Loading games for $day…"); checkLiveSports(force = true); scheduleSports()
         }, ::previewCalendarDate, ::selectCalendarGame, ::closeSportsCalendar).also { sportsCalendar = it; it.scorePresentation = ::presentScore; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
         if (calendarSchedule == null) calendarSchedule = SportsCalendarLoader(store, { day, leagues -> calendarSportsLoader(day, leagues) }) { day, snapshot, loading, failed ->
@@ -2495,9 +2509,9 @@ class MainActivity : Activity() {
     }
     private fun calendarGames(snapshot: LiveSportsSnapshot, day: java.time.LocalDate) = SportsSchedule.games(snapshot, Guide.EMPTY, "date:$day", emptySet(), System.currentTimeMillis(), matchChannels = false)
         .filter { it.leagueId in store.sportsLeagues && (sportsBrowseLeague == null || it.leagueId == sportsBrowseLeague) && (!store.sportsFollowedOnly || it.teams.any { team -> team.id in store.followedTeams }) }
-    private fun previewCalendarDate(day: java.time.LocalDate, force: Boolean) { calendarSchedule?.request(day, setOf(ensureSportsLeague()), liveSports, force) }
+    private fun previewCalendarDate(day: java.time.LocalDate, force: Boolean) { calendarSchedule?.request(day, setOf(ensureSportsLeague() ?: store.sportsLastLeague), liveSports, force) }
     private fun selectCalendarGame(day: java.time.LocalDate, game: SportsGame) {
-        sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty()
+        sportsTeam = "date:$day"; store.sportsTeam = sportsTeam.orEmpty(); ensureSportsLeague()
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
         handler.removeCallbacks(renderSports); sportsRenderPending = false
         liveSports = calendarSnapshot; liveSportsDay = day
@@ -2650,6 +2664,18 @@ class MainActivity : Activity() {
                 }
             }
             val known = redZoneLoader(snapshot, profile, quality, now).filter { (hidden[it.id] ?: 0) <= now }
+            // OK on the card plays the best feed already known at once. Asking provider guides for a sharper feed took
+            // several seconds on a TV, during which the click seemed to do nothing.
+            if (autoPlay && (known.isNotEmpty() || direct.isNotEmpty())) {
+                handler.post {
+                    if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && redZoneAutoPending && sportsPanel.redZoneFocused) {
+                        val choices = (known + direct).distinctBy { it.id }
+                        sportsPanel.updateRedZone(choices, quality)
+                        if (!playRedZone(choices)) { redZoneAutoPending = false; sportsPanel.finishTuning(); sportsPanel.matchingRedZone(); sportsPanel.showRedZoneStreams(choices) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) } }
+                    }
+                }
+                return@submit
+            }
             if (known.isNotEmpty()) handler.post {
                 if (!closed && started && sourceEpoch == generation && epoch == sportsMatchEpoch && sportsVisible && (!autoPlay || redZoneAutoPending && sportsPanel.redZoneFocused)) {
                     sportsPanel.updateRedZone(known, quality)
@@ -2915,11 +2941,18 @@ class MainActivity : Activity() {
         watchingSports?.takeIf { now in it.game.start until maxOf(it.game.end, it.game.start + 6 * 3600000L) && it.channels.any { stream -> stream.id == channel.id && stream.url == channel.url } }?.let { return it }
         // Channels opened from the guide can identify a matchup from their current EPG or title.
         val programme = guide.at(channel, now)
+        // Reading team names costs real time on a TV and this runs on the screen thread several times a minute:
+        // remember the answer for this channel and listing.
+        playbackGameMemo?.takeIf { it.channel === channel && it.programme === programme }?.let { return it.result }
         val title = Programme(guide.key(channel), channel.name, now, now + 3 * 3600000L)
         val listing = programme?.takeIf { SportsGuide.teams(it, channel.group) != null } ?: title
-        val teams = SportsGuide.teams(listing, channel.group) ?: return null
-        return GameStreams(SportsGame(teams, listing.start, listing.end, listOf(SportsBroadcast(channel, listing))), listOf(channel))
+        val teams = SportsGuide.teams(listing, channel.group)
+        val result = teams?.let { GameStreams(SportsGame(it, listing.start, listing.end, listOf(SportsBroadcast(channel, listing))), listOf(channel)) }
+        playbackGameMemo = PlaybackGameMemo(channel, programme, result)
+        return result
     }
+    private class PlaybackGameMemo(val channel: Channel, val programme: Programme?, val result: GameStreams?)
+    private var playbackGameMemo: PlaybackGameMemo? = null
     private fun showOtherGameStreams() {
         if (watchingRedZone) { sportsVisible = true; applyFilter(); showGuide(true); findRedZone(false); return }
         val context = playbackGame() ?: return

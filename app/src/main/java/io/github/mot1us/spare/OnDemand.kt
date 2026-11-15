@@ -42,7 +42,7 @@ object VodCatalog {
         require(category == null || numeric.matches(category))
         val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "direct_source", "stream_icon", "cover", "cover_big", "poster", "movie_image", "year", "releaseDate", "release_date", "added", "last_modified", "rating", "rating_5based", "tmdb_id", "tmdb", "tvdb_id", "imdb_id") +
             if (lean) emptySet() else setOf("plot", "backdrop_path", "genre", "cast")
-        Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp, limit = if (lean) 64 * 1024 * 1024 else 24 * 1024 * 1024) { input ->
+        Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp, limit = if (lean) 64 * 1024 * 1024 else 24 * 1024 * 1024, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
                 reader.beginArray(); val entries = mutableListOf<JSONObject>(); val seen = hashSetOf<String>(); var count = 0

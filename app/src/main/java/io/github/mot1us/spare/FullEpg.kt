@@ -11,7 +11,7 @@ object FullEpg {
         val history = aliases.mapValues { (_, feeds) -> feeds.maxOf { it.catchupDays } }
         // XMLTV files are large and parsed while streaming: on a TV-box CPU parsing can outlast the
         // download. Only socket time counts, with a budget sized for a full guide on a slow provider.
-        val entries = Network.consume(url, source.allowHttp, limit = 64 * 1024 * 1024, timeoutMs = 20000, networkTimeOnly = true, deadlineMs = 180000) {
+        val entries = Network.consume(url, source.allowHttp, limit = 64 * 1024 * 1024, timeoutMs = 20000, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) {
             Importers.xmltv(it, aliases.keys, historyDays = history)
         }
         require(entries.isNotEmpty()) { "No programme data matched this playlist" }

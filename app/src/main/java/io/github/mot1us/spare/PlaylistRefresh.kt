@@ -36,7 +36,7 @@ object PlaylistRefresh {
                             Importers.xtream(source)
                         } else {
                             // Keep provider URLs in memory and exclude parser work from the socket budget.
-                            Network.consume(source.url, source.allowHttp, networkTimeOnly = true) { input ->
+                            Network.consume(source.url, source.allowHttp, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) { input ->
                                 Importers.m3u(input.bufferedReader(Charsets.UTF_8), source.allowHttp)
                             }
                         }

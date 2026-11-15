@@ -128,7 +128,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 val row = action("${preset.name}\n${preset.description}") {
                     store.theme = preset.palette; store.themeStyle = preset.style; store.font = preset.font
                     store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
-                    store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1
+                    store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = SecureStore.DEFAULT_GUIDE_OPACITY
                 }.apply { tag = "theme-preset:${preset.name}"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(8), 0); maxLines = 2 }
                 val focus = row.onFocusChangeListener
                 row.setOnFocusChangeListener { view, active -> focus?.onFocusChange(view, active); previewPreset = if (active) preset else previewPreset?.takeUnless { it == preset }; refreshPreview() }

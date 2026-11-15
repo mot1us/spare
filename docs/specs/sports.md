@@ -19,6 +19,17 @@ reminders, stream choices, and completed-game replays are separate views of the
 same event identities. Each league retains its browsing position. RedZone is a
 playlist destination, not a fabricated scoreboard event.
 
+Sports opens on Live now: live games from every chosen league, with no league
+selected. Choosing a league shows that league's day (live, upcoming and
+results); Today and Calendar use the last chosen league. A broadcaster's channel
+offered as a possible stream is dropped when its own guide names a different
+matchup at that time. OK on the RedZone card plays the best feed already known
+rather than first asking provider guides for a sharper one.
+
+`scripts/sports_team_directory.py` captures ESPN's full team lists for the
+`SportsTeamDirectoryAuditTest` report (developer use only; the app makes no such
+requests). The test is skipped unless `SPARE_TEAM_DIRECTORY` names a capture.
+
 ## Owners and data contracts
 
 | Owner | Responsibility |

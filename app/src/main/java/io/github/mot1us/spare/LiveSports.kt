@@ -107,7 +107,7 @@ object LiveSports {
         }
         return result.distinctBy { it.id }
     }
-    private fun resolve(league: String, code: String, name: String, apiId: String = ""): String? {
+    internal fun resolve(league: String, code: String, name: String, apiId: String = ""): String? {
         SportsCatalog.teams.firstOrNull { league in it.competitions && apiId.isNotBlank() && it.apiId == apiId }?.let { return it.id }
         val aliases = when (league to code.uppercase(java.util.Locale.ROOT)) { "NFL" to "WSH", "NFL" to "WAS" -> "WSH"; "NFL" to "JAC" -> "JAX"; "MLB" to "OAK" -> "ATH"; else -> code.uppercase(java.util.Locale.ROOT) }
         return SportsCatalog.byId["${league.lowercase(java.util.Locale.ROOT)}:$aliases"]?.id ?: SportsCatalog.teams.firstOrNull { league in it.competitions && SportsCatalog.normalize(it.name) == SportsCatalog.normalize(name) }?.id

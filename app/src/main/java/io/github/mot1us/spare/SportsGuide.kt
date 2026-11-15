@@ -93,6 +93,17 @@ object SportsGuide {
             return college ?: detected.singleOrNull() ?: channel.sport.takeIf { detected.isEmpty() }
         }
 
+        /**
+         * Two teams, or the two strongest when every other mention is clearly weaker: in "New York Islanders vs New York
+         * Rangers" the city alone also suggests New Jersey, and in "Liverpool vs Man City" the word "Man" suggests United.
+         * A tie for second place stays ambiguous.
+         */
+        private fun pair(mentions: Map<SportsTeam, Int>): Map<SportsTeam, Int>? {
+            if (mentions.size == 2) return mentions
+            if (mentions.size < 2) return null
+            val sorted = mentions.entries.sortedByDescending { it.value }
+            return if (sorted[1].value > sorted[2].value) sorted.take(2).associate { it.key to it.value } else null
+        }
         fun resolve(explicitLeague: String?): List<SportsTeam>? {
             if (!hasMatchup && explicitLeague == null) return null
             val mentions = titleMentions.ifEmpty {
@@ -105,7 +116,7 @@ object SportsGuide {
             val resolved = mentions.toMutableMap()
             cities.forEach { resolved.putIfAbsent(it, 1) }
             val candidates = if (explicitLeague == null) teamLeagues else listOf(explicitLeague)
-            val ranked = candidates.mapNotNull { league -> resolved.filterKeys { it.league == league }.takeIf { it.size == 2 } }
+            val ranked = candidates.mapNotNull { league -> pair(resolved.filterKeys { it.league == league }) }
                 .sortedByDescending { it.values.sum() }
             if (ranked.isEmpty() || (ranked.size > 1 && ranked[0].values.sum() == ranked[1].values.sum())) return null
             return ranked.first().keys.sortedBy { it.id }

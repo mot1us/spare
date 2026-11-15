@@ -27,8 +27,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(Color.WHITE) }
     val teamsButton = button("Leagues and teams", chooseTeams).apply { tag = "sports-teams"; contentDescription = "Leagues and teams settings" }
-    private val liveButton = button("Live now") { selectSchedule("live") }.apply { tag = "sports-live" }
-    private val todayButton = button("Today") { selectSchedule("today") }.apply { tag = "sports-today"; isSelected = true }
+    private val liveButton = button("Live now") { selectSchedule("live") }.apply { tag = "sports-live"; isSelected = true }
+    private val todayButton = button("Today") { selectSchedule("today") }.apply { tag = "sports-today" }
     private val dateButton = button("Calendar") { chooseDate() }.apply { tag = "sports-date" }
     private val scheduleOptions = listOf(liveButton, todayButton, dateButton)
     /** The single filter row: when (schedule), which league, then settings. Left/Right walk it in order. */
@@ -265,7 +265,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         selectedLeague = league; remembered = leaguePositions[league]?.first; restoreLeagueLayout = leaguePositions[league]?.second; restoringLeague = true
         games = emptyList(); gameKeys = emptyList(); gameIds = LongArray(0); gamePositions = emptyMap(); displayedRedZone = false; cards.notifyDataSetChanged()
         featured = null; initialReveal = true; loadingGames = true; pendingEnter = false
-        showGames(); loading("Loading ${league?.let(SportsLeagues::label).orEmpty()}…")
+        showGames(); loading(league?.let { "Loading ${SportsLeagues.label(it)}…" } ?: "Finding live games…")
         leagueControls.forEach { (id, control) ->
             control.isSelected = id == league; control.text = (if (control.isSelected) "✓  " else "") + SportsLeagues.label(id)
             control.contentDescription = SportsLeagues.label(id) + if (control.isSelected) ", selected" else ""
@@ -273,7 +273,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (hadFocus) focusLeagueFilter()
     }
     private fun focusSelectedLeague() {
-        val target = leagueControls[selectedLeague] ?: leagueControls.values.firstOrNull() ?: teamsButton
+        // Live now has no league selected: the cursor rests on Live now itself.
+        val target = leagueControls[selectedLeague] ?: (if (selectedLeague == null && liveButton.isSelected) liveButton else null) ?: leagueControls.values.firstOrNull() ?: teamsButton
         target.requestFocus(); leagueScroll.post { leagueScroll.requestChildRectangleOnScreen(target, android.graphics.Rect(0, 0, target.width, target.height), false) }
     }
     private fun barControls(): List<View> = scheduleOptions + leagueControls.values + teamsButton
@@ -684,7 +685,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             }
         }
         restoringLeague = false
-        todayButton.isSelected = selected == "today" || selected == null
+        todayButton.isSelected = selected == "today"
         liveButton.isSelected = selected == "live"
         dateButton.isSelected = selected?.startsWith("date:") == true
         val schedule = when (selected) {
@@ -706,7 +707,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val first = initialReveal; initialReveal = false; loadingGames = false
         val showRedZone = "NFL" in enabledLeagues
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
-        empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games. Choose Today for upcoming games and results." else "No games on this date. Try another date or league."
+        empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games right now. Choose a league for its upcoming games and results." else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
         if (games != next || displayedRedZone != showRedZone) {
             cardUpdates.submit(CardUpdate(request, games, gameKeys, next.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered))
@@ -807,10 +808,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     fun focusCalendar() { gridFocus.cancel(); ++focusEpoch; (scheduleOptions.firstOrNull { it.isSelected } ?: todayButton).requestFocus() }
     fun focusHero() = focusGames()
-    /** The focused card grows slightly, matching Library posters, so the cursor is easy to find from the couch. */
+    /**
+     * The focused card gets a border in the theme's accent colour. It no longer grows: a grown card in the first
+     * column ran under the main menu and was cut off.
+     */
     private fun lift(view: View, active: Boolean) {
-        view.animate().cancel()
-        view.animate().scaleX(if (active) 1.04f else 1f).scaleY(if (active) 1.04f else 1f).translationZ(if (active) dp(8).toFloat() else 0f).setDuration(120).start()
+        view.animate().cancel(); view.scaleX = 1f; view.scaleY = 1f; view.translationZ = 0f
+        view.foreground = if (active) GradientDrawable().apply {
+            setStroke(dp(3), GuideTheme.current.accent); cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density
+        } else null
     }
     fun focusGames() {
         when {

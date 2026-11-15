@@ -21,7 +21,7 @@ class SecureStore(private val context: Context) {
         get() = preferences.getString("local-location", "").orEmpty()
         set(value) { preferences.edit { putString("local-location", LocalRegions.saved(value)) } }
     var guideOpacity: Int
-        get() = preferences.getInt("guide-opacity", -1).coerceIn(-1, 100)
+        get() = preferences.getInt("guide-opacity", DEFAULT_GUIDE_OPACITY).coerceIn(-1, 100)
         set(value) { preferences.edit { putInt("guide-opacity", value.coerceIn(-1, 100)) } }
     var customAccent: Int
         get() = preferences.getInt("theme-accent", 0)
@@ -214,7 +214,7 @@ class SecureStore(private val context: Context) {
     fun markEpgRefreshed(source: Source) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
     fun refreshError(source: Source, value: String) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
-    companion object { private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
+    companion object { /** The guide sits over the playing channel at half opacity unless the viewer chooses otherwise. */ const val DEFAULT_GUIDE_OPACITY = 50; private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
     fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
         require(kind in setOf("movie", "series"))
         val bytes = synchronized(cacheLock) { if (providerCurrent(source)) read("library-${source.id}-$kind.enc") else null } ?: return null

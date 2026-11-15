@@ -240,10 +240,19 @@ object SportsSchedule {
         }
         val confirmed = matches.map { it.channel.id }.toSet()
         if (measurement != null) measurement.channels = checkedChannels
+        // A broadcaster's channel (CBS, FOX…) whose own guide names a different matchup at this time is carrying another
+        // game: on a Sunday each local station shows its region's game, so the network name alone pointed at wrong feeds.
+        val league = game.teams.first().league
+        val elsewhere = HashMap<String, Boolean>()
+        fun otherGame(channel: Channel): Boolean = elsewhere.getOrPut(guide.key(channel)) {
+            guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { broadcastWindow(game, it, now) }.any { p ->
+                SportsGuide.teams(p, league)?.map { it.id }?.toSet()?.let { it.size == 2 && it != target } == true
+            }
+        }
         val titleOnly = titles.filter { it.id !in confirmed }
         val found = confirmed + titleOnly.map { it.id }
         progress(checkedChannels + checkedKeys, total)
-        return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found }
+        return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found && !otherGame(it) }
             .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(512), coverageComplete = complete)
     }
     /** Run after the timed match so this diagnostic pass cannot consume its deadline. */

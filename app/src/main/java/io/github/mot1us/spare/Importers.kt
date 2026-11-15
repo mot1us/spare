@@ -137,7 +137,7 @@ object Importers {
         throw SourceFailure(SourceProblem.RESPONSE)
     }
     fun xtream(source: Source, progress: (String, Long, Long) -> Unit = { _, _, _ -> }): Lineup {
-        val payload = Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp, progress = { bytes, total -> progress("Downloading channels", bytes, total) })
+        val payload = Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp, progress = { bytes, total -> progress("Downloading channels", bytes, total) }, large = true)
         progress("Reading channel list", 0, -1)
         val streams = xtreamArray(payload.toString(Charsets.UTF_8))
         // Categories are optional metadata. A provider may serve live streams while

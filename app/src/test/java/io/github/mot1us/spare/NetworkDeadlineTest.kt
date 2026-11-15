@@ -50,6 +50,25 @@ class NetworkDeadlineTest {
         }
     }
 
+    @Test fun aSlowButSteadyLargeDownloadFinishesWhileAStalledOneStops() {
+        // Each socket read takes 15 s of network time: past the old one-minute limit, but data keeps arriving.
+        serve { url ->
+            var time = 0L
+            val lineup = Network.consume(url, http = true, networkTimeOnly = true, nanoTime = { time += 15_000_000_000; time },
+                deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = 1024) { Importers.m3u(it.reader(), http = true) }
+            assertEquals(600, lineup.channels.size)
+        }
+        // The same pace is a stall when each 20 s window must bring far more than arrives.
+        serve { url ->
+            var time = 0L
+            val failure = assertThrows(SocketTimeoutException::class.java) {
+                Network.consume(url, http = true, networkTimeOnly = true, nanoTime = { time += 15_000_000_000; time },
+                    deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = 8 * 1024 * 1024) { Importers.m3u(it.reader(), http = true) }
+            }
+            assertEquals("Download stalled", failure.message)
+        }
+    }
+
     @Test fun m3uSocketBudgetKeepsTheDecodedGzipLimit() {
         val compressed = ByteArrayOutputStream().also { output ->
             GZIPOutputStream(output).use { it.write(playlist) }
