@@ -3056,7 +3056,7 @@ class MainActivity : Activity() {
     }
     private fun resolveSportsMatch(selected: Source, game: SportsGame, snapshot: Guide, favoritesSnapshot: Set<String>,
         profile: GuideFilters, quality: Map<String, VideoInfo>, confirm: Boolean, progress: (String, Int, Int) -> Unit, cached: SportsStreamCache.Match? = null,
-        trace: SportsClickTrace? = null, preparedIndex: GuideProgrammeIndex? = programmeIndex): SportsStreamCache.Match {
+        trace: SportsClickTrace? = null, preparedIndex: GuideProgrammeIndex? = programmeIndex, playNow: Boolean = false): SportsStreamCache.Match {
         var lastProgress = 0L
         // Finish the finite, cancellable local pass across every enabled provider. A timeout
         // here previously turned an incomplete scan into a false "no matches" result.
@@ -3069,7 +3069,12 @@ class MainActivity : Activity() {
         val coverageNow = System.currentTimeMillis()
         val locallyConfirmed = result.broadcasts.any { game.state == "pre" || coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
         val confirmationFloor = SportsStreams.confirmationFloor(result, profile, quality, coverageNow)
-        if (confirm && needsProvider && confirmationFloor != null && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
+        // OK on a live game plays a channel the guide or its name already confirms. Asking providers about sharper feeds
+        // first took about six seconds on an onn 4K Pro with the picture stopped; that search still runs when nothing
+        // local confirms the game, and the card's background warm-up keeps looking for sharper feeds.
+        val playable = playNow && game.live(coverageNow) && locallyConfirmed &&
+            SportsStreams.automaticChoices(result, profile, quality, snapshot, coverageNow).isNotEmpty()
+        if (confirm && !playable && needsProvider && confirmationFloor != null && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis(), betterThanHeight = confirmationFloor)
                 .filter { owner(it)?.let { source -> source.kind == "xtream" && source.epgUrl.isBlank() } == true }
@@ -3091,7 +3096,7 @@ class MainActivity : Activity() {
                 }
             }
         }
-        return SportsStreamCache.Match(result, warmed, confirm || !needsProvider || locallyConfirmed, upgradeChecked = confirm || !needsProvider || cached?.upgradeChecked == true)
+        return SportsStreamCache.Match(result, warmed, confirm || !needsProvider || locallyConfirmed, upgradeChecked = (confirm && !playable) || !needsProvider || cached?.upgradeChecked == true)
     }
     private fun selectGame(game: SportsGame, autoWatch: Boolean = false) = selectSportsGame(game, autoWatch, false)
     private fun selectSportsGame(game: SportsGame, autoWatch: Boolean, fromScores: Boolean, trace: SportsClickTrace? = performanceOverlay?.sports?.begin(game.key, autoWatch)) {
@@ -3166,7 +3171,7 @@ class MainActivity : Activity() {
                 if (fromScores) scoreStrip.tuning(game.key, message) else sportsPanel.matchingProgress(game, message, checked, total)
                 if (reminderWatch && gameWatchPanel.isVisible) gameWatchPanel.update(message, checked, total)
             } } }
-            val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached, trace) }.getOrElse {
+            val prepared = runCatching { resolveSportsMatch(selected, game, snapshot, favoritesSnapshot, profile, quality, true, ::progress, cached, trace, playNow = autoWatch) }.getOrElse {
                 trace?.finish(if (Thread.currentThread().isInterrupted) "cancelled" else "matching failed")
                 if (!Thread.currentThread().isInterrupted) handler.post {
                     if (!closed && started && sourceEpoch == generation && matchEpoch == sportsMatchEpoch && targetActive()) {

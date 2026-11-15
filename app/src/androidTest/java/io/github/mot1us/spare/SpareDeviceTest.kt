@@ -3054,8 +3054,11 @@ class SpareDeviceTest {
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     waitFor(scenario) { activity ->
                         val card = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)?.itemView
-                        val drawable = card?.let { find<android.widget.ImageView>(it) }?.drawable as? android.graphics.drawable.BitmapDrawable
-                        (drawable?.bitmap?.width ?: 0) >= 256 && drawable?.isFilterBitmap == true
+                        val logo = card?.let { find<android.widget.ImageView>(it) }
+                        val drawable = logo?.drawable as? android.graphics.drawable.BitmapDrawable
+                        // Sharp means at least as many pixels as the space it is drawn in, not more (bigger slowed Sports).
+                        val space = logo?.let { minOf(it.width - it.paddingLeft - it.paddingRight, it.height - it.paddingTop - it.paddingBottom) } ?: Int.MAX_VALUE
+                        drawable != null && maxOf(drawable.bitmap.width, drawable.bitmap.height) >= space && drawable.isFilterBitmap
                     }
                     scenario.onActivity { selectSportsSchedule(it, "sports-date") }
                     val calendarToday = java.time.LocalDate.now()

@@ -181,9 +181,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var searchProgress = 0
     private fun setSearching(on: Boolean) { streamsSkeleton.isVisible = on; if (!on) searchProgress = 0 }
     private val artworkFiles = ArtworkFiles(context)
-    private val logos = LogoLoader(512, 6 * 1024 * 1024, artworkFiles)
-    private val cardLogos = LogoLoader(384, 6 * 1024 * 1024, artworkFiles)
-    private val pictures = LogoLoader(1280, 8 * 1024 * 1024, artworkFiles)
+    // Decoded at about the size they are shown (crests 125 dp, card logos about 75 dp, the banner photo behind text at
+    // 65%): every new picture is copied to the video chip, and oversized ones made Sports browsing miss most frames
+    // on an onn 4K Pro.
+    private val logos = LogoLoader(256, 6 * 1024 * 1024, artworkFiles)
+    private val cardLogos = LogoLoader(160, 6 * 1024 * 1024, artworkFiles)
+    private val pictures = LogoLoader(960, 8 * 1024 * 1024, artworkFiles)
     private val artwork = SportsArtwork(context) { key, url, attribution -> showArtwork(key, url, attribution) }
     var archiveWindowDays = 0
         set(value) { if (field != value) { field = value; refreshCardStreams() } }
