@@ -29,7 +29,17 @@ Account changes and cache ownership follow [Android provider storage](android-pr
   interruption, uses finite connect/read budgets, and allows at most six request
   attempts through redirects. Its default payload limit is 24 MiB. Streaming M3U
   parsing excludes parser work from the cumulative socket-read budget; this does
-  not remove byte or socket-time limits.
+  not remove byte or socket-time limits. Large downloads (lineups, guides,
+  catalogs) fail when they stall (under 32 KiB in a read-timeout window) rather
+  than at a fixed minute, within a 10-minute ceiling.
+- A playlist may name a User-Agent, sent to its main and backup server addresses
+  (origin match) for provider requests and playback. It is printable ASCII on one
+  line, at most 200 characters; blank sends Spare's own.
+- An Xtream playlist may name a backup server base address. The lineup request
+  moves to it only when the main server is unreachable (connection failure,
+  timeout or 5xx), never for credential errors or cancellation; that lineup's
+  streams then play from the backup. Neither option changes the provider cache
+  identity.
 - M3U requires an `#EXTM3U` header and at least one accepted stream. It handles BOM,
   CR/LF variants, quoted attributes, provider category order, and duplicate entries.
   Entries marked as media remain distinguishable from live channels. Unsafe logo

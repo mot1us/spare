@@ -146,10 +146,10 @@ class SecureStore(private val context: Context) {
         require(prefix.matches(Regex("(?:watch|library-favorites|library-followed|library-categories)-[a-zA-Z0-9_-]+-")))
         encryptedNames().filter { it.startsWith(prefix) }.forEach(::delete)
     }
-    fun sources(): List<Source> = read("sources.enc")?.let { bytes ->
+    fun sources(): List<Source> = (read("sources.enc")?.let { bytes ->
         val array = JSONArray(bytes.toString(Charsets.UTF_8)); List(array.length()) { Source.from(array.getJSONObject(it)) }
-    } ?: emptyList()
-    fun saveSources(sources: List<Source>) = write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray())
+    } ?: emptyList()).also(Network::useSources)
+    fun saveSources(sources: List<Source>) { Network.useSources(sources); write("sources.enc", JSONArray(sources.map { it.json() }).toString().toByteArray()) }
     fun cache(source: Source, guide: Guide) { saveLineup(source, guide); cacheProgrammes(source, guide.programmes, System.currentTimeMillis()) }
     fun saveLineup(source: Source, guide: Guide, url: String = guideUrl(source)) {
         synchronized(cacheLock) {

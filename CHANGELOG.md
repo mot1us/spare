@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.50.1 — 2026-11-15
+
+- Playlists can name a User-Agent (Edit playlist → Optional User-Agent), for providers that only answer certain players. Spare sends it to that playlist's servers for channel lists, guides and playback. Leave it blank to keep Spare's own.
+- Xtream playlists can name a backup server address. When the main server can't be reached, Spare loads the channel list from the backup, and those channels play from it until the main server answers again. Wrong usernames or passwords never switch servers.
+
 ## 0.50.0 — 2026-11-15
 
 - Sports opens on Live now: live games from all your leagues together. Choosing a league shows that league's whole day (live, upcoming and results); Today and Calendar use the last league you chose.

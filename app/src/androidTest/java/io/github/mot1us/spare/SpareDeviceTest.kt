@@ -714,6 +714,14 @@ class SpareDeviceTest {
                     val allow = httpConsent(root)!!
                     allow.performClick()
                     assertEquals(https.url, root.findViewWithTag<EditText>("Playlist URL").text.toString())
+                    // Xtream playlists offer a backup server, then every playlist an optional User-Agent; Next walks them in order.
+                    val backup = root.findViewWithTag<EditText>("Optional backup server URL (used when the main server can't be reached)")
+                    val agent = root.findViewWithTag<EditText>("Optional User-Agent (only if your provider asks for one)")
+                    epg.requestFocus(); epg.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
+                    assertTrue("Keyboard Next from the guide URL reaches the backup server", backup.hasFocus())
+                    backup.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_NEXT)
+                    assertTrue("Keyboard Next from the backup server reaches the User-Agent", agent.hasFocus())
+                    backup.setText("https://backup.example:8443"); agent.setText("FixturePlayer/2.0")
                     dialog!!.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
                 }
                 waitFor(scenario) { dialog?.window?.decorView?.hasWindowFocus() == true }
@@ -722,6 +730,7 @@ class SpareDeviceTest {
                 assertNotNull(saved)
                 assertEquals(https.url, saved!!.url)
                 assertTrue(saved!!.allowHttp)
+                assertEquals("https://backup.example:8443", saved!!.backupUrl); assertEquals("FixturePlayer/2.0", saved!!.userAgent)
                 scenario.onActivity { activity ->
                     MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, java.lang.Long.TYPE).apply { isAccessible = true }
                         .invoke(activity, OnDemand("movie:remove", "Removal fixture", "", "${server.base}/channel1.mp4"), 0L)

@@ -33,7 +33,8 @@ object PlaylistRefresh {
                     runCatching {
                         stage("Downloading playlist…")
                         val lineup = if (source.kind == "xtream") {
-                            Importers.xtream(source)
+                            // A lineup read from the backup server plays from it too, until the main server answers again.
+                            Importers.withBackup(source) { Importers.xtream(it) }
                         } else {
                             // Keep provider URLs in memory and exclude parser work from the socket budget.
                             Network.consume(source.url, source.allowHttp, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) { input ->

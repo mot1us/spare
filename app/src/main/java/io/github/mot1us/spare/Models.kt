@@ -9,12 +9,18 @@ data class Source(
     val id: String = UUID.randomUUID().toString(), val name: String,
     val kind: String, val url: String, val username: String = "", val password: String = "",
     val epgUrl: String = "", val allowHttp: Boolean = false, val enabled: Boolean = true, val maxStreams: Int = 0,
+    /** Optional, for providers that only answer particular players. Blank sends Spare's own. */
+    val userAgent: String = "",
+    /** Optional second Xtream server address, tried when the main one cannot be reached. */
+    val backupUrl: String = "",
 ) {
     fun json() = JSONObject().put("id", id).put("name", name).put("kind", kind).put("url", url)
         .put("username", username).put("password", password).put("epg", epgUrl).put("http", allowHttp).put("enabled", enabled).put("maxStreams", maxStreams)
+        .put("ua", userAgent).put("backup", backupUrl)
     companion object {
         fun from(j: JSONObject) = Source(j.getString("id"), j.getString("name"), j.getString("kind"),
-            j.getString("url"), j.optString("username"), j.optString("password"), j.optString("epg"), j.optBoolean("http"), j.optBoolean("enabled", true), j.optInt("maxStreams").coerceIn(0, 4))
+            j.getString("url"), j.optString("username"), j.optString("password"), j.optString("epg"), j.optBoolean("http"), j.optBoolean("enabled", true), j.optInt("maxStreams").coerceIn(0, 4),
+            Network.userAgent(j.optString("ua")), j.optString("backup").take(2048))
     }
 }
 data class Channel(val id: String, val name: String, val group: String, val url: String, val logo: String = "", val guideId: String = "",

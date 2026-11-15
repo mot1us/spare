@@ -136,6 +136,15 @@ object Importers {
         }
         throw SourceFailure(SourceProblem.RESPONSE)
     }
+    /**
+     * Runs a provider request against the main Xtream server, then the playlist's backup server when the main one
+     * cannot be reached (no connection, a timeout or a server error). Wrong credentials and cancellation never fail over.
+     */
+    fun <T> withBackup(source: Source, request: (Source) -> T): T = try { request(source) } catch (error: java.io.IOException) {
+        val unreachable = error !is java.io.InterruptedIOException && (error !is HttpFailure || error.status >= 500)
+        if (source.kind != "xtream" || source.backupUrl.isBlank() || !unreachable || Thread.currentThread().isInterrupted) throw error
+        request(source.copy(url = source.backupUrl))
+    }
     fun xtream(source: Source, progress: (String, Long, Long) -> Unit = { _, _, _ -> }): Lineup {
         val payload = Network.get(endpoint(source, "player_api.php", "get_live_streams"), source.allowHttp, progress = { bytes, total -> progress("Downloading channels", bytes, total) }, large = true)
         progress("Reading channel list", 0, -1)

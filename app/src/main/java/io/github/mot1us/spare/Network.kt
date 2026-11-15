@@ -8,6 +8,19 @@ import java.net.URI
 import java.util.zip.GZIPInputStream
 
 object Network {
+    /** Spare's own User-Agent, sent unless a playlist names its own for its servers. */
+    val defaultUserAgent get() = "Spare/${BuildConfig.VERSION_NAME}"
+    /** A playlist's User-Agent: printable ASCII only (no line breaks that could add headers), at most 200 characters. */
+    fun userAgent(value: String): String = value.trim().takeIf { it.length <= 200 && it.all { c -> c in ' '..'~' } }.orEmpty()
+    @Volatile private var agents: Map<String, String> = emptyMap()
+    private fun origin(url: String): String? = runCatching { URI(url).let { "${it.scheme?.lowercase()}://${it.host?.lowercase()}:${it.port}" } }.getOrNull()
+    /** Remember each playlist's User-Agent for its server addresses (main and backup). */
+    fun useSources(sources: List<Source>) {
+        agents = buildMap { sources.filter { it.userAgent.isNotBlank() }.forEach { source ->
+            listOf(source.url, source.backupUrl).filter { it.isNotBlank() }.mapNotNull(::origin).forEach { put(it, source.userAgent) }
+        } }
+    }
+    fun userAgentFor(url: String): String = origin(url)?.let(agents::get) ?: defaultUserAgent
     /** Large downloads (playlists, guides) may run up to ten minutes of network time, as long as they never stall. */
     const val LARGE_DEADLINE_MS = 600_000L
     /** A large download must bring at least this much in each read-timeout window (20 s by default). */
@@ -59,7 +72,7 @@ object Network {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = minOf(12000, timeoutMs)
                 connection.readTimeout = timeoutMs
-                connection.setRequestProperty("User-Agent", "Spare/${BuildConfig.VERSION_NAME}")
+                connection.setRequestProperty("User-Agent", userAgentFor(destination))
                 connection.setRequestProperty("Accept-Encoding", "gzip")
                 val status = connection.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {

@@ -67,6 +67,8 @@ object SourceDialog {
         }
         form.addView(showPassword)
         val epg = input("Optional XMLTV URL (overrides provider guide)", existing?.epgUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val backup = input("Optional backup server URL (used when the main server can't be reached)", existing?.backupUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val agent = input("Optional User-Agent (only if your provider asks for one)", existing?.userAgent.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
         val allow = CheckBox(activity).apply { id = View.generateViewId(); text = "Allow HTTP-only links from this provider"; isChecked = existing?.allowHttp == true }
         form.addView(allow)
         form.addView(TextView(activity).apply {
@@ -77,7 +79,7 @@ object SourceDialog {
         kinds.setOnCheckedChangeListener { _, checked ->
             val isXtream = checked == xtream.id
             addressLabel.text = if (isXtream) "Server URL (include the provider's port)" else "Playlist URL"
-            listOf(user, password).forEach { field ->
+            listOf(user, password, backup).forEach { field ->
                 field.visibility = if (isXtream) View.VISIBLE else View.GONE
                 form.getChildAt(form.indexOfChild(field) - 1).visibility = field.visibility
             }
@@ -95,9 +97,9 @@ object SourceDialog {
             val cancelButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
             updateFocus = {
                 val isXtream = kinds.checkedRadioButtonId == xtream.id
-                val fields = listOf(name, url) + (if (isXtream) listOf(user, password) else emptyList()) + epg
+                val fields = listOf(name, url) + (if (isXtream) listOf(user, password) else emptyList()) + listOf(epg) + (if (isXtream) listOf(backup) else emptyList()) + agent
                 val controls = listOf<View>(name, if (isXtream) xtream else m3u, url) +
-                    (if (isXtream) listOf(user, password, showPassword) else emptyList()) + listOf(epg, allow, saveButton)
+                    (if (isXtream) listOf(user, password, showPassword) else emptyList()) + listOf(epg) + (if (isXtream) listOf(backup) else emptyList()) + listOf(agent, allow, saveButton)
                 controls.forEachIndexed { index, view ->
                     view.isFocusableInTouchMode = true
                     val before = controls[(index - 1).coerceAtLeast(0)]
@@ -135,8 +137,17 @@ object SourceDialog {
                 if (isXtream && (user.text.isEmpty() || password.text.isEmpty() || URI(address).rawQuery != null || URI(address).fragment != null)) {
                     error.text = "Enter a server base URL without a query, plus username and password."; return@setOnClickListener
                 }
+                val userAgent = Network.userAgent(agent.text.toString())
+                if (agent.text.isNotBlank() && userAgent.isEmpty()) {
+                    error.text = "The User-Agent must be plain text on one line, up to 200 characters."; return@setOnClickListener
+                }
+                val backupAddress = if (isXtream) backup.text.toString().trim() else ""
+                if (backupAddress.isNotBlank() && (!Network.allowed(backupAddress, allow.isChecked) || runCatching { URI(backupAddress).rawQuery != null || URI(backupAddress).fragment != null }.getOrDefault(true))) {
+                    error.text = "Enter the backup server's base URL (HTTPS, or allow HTTP for this source), without a query."; return@setOnClickListener
+                }
                 val source = Source(existing?.id ?: java.util.UUID.randomUUID().toString(), name.text.toString().trim().take(64).ifBlank { URI(address).host },
-                    if (isXtream) "xtream" else "m3u", address, if (isXtream) user.text.toString() else "", if (isXtream) password.text.toString() else "", guideAddress, allow.isChecked, existing?.enabled ?: true, existing?.maxStreams ?: 0)
+                    if (isXtream) "xtream" else "m3u", address, if (isXtream) user.text.toString() else "", if (isXtream) password.text.toString() else "", guideAddress, allow.isChecked, existing?.enabled ?: true, existing?.maxStreams ?: 0,
+                    userAgent, backupAddress)
                 save(source); dialog.dismiss()
             }
         }

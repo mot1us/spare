@@ -34,7 +34,7 @@ class ProviderDataSource(private val allowHttp: () -> Boolean) : BaseDataSource(
                 connection = client; client.instanceFollowRedirects = false; client.connectTimeout = 12000; client.readTimeout = 15000
                 client.requestMethod = DataSpec.getStringForHttpMethod(dataSpec.httpMethod)
                 headers.forEach { (name, value) -> client.setRequestProperty(name, value) }
-                client.setRequestProperty("User-Agent", "Spare/${BuildConfig.VERSION_NAME}"); client.setRequestProperty("Accept-Encoding", "identity")
+                client.setRequestProperty("User-Agent", Network.userAgentFor(target)); client.setRequestProperty("Accept-Encoding", "identity")
                 if (dataSpec.position > 0 || dataSpec.length != C.LENGTH_UNSET.toLong()) {
                     val end = if (dataSpec.length == C.LENGTH_UNSET.toLong()) "" else (dataSpec.position + dataSpec.length - 1).toString()
                     client.setRequestProperty("Range", "bytes=${dataSpec.position}-$end")

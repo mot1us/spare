@@ -16,7 +16,7 @@ class LiveProviderDataSource(private val allowHttp: () -> Boolean) : DataSource 
     override fun open(dataSpec: DataSpec): Long {
         val consent = allowHttp()
         if (!Network.allowed(dataSpec.uri.toString(), consent)) throw IOException(SourceFailure(if (dataSpec.uri.scheme == "http" && !consent) SourceProblem.HTTP_REQUIRED else SourceProblem.ADDRESS))
-        val client = DefaultHttpDataSource.Factory().setUserAgent("Spare/${BuildConfig.VERSION_NAME}")
+        val client = DefaultHttpDataSource.Factory().setUserAgent(Network.userAgentFor(dataSpec.uri.toString()))
             .setConnectTimeoutMs(12000).setReadTimeoutMs(20000).setAllowCrossProtocolRedirects(consent).createDataSource()
         listeners.forEach(client::addTransferListener)
         upstream = client
