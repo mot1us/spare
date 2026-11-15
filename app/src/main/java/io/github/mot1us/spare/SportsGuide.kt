@@ -17,6 +17,7 @@ data class SportsGame(val teams: List<SportsTeam>, val start: Long, val end: Lon
 object SportsGuide {
     const val HORIZON = 48 * 3600000L
     const val MAX_WARM_CHANNELS = 64
+    const val MAX_NETWORK_CHANNELS = 160
     private val matchup = Regex("\\b(vs|v|versus|at)\\b")
     internal fun hasMatchupSeparator(normalizedTitle: String) = matchup.containsMatchIn(normalizedTitle)
     private val baseball = Regex("\\b(mlb|baseball|world series)\\b")
@@ -145,7 +146,18 @@ object SportsGuide {
             game.broadcasts.sortedByDescending { it.channel.id in favorites }) }.sortedBy { it.start }.take(256)
     }
     /** Order likely game networks first, never open streams, and cap provider guide requests. */
-    fun warmChannels(channels: List<Channel>, favorites: Set<String>, followed: Set<String>): List<Channel> {
+    /**
+     * Channels whose listings are fetched first. Channels carrying today's games come first: the scoreboard names each
+     * game's networks, and any channel named for one of them (in short or spelled-out form) is fetched so its listing can
+     * confirm the game. Then channels that look like sports channels, up to [MAX_WARM_CHANNELS].
+     */
+    fun warmChannels(channels: List<Channel>, favorites: Set<String>, followed: Set<String>, networks: Collection<String> = emptyList()): List<Channel> {
+        val keys = networks.map(SportsStreams::broadcasterKey).filter { it.trim().length >= 3 }.distinct()
+        val carrying = if (keys.isEmpty()) emptyList() else channels.filter { channel -> SportsStreams.speculative(channel) && keys.any { SportsStreams.broadcasterMatchesKey(it, channel) } }
+            .distinctBy { it.guideId.ifBlank { it.id } }.take(MAX_NETWORK_CHANNELS)
+        return (carrying + rankedChannels(channels, favorites, followed)).distinctBy { it.id }
+    }
+    private fun rankedChannels(channels: List<Channel>, favorites: Set<String>, followed: Set<String>): List<Channel> {
         val scores = channels.mapIndexedNotNull { index, channel ->
             val label = SportsCatalog.normalize("${channel.group} ${channel.name}")
             val team = SportsCatalog.mentions(label, false)

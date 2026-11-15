@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.47.1 — 2026-11-14
+
+- Sports fetches the guide listings of the channels carrying today's games first. The scoreboard names each game's networks; any channel named for one of them is checked right away, so its listing can confirm the game. Before, only channels with sports words in their names (ESPN, Fox, NBC…) were checked early, and a channel such as "Big Ten Network" could wait behind thousands of others.
+- The poster and logo cache no longer lists and re-sorts every saved file after each image it saves. It tidies up every few dozen images, reading each file's date once. The poster cache also holds up to 2,500 posters (still within 64 MB) instead of 600, so browsing a large catalog stops re-downloading posters it had a moment ago.
+- Settings › About Spare › Performance report can be scrolled with the remote: Down from Start over moves into the report, then Down and Up scroll it.
+
 ## 0.47.0 — 2026-11-14
 
 - Movies and Series no longer live in memory. Each catalog is kept in the encrypted on-disk database, and Spare holds only a small index per title (search text, category, date added, rating) to filter and search. A 15,000-title catalog needed about 6 MB of memory before and about 1 MB now (measured on the emulator). Titles are read from the database only when they are about to be shown.

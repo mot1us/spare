@@ -90,6 +90,26 @@ class SettingsPanel(context: Context, private val render: (String) -> Unit, priv
         content.addView(label(title, 23f).apply { tag = "settings-page-title"; typeface = AppFont.face(true) }, LayoutParams(-1, dp(45)))
         if (description.isNotEmpty()) note(description)
     }
+    /**
+     * Long text the remote can scroll: it takes the cursor (with a focus outline), and Up/Down move it half a screen at a
+     * time. At the top, Up moves to the control above as usual.
+     */
+    fun scrollingNote(message: String, identifier: String? = null) {
+        val text = label(message, 12f).apply {
+            tag = identifier; setTextColor(Color.LTGRAY); setPadding(dp(8), dp(6), dp(8), dp(14)); isFocusableInTouchMode = true; isFocusable = true
+            setOnFocusChangeListener { view, focused -> view.background = if (focused) GuideTheme.background(resources.displayMetrics.density, 0x33323D4B) else null }
+            setOnKeyListener { _, key, event ->
+                if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener key == KeyEvent.KEYCODE_DPAD_DOWN || key == KeyEvent.KEYCODE_DPAD_UP && contentScroll.scrollY > 0
+                val step = contentScroll.height / 2
+                when (key) {
+                    KeyEvent.KEYCODE_DPAD_DOWN -> { contentScroll.smoothScrollBy(0, step); true }
+                    KeyEvent.KEYCODE_DPAD_UP -> if (contentScroll.scrollY > 0) { contentScroll.smoothScrollBy(0, -step); true } else false
+                    else -> false
+                }
+            }
+        }
+        content.addView(text, LayoutParams(-1, -2))
+    }
     fun note(message: String, identifier: String? = null) { content.addView(label(message, 12f).apply { tag = identifier; setTextColor(Color.LTGRAY); setPadding(0, dp(4), 0, dp(14)) }, LayoutParams(-1, -2)) }
     fun input(title: String, value: String, hint: String): EditText {
         note(title)

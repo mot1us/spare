@@ -280,6 +280,17 @@ class MainActivity : Activity() {
     private val sportsForcedEpg = mutableSetOf<String>()
     private val renderSports = Runnable { sportsRenderPending = false; refreshSports() }
     private var liveSports = LiveSportsSnapshot.EMPTY
+    private var epgOrderNetworks: Set<String> = emptySet()
+    /** Networks of games on now or starting within six hours, from the scoreboard. */
+    private fun sportsNetworks(): Set<String> {
+        val now = System.currentTimeMillis()
+        return liveSports.events.filter { it.state == "in" || it.state == "pre" && it.start in now..now + 6 * 3600000L }.flatMap { it.networks }.toSet()
+    }
+    /** New games on the scoreboard: fetch the listings of the channels carrying them next (already fresh ones are skipped). */
+    private fun reorderEpgForGames() {
+        if (sportsNetworks() == epgOrderNetworks) return
+        epgBackgroundFor = null; handler.removeCallbacks(fetchBackgroundEpg); handler.post(fetchBackgroundEpg)
+    }
     private var liveSportsChecking = false
     private var liveSportsAgain = false
     private var liveSportsAttempt = 0L
@@ -329,7 +340,7 @@ class MainActivity : Activity() {
         if (snapshot.events.isEmpty() && snapshot.leagues.isEmpty()) return
         handler.post {
             if (!closed && request == liveSportsRequest && liveSportsDay == day && (!cached || liveSports.leagues.isEmpty())) {
-                liveSports = liveSports.mergeRefresh(snapshot); rememberScores(liveSports); scheduleSports(); updateScoreStrip()
+                liveSports = liveSports.mergeRefresh(snapshot); rememberScores(liveSports); scheduleSports(); updateScoreStrip(); reorderEpgForGames()
             }
         }
     }
@@ -1834,12 +1845,13 @@ class MainActivity : Activity() {
             val channels = guide.channels
             if (epgBackgroundOrdering === channels) return
             epgBackgroundOrdering = channels
-            val favoriteIds = favorites; val followed = store.followedTeams
+            val favoriteIds = favorites; val followed = store.followedTeams; val networks = sportsNetworks()
+            epgOrderNetworks = networks
             epgOrderWorker.execute {
                 // Favorites, then likely game networks (so Sports matches from the saved guide instead of
                 // asking the provider per game), then everything else in guide order.
                 val all = channels.filter { !it.media }
-                val sports = runCatching { SportsGuide.warmChannels(all, favoriteIds, followed) }.getOrDefault(emptyList())
+                val sports = runCatching { SportsGuide.warmChannels(all, favoriteIds, followed, networks) }.getOrDefault(emptyList())
                 val order = (all.filter { it.id in favoriteIds } + sports + all).distinctBy { it.id }
                 handler.post {
                     if (!closed && epgBackgroundOrdering === channels) {
@@ -2281,7 +2293,7 @@ class MainActivity : Activity() {
         liveSportsTask = liveSportsWorker.submit {
             val result = runCatching { liveSportsLoader() }.getOrDefault(LiveSportsSnapshot.EMPTY)
             handler.post { if (!closed) {
-                liveSportsChecking = false; if (liveSportsDay == requestedDay) { liveSports = liveSports.mergeRefresh(result, complete = true); rememberScores(liveSports) }
+                liveSportsChecking = false; if (liveSportsDay == requestedDay) { liveSports = liveSports.mergeRefresh(result, complete = true); rememberScores(liveSports); reorderEpgForGames() }
                 if (liveSportsAgain) { liveSportsAgain = false; checkLiveSports(force = true) }
                 scheduleSports(); updateScoreStrip()
             } }
@@ -3338,8 +3350,8 @@ class MainActivity : Activity() {
             "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage."); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
             "Performance report" -> {
                 panel.page(page, "What Spare was doing when it felt slow. Use the app until it stutters or drags, then open this page and send a photo of it. Nothing here leaves this TV.")
-                panel.note(Diagnostics.report(), "performance-report")
                 panel.action("Start over") { Diagnostics.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
+                panel.scrollingNote(Diagnostics.report() + "\n\nDown scrolls this report.", "performance-report")
             }
             "Open-source licenses" -> { panel.page(page, ""); panel.note(listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { assets.open("licenses/$it").bufferedReader().use { reader -> reader.readText() } }) }
             "Exit Spare" -> { panel.page(page, "Close the player."); panel.action("Exit Spare") { finish() } }

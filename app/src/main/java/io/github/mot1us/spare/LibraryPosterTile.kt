@@ -182,6 +182,7 @@ internal fun posterDecodeSize(metrics: android.util.DisplayMetrics): Int {
 internal fun posterDecodeSize(artHeight: Int) = ((artHeight.coerceAtLeast(0) + 63) / 64 * 64).coerceIn(128, 480)
 
 /** Library and Search share one encrypted, bounded poster cache, separate from guide logos. */
-internal fun posterFiles(context: Context) = GuideLogoFiles(context, "poster-art-", 600, 64L * 1024 * 1024)
+// Up to 2,500 posters within 64 MB: at 600, browsing a large catalog evicted (and re-downloaded) posters constantly.
+internal fun posterFiles(context: Context) = GuideLogoFiles(context, "poster-art-", 2500, 64L * 1024 * 1024)
 
 internal class PosterHolder(val box: LibraryPosterTile) : RecyclerView.ViewHolder(box)

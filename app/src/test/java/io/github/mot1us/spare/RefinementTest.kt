@@ -80,6 +80,16 @@ class RefinementTest {
         val matched = SportsSchedule.games(snapshot, Guide(listOf(channel), mapOf("one" to listOf(Programme("one", "Seahawks vs 49ers", now - 600000, now + 3600000)))), null, emptySet(), now).single()
         assertEquals(channel, matched.broadcasts.single().channel)
     }
+    @Test fun listingsAreFetchedFirstForChannelsCarryingTodaysGames() {
+        // No sports keyword in the name, so it used to wait behind thousands of channels; a game on BTN puts it first.
+        val btn = Channel("btn", "US: Big Ten Network FHD", "US", "https://example.com/btn")
+        val espn = Channel("espn", "ESPN HD", "US Sports", "https://example.com/espn")
+        val news = Channel("news", "News 24", "US", "https://example.com/news")
+        val channels = listOf(news, espn, btn)
+        assertFalse(btn in SportsGuide.warmChannels(channels, emptySet(), emptySet()))
+        assertEquals(btn, SportsGuide.warmChannels(channels, emptySet(), emptySet(), listOf("BTN")).first())
+        assertFalse(news in SportsGuide.warmChannels(channels, emptySet(), emptySet(), listOf("BTN")))
+    }
     @Test fun scoreboardNetworkShortNamesFindSpelledOutChannels() {
         // The scoreboard says "BTN"; playlists say "Big Ten Network". Every BTN channel is offered, and unrelated ones are not.
         val btn = Channel("btn", "US: Big Ten Network FHD", "US Sports", "https://example.com/btn")
