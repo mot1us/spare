@@ -2357,7 +2357,7 @@ class SpareDeviceTest {
                     activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
                         LiveEvent("live-nfl", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL"),
                         LiveEvent("live-nba", setOf("nba:LAL", "nba:BOS"), now - 300000, league = "NBA"),
-                        LiveEvent("later-nfl", setOf("nfl:SEA", "nfl:SF"), now + 30 * 60000L, "pre", league = "NFL")), now, setOf("NFL", "NBA")) }
+                        LiveEvent("later-nfl", setOf("nfl:SEA", "nfl:SF"), laterToday(now), "pre", league = "NFL")), now, setOf("NFL", "NBA")) }
                 }
             }
             lifecycle.addLifecycleCallback(fixture)
@@ -2467,11 +2467,9 @@ class SpareDeviceTest {
                         player = find<PlayerView>(activity.window.decorView)!!.player
                         @Suppress("DEPRECATION") activity.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL)
                     }
-                    Thread.sleep(500)
-                    scenario.onActivity { activity ->
-                        assertSame("Playback is untouched", player, find<PlayerView>(activity.window.decorView)!!.player)
-                        assertTrue(player!!.isPlaying); assertTrue("The guide on screen stays", channelList(activity)?.isShown == true)
-                    }
+                    // A slow emulator can be buffering at any instant; playback must carry on, on the same player.
+                    waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.player === player && player!!.isPlaying }
+                    scenario.onActivity { activity -> assertTrue("The guide on screen stays", channelList(activity)?.isShown == true) }
                 }
             } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
@@ -5294,6 +5292,12 @@ class SpareDeviceTest {
         }
     }
 
+    /** A start time later today on this device's clock, whatever the time zone (CI emulators run on UTC). */
+    private fun laterToday(now: Long): Long {
+        val midnight = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1)
+            .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return minOf(now + 30 * 60000L, now + (midnight - now) / 2)
+    }
     private fun playingPath(scenario: ActivityScenario<MainActivity>): String? {
         var result: String? = null
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
