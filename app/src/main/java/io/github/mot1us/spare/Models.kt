@@ -43,7 +43,7 @@ data class Channel(val id: String, val name: String, val group: String, val url:
         val providerRate = !observedRate && info.fps.isFinite() && info.fps > 0f && reportedQuality != null
         val source = when {
             providerRate || observed == null -> "Provider reported"
-            observedRate -> when (observed?.evidence) {
+            observedRate -> when (observed.evidence) {
                 "input timestamps", "timestamps" -> "Measured FPS"
                 "SPS timing" -> "Stream timing"
                 "stream" -> "Stream reported"
@@ -55,7 +55,7 @@ data class Channel(val id: String, val name: String, val group: String, val url:
             else -> "Playback resolution"
         }
         val mixed = when {
-            observedRate && (observed?.height ?: 0) <= 0 && (reportedQuality?.height ?: 0) > 0 -> " · Provider resolution"
+            observedRate && observed.height <= 0 && (reportedQuality?.height ?: 0) > 0 -> " · Provider resolution"
             providerRate && (observed?.height ?: 0) > 0 -> " · Playback resolution"
             else -> ""
         }

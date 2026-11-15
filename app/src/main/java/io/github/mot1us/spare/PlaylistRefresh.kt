@@ -69,9 +69,9 @@ object PlaylistRefresh {
                                 .filter { channel -> !seed || saved[channel.guideId.ifBlank { channel.id }].orEmpty().none { at >= it.start && at < it.end } }.take(8)
                             val updated = linkedMapOf<String, List<Programme>>(); var failure: Throwable? = null
                             targets.forEach { channel -> runCatching { XtreamEpg.load(source, channel, 24, timeoutMs = 6000) }.onSuccess { if (it.isNotEmpty()) updated[channel.guideId.ifBlank { channel.id }] = it }.onFailure { failure = it } }
-                            if (updated.isEmpty() && failure != null) throw failure!!
+                            if (updated.isEmpty() && failure != null) throw failure
                             programmes = saved + updated
-                        } else if (fullFailure != null) throw fullFailure!!
+                        } else if (fullFailure != null) throw fullFailure
                         // Retain archive history and any visible-channel data saved during the download.
                         val latest = if (store.programmesStamp(source) == savedStamp) saved else runCatching { store.cachedProgrammes(source) }.getOrDefault(saved)
                         val now = System.currentTimeMillis()

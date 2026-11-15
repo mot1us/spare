@@ -207,7 +207,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
             val ink = if (row.hasFocus()) contrastingInk(accent()) else Color.WHITE
             name.setTextColor(ink); state.setTextColor(ink)
             name.typeface = AppFont.faceFor(store.font); state.typeface = AppFont.faceFor(store.font)
-            chip?.background = GradientDrawable().apply { setColor(swatch!!.invoke()); cornerRadius = dp(3).toFloat(); setStroke(dp(1).coerceAtLeast(1), if (row.hasFocus()) ink else 0xAAFFFFFF.toInt()) }
+            chip?.background = GradientDrawable().apply { setColor(swatch.invoke()); cornerRadius = dp(3).toFloat(); setStroke(dp(1).coerceAtLeast(1), if (row.hasFocus()) ink else 0xAAFFFFFF.toInt()) }
         }
         updates.add(::paint)
         row.setOnFocusChangeListener { _, _ -> paint() }

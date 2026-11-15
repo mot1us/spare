@@ -25,8 +25,8 @@ object GuideDisk {
                     require(channel.length <= 512 && title.length <= 512 && description.length <= 2048 && artwork.length <= 4096)
                     val programme = Programme(channel, title, start, end, description, artwork)
                     if (count++ < ProgrammeBudget.MAX) entries.getOrPut(channel) { arrayListOf() }.add(programme) else {
-                        if (bounded == null) { bounded = ProgrammeBudget(Importers.MAX_CHANNELS, System.currentTimeMillis()); entries.values.forEach { values -> values.forEach(bounded!!::add) }; entries.clear() }
-                        bounded!!.add(programme)
+                        if (bounded == null) { bounded = ProgrammeBudget(Importers.MAX_CHANNELS, System.currentTimeMillis()); entries.values.forEach { values -> values.forEach(bounded::add) }; entries.clear() }
+                        bounded.add(programme)
                     }
                 }
                 reader.endArray()

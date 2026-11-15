@@ -4940,6 +4940,13 @@ class SpareDeviceTest {
                     assertEquals(listOf("library-shelf:continue", "library-shelf:watchlist", "library-shelf:recent"),
                         (0 until rows.childCount).map { rows.getChildAt(it) }.sortedBy { it.top }.take(3).map { it.tag })
                 }
+                // Once the provider's details arrive the banner still leads with the resume point, and its fade has finished.
+                Thread.sleep(900)
+                scenario.onActivity { activity ->
+                    val root = activity.window.decorView
+                    assertTrue(root.findViewWithTag<TextView>("library-spot-meta").text.toString().startsWith("Resume at 1:00"))
+                    assertEquals(1f, root.findViewWithTag<View>("library-spotlight").alpha)
+                }
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5009" && shelfOf(it.currentFocus) == "library-shelf:watchlist" }
                 scenario.onActivity { assertTrue(it.currentFocus?.contentDescription.toString(), it.currentFocus?.contentDescription.toString().endsWith("In Watchlist")) }
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" && shelfOf(it.currentFocus) == "library-shelf:recent" }

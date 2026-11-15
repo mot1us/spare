@@ -343,7 +343,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val result = linkedMapOf<String, Pair<String, CatalogShelves.Data>>()
         val favorites = runCatching { store.libraryFavorites(selected) }.getOrDefault(LibraryFavorites())
         val progress = runCatching { store.watchProgress(selected).sortedByDescending { it.updated } }.getOrDefault(emptyList())
-        val resumed = if (mode == "movie") progress.filter { it.item.kind == "movie" }.map { entry -> browserRow(entry.item).copy(detail = "Resume at ${duration(entry.position)}") }
+        val resumed = if (mode == "movie") progress.filter { it.item.kind == "movie" }.map { entry -> browserRow(entry.item).copy(detail = "Resume at ${duration(entry.position)}", personal = true) }
         else {
             // One tile per series: its most recently watched episode.
             val series = runCatching { (store.followedSeries(selected).entries + favorites.entries).map { it.item }.filter { it.kind == "series" }.associateBy { it.id } }.getOrDefault(emptyMap())
@@ -354,7 +354,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (rows.isNotEmpty()) result[id] = title to CatalogShelves.Data(rows.take(HOME_PERSONAL), if (rows.size > HOME_PERSONAL) rows.size else 0, busy = false, more = rows.size > HOME_PERSONAL)
         }
         shelf(HOME_CONTINUE, "Continue watching", resumed)
-        shelf(HOME_WATCHLIST, "Watchlist", favorites.entries.filter { it.item.kind == mode }.map { entry -> browserRow(entry.item).copy(detail = entry.label(favorites.watched)) })
+        shelf(HOME_WATCHLIST, "Watchlist", favorites.entries.filter { it.item.kind == mode }.map { entry -> browserRow(entry.item).copy(detail = entry.label(favorites.watched), personal = entry.item.kind == "series") })
         return result
     }
     /** Episodes are shown as their series: its poster and name, with the episode code and resume point. */

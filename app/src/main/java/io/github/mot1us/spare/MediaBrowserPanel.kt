@@ -26,7 +26,9 @@ import androidx.recyclerview.widget.RecyclerView
 /** Richer text for the spotlight, fetched once when a poster settles under the cursor. */
 data class Spotlight(val meta: String, val plot: String, val backdrop: String)
 data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null,
-    val backdrop: String = "", val spotlight: (((Spotlight) -> Unit) -> Unit)? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
+    val backdrop: String = "", val spotlight: (((Spotlight) -> Unit) -> Unit)? = null,
+    /** [detail] is the viewer's own (a resume point, a Watchlist note): the banner keeps it ahead of the provider's facts. */
+    val personal: Boolean = false, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
 /**
  * Library, laid out like streaming apps: a tab line (Movies, Series, Watchlist…) over a large artwork banner that
@@ -197,8 +199,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotlight.addView(spotMeta, LayoutParams(-1, -2).apply { topMargin = dp(4) })
         spotlight.addView(spotPlot, LayoutParams(dp(470), -2).apply { topMargin = dp(8) })
         hero.apply { tag = "library-hero"; clipChildren = true }
-        // The artwork fills the right of the banner; the scrim fades it into the page under the text on the left.
-        hero.addView(spotArt, FrameLayout.LayoutParams(-1, -1).apply { marginStart = dp(260) })
+        // The artwork spans the whole banner; the scrim hides it under the text on the left and fades it in to the right.
+        hero.addView(spotArt, FrameLayout.LayoutParams(-1, -1))
         hero.addView(spotScrim, FrameLayout.LayoutParams(-1, -1))
         hero.addView(LinearLayout(context).apply {
             orientation = VERTICAL; setPadding(0, 0, 0, dp(10))
@@ -506,13 +508,13 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val base = (GuideTheme.current.background or 0xFF000000.toInt()) and 0xFFFFFF
         fun shade(alpha: Int) = base or (alpha shl 24)
         spotScrim.background = android.graphics.drawable.LayerDrawable(arrayOf(
-            android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(shade(0xFF), shade(0xE6), shade(0x40))),
+            android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(shade(0xFF), shade(0xF2), shade(0x8C), shade(0x10))),
             android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(shade(0xFF), shade(0x00), shade(0x00)))))
         loading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
         categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1); rows.adapter?.notifyItemRangeChanged(0, shownRows.size); shelves.refreshTiles()
     }
     fun allowArtworkHttp(value: Boolean) { artworkHttp = value; shelves.http = value }
-    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; showSearchBox(); updateBrowseControls(); spotKey = null; spotMode() }
+    fun browse() { ++detailGeneration; detailPane.visibility = GONE; body.visibility = VISIBLE; titleLine.visibility = VISIBLE; showSearchBox(); updateBrowseControls(); spotKey = null; spotMode() }
     /** Spotlight shows in poster grids and on a details page; plain lists (episodes, archive) keep the compact header. */
     private fun spotMode() {
         val on = !archive && (detailPane.isVisible || (body.isVisible && (grid || seriesSpot != null)))
@@ -557,7 +559,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotKey = row.key; spotRow = row
         spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
         // The new title's words fade in rather than snapping, as the cursor moves along a row.
-        spotlight.animate().cancel(); spotlight.alpha = .35f; spotlight.animate().alpha(1f).setDuration(180).start()
+        spotlight.animate().cancel(); spotlight.alpha = .55f; spotlight.animate().alpha(1f).setDuration(150).start()
         spotArtwork(row.backdrop.ifBlank { row.poster })
         // Wait for the cursor to settle so fast scrolling never queues provider requests.
         searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
@@ -572,7 +574,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         val row = spotRow ?: return; val key = row.key
         row.spotlight?.invoke { spot ->
             if (spotKey != key || detailPane.isVisible) return@invoke
-            if (spot.meta.isNotBlank()) spotMeta.text = spot.meta
+            if (spot.meta.isNotBlank()) spotMeta.text = if (row.personal && row.detail.isNotBlank()) "${row.detail}  ·  ${spot.meta}" else spot.meta
             if (spot.plot.isNotBlank()) spotPlot.text = spot.plot
             if (spot.backdrop.isNotBlank()) spotArtwork(spot.backdrop)
         }
@@ -582,7 +584,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (detailPane.visibility != VISIBLE) spotKey = null
         val focusedAction = detailPane.findFocus()?.tag
         val generation = ++detailGeneration
-        hideKeyboard(); body.visibility = GONE; if (search.hasFocus()) focusToolbar(); search.visibility = GONE; detailPane.visibility = VISIBLE; updateBrowseControls(); spotMode()
+        hideKeyboard(); body.visibility = GONE; if (search.hasFocus()) focusToolbar(); search.visibility = GONE; titleLine.visibility = GONE; detailPane.visibility = VISIBLE; updateBrowseControls(); spotMode()
         // Keep focus on the toolbar while replacing focused detail controls.
         if (detailPane.hasFocus()) focusToolbar()
         detailPane.removeAllViews(); detailPane.background = null

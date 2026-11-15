@@ -73,7 +73,7 @@ class GuideProgrammeIndex private constructor(
             val sameChannels = prior?.guide?.channels === guide.channels
             if (!sameChannels) parsed.clear()
             val now = prior?.preparedAt?.takeIf { sameChannels && requestedAt - it in 0 until REFRESH_INTERVAL } ?: requestedAt
-            val shape = if (sameChannels && prior != null) prior.shape else channels(guide)
+            val shape = if (sameChannels) prior.shape else channels(guide)
             val byKey = LinkedHashMap<String, List<Listing>>()
             val byTeam = HashMap<Pair<String, String>, MutableList<SportsListing>>()
             // Use the interleaved channel order and original programme order for stable ties.
@@ -81,7 +81,7 @@ class GuideProgrammeIndex private constructor(
             for (key in keys) {
                 if (Thread.currentThread().isInterrupted) throw InterruptedException()
                 val entries = guide.programmes[key] ?: continue
-                val priorRows = if (sameChannels && prior != null && prior.guide.programmes[key] === entries && prior.preparedAt == now) prior.programmesByKey[key] else null
+                val priorRows = if (sameChannels && prior.guide.programmes[key] === entries && prior.preparedAt == now) prior.programmesByKey[key] else null
                 val rows = priorRows ?: entries.mapNotNull { programme ->
                     if (programme.end <= now - PAST || programme.start >= now + FUTURE) return@mapNotNull null
                     val text = Text(programme.title, programme.description)

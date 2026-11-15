@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.49.1 — 2026-11-15
+
+- Library banner: the title's artwork now spans the whole banner and fades smoothly into the page behind the text, instead of starting part-way across with a visible edge.
+- Continue watching and Watchlist series keep your own detail (such as "Resume at 1:00" or "2 new · 5 unwatched") at the front of the banner after the provider's year, genre and length arrive. Before, the provider's details replaced it.
+- The details page no longer repeats the section name ("Movies") above the poster.
+- Removed needless null checks and two always-true conditions the compiler flagged.
+
 ## 0.49.0 — 2026-11-14
 
 - Library redesigned like a streaming app. The second column of Movies, Series, Up next, Watchlist and Continue watching buttons is now a tab line across the top, with Search and Refresh as icons at its right. Below it, a larger banner shows the focused title's artwork, name, details and plot, and its text fades in as you move. Movies and Series rows use the full width of the screen. The search box only appears while it holds a search, and the remote-hint line is gone.
