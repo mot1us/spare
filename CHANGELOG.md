@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.49.2 — 2026-11-15
+
+- Sports no longer sits empty (only the RedZone card) for up to a minute when its first scoreboard load runs out of time, which could happen right after leaving Library on a busy game day. It now tries again within a few seconds, up to four times, before falling back to the usual once-a-minute refresh.
+
 ## 0.49.1 — 2026-11-15
 
 - Library banner: the title's artwork now spans the whole banner and fades smoothly into the page behind the text, instead of starting part-way across with a visible edge.

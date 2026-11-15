@@ -293,6 +293,9 @@ class MainActivity : Activity() {
     private var liveSportsChecking = false
     private var liveSportsAgain = false
     private var liveSportsAttempt = 0L
+    /** Quick retries left after a scoreboard load that missed the league on screen (a busy TV or network can miss the deadline). */
+    private var liveSportsQuickRetries = SPORTS_QUICK_RETRIES
+    private val retryLiveSports = Runnable { if (started && !closed && sportsVisible && guideVisible) checkLiveSports(force = true) }
     private var liveSportsRequest = 0
     private var liveSportsDay: java.time.LocalDate? = null
     private var liveSportsTeamScope: String? = "today"
@@ -1357,7 +1360,7 @@ class MainActivity : Activity() {
         settingsPanel?.visibility = View.GONE
         if (library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
-        if (sports) { sportsTeam = "today"; sportsPanel.home() }
+        if (sports) { sportsTeam = "today"; liveSportsQuickRetries = SPORTS_QUICK_RETRIES; sportsPanel.home() }
         switchMode(sports)
     }
     private fun enterNavigationContent() {
@@ -2339,9 +2342,23 @@ class MainActivity : Activity() {
             handler.post { if (!closed) {
                 liveSportsChecking = false; if (liveSportsDay == requestedDay) { liveSports = liveSports.mergeRefresh(result, complete = true); rememberScores(liveSports); reorderEpgForGames() }
                 if (liveSportsAgain) { liveSportsAgain = false; checkLiveSports(force = true) }
+                else retrySportsSoonIfMissing()
                 scheduleSports(); updateScoreStrip()
             } }
         }
+    }
+    /**
+     * A first load that misses its deadline used to leave Sports empty (only RedZone) until the next minute-long poll.
+     * When the league on screen is still missing, try again within seconds, a few times, before falling back to the poll.
+     */
+    private fun retrySportsSoonIfMissing() {
+        handler.removeCallbacks(retryLiveSports)
+        val league = sportsBrowseLeague
+        val missing = sportsVisible && guideVisible && (liveSports.leagues.isEmpty() || league != null && league !in liveSports.leagues)
+        if (!missing) { liveSportsQuickRetries = SPORTS_QUICK_RETRIES; return }
+        if (liveSportsQuickRetries <= 0) return
+        liveSportsQuickRetries--
+        handler.postDelayed(retryLiveSports, SPORTS_QUICK_RETRY_MS)
     }
     private fun scheduleSports() {
         if (!sportsVisible || !guideVisible || closed) return
@@ -3182,7 +3199,7 @@ class MainActivity : Activity() {
         handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls); handler.removeCallbacks(filterSearch)
         ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
-        handler.removeCallbacks(renderSports); handler.removeCallbacks(pollLiveSports); sportsRenderPending = false
+        handler.removeCallbacks(renderSports); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); sportsRenderPending = false
         library.dismiss(); multiview.close(); voiceInput.stop(); voiceSearchPending = false; closeDetails(); dismissGameReminder()
         onDemand = null; demandPosition = 0; demandPaused = false; demandSubtitleMode = null; demandControls.visibility = View.GONE
         playbackToken++; firstFrame = false; hasPlayedChannel = false; expectedMediaId = ""; playbackUrl = ""; pausedPlayback = null
@@ -3793,7 +3810,7 @@ class MainActivity : Activity() {
         Diagnostics.stop(); Diagnostics.playback = null
         performanceOverlay?.close()
         performanceOverlay = null
-        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
+        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
         super.onStop()
     }
     override fun onTrimMemory(level: Int) {
@@ -3904,3 +3921,5 @@ class MainActivity : Activity() {
 
 /** Where screens start beside the resting main menu: its margin, its slim icon column and a gap. */
 private const val DOCK_INSET_DP = 84
+private const val SPORTS_QUICK_RETRIES = 4
+private const val SPORTS_QUICK_RETRY_MS = 3000L

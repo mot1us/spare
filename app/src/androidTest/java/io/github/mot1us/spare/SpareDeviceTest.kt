@@ -2267,6 +2267,40 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsRetriesSoonWhenTheFirstScoreboardLoadMissesItsDeadline() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports retry fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL")
+            val calls = java.util.concurrent.atomic.AtomicInteger()
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = {
+                        val now = System.currentTimeMillis()
+                        // The first load runs out of time on a busy TV and comes back with no league finished.
+                        if (calls.incrementAndGet() == 1) LiveSportsSnapshot(emptyList(), now, emptySet())
+                        else LiveSportsSnapshot(listOf(LiveEvent("retry-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL"))
+                    }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    val opened = android.os.SystemClock.elapsedRealtime()
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 2 }
+                    val waited = android.os.SystemClock.elapsedRealtime() - opened
+                    assertTrue("The game appears after a quick retry, not the minute-long poll (took $waited ms, ${calls.get()} loads)", waited < 20000 && calls.get() >= 2)
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
