@@ -2354,7 +2354,7 @@ class SpareDeviceTest {
                     activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(
                         LiveEvent("live-nfl", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL"),
                         LiveEvent("live-nba", setOf("nba:LAL", "nba:BOS"), now - 300000, league = "NBA"),
-                        LiveEvent("later-nfl", setOf("nfl:SEA", "nfl:SF"), now + 3 * 3600000L, "pre", league = "NFL")), now, setOf("NFL", "NBA")) }
+                        LiveEvent("later-nfl", setOf("nfl:SEA", "nfl:SF"), now + 30 * 60000L, "pre", league = "NFL")), now, setOf("NFL", "NBA")) }
                 }
             }
             lifecycle.addLifecycleCallback(fixture)
@@ -2373,6 +2373,42 @@ class SpareDeviceTest {
                     // A league shows its day: the live game, the later game and RedZone.
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").isSelected && it.window.decorView.findViewWithTag<View>("NFL:later-nfl")?.isShown == true }
                     scenario.onActivity { activity -> assertNull(activity.window.decorView.findViewWithTag<View>("NBA:live-nba")) }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun liveNowListsGuideGolfAndOkPlaysItsChannel() {
+        FixtureServer(channelCount = 3).use { server ->
+            val source = Source(name = "Guide events fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val channels = (1..3).map { Channel("ge:$it", listOf("News", "Golf Channel", "Movies")[it - 1], "Sports", "${server.base}/channel$it.mp4", guideId = "ge:$it") }
+            val programmes = mapOf("ge:1" to listOf(Programme("ge:1", "Evening News", now - 600000, now + 3600000)),
+                "ge:2" to listOf(Programme("ge:2", "LIVE: PGA Tour Golf - Fixture Classic, Round 3", now - 600000, now + 3 * 3600000)),
+                "ge:3" to listOf(Programme("ge:3", "Golf Movie Night", now - 600000, now + 3600000)))
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            store.sportsLeagues = setOf("NBA"); store.sportsLastLeague = "NBA"
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { LiveSportsSnapshot(emptyList(), System.currentTimeMillis(), setOf("NBA")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    fun card(activity: MainActivity): View? = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.let { grid ->
+                        (0 until grid.childCount).map(grid::getChildAt).firstOrNull { (it.tag as? String)?.startsWith("coverage:golf:") == true } }
+                    waitFor(scenario) { card(it)?.isShown == true }
+                    scenario.onActivity { activity ->
+                        assertEquals("Only the live golf listing becomes a card", 1, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount)
+                        assertEquals("PGA Tour Golf - Fixture Classic, Round 3", activity.window.decorView.findViewWithTag<TextView>("sports-coverage-title:${card(activity)!!.tag}").text.toString())
+                        card(activity)!!.performClick()
+                    }
+                    waitFor(scenario) { playingPath(scenario) == "/channel2.mp4" }
                 }
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)
@@ -2828,6 +2864,8 @@ class SpareDeviceTest {
                     var playing: Player? = null
                     scenario.onActivity { activity ->
                         playing = find<PlayerView>(activity.window.decorView)!!.player
+                        // Score delay is checked on a league's day, where a game stays after it ends (Live now drops it).
+                        MainActivity::class.java.getDeclaredField("sportsTeam").apply { isAccessible = true }.set(activity, "today")
                         MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-hero-score")?.text?.toString() == "Score delayed" }

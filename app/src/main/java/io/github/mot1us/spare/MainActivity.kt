@@ -1077,6 +1077,8 @@ class MainActivity : Activity() {
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
         sportsPanel.playOnSelection = { store.sportsAutoPlay && !(::multiview.isInitialized && multiview.browsing) }
         sportsPanel.findRedZone = { findRedZone(false) }
+        sportsPanel.watchCoverage = ::playCoverage
+        sportsPanel.chooseCoverage = { item -> sportsPanel.showCoverageStreams(item, coverageChoices(item)) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) } }
         sportsPanel.watchRedZone = { findRedZone(true) }
         sportsPanel.setSpoilers(store.hideCompletedScores)
         sportsPanel.watchReplay = ::playSportsReplay
@@ -2408,6 +2410,11 @@ class MainActivity : Activity() {
                 (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
             }
             val inLeague = rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) }
+            // Live now also lists golf, tennis, racing and fights the guide marks as live (no scoreboard for those).
+            val coverage = if (selectedTeam == "live" && selectedLeague == null) runCatching {
+                SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now }
+                    .map { item -> item.copy(channels = item.channels.sortedWith(SportsStreams.preferenceComparator(redZoneProfile, qualitySnapshot))) }
+            }.getOrDefault(emptyList()) else emptyList()
             val games = SportsPanel.ordered(inLeague.filter { selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed } }, followed, now)
             val hiddenByTeams = inLeague.size - games.size
             handler.post {
@@ -2422,7 +2429,7 @@ class MainActivity : Activity() {
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
-                sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(selectedLeague?.let { setOf(it) } ?: leagues); sportsPanel.setLeagueFilter(selectedLeague); sportsPanel.submit(games, followed, selectedTeam, progress, scanning, hiddenByTeams); scheduleScoreDelay()
+                sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(selectedLeague?.let { setOf(it) } ?: leagues); sportsPanel.setLeagueFilter(selectedLeague); sportsPanel.submit(games, followed, selectedTeam, progress, scanning, hiddenByTeams, coverage); scheduleScoreDelay()
                 if (browsing) selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
@@ -2634,6 +2641,13 @@ class MainActivity : Activity() {
         programmeInfo.text = "${sportsPanel.scoreText(game)}\n${SportsLeagues.label(game.leagueId)} · ${sportsPanel.statusText(game)}\n" +
             game.networks.joinToString(" · ").ifBlank { "Broadcaster to be announced" } + "\n" +
             (if (game.broadcasts.isNotEmpty() || game.titleMatches.isNotEmpty()) "${game.broadcasts.size + game.titleMatches.size} EPG/title matches · OK Choose channel" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible network channels · OK Review" else "Channel not matched yet")
+    }
+    private fun coverageChoices(item: SportsCoverage) = item.channels.filter { allowed(it) && !unavailable.contains(it.id, System.currentTimeMillis()) }
+        .sortedWith(SportsStreams.preferenceComparator(sportsStreamFilters(), videoInfo))
+    /** OK on a guide event card plays its best channel; with none playable, it lists the channels instead. */
+    private fun playCoverage(item: SportsCoverage) {
+        val best = coverageChoices(item).firstOrNull() ?: return sportsPanel.showCoverageStreams(item, emptyList()) { channelLabel(it) }
+        sportsResults = null; tune(best); showGuide(false)
     }
     private fun playRedZone(channels: List<Channel>): Boolean {
         val choices = channels.filter { allowed(it) && !unavailable.contains(it.id, System.currentTimeMillis()) }

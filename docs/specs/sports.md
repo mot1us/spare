@@ -26,6 +26,13 @@ offered as a possible stream is dropped when its own guide names a different
 matchup at that time. OK on the RedZone card plays the best feed already known
 rather than first asking provider guides for a sharper one.
 
+Live now also lists guide coverage (`SportsGuideCoverage`): golf, tennis, motor
+racing and fights airing now whose listing says "live" and names the sport
+(title or description, or the channel name when the title names no other
+sport). Studio shows, replays, previews and highlights are excluded; listings of
+the same event are grouped into one card of channels, at most 24 cards. These
+are guide evidence, not scoreboard events, and appear only on Live now.
+
 `scripts/sports_team_directory.py` captures ESPN's full team lists for the
 `SportsTeamDirectoryAuditTest` report (developer use only; the app makes no such
 requests). The test is skipped unless `SPARE_TEAM_DIRECTORY` names a capture.
