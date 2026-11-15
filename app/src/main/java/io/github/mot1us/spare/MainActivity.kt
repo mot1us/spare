@@ -400,7 +400,8 @@ class MainActivity : Activity() {
     private val hardwareDecoders by lazy { runCatching { android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos.associate { it.name to (Build.VERSION.SDK_INT < 29 || it.isHardwareAccelerated) } }.getOrDefault(emptyMap()) }
     private fun decoderLabel(): String {
         val name = videoDecoderName.ifBlank { return "Decoder not started" }
-        return "Decoder $name · " + when (hardwareDecoders[name]) { true -> "hardware"; false -> "SOFTWARE"; null -> "type unknown" }
+        val speed = sourceVideoFrames.operatingRate.takeIf { it > 0 }?.let { " · asked for ${it.toInt()} fps" } ?: " · speed from stream"
+        return "Decoder $name · " + when (hardwareDecoders[name]) { true -> "hardware"; false -> "SOFTWARE"; null -> "type unknown" } + speed
     }
     @Volatile private var scanEvidence = "unknown"
     private lateinit var frameRates: FrameRates

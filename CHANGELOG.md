@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.47.4 — 2026-11-14
+
+- Live channels that do not state their frame rate (most live transport streams) now ask the TV's video decoder to run fast enough for 60 frames a second, when it supports that picture size at 60. Before, the decoder was given no target; on the onn 4K Pro it reported 30 for 59.94 fps channels and dropped frames whenever the app was busy. Streams that state their own frame rate are unchanged.
+- Playback diagnostics show whether the decoder was asked for 60 fps or took its speed from the stream.
+
 ## 0.47.3 — 2026-11-14
 
 - Playback diagnostics and the Performance report name the video decoder in use and whether it is the TV's hardware decoder or a software one. A software decoder shares the processor with the app, which would make video stutter whenever the app is busy while audio stays smooth.
