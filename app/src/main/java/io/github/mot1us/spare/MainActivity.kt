@@ -1507,10 +1507,26 @@ class MainActivity : Activity() {
         tune(channel)
         if (enterFullscreen) showGuide(false)
     }
+    private var additionalRestoreAsked = 0L
+    private val restoreAdditionalLater = Runnable { restoreAdditionalPlaylists() }
+    /**
+     * Other playlists are unpacked from storage only once the startup channel has settled and the remote is idle (or after
+     * [ADDITIONAL_RESTORE_MAX_WAIT_MS]). Unpacking a large one took seven seconds of processor on an onn 4K Pro and made the
+     * picture stutter while Sports was opening.
+     */
     private fun restoreAdditionalPlaylists() {
-        if (additionalRestoreStarted) return
-        additionalRestoreStarted = true
-        enabledSources().filter { it.id != source?.id }.forEach { loadAdditionalPlaylist(it) }
+        handler.removeCallbacks(restoreAdditionalLater)
+        if (additionalRestoreStarted || closed) return
+        val others = enabledSources().filter { it.id != source?.id }
+        if (others.isEmpty()) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (additionalRestoreAsked == 0L) additionalRestoreAsked = now
+        val settled = current == null || playbackWarmup.ready(playbackToken, now, started && firstFrame && player.isPlaying, player.totalBufferedDuration, 10000, 5000, 20000)
+        if (now - additionalRestoreAsked < ADDITIONAL_RESTORE_MAX_WAIT_MS && (!settled || now - lastInputAt < 3000)) {
+            handler.postDelayed(restoreAdditionalLater, 1000); return
+        }
+        additionalRestoreStarted = true; additionalRestoreAsked = 0L
+        others.forEach { loadAdditionalPlaylist(it) }
     }
     private fun receiveSavedProgrammes(selected: Source, saved: Map<String, List<Programme>>, applied: () -> Unit) {
         val epoch = generation; val before = guide; val catalog = playlists
@@ -1592,7 +1608,7 @@ class MainActivity : Activity() {
         if (::library.isInitialized) library.dismiss()
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; handler.removeCallbacks(demandTick); if (::demandControls.isInitialized) demandControls.visibility = View.GONE
         cachedStartup = false; deferredRefresh = null; refreshRetryAt = 0L; launchRefreshPending = false
-        startupPlaybackPending = true; startupInputAt = lastInputAt; additionalRestoreStarted = false; restoringProgrammes.clear()
+        startupPlaybackPending = true; startupInputAt = lastInputAt; additionalRestoreStarted = false; additionalRestoreAsked = 0L; handler.removeCallbacks(restoreAdditionalLater); restoringProgrammes.clear()
         stopSportsPrefetch(clear = true); clearSportsPlayback()
         val epoch = ++generation; guideTimeline.clear()
         sportsVisible = false; sportsChannels = emptyList(); selectedGame = null; sportsResults = null; watchingSports = null; replayDiscovery?.pause(); replayGames = emptyList(); sportsBackoffUntil = 0; sportsFailures = 0; sportsForcedEpg.clear()
@@ -3784,7 +3800,7 @@ class MainActivity : Activity() {
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -3812,7 +3828,7 @@ class MainActivity : Activity() {
         Diagnostics.stop(); Diagnostics.playback = null
         performanceOverlay?.close()
         performanceOverlay = null
-        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
+        scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); handler.removeCallbacks(restoreAdditionalLater); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()
         super.onStop()
     }
     override fun onTrimMemory(level: Int) {
@@ -3924,4 +3940,5 @@ class MainActivity : Activity() {
 /** Where screens start beside the resting main menu: its margin, its slim icon column and a gap. */
 private const val DOCK_INSET_DP = 84
 private const val SPORTS_QUICK_RETRIES = 4
+private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L

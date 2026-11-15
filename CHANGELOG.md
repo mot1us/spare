@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.49.4 — 2026-11-15
+
+- Startup no longer unpacks your other playlists while the first channel is still settling. On an onn 4K Pro, unpacking a large second playlist took about seven seconds of processor right after launch. Opening Sports during that time froze the menu briefly and made the picture stutter. Other playlists now load once the channel has played smoothly for about ten seconds and the remote is idle, or after 45 seconds at most. Until then, Sports and Search only see the playlist you are watching.
+
 ## 0.49.3 — 2026-11-15
 
 - Sports says when "Show only my teams" is hiding games. With the setting on and none of your teams playing, Today or a league showed only the RedZone card with no explanation. The line under the title now reads, for example, "Today · Showing only your teams · 12 other games hidden", and an otherwise empty screen says how to turn the setting off. Live now still shows every live game.
