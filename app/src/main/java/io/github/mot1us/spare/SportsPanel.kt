@@ -668,7 +668,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         gridArea.animate().alpha(1f).setDuration(180).start(); heroContent.animate().alpha(1f).setDuration(180).start()
     }
     fun loading(message: String) { contextLine.text = message; loadingGames = games.isEmpty(); progress.isVisible = true; status.text = message; if (games.isEmpty()) { empty.text = "Loading scores and schedules…"; empty.isVisible = true; if (initialReveal) showSkeleton() } }
-    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean) {
+    /** [hidden] counts games left out by "Show only my teams", so an empty-looking screen says why. */
+    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean, hidden: Int = 0) {
         if (cardsClosed) return
         val request = ++cardsRequest
         this.followed = followed
@@ -695,6 +696,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         setTextChanged(headerTitle, selectedLeague?.let(SportsLeagues::label) ?: "Sports")
         val now = System.currentTimeMillis()
         setTextChanged(contextLine, if (scanning && next.isEmpty()) "$schedule · Checking games…"
+            else if (hidden > 0) "$schedule · Showing only your teams · ${counted(hidden, "other game")} hidden"
             else "$schedule · ${counted(next.size, "game")} · ${next.count { it.live(now) }} live")
         if (scanning && next.isEmpty() && (initialReveal || !changedScope)) {
             if (!watchMode && !actionsOpen) { progress.isIndeterminate = true; progress.isVisible = true; status.text = "Updating sports…" }
@@ -704,7 +706,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val first = initialReveal; initialReveal = false; loadingGames = false
         val showRedZone = "NFL" in enabledLeagues
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
-        empty.text = if (scanning) "Checking games…" else if (selected == "live") "No live games. Choose Today for upcoming games and results." else "No games on this date. Try another date or league."
+        empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games. Choose Today for upcoming games and results." else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
         if (games != next || displayedRedZone != showRedZone) {
             cardUpdates.submit(CardUpdate(request, games, gameKeys, next.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered))

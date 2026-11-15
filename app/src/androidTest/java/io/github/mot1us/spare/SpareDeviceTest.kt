@@ -2301,6 +2301,34 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsSaysWhenShowOnlyMyTeamsHidesTheDaysGames() {
+        FixtureServer().use { server ->
+            val source = Source(name = "My teams fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL"); store.followedTeams = setOf("nfl:SEA"); store.sportsFollowedOnly = true
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("teams-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL")) }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-context")?.text?.toString() == "Today · Showing only your teams · 1 other game hidden" }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-live").performClick() }
+                    // Live now shows every live game whatever the team setting, as before.
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 2 }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.sportsFollowedOnly = false; store.followedTeams = emptySet(); store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

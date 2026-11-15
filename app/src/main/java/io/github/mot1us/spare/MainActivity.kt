@@ -2384,7 +2384,9 @@ class MainActivity : Activity() {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
                 (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
             }
-            val games = SportsPanel.ordered(rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) && (selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed }) }, followed, now)
+            val inLeague = rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) }
+            val games = SportsPanel.ordered(inLeague.filter { selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed } }, followed, now)
+            val hiddenByTeams = inLeague.size - games.size
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
                 if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
@@ -2397,7 +2399,7 @@ class MainActivity : Activity() {
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
                     else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
-                sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(selectedLeague?.let { setOf(it) } ?: leagues); sportsPanel.setLeagueFilter(selectedLeague); sportsPanel.submit(games, followed, selectedTeam, progress, scanning); scheduleScoreDelay()
+                sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(selectedLeague?.let { setOf(it) } ?: leagues); sportsPanel.setLeagueFilter(selectedLeague); sportsPanel.submit(games, followed, selectedTeam, progress, scanning, hiddenByTeams); scheduleScoreDelay()
                 if (browsing) selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
