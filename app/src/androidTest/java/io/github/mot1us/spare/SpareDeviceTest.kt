@@ -2420,6 +2420,40 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun okOnSportsInTheMenuLeavesTheMenuWhileScoresAreStillLoading() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Slow scores fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NFL")
+            val release = java.util.concurrent.CountDownLatch(1)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = {
+                    // On a TV the first scoreboard reply can take seconds.
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                    val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("slow-nfl", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL"))
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    device.pressBack(); waitFor(scenario) { channelList(it)?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").requestFocus() }
+                    waitFor(scenario) { it.currentFocus?.tag == "sports-mode" }
+                    device.pressDPadCenter()
+                    // The cursor leaves the menu at once and rests on Live now while the scores load.
+                    waitFor(scenario) { it.currentFocus?.tag == "sports-live" && !it.window.decorView.findViewWithTag<View>("app-navigation").hasFocus() }
+                    release.countDown()
+                    // Then the games take the cursor as soon as they arrive.
+                    waitFor(scenario) { it.currentFocus?.tag == "NFL:slow-nfl" }
+                }
+            } finally {
+                release.countDown(); lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

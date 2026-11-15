@@ -33,6 +33,12 @@ sport). Studio shows, replays, previews and highlights are excluded; listings of
 the same event are grouped into one card of channels, at most 24 cards. These
 are guide evidence, not scoreboard events, and appear only on Live now.
 
+Provider event slots (`EventChannelNames`): categories with three or more
+numbered or "no event" channels are re-read from Xtream providers (categories
+list plus `get_live_streams&category_id`, at most eight categories) every 10
+minutes while Sports is open. Fresh names are used only for matching and stream
+labels; the saved lineup and guide are unchanged until the next full refresh.
+
 `scripts/sports_team_directory.py` captures ESPN's full team lists for the
 `SportsTeamDirectoryAuditTest` report (developer use only; the app makes no such
 requests). The test is skipped unless `SPARE_TEAM_DIRECTORY` names a capture.

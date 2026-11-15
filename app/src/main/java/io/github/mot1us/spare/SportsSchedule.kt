@@ -188,7 +188,10 @@ object SportsSchedule {
             return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
         }
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
-        val channels = prepared?.sportsChannels(hints, candidateHints) ?: PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
+        val indexed = prepared?.sportsChannels(hints, candidateHints) ?: PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
+        // Event channels renamed since the channel list was saved ("Game Pass 11: NO EVENT" -> "...: SEA @ LV").
+        val channels = EventChannelNames.renamedIn(guide.channels).filter(SportsStreams::video).let { renamed ->
+            if (renamed.isEmpty()) indexed else (indexed + renamed).distinctBy { it.id } }
         var complete = true
         val matches = mutableListOf<SportsBroadcast>()
         var checkedKeys = 0
@@ -231,12 +234,14 @@ object SportsSchedule {
             if (index % 128 == 0 && System.nanoTime() >= deadlineNanos) { complete = false; break }
             checkedChannels++
             if (index % 512 == 0) progress(checkedKeys + checkedChannels, total)
-            val named = relevant(channel.name)
-            val possibleNetwork = candidateHints.any { channel.name.contains(it, true) } && SportsStreams.speculative(channel)
+            val name = EventChannelNames.name(channel)
+            val named = relevant(name)
+            val possibleNetwork = candidateHints.any { name.contains(it, true) } && SportsStreams.speculative(channel)
             if (!named && !possibleNetwork) continue
-            if (SportsGuide.excludedTitle(channel.sportsKey) || named && !currentTitle(channel.name)) continue
-            if (game.live(now) && named && matchesTarget(Programme(channel.id, channel.name, game.start, game.end), channel.group)) titles.add(channel)
-            else if (possibleNetwork && patterns.any { it in channel.sportsKey }) candidates.add(channel)
+            val sportsKey = if (EventChannelNames.renamed(channel)) " ${SportsCatalog.normalize(name)} " else channel.sportsKey
+            if (SportsGuide.excludedTitle(sportsKey) || named && !currentTitle(name)) continue
+            if (game.live(now) && named && matchesTarget(Programme(channel.id, name, game.start, game.end), channel.group)) titles.add(channel)
+            else if (possibleNetwork && patterns.any { it in sportsKey }) candidates.add(channel)
         }
         val confirmed = matches.map { it.channel.id }.toSet()
         if (measurement != null) measurement.channels = checkedChannels

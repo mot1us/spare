@@ -874,10 +874,14 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             setStroke(dp(3), GuideTheme.current.accent); cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density
         } else null
     }
-    fun focusGames() {
+    /**
+     * [entering] is true when the viewer has just moved into Sports (from the main menu or the guide): while games load,
+     * the cursor then rests on the filter row instead of staying in the menu, which looked as if OK had done nothing.
+     */
+    fun focusGames(entering: Boolean = false) {
         when {
             // Wait for the first game instead of parking the cursor on a league chip while loading.
-            loadingGames && games.isEmpty() && !watchMode -> { pendingEnter = true; pendingInput = inputEpoch; if (!hasFocus()) return; focusLeagueFilter() }
+            loadingGames && games.isEmpty() && !watchMode -> { pendingEnter = true; pendingInput = inputEpoch; if (!hasFocus() && !entering) return; focusLeagueFilter() }
             watchMode -> { pendingEnter = false; if (streamsList.isNotEmpty()) focusStream(0) else focusStreamsHeader() }
             actionsOpen -> findStreams.takeIf { it.isEnabled }?.requestFocus() ?: focusLeagueFilter()
             cards.itemCount > 0 -> { pendingEnter = false; val key = remembered ?: featured?.key ?: REDZONE; focusAt(gamePositions[key] ?: 0) }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.50.1 — 2026-11-15
+
+- OK on Sports in the main menu now moves straight into Sports. While scores were still loading, the cursor stayed in the menu, so OK seemed to do nothing until the games arrived. The cursor now rests on Live now and moves to the games when they load.
+- Event channels renamed for today's games are found. Providers rename slots such as "NFL Game Pass 11: NO EVENT" to "NFL Game Pass 11: SEA @ LV" as games start, but Spare only saw the names from its last channel-list download. While Sports is open, Spare now re-reads just those event categories from Xtream providers every 10 minutes (a small request, not the whole list) and matches games to the fresh names.
+
 ## 0.50.0 — 2026-11-15
 
 - Sports opens on Live now: live games from all your leagues together. Choosing a league shows that league's whole day (live, upcoming and results); Today and Calendar use the last league you chose.

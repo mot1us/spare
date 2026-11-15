@@ -543,7 +543,7 @@ class MainActivity : Activity() {
     private fun owner(item: OnDemand): Source? = if (item.playlistId.isBlank()) source else sources.firstOrNull { it.id == item.playlistId }
     private fun enabledSources() = sources.filter { it.enabled }
     private fun playbackSource() = onDemand?.let(::owner) ?: owner(current)
-    private fun channelLabel(channel: Channel) = channel.name + if (enabledSources().size > 1) " · ${owner(channel)?.name.orEmpty()}" else ""
+    private fun channelLabel(channel: Channel) = EventChannelNames.name(channel) + if (enabledSources().size > 1) " · ${owner(channel)?.name.orEmpty()}" else ""
     private fun allowed(channel: Channel) = owner(channel)?.let { it.enabled && Network.allowed(channel.url, it.allowHttp) } == true
     private val programmeIndexWorker = workers.pool("programme-index", background = true)
     private val programmeIndexBuilder = GuideProgrammeIndex.Builder()
@@ -1350,7 +1350,7 @@ class MainActivity : Activity() {
         scheduleEpg()
     }
     private fun focusChannel() {
-        if (sportsVisible) { ++focusEpoch; sportsPanel.focusGames(); return }
+        if (sportsVisible) { ++focusEpoch; sportsPanel.focusGames(entering = true); return }
         val index = adapter.positionOf((focused ?: current)?.id).takeIf { it >= 0 }
             ?: adapter.positionOf(current?.id).coerceAtLeast(0)
         focusChannelAt(index)
@@ -2394,6 +2394,7 @@ class MainActivity : Activity() {
         ensureSportsLeague()
         rememberScores(liveSports)
         if (sportsComputing) { sportsDirty = true; return }
+        refreshEventNames()
         checkLiveSports(); handler.removeCallbacks(pollLiveSports); handler.postDelayed(pollLiveSports, 60000)
         sportsComputing = true
         val liveSnapshot = liveSports; val checkingSnapshot = liveSportsChecking
@@ -2470,6 +2471,30 @@ class MainActivity : Activity() {
      * Live now browses every chosen league at once (no league selected). Today and Calendar show one league,
      * the last one chosen, so its upcoming games and results stay readable.
      */
+    private val eventNameWorker = workers.pool("event-names", background = true)
+    private var eventNamesAt = 0L
+    private var eventNamesTask: java.util.concurrent.Future<*>? = null
+    /**
+     * While Live now is open, re-read the provider's event categories (Game Pass, PPV…) every 10 minutes, so channels
+     * renamed for today's games are found without downloading the whole channel list.
+     */
+    private fun refreshEventNames() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (eventNamesAt != 0L && now - eventNamesAt < EventChannelNames.REFRESH_MS || eventNamesTask?.isDone == false) return
+        val snapshot = guide
+        val wanted = enabledSources().filter { it.kind == "xtream" }.associateWith { owner ->
+            EventChannelNames.eventGroups(snapshot.channels.filter { playlistId(it) == owner.id })
+        }.filterValues { it.isNotEmpty() }
+        eventNamesAt = now
+        if (wanted.isEmpty()) return
+        eventNamesTask = eventNameWorker.submit {
+            val fresh = wanted.mapNotNull { (owner, groups) -> runCatching { owner.id to EventChannelNames.fetch(owner, groups) }.getOrNull() }.toMap()
+            if (fresh.isEmpty() || Thread.currentThread().isInterrupted) return@submit
+            handler.post {
+                if (!closed && EventChannelNames.update(guide.channels, ::playlistId, fresh)) { sportsStreamCache.clear(); scheduleSports() }
+            }
+        }
+    }
     private fun ensureSportsLeague(): String? {
         if (sportsBrowseLeague != null && sportsBrowseLeague !in store.sportsLeagues) sportsBrowseLeague = null
         if (sportsBrowseLeague == null && sportsTeam != "live") sportsBrowseLeague = store.sportsLastLeague
@@ -3199,6 +3224,7 @@ class MainActivity : Activity() {
         if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun configurePlaylists(next: List<Source>) {
+        EventChannelNames.clear(); eventNamesAt = 0L
         store.saveSources(next); sources = next
         if (::playlists.isInitialized) playlists.configure(next)
         source = next.firstOrNull { it.id == source?.id && it.enabled } ?: next.firstOrNull { it.enabled }
