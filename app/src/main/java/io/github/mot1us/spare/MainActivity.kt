@@ -395,6 +395,13 @@ class MainActivity : Activity() {
     private lateinit var video: PlayerView
     @Volatile private var measuredFrameRate = 0f
     @Volatile private var decoderFrameRate = 0f
+    @Volatile private var videoDecoderName = ""
+    /** Hardware decoders run on the video chip; a software one competes with the app for the processor. */
+    private val hardwareDecoders by lazy { runCatching { android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos.associate { it.name to (Build.VERSION.SDK_INT < 29 || it.isHardwareAccelerated) } }.getOrDefault(emptyMap()) }
+    private fun decoderLabel(): String {
+        val name = videoDecoderName.ifBlank { return "Decoder not started" }
+        return "Decoder $name · " + when (hardwareDecoders[name]) { true -> "hardware"; false -> "SOFTWARE"; null -> "type unknown" }
+    }
     @Volatile private var scanEvidence = "unknown"
     private lateinit var frameRates: FrameRates
     private lateinit var root: FrameLayout
@@ -804,6 +811,7 @@ class MainActivity : Activity() {
             }
         })
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoderName = decoderName }
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
                     playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
@@ -3051,7 +3059,7 @@ class MainActivity : Activity() {
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${current?.let { videoInfo[it.id]?.evidence }.orEmpty()}"
         val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
         val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
-        val presentation = "Video · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
+        val presentation = "Video · ${decoderLabel()} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
         val audio = player.audioFormat
         return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(), presentation,
             audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())

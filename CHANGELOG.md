@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.47.3 — 2026-11-14
+
+- Playback diagnostics and the Performance report name the video decoder in use and whether it is the TV's hardware decoder or a software one. A software decoder shares the processor with the app, which would make video stutter whenever the app is busy while audio stays smooth.
+
 ## 0.47.2 — 2026-11-14
 
 - Fixed a stall caused by the Performance report itself: when video frames dropped, it looked up what every part of the app was doing on the screen's own thread (about 0.2 s each time). That now happens in the background.
