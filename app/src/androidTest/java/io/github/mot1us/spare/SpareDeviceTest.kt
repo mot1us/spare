@@ -4140,6 +4140,8 @@ class SpareDeviceTest {
                     val diagnostic = MainActivity::class.java.getDeclaredMethod("playbackDiagnostics").apply { isAccessible = true }.invoke(activity) as String
                     assertTrue(diagnostic.contains("dropped frames this playback attempt")); assertTrue(diagnostic.contains("Hz · Requested"))
                     assertTrue("The decoder in use is named: $diagnostic", Regex("Decoder \\S+ · (hardware|SOFTWARE|type unknown)").containsMatchIn(diagnostic))
+                    assertTrue("Tunneled playback is reported: $diagnostic", diagnostic.contains("tunneled"))
+                    android.util.Log.i("SpareTunnel", diagnostic.lines().first { "Decoder" in it && "tunneled" in it })
                     assertSame(samePlayer, find<PlayerView>(activity.window.decorView)!!.player)
                     assertEquals("Matching corrections must preserve the playing connection", attempt, samePlayer!!.currentMediaItem!!.mediaId)
                 }

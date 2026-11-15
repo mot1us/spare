@@ -396,11 +396,40 @@ class MainActivity : Activity() {
     @Volatile private var measuredFrameRate = 0f
     @Volatile private var decoderFrameRate = 0f
     @Volatile private var videoDecoderName = ""
+    /** Whether the TV's video hardware is timing frames for the current stream (Media3 may decline for some tracks). */
+    private fun tunneled() = ::player.isInitialized && player.isTunnelingEnabled
+    /** Ask for tunneled playback on the main player, except while multiview shares the screen with other players. */
+    private fun applyTunneling() {
+        val selector = player.trackSelector as? androidx.media3.exoplayer.trackselection.DefaultTrackSelector ?: return
+        val wanted = store.tunneledPlayback && !multiview.active
+        if (selector.parameters.tunnelingEnabled != wanted) selector.setParameters(selector.buildUponParameters().setTunnelingEnabled(wanted))
+    }
+    /** Tunneled playback did not start a stream on this TV: switch it off for good and try the stream again normally. */
+    private fun tunnelingFailed(): Boolean {
+        if (!tunneled()) return false
+        store.tunneledPlayback = false; store.tunnelingFailed = true; applyTunneling()
+        playAttempt(PlaybackPhase.RECONNECTING); return true
+    }
+    private var tunnelRateToken = -1
+    /** With tunneling no per-frame callback arrives, so frame-rate matching reads the stream's own header once per stream. */
+    private fun observeTunneledRate() {
+        if (!tunneled() || !firstFrame || multiview.active || tunnelRateToken == playbackToken) return
+        val format = player.videoFormat ?: return
+        tunnelRateToken = playbackToken
+        val header = if (format.sampleMimeType == androidx.media3.common.MimeTypes.VIDEO_H264) AvcHeader.read(format.initializationData.toMutableList()) else AvcHeader.Info()
+        scanEvidence = if (header.known) (if (header.interlaced) "SPS interlaced" else "SPS progressive") else if (VideoRate.interlaced(format)) "MPEG-2 interlaced" else "unknown"
+        val info = VideoRate.observation(format, 0f, 0f, header, sourceVideoFrames.rate(playbackToken))
+        if (info.fps > 0) frameRates.observe(info.fps, info.evidence in setOf("input timestamps", "SPS timing"))
+        val size = player.videoSize
+        val width = info.width.takeIf { it > 0 } ?: size.width; val height = info.height.takeIf { it > 0 } ?: size.height
+        if (width > 0 && height > 0) recordVideo(info.copy(width = width, height = height))
+    }
     /** Hardware decoders run on the video chip; a software one competes with the app for the processor. */
     private val hardwareDecoders by lazy { runCatching { android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos.associate { it.name to (Build.VERSION.SDK_INT < 29 || it.isHardwareAccelerated) } }.getOrDefault(emptyMap()) }
     private fun decoderLabel(): String {
         val name = videoDecoderName.ifBlank { return "Decoder not started" }
-        val speed = sourceVideoFrames.operatingRate.takeIf { it > 0 }?.let { " · asked for ${it.toInt()} fps" } ?: " · speed from stream"
+        val speed = (sourceVideoFrames.operatingRate.takeIf { it > 0 }?.let { " · asked for ${it.toInt()} fps" } ?: " · speed from stream") +
+            when { tunneled() -> " · tunneled (the TV times frames; drops are not counted)"; store.tunneledPlayback -> " · not tunneled (declined for this stream)"; else -> " · not tunneled" }
         return "Decoder $name · " + when (hardwareDecoders[name]) { true -> "hardware"; false -> "SOFTWARE"; null -> "type unknown" } + speed
     }
     @Volatile private var scanEvidence = "unknown"
@@ -631,7 +660,9 @@ class MainActivity : Activity() {
             val monotonic = android.os.SystemClock.elapsedRealtime()
             if (onDemand == null && !multiview.active) current?.let { streamHealth.observe(it.id, monotonic, active && state == Player.STATE_READY) }
             if (monotonic - journalSampleAt >= 5000) { journalSampleAt = monotonic; journal(PlaybackJournal.Event.SAMPLE) }
-            val frame = if (!multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
+            observeTunneledRate()
+            // Tunneled frames never reach the app, so only the playback position can show progress.
+            val frame = if (!tunneled() && !multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
             if (recoverBufferedSports(monotonic, state == Player.STATE_BUFFERING)) return
             if (playbackProgress.stalled(playbackToken, android.os.SystemClock.elapsedRealtime(), player.currentPosition, frame, state == Player.STATE_BUFFERING, active, bufferedMs = player.totalBufferedDuration)) {
                 reconnectOrFail(if (onDemand != null) "Playback stopped advancing. Retry resumes this title from your saved position. (STREAM_STALLED)" else "Playback stopped advancing. Choose Retry to reconnect this channel. (STREAM_STALLED)")
@@ -657,6 +688,7 @@ class MainActivity : Activity() {
     private val revealBuffering = Runnable { if (started && (current != null || onDemand != null) && player.playbackState == Player.STATE_BUFFERING) showPlaybackLoading(PlaybackPhase.BUFFERING) }
     private val startupTimeout = Runnable {
         if (started && (current != null || onDemand != null) && !firstFrame) {
+            if (tunnelingFailed()) return@Runnable
             performanceOverlay?.sports?.playing?.outcome("startup timeout")
             if (onDemand != null) { reconnectOrFail("This title did not resume. Retry continues from your saved position. (STREAM_TIMEOUT)"); return@Runnable }
             if (!hasPlayedChannel && tryAlternate()) return@Runnable
@@ -771,6 +803,9 @@ class MainActivity : Activity() {
             override fun onPlayerError(error: PlaybackException) {
                 if (!started || (current == null && onDemand == null) || player.playerError !== error) return
                 cancelPlaybackCallbacks()
+                // A decoder or audio output that cannot run tunneled fails here: play the stream normally from now on.
+                if (error.errorCode in setOf(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED, PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED, PlaybackException.ERROR_CODE_DECODING_FAILED,
+                        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED, PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED) && tunnelingFailed()) return
                 val http = PlaybackErrors.httpFailure(error)
                 val statusCode = http?.responseCode
                 performanceOverlay?.sports?.playing?.playerError(statusCode, error.errorCode)
@@ -1680,6 +1715,7 @@ class MainActivity : Activity() {
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
         if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
+        applyTunneling()
         journal(PlaybackJournal.Event.OPEN)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
         handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
@@ -3226,6 +3262,15 @@ class MainActivity : Activity() {
                 panel.page(page, "Player controls for live TV, catch-up, movies and series. Changes keep this settings surface open.")
                 panel.action("Sleep timer", SleepTimer.label(sleepAt, System.currentTimeMillis()), sleepAt > 0) {
                     setSleepTimer(SleepTimer.next(sleepAt, System.currentTimeMillis())); refresh("Sleep timer")
+                }
+                panel.action("Tunneled playback", when {
+                    store.tunneledPlayback -> "On · the TV's video hardware times frames, so a busy app cannot stutter the picture"
+                    store.tunnelingFailed -> "Off · switched off after a stream did not start with it"
+                    else -> "Off"
+                }, store.tunneledPlayback) {
+                    store.tunneledPlayback = !store.tunneledPlayback
+                    if (current != null || onDemand != null) playAttempt(PlaybackPhase.RECONNECTING)
+                    refresh("Tunneled playback")
                 }
                 listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels").forEach { label ->
                     panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }

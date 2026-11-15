@@ -428,6 +428,13 @@ class SecureStore(private val context: Context) {
     var sportsFailoverSeconds: Int
         get() = preferences.getInt("sports-failover-seconds", 15).takeIf { it in listOf(10, 15, 20, 30) } ?: 15
         set(value) { preferences.edit { putInt("sports-failover-seconds", value.takeIf { it in listOf(10, 15, 20, 30) } ?: 15) } }
+    /** The TV's video hardware times frames (tunneled playback); on by default, switched off for good if a channel fails to start with it. */
+    var tunneledPlayback: Boolean
+        get() = preferences.getBoolean("tunneled-playback", true)
+        set(value) { preferences.edit { putBoolean("tunneled-playback", value); if (value) putBoolean("tunneling-failed", false) } }
+    var tunnelingFailed: Boolean
+        get() = preferences.getBoolean("tunneling-failed", false)
+        set(value) { preferences.edit { putBoolean("tunneling-failed", value) } }
     var frameRateMatching: Boolean
         get() = preferences.getBoolean("frame-rate-matching", true)
         set(value) { preferences.edit { putBoolean("frame-rate-matching", value) } }

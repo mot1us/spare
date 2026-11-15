@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.48.0 — 2026-11-14
+
+- Tunneled playback (Settings › Playback), on by default: the TV's own video hardware times each frame and keeps it in sync with the sound, so the picture no longer depends on the app keeping up. Before, scrolling, opening Library or the app's own background work could make video stutter while audio stayed smooth. The same approach is offered by OwnTV.
+- If a stream does not start with tunneled playback, or the decoder or audio output refuses it, Spare switches it off for good, says so in Settings, and plays the stream again normally. Multiview always plays normally. Some streams are declined automatically by the player; diagnostics show whether the current stream is tunneled.
+- While tunneled, frames never pass through the app: frame-rate matching reads the stream's own header once instead of timing frames, stall detection relies on the playback position, and dropped frames are no longer counted.
+
 ## 0.47.4 — 2026-11-14
 
 - Live channels that do not state their frame rate (most live transport streams) now ask the TV's video decoder to run fast enough for 60 frames a second, when it supports that picture size at 60. Before, the decoder was given no target; on the onn 4K Pro it reported 30 for 59.94 fps channels and dropped frames whenever the app was busy. Streams that state their own frame rate are unchanged.
