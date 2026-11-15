@@ -6,7 +6,7 @@
 and Settings dock. `GuideAdapter`, `SidebarAdapter`, `NavigationRail`, and
 `TvFocus` own remote focus and list presentation. `GuideTimeline` owns per-channel
 programme browsing. `GuideTheme`, `ThemeEditor`, and `AppFont` own appearance.
-This contract applies to Android TV; [macOS](macos.md) has separate controls.
+This contract applies to Android TV.
 
 ## Guide data and selection
 

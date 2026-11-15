@@ -5,7 +5,7 @@
 Spare imports user-supplied M3U or Xtream sources into a playable lineup and a
 programme guide. It supplies no channels, provider accounts, or hosted proxy.
 Multiple enabled sources may contribute to one Guide, Search, and Sports view.
-The macOS implementation has a separate [preview contract](macos.md).
+
 
 `Source` carries a saved source ID, kind, address, credentials, optional explicit
 EPG URL, HTTP consent, enabled state, and configured stream limit. `Importers`

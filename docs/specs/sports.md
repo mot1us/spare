@@ -9,7 +9,7 @@ and it does not open video connections to discover coverage or measure quality.
 Playback and multiview remain subject to the [playback contract](playback.md);
 provider ownership and encrypted files follow
 [Android provider storage](android-provider-storage.md). The
-[macOS preview](macos.md) has its own, smaller Sports implementation.
+
 
 The Android league registry covers NFL, MLB, NBA, NHL, Premier League, MLS,
 Champions League, NCAA football (FBS/FCS), men's and women's basketball, and

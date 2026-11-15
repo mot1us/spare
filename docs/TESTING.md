@@ -10,10 +10,6 @@ and an Android TV system image. CI configuration is in
 [build.yml](../.github/workflows/build.yml) and
 [release.yml](../.github/workflows/release.yml).
 
-macOS requires a Mac with Xcode command-line tools and Swift 5.9 or newer; the
-package targets macOS 13+. Native packaging also needs access to the pinned VLC
-runtime/source downloads unless already cached.
-
 Use synthetic playlists, guide data, credentials, and media. Do not inspect
 private `.env`, credential, or machine-specific configuration files to find build
 settings. Do not commit SDK paths, signing material, or generated build output.
@@ -42,21 +38,6 @@ transport-stream fixture during assembly. That fixture is not a release asset.
 Gradle reports are under `app/build/reports/` and APKs under
 `app/build/outputs/apk/`. Dependencies are locked; update locks only with an
 intentional dependency change.
-
-For macOS:
-
-```sh
-cd macos
-swift test
-cd ..
-python3 scripts/macos-build.py
-```
-
-Swift tests cover core parsing/storage/services and app-state/player-watchdog
-contracts. The packaging script builds both architectures by default, bundles the
-separate VLC runtime and license/source material, checks executable/VLC
-architectures, declares a macOS 13 minimum, and verifies ad-hoc signing. Packaging is distinct from
-real native UI/playback verification.
 
 ## Isolated Android TV tests
 
@@ -111,25 +92,6 @@ Scale local device coverage to the changed behavior. Once relevant checks pass,
 do not rerun unrelated suites without a new change or unresolved failure. Record
 any failed check and targeted rerun separately; never report a partial run as a
 full fresh pass.
-
-## Native Mac smoke
-
-Use an isolated `SPARE_DATA_DIR` and `--demo` with the packaged executable:
-
-```sh
-SPARE_DATA_DIR="$(mktemp -d)" dist/macos/Spare.app/Contents/MacOS/Spare --demo
-```
-
-Demo mode uses in-memory secrets and a separate demo preference suite. It expects
-a synthetic M3U server at `http://127.0.0.1:8767/playlist.m3u`; serve only generated
-fixture channels and media, never real provider addresses. The demo preferences
-are separate from normal settings but are shared between demo launches.
-
-Check launch, channel selection, decoded video, pause/resume, preview/full-screen
-transitions, Live TV/Sports navigation, and clean exit. Use at least two fixture
-channels to exercise switching. An isolated data directory alone does not enable
-in-memory secrets; keep `--demo`. Browser testing, if needed, uses an isolated
-browser/profile without personal accounts.
 
 ## Physical onn 4K Pro and TV acceptance
 

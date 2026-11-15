@@ -6,8 +6,7 @@ Library provides provider movies, series, episodes, Watchlist, and Continue
 watching. Search combines these titles with live channels and current/upcoming
 programme matches across enabled playlists. Provider catch-up is entered from the
 Guide and remains separate from movie/series catalogs. These features do not
-record streams, maintain a timeshift buffer, or supply content. They are outside
-the current [macOS preview](macos.md).
+record streams, maintain a timeshift buffer, or supply content.
 
 `OnDemand` describes a movie, series, episode, or catch-up item, including its
 provider ID, playlist owner, display metadata, and playback URL where applicable.

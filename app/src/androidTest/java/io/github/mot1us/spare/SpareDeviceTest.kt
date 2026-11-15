@@ -164,16 +164,32 @@ class SpareDeviceTest {
                 assertTrue(first.entries.none { a -> second.entries.any { b -> a.id == b.id } })
                 assertEquals("movie:188", catalog.query(snapshot, null, "Movie 188").entries.first().id)
                 val restored = LibraryCatalog(store).cached(source, "movie")!!
-                assertEquals(2190, restored.count); assertEquals(snapshot.groups, restored.groups)
-                assertTrue("Catalog writes are batched", restored.chunks.size < 8)
-                assertTrue(restored.chunks.all { it.keys.size == it.count && it.titles.size == it.count })
+                assertEquals(2190, restored.count)
+                assertTrue("The whole catalog is in the database, not in memory", restored.whole && restored.chunks.isEmpty())
+                assertTrue(catalog.hasCategory(restored, "1") && !catalog.hasCategory(restored, "3"))
+                val home = catalog.home(restored, mapOf("1" to "Science fiction", "2" to "Drama"), perRow = 5)
+                assertEquals(mapOf("1" to 1095, "2" to 1095), home.counts); assertEquals(listOf("movie:2", "movie:4", "movie:6", "movie:8", "movie:10"), home.categories.getValue("1").map { it.id })
+                assertEquals(listOf("movie:1", "movie:3"), catalog.row(restored, "2", emptyMap(), perRow = 2).map { it.id })
                 val cold = LibraryCatalog(store); cold.cached(source, "movie")
                 assertEquals("movie:2188", cold.matches(source, VodStart.Request("Movie 2188")).single().id)
                 assertEquals("movie:2188", LibraryCatalog(store).query(restored, null, "Movie 2188").entries.single().id)
                 assertTrue(catalog.query(restored.copy(scopeGroup = "Category 1"), null, "", limit = 40).entries.all { it.category == "Science fiction" })
-                store.delete(restored.chunks.first().file)
-                assertEquals("Index skips unrelated encrypted pages", "movie:2188", LibraryCatalog(store).query(restored, null, "Movie 2188").entries.single().id)
                 assertTrue(context.filesDir.listFiles()!!.filter { it.name.startsWith("catalog-${source.id}-") }.none { it.readBytes().toString(Charsets.UTF_8).contains("https://example.com/private/") })
+                listOf("library.db", "library.db-wal").map(context::getDatabasePath).filter { it.exists() }.forEach { file ->
+                    val text = file.readBytes().toString(Charsets.ISO_8859_1)
+                    assertFalse("Titles stay sealed in the database", text.contains("https://example.com/private/") || text.contains("Movie 2188"))
+                }
+                // A catalog saved by an earlier version (one encrypted file) moves into the database the first time it is read.
+                store.removeCache(source)
+                val legacy = org.json.JSONObject().put("schema", LibraryCatalog.SCHEMA).put("provider", source.providerKey()).put("updated", System.currentTimeMillis()).put("complete", true)
+                    .put("pages", org.json.JSONArray().put(org.json.JSONObject().put("file", "").put("count", 2).put("groups", org.json.JSONArray(listOf("Category 1")))
+                        .put("titles", org.json.JSONArray(listOf(LibraryCatalog.Title("movie:7", "Old saved film", "Category 1", "mp4", "2020", "", "").json(), LibraryCatalog.Title("movie:8", "Second film", "Category 1", "mp4", "2021", "", "").json())))))
+                    .put("labels", org.json.JSONObject().put("1", "Science fiction"))
+                store.write("catalog-${source.id}-movie-index.enc", legacy.toString().toByteArray())
+                val migrated = LibraryCatalog(store).cached(source, "movie")!!
+                assertTrue(migrated.whole && migrated.complete); assertEquals(2, migrated.count)
+                assertEquals("movie:7", LibraryCatalog(store).query(migrated, null, "Old saved").entries.single().id)
+                assertNull("The old file is removed once moved", store.read("catalog-${source.id}-movie-index.enc"))
             } finally { store.removeCache(source) }
 
         FixtureServer(slowVod = true, parallelClients = true).use { server ->

@@ -2,14 +2,12 @@
 
 ## Purpose and scope
 
-Spare is a native player for user-supplied IPTV sources. Android TV is the main
-application; the separately approved macOS preview implements Live TV and Sports.
+Spare is a native Android TV player for user-supplied IPTV sources.
 There is no Spare account, hosted credential service, advertising, or analytics.
 Provider catch-up is remote archive playback, not local recording or timeshift.
 
 Android supports M3U and Xtream live sources, provider movies and series, shared
-Search, Sports, and explicit two-up/four-up multiview. macOS does not inherit the
-Android Library, catch-up, or multiview scope. New product scope requires explicit
+Search, Sports, and explicit two-up/four-up multiview. New product scope requires explicit
 approval under [project instructions](../../AGENTS.md).
 
 ## Components and ownership
@@ -23,12 +21,10 @@ approval under [project instructions](../../AGENTS.md).
 | Sports | Schedule state is separate from provider coverage. Matching, replay discovery, score delay, reminders, and recovery have their own bounded work and cancellation. |
 | Playback | `MainActivity` retains one primary player; `Multiview` owns up to three additional players only during an explicit session. Transport and recovery helpers do not open probe players. |
 | Updates | `UpdateLookup`, `Release`, and `Updater` discover and verify Android packages. Installation uses native Android package installation. |
-| macOS | `SpareCore` owns provider, HTTP, cache, and Sports services; `SpareMac` owns SwiftUI state and playback; `CSpare` dynamically loads the separate VLC runtime. |
-| Delivery | Root `version.properties` supplies both platforms. Gradle builds Android; `scripts/macos-build.py` packages macOS. GitHub workflows own checked release publication. |
+| Delivery | Root `version.properties` supplies the version. Gradle builds Android. GitHub workflows own checked release publication. |
 
-Source entry points are under `app/src/main/java/io/github/mot1us/spare/` and
-`macos/Sources/`. The project intentionally uses a single Android app module and
-a Swift package rather than a shared cross-platform UI or backend.
+Source entry points are under `app/src/main/java/io/github/mot1us/spare/`. The
+project intentionally uses a single Android app module.
 
 ## Shared data contracts
 
@@ -72,8 +68,7 @@ stop can reconnect; background/resume is not a playback-continuity promise.
 
 Provider input is untrusted. Parsers retain input/item bounds and reject XML
 DTDs and custom XML entities. Android provider requests and redirects obey the owning source's
-HTTP consent; update transport always requires HTTPS. macOS VLC child-request
-consent remains an explicitly documented limitation in the [Mac spec](macos.md).
+HTTP consent; update transport always requires HTTPS.
 Credentials, provider URLs, and viewing history remain local and protected as
 specified in [Security](../../SECURITY.md).
 
@@ -89,12 +84,10 @@ physical HDMI refresh-rate behavior.
 Use [Testing](../TESTING.md) for commands and the physical-device checklist.
 `ActivityWorkersTest`, `LatestTaskTest`, `SharedJobsTest`, and provider identity
 tests cover ownership helpers; isolated Android scenarios cover lifecycle and
-playback continuity. Swift tests cover core and app-state contracts separately
-from packaged native smoke testing.
+playback continuity.
 
 The [0.32.16 audit](../AUDIT-0.32.16.md#remaining-findings) records unresolved
-Android M3U port-sensitive identity migration, Mac VLC child-request consent,
-and Mac artwork memory/disk bounds. These remain follow-up work, not guarantees
+Android M3U port-sensitive identity migration. This remains follow-up work, not a guarantee
 created by this documentation review.
 
 ## Change notes

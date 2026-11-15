@@ -17,14 +17,13 @@ reports and historical test notes describe the version they reviewed.
 | [Library and Search](specs/library-and-search.md) | Lazy catalogs, movies/episodes, catch-up, history, Watchlist, and shared search. |
 | [Sports](specs/sports.md) | Schedules, stream evidence/ranking, replays, score delay, reminders, and recovery. |
 | [Updates and release](specs/updates-and-release.md) | Android update trust, installation, versioning, and publication gates. |
-| [macOS preview](specs/macos.md) | Native Mac scope, source/task ownership, secure caches, VLC, and known gaps. |
 
 ## Development and operation
 
 - [Testing](TESTING.md): build prerequisites, required checks, isolated device
   suites, and the physical onn/TV checklist.
 - [Releasing](RELEASING.md): versioned delivery, signed publication, and updater
-  configuration; [Mac setup](../macos/README.md): packaging and native controls.
+  configuration.
 - [Security](../SECURITY.md): input, transport, storage, and disclosure boundaries.
 - [Buffering](BUFFERING.md): player budgets, diagnostics, and recovery behavior.
 - [Local channels](LOCAL-CHANNELS.md): offline reference data and matching limits.

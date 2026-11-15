@@ -76,6 +76,18 @@ class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context
             result
         }
 
+    /** The titles at these positions of one saved copy, in the order asked for; positions that are gone are skipped. */
+    fun titlesAt(scope: String, gen: String, positions: List<Int>): List<LibraryCatalog.Title> {
+        if (positions.isEmpty()) return emptyList()
+        val found = HashMap<Int, LibraryCatalog.Title>(positions.size)
+        positions.distinct().chunked(500).forEach { part ->
+            readableDatabase.rawQuery("SELECT pos, payload FROM title WHERE scope = ? AND gen = ? AND pos IN (${part.joinToString(",")})", arrayOf(scope, gen)).use { cursor ->
+                while (cursor.moveToNext()) found[cursor.getInt(0)] = LibraryCatalog.Title.from(JSONArray(String(crypto.open(cursor.getBlob(1)))))
+            }
+        }
+        return positions.mapNotNull(found::get)
+    }
+
     fun deleteSource(sourceId: String) {
         writableDatabase.transaction {
             val range = arrayOf("$sourceId:", "$sourceId;")

@@ -277,12 +277,29 @@ class LibraryController(private val activity: Activity, private val store: Secur
             ui(token) { proceed(names) }
         }
     }
-    private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.dbScope == null && it.count > 0 }
+    private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.whole && it.count > 0 }
     /** Set while the rows are being prepared off the UI thread: any other request (a new epoch) supersedes it. */
     private var homeToken = -1
     /** The rows are on screen or about to be: catalog updates and late grid pages must not replace them. */
     private fun homeActive() = panel.shelfCatalog != null || homeToken == epoch
-    private class Home(val stamp: Long, val shelves: Map<String, String>, val data: Map<String, CatalogShelves.Data>)
+    /** [data] fills in as category rows scroll into view and read their titles (see [loadShelf]). */
+    private class Home(val stamp: Long, val shelves: Map<String, String>, val data: MutableMap<String, CatalogShelves.Data>, val counts: Map<String, Int>)
+    private val shelfLoads = HashSet<String>()
+    /** One category row's titles, read from the database when the row comes into view. Main thread. */
+    private fun loadShelf(root: String, names: Map<String, String>, full: LibraryCatalog.Snapshot, id: String) {
+        val home = homes[root] ?: return
+        if (id !in names || home.data[id] != null || !shelfLoads.add("$root:$id")) return
+        catalogReader.submit {
+            val items = runCatching { repository.row(full, id, names) }.getOrDefault(emptyList())
+            handler.post {
+                shelfLoads.remove("$root:$id")
+                if (destroyed) return@post
+                val value = CatalogShelves.Data(items.map(::browserRow), home.counts[id] ?: items.size, busy = false, failed = items.isEmpty())
+                home.data[id] = value
+                if (panel.shelfCatalog == root) panel.shelf(id, value)
+            }
+        }
+    }
     private val homes = mutableMapOf<String, Home>()
     /** A category or search grid was opened from the rows home: Back returns to the rows. */
     private var gridFromHome = false
@@ -296,7 +313,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             homeToken = -1; pageTask?.cancel(true); ++pageEpoch
             if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
-            panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, {}, {}, { id -> when {
+            panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, { id -> loadShelf(root, names, full, id) }, {}, { id -> when {
                     id == HOME_CONTINUE -> open("continue"); id == HOME_WATCHLIST -> open("favorites")
                     id in names -> { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) }
                 } },
@@ -313,8 +330,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val shelves = linkedMapOf<String, String>(); val data = HashMap<String, CatalogShelves.Data>()
             if (rows.recent.isNotEmpty()) { shelves[HOME_RECENT] = "Recently added"; data[HOME_RECENT] = CatalogShelves.Data(rows.recent.map(::browserRow), 0, busy = false, more = false) }
             if (rows.top.isNotEmpty()) { shelves[HOME_TOP] = "Top rated"; data[HOME_TOP] = CatalogShelves.Data(rows.top.map(::browserRow), 0, busy = false, more = false) }
-            rows.categories.forEach { (id, items) -> shelves[id] = names[id].orEmpty(); data[id] = CatalogShelves.Data(items.map(::browserRow), rows.counts[id] ?: items.size, busy = false) }
-            val built = Home(full.updated, shelves, data)
+            // Every category with titles gets a row; only the first few read their titles now, the rest as they scroll into view.
+            names.keys.filter { (rows.counts[it] ?: 0) > 0 }.forEach { id -> shelves[id] = names[id].orEmpty() }
+            rows.categories.forEach { (id, items) -> data[id] = CatalogShelves.Data(items.map(::browserRow), rows.counts[id] ?: items.size, busy = false) }
+            val built = Home(full.updated, shelves, data, rows.counts)
             ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built, personal) }
         }
         homeToken = epoch
@@ -458,7 +477,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val cached = memory?.takeIf { it.complete } ?: runCatching {
                 // Only reuse an already-parsed full catalog here; decrypting a large saved one first delays the category.
                 repository.cached(selected, mode, scope) ?: repository.memory(selected, mode)?.takeIf { full ->
-                    full.complete && full.chunks.any { "Category $scope" in it.groups }
+                    full.complete && repository.hasCategory(full, scope)
                 }?.copy(labels = names, scopeGroup = "Category $scope")
             }.getOrNull()
             if (cached != null) deliver(cached, !cached.complete)
@@ -470,7 +489,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 }
             }.onSuccess { Timings.since("Category", began); deliver(it, false) }.onFailure { failure ->
                 val saved = cached ?: if (Thread.currentThread().isInterrupted) null else runCatching {
-                    repository.cached(selected, mode)?.takeIf { full -> full.chunks.any { "Category $scope" in it.groups } }?.copy(labels = names, scopeGroup = "Category $scope")
+                    repository.cached(selected, mode)?.takeIf { full -> repository.hasCategory(full, scope) }?.copy(labels = names, scopeGroup = "Category $scope")
                 }.getOrNull()
                 if (saved != null && cached == null) deliver(saved, false)
                 handler.post {
@@ -533,7 +552,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (selected != null && scope != null && scope.matches(Regex("[0-9]{1,20}"))) {
                 shelfCategory = scope; selectedCategories["${selected.id}:$kind"] = scope
             }
-            if (selected != null && scope != null && scope.matches(Regex("[0-9]{1,20}")) && snapshot.chunks.none { group in it.groups })
+            if (selected != null && scope != null && scope.matches(Regex("[0-9]{1,20}")) && !repository.hasGroup(snapshot, group))
                 scopedCatalog(selected, kind, key, scope, snapshot.labels, query, false)
             else { activeCatalog = key; activeSnapshot = snapshot; loadCatalogPage(group, query, false) }
         }, { loadCatalogPage(activeGroup, activeQuery, true) })

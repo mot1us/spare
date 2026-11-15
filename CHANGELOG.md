@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.47.0 — 2026-11-14
+
+- Movies and Series no longer live in memory. Each catalog is kept in the encrypted on-disk database, and Spare holds only a small index per title (search text, category, date added, rating) to filter and search. A 15,000-title catalog needed about 6 MB of memory before and about 1 MB now (measured on the emulator). Titles are read from the database only when they are about to be shown.
+- The Movies and Series rows load the way other TV apps do: the first few category rows are ready when the page opens, and each further row reads its titles as it scrolls into view.
+- A catalog saved by an earlier version moves into the database once, the first time it is opened; nothing is downloaded again.
+- Removed the macOS preview app and its build from the project. Spare is an Android TV app only.
+
 ## 0.46.3 — 2026-11-14
 
 - Sports now knows that a scoreboard's short network names and a playlist's spelled-out channel names are the same network: BTN = Big Ten Network, SECN = SEC Network, ACCN = ACC Network, CBSSN = CBS Sports Network, FS1/FS2 = Fox Sports 1/2, Pac-12 Network. A game on BTN now offers every "Big Ten Network" channel, not only the ones whose names say "BTN".

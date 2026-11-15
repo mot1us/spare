@@ -34,7 +34,7 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
     data class CatalogStatus(val checking: Boolean, val complete: Boolean, val failed: Boolean)
     fun catalogStatus(selected: Source, kinds: Set<String>): CatalogStatus = synchronized(lock) {
         if (source != selected) return@synchronized CatalogStatus(false, false, false)
-        val complete = kinds.all { mode -> repository.memory(selected, mode)?.let { it.complete && it.chunks.all { chunk -> chunk.titles.size == chunk.count } } == true }
+        val complete = kinds.all { mode -> repository.memory(selected, mode)?.let { it.complete && (it.whole || it.chunks.all { chunk -> chunk.titles.size == chunk.count }) } == true }
         CatalogStatus(!complete && (restoring || kinds.any { it in loading }), complete, kinds.any { it in failures })
     }
     fun prepare(selected: Source) {

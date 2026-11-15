@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-Spare distributes Android APKs and the optional macOS preview through this repository's GitHub Releases. There is no Spare account, hosted credential service or VPS dependency. This contract covers the Android updater's trust boundary and the automation that produces release artifacts. [Releasing](../RELEASING.md) is the operator workflow; [Testing](../TESTING.md) contains build, emulator and physical-device checks.
+Spare distributes Android APKs through this repository's GitHub Releases. There is no Spare account, hosted credential service or VPS dependency. This contract covers the Android updater's trust boundary and the automation that produces release artifacts. [Releasing](../RELEASING.md) is the operator workflow; [Testing](../TESTING.md) contains build, emulator and physical-device checks.
 
 ## Ownership and public data
 
@@ -38,23 +38,17 @@ Automatic updates are disabled in debug builds. A release build checks once per 
 
 ## Version and publication invariants
 
-Every completed project update increments the semantic version and monotonically increasing code, adds a changelog entry, and uses the delivered version in its commit. Android and macOS derive native versions from the same file. The version script validates shape/range and a matching changelog heading; reviewers and delivery history must still establish monotonicity. Dependency locks remain synchronized with actual dependency changes.
+Every completed project update increments the semantic version and monotonically increasing code, adds a changelog entry, and uses the delivered version in its commit. Gradle derives the app version from that file. The version script validates shape/range and a matching changelog heading; reviewers and delivery history must still establish monotonicity. Dependency locks remain synchronized with actual dependency changes.
 
 `release-request.json` is an explicit publication marker, not another version authority. Push-triggered publication requires its name/code to match the tracked version. It may retain an earlier requested version during unreleased work. Its attempt counter is advanced when requesting another run; a manual workflow dispatch has explicit publish/full-TV/Mac controls. Weekly runs verify the full TV suite without publishing.
 
-Ordinary Checks run Android unit tests, lint, debug/release/test APK builds, version/tooling checks and Mac Swift tests. They do not start a TV emulator or publish. Release verification additionally gates on isolated TV scenarios, the native update-install exercise and a minified-release smoke test. Focused requests always include startup, playback and encrypted-storage smoke checks; unknown test names fail selection. Playback-engine, storage/security and updater changes require the full suite. Physical-device behavior and refresh-rate/provider claims still require the hardware checklist.
+Ordinary Checks run Android unit tests, lint, debug/release/test APK builds, and version/tooling checks. They do not start a TV emulator or publish. Release verification additionally gates on isolated TV scenarios, the native update-install exercise and a minified-release smoke test. Focused requests always include startup, playback and encrypted-storage smoke checks; unknown test names fail selection. Playback-engine, storage/security and updater changes require the full suite. Physical-device behavior and refresh-rate/provider claims still require the hardware checklist.
 
 Release signing is permitted only in trusted main-branch jobs with protected secrets. Pull requests and ordinary development builds must not receive production signing material. Missing signing configuration yields an unsigned release APK, never a debug-signed production artifact. Test signing identities used by isolated installer checks are not distribution keys.
 
 The release job signs the already checked optimized APK, verifies the public certificate fingerprint and native package/version, then produces `spare.apk`, `SHA256SUMS` and `update.json`. Release notes come from the matching changelog section. An existing tag is rejected even if no GitHub Release exists; failed or timed-out remote lookup also fails closed. A new release targets the checked commit. Published tags and artifacts must not be rewritten.
 
 The tracked prerelease channel cannot be overridden to stable by a manual run. A manual request may force prerelease. Moving the tracked channel to stable requires the physical checkpoint described in the release workflow, so prerelease testing does not silently move users onto the stable channel.
-
-## macOS distribution
-
-The Mac preview uses manual GitHub downloads rather than the Android installer. `scripts/macos-build.py` defaults to a universal app, downloads checksum-pinned VLC runtime/source artifacts, bundles the dynamic runtime and licenses, applies ad-hoc signing, verifies signatures and requested architectures, and emits a versioned ZIP plus source archive and `MACOS-SHA256SUMS`. Ad-hoc signing is not Developer ID notarization. The development-only local-runtime option relies on an already verified input and is not equivalent to downloading the pinned runtime bytes.
-
-Mac publication is opt-in. Its build and Swift tests run separately; appending Mac assets requires both that job and the APK release job to succeed. Mac build failure does not by itself block the APK job, but prevents Mac attachment. Uploading uses no replacement option. See [Mac contracts](macos.md) for runtime transport and resource limitations.
 
 ## Validation and remaining boundaries
 
