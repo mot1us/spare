@@ -34,7 +34,7 @@ selected item to the existing primary player under the [playback contract](playb
   a row's first tile opens the main dock. Back from the titles goes to the tab line,
   and Back again leaves Library.
 - Poster artwork that arrives after its tile is drawn fades in. Posters already saved
-  on the TV are read and decoded on their own threads, never queued behind downloads.
+  on the TV are read and decoded on a thread of their own, never queued behind downloads.
 
 ## Catalog loading and bounds
 

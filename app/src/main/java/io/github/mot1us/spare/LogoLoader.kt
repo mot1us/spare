@@ -39,7 +39,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private class Failure(val until: Long, val attempts: Int)
     private val failed = ConcurrentHashMap<String, Failure>()
     private val workers = Executors.newFixedThreadPool(threads) as java.util.concurrent.ThreadPoolExecutor
-    private val readers = Executors.newFixedThreadPool(2) as java.util.concurrent.ThreadPoolExecutor
+    /** One thread, in order: saved images are quick to read, and a strict order keeps the download line bounded. */
+    private val readers = Executors.newFixedThreadPool(1) as java.util.concurrent.ThreadPoolExecutor
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var closed = false
     @Volatile private var paused = false
@@ -204,7 +205,14 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (stale()) return@execute
             val startedAt = SystemClock.uptimeMillis()
             val saved = runCatching { files?.saved(address()) }.getOrNull()
-            if (saved == null) { if (!closed) runCatching { download() }; return@execute }
+            if (saved == null) {
+                // No saved copy and the download line is full: give up this time, as request() does, so a visible
+                // image retries later and a detached one is simply forgotten instead of waiting in a long line.
+                if (workers.queue.size < 48 && !closed && runCatching { download() }.isSuccess) return@execute
+                val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
+                handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(null) } }
+                return@execute
+            }
             finish(runCatching { decode(saved, dimension) }.getOrNull(), startedAt)
         }
         return null
