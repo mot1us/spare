@@ -80,6 +80,20 @@ class RefinementTest {
         val matched = SportsSchedule.games(snapshot, Guide(listOf(channel), mapOf("one" to listOf(Programme("one", "Seahawks vs 49ers", now - 600000, now + 3600000)))), null, emptySet(), now).single()
         assertEquals(channel, matched.broadcasts.single().channel)
     }
+    @Test fun scoreboardNetworkShortNamesFindSpelledOutChannels() {
+        // The scoreboard says "BTN"; playlists say "Big Ten Network". Every BTN channel is offered, and unrelated ones are not.
+        val btn = Channel("btn", "US: Big Ten Network FHD", "US Sports", "https://example.com/btn")
+        val hd = Channel("btn-hd", "US: Big Ten Network HD 720", "US Sports", "https://example.com/btn-hd")
+        val short = Channel("btn-4k", "4K | BTN", "4K Events", "https://example.com/btn-4k")
+        val other = Channel("ten", "Ten Network AU", "AU", "https://example.com/ten")
+        val event = LiveEvent("cfb", setOf("ncaaf:264", "ncaaf:127"), now - 600000, "in", listOf("BTN"))
+        val snapshot = LiveSportsSnapshot(listOf(event), now, setOf("NCAAF"))
+        val game = SportsSchedule.games(snapshot, Guide(listOf(btn, hd, short, other), emptyMap()), null, emptySet(), now).single()
+        assertEquals(setOf("btn", "btn-hd", "btn-4k"), game.candidates.map { it.id }.toSet())
+        assertTrue(SportsStreams.broadcasterMatches("BTN", btn) && SportsStreams.broadcasterMatches("Big Ten Network", short))
+        assertFalse(SportsStreams.broadcasterMatches("BTN", other))
+        assertTrue(SportsStreams.broadcasterMatches("SECN", Channel("sec", "SEC Network FHD", "US", "https://example.com/sec")))
+    }
     @Test fun addonEnrichmentUsesOnlyMetadataIdAndPreservesProviderPlayback() {
         val item = OnDemand("movie:1", "A film", "Films", "https://provider.example/movie/secret-user/secret-pass/1.mp4", externalId = "tt1234567")
         val requests = mutableListOf<String>()

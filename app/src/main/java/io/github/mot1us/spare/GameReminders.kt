@@ -63,7 +63,19 @@ object SportsStreams {
     internal fun speculative(channel: Channel) = video(channel) && !nonSportsCategory.containsMatchIn(channel.group) && !nonSportsName.containsMatchIn(channel.name)
     private val preferredQuality = GuideFilters(1080, FrameRateFilter.sixtyOrBetter)
     private val numberedNetwork = Regex("\\b(espn|tsn|fs)\\s+([1-9])\\b")
-    internal fun broadcasterKey(value: String) = " " + SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2") + " "
+    /**
+     * Scoreboards name networks by their short form (BTN, SECN) while playlists usually spell them out
+     * ("US: Big Ten Network FHD"). Both sides are reduced to the short form before comparing.
+     */
+    private val spelledOut = listOf("big ten network" to "btn", "big 10 network" to "btn", "sec network" to "secn", "acc network" to "accn",
+        "pac 12 network" to "pac12", "cbs sports network" to "cbssn", "fox sports 1" to "fs1", "fox sports 2" to "fs2")
+    /** Every spelling of a scoreboard network name, normalized: "BTN" also finds "Big Ten Network". */
+    internal fun networkNames(network: String): List<String> {
+        val key = SportsCatalog.normalize(network)
+        return (listOf(key) + spelledOut.filter { (long, short) -> key == short || key == long }.flatMap { listOf(it.first, it.second) }).distinct()
+    }
+    private fun shortNetworks(normalized: String): String { var value = " $normalized "; spelledOut.forEach { (long, short) -> value = value.replace(" $long ", " $short ") }; return value.trim() }
+    internal fun broadcasterKey(value: String) = " " + shortNetworks(SportsCatalog.normalize(value.replace("+", " plus ")).replace(numberedNetwork, "$1$2")) + " "
     internal fun broadcasterMatches(network: String, channel: Channel): Boolean {
         return broadcasterMatchesKey(broadcasterKey(network), channel)
     }

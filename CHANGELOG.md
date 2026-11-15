@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.46.3 — 2026-11-14
+
+- Sports now knows that a scoreboard's short network names and a playlist's spelled-out channel names are the same network: BTN = Big Ten Network, SECN = SEC Network, ACCN = ACC Network, CBSSN = CBS Sports Network, FS1/FS2 = Fox Sports 1/2, Pac-12 Network. A game on BTN now offers every "Big Ten Network" channel, not only the ones whose names say "BTN".
+
 ## 0.46.2 — 2026-11-14
 
 Fixes found with the Performance report from an onn 4K Pro:

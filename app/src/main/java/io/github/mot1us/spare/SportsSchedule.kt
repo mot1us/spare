@@ -177,7 +177,7 @@ object SportsSchedule {
             val key = p.title to (p.description + context)
             return parsed.getOrPut(key) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target }
         }
-        val names = game.networks.map { " ${SportsCatalog.normalize(it)} " }.filter { it.length >= 5 }
+        val names = game.networks.flatMap(SportsStreams::networkNames).distinct().map { " $it " }.filter { it.length >= 5 }
         val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }.map { " $it " }
         val patterns = names + mascots
         val candidateHints = patterns.flatMap { it.trim().split(' ') }.filter { it.length >= 3 }.distinct()
