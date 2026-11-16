@@ -48,6 +48,23 @@ class LogoLoaderDeviceTest {
         return ready
     }
 
+    @Test fun aSlowDownloadNeverHoldsUpLookingForOtherSavedImages() {
+        val files = GuideLogoFiles(context, "lock-test-"); val bytes = png(); val hold = CountDownLatch(1); val started = CountDownLatch(1)
+        val slow = Thread { runCatching { files.bytes("https://images.example/slow.png") { started.countDown(); hold.await(10, TimeUnit.SECONDS); bytes } } }.apply { start() }
+        try {
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val began = android.os.SystemClock.uptimeMillis()
+            // More names than there are shared locks, so some of them share the slow download's lock.
+            repeat(200) { assertNull(files.saved("https://images.example/other-$it.png")) }
+            assertTrue("Saved-image checks waited for an unrelated download", android.os.SystemClock.uptimeMillis() - began < 2000)
+            hold.countDown(); slow.join(5000)
+            assertArrayEquals(bytes, files.saved("https://images.example/slow.png"))
+        } finally {
+            hold.countDown(); slow.join(5000)
+            context.filesDir.listFiles { _, name -> name.startsWith("lock-test-") }?.forEach { it.delete() }
+        }
+    }
+
     @Test fun newestFirstLoadsTheLatestRequestsAndLetsTheOldestGo() {
         val bytes = png(); val hold = CountDownLatch(1); val order = java.util.Collections.synchronizedList(mutableListOf<String>())
         val loader = LogoLoader(files = object : ImageFiles {

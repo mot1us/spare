@@ -21,20 +21,23 @@ class GuideLogoFiles(context: Context, private val prefix: String = "guide-logo-
         return saved.copyOfRange(8, saved.size)
     }
     override fun saved(url: String): ByteArray? { val name = name(url); return synchronized(lock(name)) { read(name, System.currentTimeMillis()) } }
+    /**
+     * The download runs outside the lock. Names share 32 locks, so holding one for a whole download made the
+     * saved-copy check for an unrelated image wait for it, and every image behind that check with it.
+     * Two downloads of the same image at once are harmless: both save the same bytes.
+     */
     override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
         val name = name(url)
-        return synchronized(lock(name)) {
-            val now = System.currentTimeMillis()
-            read(name, now)?.let { return@synchronized it }
-            val bytes = fetch(); require(bytes.size in 1..2097152)
-            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
-            store.write(name, ByteBuffer.allocate(8 + bytes.size).putLong(now).put(bytes).array())
-            // Trimming lists the whole app folder: do it every few dozen new images, not after each one.
-            if (++written >= 32 || now - trimmedAt !in 0 until 120_000L) trim(now)
-            bytes
-        }
+        synchronized(lock(name)) { read(name, System.currentTimeMillis()) }?.let { return it }
+        val bytes = fetch(); require(bytes.size in 1..2097152)
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        require(bounds.outWidth in 1..4096 && bounds.outHeight in 1..4096)
+        val now = System.currentTimeMillis()
+        synchronized(lock(name)) { store.write(name, ByteBuffer.allocate(8 + bytes.size).putLong(now).put(bytes).array()) }
+        // Trimming lists the whole app folder: do it every few dozen new images, not after each one.
+        if (++written >= 32 || now - trimmedAt !in 0 until 120_000L) trim(now)
+        return bytes
     }
     @Volatile private var written = 0
     @Volatile private var trimmedAt = 0L

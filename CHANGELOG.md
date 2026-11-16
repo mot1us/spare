@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.8 — 2026-11-16
+
+- Library posters no longer wait behind an unrelated download. While one poster was downloading, the check for whether another poster was already saved on the TV could be made to wait for it, and every poster behind that check waited too. Downloads now run without holding that lock. On an onn 4K Pro a row's new posters started appearing about 1.5 seconds after scrolling stopped and then arrived one or two at a time; whether this change removes that delay is still to be measured there.
+
 ## 0.51.7 — 2026-11-16
 
 - Library posters load in the order you need them. Posters for the row you stopped on now load first, and requests for rows you scrolled past are let go. Before, they loaded in the order they were asked for, so a new row waited behind every row passed on the way: on an onn 4K Pro each poster took about 0.1 seconds to load but waited about 2 seconds in line.
