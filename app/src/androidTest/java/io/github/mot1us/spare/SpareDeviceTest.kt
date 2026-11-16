@@ -1862,6 +1862,28 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun backFromChannelsReturnsToTheCategoryOnScreenNotOneBrowsedEarlier() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Category return", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = (1..12).map { Channel("back:$it", "Channel $it", "Category ${(it - 1) / 3 + 1}", "${server.base}/channel1.mp4") }
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }; device.pressDPadLeft()
+                // Browse to a category by moving the cursor onto it, then switch to All channels another way.
+                repeat(10) { if (!device.hasObject(By.text("Category 3").focused(true))) { device.pressDPadDown(); instrumentation.waitForIdleSync() } }
+                waitFor(scenario) { device.hasObject(By.text("Category 3").focused(true)) && channelList(it)?.adapter?.itemCount == 3 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-all").performClick() }
+                waitFor(scenario) { channelList(it)?.let { list -> list.adapter?.itemCount == 12 && list.hasFocus() } == true }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").hasFocus() }
+                Thread.sleep(700); instrumentation.waitForIdleSync()
+                scenario.onActivity { assertEquals("Back changed the category to one browsed earlier", 12, channelList(it)!!.adapter!!.itemCount) }
+                assertTrue("Back lands on the category whose channels are shown", device.hasObject(By.text("All channels").focused(true)))
+            }
+        }
+    }
+
     @Test fun deepCategoriesReachToolbarAndReturnWithoutScrollingOrRetuning() {
         FixtureServer().use { server ->
             val source = Source(name = "Deep sidebar", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

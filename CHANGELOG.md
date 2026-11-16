@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.12 — 2026-11-16
+
+- Pressing Back in the guide no longer switches category. Back moves the cursor from the channels to the category list, and it used to land on the category the cursor last rested on, which selected it. If the list had been changed another way since (the All channels tab, for example), Back alone jumped to the earlier category. The cursor now lands on the category whose channels are on screen.
+
 ## 0.51.11 — 2026-11-16
 
 - A movie's details page in Library shows one Watchlist button, beside Play. The second one on the tab line is hidden there; series pages, which have no button beside Play, keep it.

@@ -1450,7 +1450,10 @@ class MainActivity : Activity() {
     private fun openNavigation() { cancelCategoryPreview(); ++focusEpoch; pendingFocusList = null; root.bringChildToFront(navigationRail); navigationRail.focusCurrent() }
     private fun focusSidebar(remember: Boolean = true) {
         if (sportsVisible) { ++focusEpoch; navigationRail.focusCurrent(); return }
-        focusCategoryAt(if (remember) sidebarAdapter.rememberedPosition() else sidebarAdapter.activePosition())
+        // When moving onto a category selects it, the cursor returns to the category on screen. Returning to the
+        // one it last rested on switched categories on a plain Back whenever the list had been changed another way
+        // (the All channels tab, a channel picked elsewhere).
+        focusCategoryAt(if (!remember) sidebarAdapter.activePosition() else if (store.guideAutoCategories) sidebarAdapter.shownPosition() else sidebarAdapter.rememberedPosition())
     }
     private fun focusCategoryAt(position: Int) {
         if (position !in 0 until sidebarAdapter.itemCount) return

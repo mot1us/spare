@@ -39,6 +39,8 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
     override fun getItemId(position: Int) = items[position].rowId
     fun rememberedPosition() = positions[focusedKey] ?: activePosition()
     fun activePosition() = positions[activeKey] ?: 0
+    /** The category whose channels are on screen, when it has a row here; otherwise where the cursor last was. */
+    fun shownPosition() = positions[activeKey] ?: rememberedPosition()
     fun focusedSection() = positions[focusedKey]?.let(items::get)
     override fun getItemCount() = items.size
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
