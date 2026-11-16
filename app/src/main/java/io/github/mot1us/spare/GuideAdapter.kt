@@ -89,8 +89,10 @@ class GuideAdapter(
             isFocusable = true; isFocusableInTouchMode = true; isClickable = true; isLongClickable = true
             setOnClickListener { channel?.let(selected) }
             setOnLongClickListener { channel?.let(favorite); true }
-            appearance(); clipToOutline = true
-            setOnFocusChangeListener { _, hasFocus -> elevation = if (hasFocus) 4 * rowDensity else 0f; invalidate(); if (hasFocus) channel?.let(focus) }
+            // No rounded clipping and no drop shadow: both made the graphics chip redo each wide row on every frame, and
+            // nothing a row draws reaches its corners. The highlight alone marks the focused row.
+            appearance()
+            setOnFocusChangeListener { _, hasFocus -> invalidate(); if (hasFocus) channel?.let(focus) }
         }
         /** Theme editing redraws the same focused row instead of replacing its holder. */
         fun appearance() {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.5 — 2026-11-16
+
+- Lighter guide drawing, aimed at smoother scrolling on budget boxes. Guide rows no longer use rounded clipping or a drop shadow under the highlighted row, and a duplicate black layer behind the whole app is gone. The guide looks the same. Measured on an onn 4K Pro, the TV's graphics chip, not the app's own code, was the slow part of each guide frame.
+- "Up next" in the guide header only shows with the small preview, where there is room for it. With the channel behind the guide it had clipped the description.
+
 ## 0.51.4 — 2026-11-16
 
 - The guide header shows "Up next" with the time and title of the programme that follows on the highlighted channel, in what was empty space under the description.

@@ -929,7 +929,7 @@ class MainActivity : Activity() {
         setOnClickListener { click() }
     }
     private fun buildUi() {
-        root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }; setContentView(root)
+        root = FrameLayout(this); setContentView(root) // The window itself is black; a second black layer here was painted for nothing.
         var lastSportsFocus: java.lang.ref.WeakReference<View>? = null
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, next ->
             val waiting = pendingFocusList
@@ -2027,7 +2027,8 @@ class MainActivity : Activity() {
         programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${it.description}" } ?: "\n${epgErrors[channel.id] ?: if (owner(channel)?.id in restoringProgrammes) "Loading saved programme guide…" else if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
         val next = programme?.let { now -> guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= now.end } }
         upNextInfo.text = next?.let { "Up next  ·  ${GuideAdapter.time(it.start)}  ${it.title}" }.orEmpty()
-        upNextInfo.visibility = if (next == null) View.GONE else View.VISIBLE
+        // The short header (channel playing behind the guide) has no room for it.
+        upNextInfo.visibility = if (next == null || !guideSolid) View.GONE else View.VISIBLE
     }
     private fun applyFilter() {
         requestLocalMatches()
