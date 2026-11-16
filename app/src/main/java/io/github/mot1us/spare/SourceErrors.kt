@@ -35,6 +35,7 @@ object SourceErrors {
             403 -> "The provider returned HTTP 403 (access denied). Check account access, provider restrictions, or VPN settings."
             404 -> "The provider returned HTTP 404 (not found). Check the server address, port, and path."
             429 -> "The provider returned HTTP 429 (too many requests). Wait a moment before trying again."
+            301, 302, 303, 307, 308 -> "The provider sent this stream to another address that uses plain HTTP. If you trust the provider, edit the playlist and turn on Allow HTTP-only links."
             in 500..599 -> "The provider returned HTTP ${it.status} (server error). Try again later."
             else -> "The provider returned HTTP ${it.status}. Check the source settings or contact the provider."
         } }

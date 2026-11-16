@@ -67,10 +67,10 @@ object SourceDialog {
         }
         form.addView(showPassword)
         val epg = input("Optional XMLTV URL (overrides provider guide)", existing?.epgUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
-        val allow = CheckBox(activity).apply { id = View.generateViewId(); text = "Allow HTTP-only links from this provider"; isChecked = existing?.allowHttp == true }
+        val allow = CheckBox(activity).apply { id = View.generateViewId(); text = "Allow HTTP-only links from this provider"; isChecked = existing?.allowHttp ?: true }
         form.addView(allow)
         form.addView(TextView(activity).apply {
-            text = "This option does not change your HTTPS server address. Leave it off unless the provider needs HTTP links. HTTP can expose credentials and viewing requests.\n\nUse the TV keyboard or paired Google TV phone remote."; textSize = 13f
+            text = "On by default for new playlists: most providers send streams over plain HTTP, and without it they fail to play. It does not change an HTTPS server address. Turn it off only if your provider uses HTTPS throughout; HTTP links are not encrypted.\n\nUse the TV keyboard or paired Google TV phone remote."; textSize = 13f
         })
         // Rarely needed options stay folded away, so the everyday form is unchanged; they open when already in use.
         val advanced = CheckBox(activity).apply { id = View.generateViewId(); tag = "playlist-advanced"; text = "Show advanced options"

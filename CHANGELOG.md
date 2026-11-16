@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.50.6 — 2026-11-16
+
+- New playlists allow HTTP links by default. Most IPTV providers send streams over plain HTTP, often by redirecting from an HTTPS address. Without this setting those streams failed with "HTTP 302", which looked like a broken channel. Turn it off in the playlist's settings if your provider uses HTTPS throughout. Existing playlists keep their setting.
+- A stream redirect Spare won't follow now fails at once with a clear message ("turn on Allow HTTP-only links"). Before, it was retried for about five seconds per stream before the next choice, so a game could take 15–20 seconds to fail over.
+- Alternate presentations of a game (studio shows, "mobile view", arena feeds, watch parties) are tried after the main broadcast. They were ranked first when their picture quality was higher.
+
 ## 0.50.5 — 2026-11-16
 
 - Removed a 0.7-second screen freeze when opening Sports: the check for renamed event channels (Game Pass, PPV) scanned every channel name on the screen thread. It now runs in the background.

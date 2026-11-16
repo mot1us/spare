@@ -5397,12 +5397,11 @@ class SpareDeviceTest {
             fields[1].text = playlist
             assertEquals("Playlist URL entry", playlist, fields[1].text)
             val consent = button("Allow HTTP-only links from this provider")
+            assertTrue("HTTP links are allowed by default for a new playlist", consent.isChecked)
+            // Clicking moves focus to the box (and toggles it); leave it on, as the fixture needs HTTP.
             consent.click()
-            if (!consent.isChecked) {
-                assertTrue("Focus reached HTTP consent", consent.isFocused)
-                device.pressDPadCenter()
-            }
-            assertTrue("Fixture requires explicit HTTP consent", consent.isChecked)
+            if (!consent.isChecked) consent.click()
+            assertTrue("Fixture requires HTTP consent", consent.isChecked)
             // Down passes the folded "Show advanced options" box on its way to Save.
             repeat(2) { if (!button("Save").isFocused) device.pressDPadDown() }
             assertTrue("Focus reached Save", button("Save").isFocused)

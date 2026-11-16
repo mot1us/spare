@@ -110,9 +110,16 @@ object SportsStreams {
         return (game.broadcasts.map { it.channel } + game.titleMatches + game.candidates).distinctBy { it.id }
             .filter { video(it) && available(it) && matchingCategory(it, filters) }
             .sortedWith(compareByDescending<Channel> { it.id in confirmed }
+                .thenBy { alternateFeed(it) }
                 .then(preferenceComparator(filters, quality))
                 .thenByDescending { it.id in epg })
     }
+    private val alternate = Regex("\\b(studio show|mobile view|alt(ernate)? (cast|feed|view)|watch party|courtside|skycam|all ?22|condensed|in arena)\\b")
+    /**
+     * Alternate presentations of a game (a studio show, a phone-shaped "mobile view", an arena feed with no commentary)
+     * play after the main broadcast; they ranked first on picture quality alone.
+     */
+    internal fun alternateFeed(channel: Channel): Boolean = alternate.containsMatchIn(SportsCatalog.normalize(EventChannelNames.name(channel)))
     enum class Coverage { EPG, CHANNEL_TITLE, UNCONFIRMED }
     /** Coverage describes the matchup evidence, not whether a provider stream will open. */
     fun coverage(game: SportsGame, channel: Channel, guide: Guide, now: Long): Coverage =

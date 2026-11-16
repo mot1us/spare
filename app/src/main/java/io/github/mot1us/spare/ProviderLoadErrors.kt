@@ -10,9 +10,14 @@ class ProviderLoadErrors(private val liveHlsEndpoint: String? = null) : DefaultL
     override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
         val status = PlaybackErrors.httpFailure(loadErrorInfo.exception)?.responseCode
         missingSegmentDelay(status, loadErrorInfo.loadEventInfo.dataSpec.uri.toString(), loadErrorInfo.errorCount)?.let { return it }
-        if (status != null && status in 400..499 && status != 408) return C.TIME_UNSET
+        // A redirect that reaches the player is one Spare will not follow (to plain HTTP without the playlist's
+        // consent); retrying it only wasted about five seconds per stream before the next choice.
+        if (final(status)) return C.TIME_UNSET
         return super.getRetryDelayMsFor(loadErrorInfo)
     }
+
+    /** Responses that retrying cannot change: a redirect Spare will not follow, or a client error other than a timeout. */
+    internal fun final(status: Int?) = status != null && (status in 300..399 || status in 400..499 && status != 408)
 
     /** Retry a briefly unavailable live segment without throwing away queued video. */
     internal fun missingSegmentDelay(status: Int?, failedUrl: String, attempt: Int): Long? {
