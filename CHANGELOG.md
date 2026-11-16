@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.51.4 — 2026-11-16
+
+- The guide header shows "Up next" with the time and title of the programme that follows on the highlighted channel, in what was empty space under the description.
+- Library details: the on-screen Back button is replaced by Add to Watchlist, next to Play. The remote's Back button leaves the page as before.
+- When the channel plays in the small preview, the guide is painted as a solid color instead of a see-through one over black. It looks the same and gives the TV less to blend on each frame while scrolling.
+- Opening the guide does slightly less work per channel on very large playlists.
+
 ## 0.51.3 — 2026-11-16
 
 - "Guide video" is now in Settings › Guide and in first-run setup ("Channel while browsing"): play the channel in a small preview at the top right, or behind the guide. It was only in Theme › Advanced › Guide, where it was hard to find. Settings itself always shows the channel behind its panel.

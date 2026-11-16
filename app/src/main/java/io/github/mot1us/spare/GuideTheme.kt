@@ -79,6 +79,10 @@ object GuideTheme {
         cornerRadius = (if (style == "Glass" && customRadius < 0) 12f else radius) * density
         setStroke(stroke(density, if (style == "Nostalgia") 2 else 1), when (style) { "Nostalgia" -> GuideTheme.current.accent; "Flat", "Cinema", "Soft" -> Color.TRANSPARENT; "Outline", "Terminal" -> GuideTheme.current.accent; else -> 0x40FFFFFF })
     }
+    /** The same look as a see-through color over black, as a solid color the TV can draw without blending. */
+    fun overBlack(color: Int): Int { val a = color ushr 24; return (0xFF shl 24) or ((Color.red(color) * a / 255) shl 16) or ((Color.green(color) * a / 255) shl 8) or (Color.blue(color) * a / 255) }
+    /** [solid] is for when nothing shows behind the guide (the channel plays in the small preview). */
+    fun guideBackground(opacity: Int, solid: Boolean) = guideBackground(opacity).apply { if (solid) colors = colors?.map(::overBlack)?.toIntArray() }
     fun guideBackground(opacity: Int = -1) = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, if (opacity >= 0) IntArray(2) { (current.background and 0x00FFFFFF) or ((opacity.coerceIn(0, 100) * 255 / 100) shl 24) } else when (style) {
         "Cinema" -> intArrayOf(current.background or 0xC8000000.toInt(), current.background or 0x88000000.toInt())
         "Flat", "Soft" -> intArrayOf(current.background or 0xF6000000.toInt(), current.background or 0xE8000000.toInt())

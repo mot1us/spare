@@ -428,8 +428,12 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         selectedTab = key
         sectionControls.forEach { it.isSelected = it.tag == "library-tab:$key" }
     }
+    private var savedNow = false
+    private var detailWatch: Button? = null
+    private fun watchLabel(saved: Boolean) = if (saved) "✓ In Watchlist" else "Add to Watchlist"
     fun favoriteTitle(item: OnDemand?, saved: Boolean, canMarkWatched: Boolean = false, allWatched: Boolean = false) {
-        saveTitle.isVisible = item != null; saveTitle.text = if (saved) "✓ In Watchlist" else "Add to Watchlist"
+        savedNow = saved; detailWatch?.text = watchLabel(saved)
+        saveTitle.isVisible = item != null; saveTitle.text = watchLabel(saved)
         saveTitle.contentDescription = if (saved) "Remove ${item?.title} from Watchlist" else "Add ${item?.title} to Watchlist"
         markWatched.isVisible = item?.kind == "series" && saved && canMarkWatched
         markWatched.text = if (allWatched) "Mark unwatched" else "Mark all watched"
@@ -579,7 +583,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             if (spot.backdrop.isNotBlank()) spotArtwork(spot.backdrop)
         }
     }
-    fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, back: () -> Unit, busy: Boolean) {
+    fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, busy: Boolean) {
         val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
         if (detailPane.visibility != VISIBLE) spotKey = null
         val focusedAction = detailPane.findFocus()?.tag
@@ -606,7 +610,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
         // Actions lead the column beside the poster, so they stay in view above a long plot.
         val actions = LinearLayout(context)
-        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back", back).apply { tag = "library-back" }, LayoutParams(-2, dp(38)))
+        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); 
+        // The remote's Back button leaves this page, so the second action is the useful one: Watchlist.
+        val watch = makeButton(watchLabel(savedNow)) { favoriteAction?.invoke() }.apply { tag = "library-detail-watchlist" }
+        detailWatch = watch; actions.addView(watch, LayoutParams(-2, dp(38)))
         copy.addView(actions, 0, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(14) })
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()

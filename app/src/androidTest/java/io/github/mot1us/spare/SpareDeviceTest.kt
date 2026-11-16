@@ -2679,6 +2679,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 scenario.onActivity { activity ->
                     assertNull("Setup runs once", activity.window.decorView.findViewWithTag<View>("onboarding"))
+                    val next = activity.window.decorView.findViewWithTag<TextView>("guide-up-next")
+                    assertTrue("The header names what follows: ${next.text}", next.text.startsWith("Up next  ·  ") && next.text.endsWith("Live Report"))
                     // The same choice lives in Settings › Guide, not only deep in Theme.
                     activity.window.decorView.findViewWithTag<View>("settings").performClick()
                     val panel = activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel")
@@ -4057,12 +4059,14 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel")
                     val play = panel.findViewWithTag<View>("library-play")
-                    val back = panel.findViewWithTag<View>("library-back")
-                    back.requestFocus()
+                    assertNull("Remote Back leaves details; no on-screen Back button", panel.findViewWithTag<View>("library-back"))
+                    val watch = panel.findViewWithTag<android.widget.Button>("library-detail-watchlist")
+                    assertEquals("✓ In Watchlist", watch.text.toString())
+                    watch.requestFocus()
                     panel.detail(OnDemand("movie:101", "Fixture movie", "Fixture cinema", description = "Updated provider metadata"),
                         { title, action -> android.widget.Button(activity).apply { text = title; setOnClickListener { action() } } },
-                        { play.performClick() }, { back.performClick() }, false)
-                    assertTrue("Provider metadata must preserve the focused Back action", panel.findViewWithTag<View>("library-back").hasFocus())
+                        { play.performClick() }, false)
+                    assertTrue("Provider metadata must preserve the focused action", panel.findViewWithTag<View>("library-detail-watchlist").hasFocus())
                 }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/101.mp4" && samePlayer?.isPlaying == true }

@@ -665,7 +665,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     }
     private fun openDetails(selected: Source, item: OnDemand) {
         val key = "${selected.id}:${item.id}"; detailItem = details[key] ?: item
-        fun render(value: OnDemand, busy: Boolean) { detailItem = value; panel.detail(value, button, { playSelected(detailItem ?: value) }, { closeDetails() }, busy); presentFavorites() }
+        fun render(value: OnDemand, busy: Boolean) { detailItem = value; panel.detail(value, button, { playSelected(detailItem ?: value) }, busy); presentFavorites() }
         render(detailItem!!, details[key] == null)
         if (details[key] != null) return
         request { token ->

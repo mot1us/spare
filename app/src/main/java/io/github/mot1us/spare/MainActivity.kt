@@ -259,6 +259,7 @@ class MainActivity : Activity() {
     private var sportsBrowseLeague: String? = null
     private var onboarding: OnboardingPanel? = null
     private var onboardingTune: Channel? = null
+    private var guideSolid = false
     private var sportsRenderPending = false
     private var sportsComputing = false
     private var sportsDirty = false
@@ -448,6 +449,7 @@ class MainActivity : Activity() {
     private lateinit var guidePanel: LinearLayout
     private lateinit var channelInfo: TextView
     private lateinit var programmeInfo: TextView
+    private lateinit var upNextInfo: TextView
     private lateinit var status: TextView
     private lateinit var times: TimeRuler
     private lateinit var previewCaption: TextView
@@ -546,6 +548,10 @@ class MainActivity : Activity() {
         playlistGroups[selected.id] = GroupCache(channels, order, usa, groups); return groups
     }
     private val providerViews = mutableMapOf<String, Guide>()
+    private var catchupGuide: Guide? = null
+    private var catchupAny = false
+    /** Whether any channel offers catch-up, worked out once per lineup instead of on every filter. */
+    private fun hasCatchup(): Boolean { if (catchupGuide !== guide) { catchupGuide = guide; catchupAny = guide.channels.any(Catchup::supported) }; return catchupAny }
     private fun playlistId(channel: Channel) = channel.playlistId.ifBlank { if (::playlists.isInitialized) playlists.legacySource else source?.id.orEmpty() }
     private fun owner(channel: Channel?): Source? = if (channel == null) source else sources.firstOrNull { it.id == playlistId(channel) }
     private fun owner(item: OnDemand): Source? = if (item.playlistId.isBlank()) source else sources.firstOrNull { it.id == item.playlistId }
@@ -1011,6 +1017,9 @@ class MainActivity : Activity() {
         headerInfo.addView(channelInfo, LinearLayout.LayoutParams(-1, -2))
         programmeInfo = text("Add a playlist in Settings to start watching.", 12f).apply { maxLines = 5; setTextColor(Color.LTGRAY) }
         headerInfo.addView(programmeInfo, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(6) })
+        // What follows on the highlighted channel, in the space under the description.
+        upNextInfo = text("", 12f).apply { tag = "guide-up-next"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; visibility = View.GONE }
+        headerInfo.addView(upNextInfo, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(2) })
         status = text("", 11f).apply { setTextColor(Color.LTGRAY); maxLines = 2 }
         headerInfo.addView(status, LinearLayout.LayoutParams(-1, -2))
         refreshBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = View.GONE; tag = "background-refresh" }; headerInfo.addView(refreshBar, LinearLayout.LayoutParams(-1, dp(2)))
@@ -2016,16 +2025,23 @@ class MainActivity : Activity() {
         headerArtwork.scaleType = if (art == channel.logo) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
         programmeArtwork.show(if (guideVisible && !sportsVisible) art else "", owner(channel)?.allowHttp == true)
         programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${it.description}" } ?: "\n${epgErrors[channel.id] ?: if (owner(channel)?.id in restoringProgrammes) "Loading saved programme guide…" else if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
+        val next = programme?.let { now -> guide.programmes[guide.key(channel)]?.firstOrNull { it.start >= now.end } }
+        upNextInfo.text = next?.let { "Up next  ·  ${GuideAdapter.time(it.start)}  ${it.title}" }.orEmpty()
+        upNextInfo.visibility = if (next == null) View.GONE else View.VISIBLE
     }
     private fun applyFilter() {
         requestLocalMatches()
         val now = System.currentTimeMillis()
-        val hidden = unavailable.snapshot().keys.count { unavailable.contains(it, now) && channelIndex.contains(guide.channels, it) }
+        val anyUnavailable = !unavailable.isEmpty
+        val hidden = if (!anyUnavailable) 0 else unavailable.snapshot().keys.count { unavailable.contains(it, now) && channelIndex.contains(guide.channels, it) }
         val searchTerm = ChannelSearch.key(query)
+        // This runs over every channel (15,000+ on large playlists) when the guide opens, so each check is skipped when it cannot matter.
+        val byPlaylist = browsePlaylist != null || playlistFilters.isNotEmpty()
         val filtered = channelIndex.candidates(guide.channels, browsePlaylist, group).filter { channel ->
-            val eligible = !channel.media && !unavailable.contains(channel.id, now) && (!localOnly || channel.id in localIds) && (!favoritesOnly || channel.id in favorites) && (browsePlaylist == null || playlistId(channel) == browsePlaylist) && (group == null || channel.group == group) &&
+            val playlist = if (byPlaylist) playlistId(channel) else ""
+            val eligible = !channel.media && !(anyUnavailable && unavailable.contains(channel.id, now)) && (!localOnly || channel.id in localIds) && (!favoritesOnly || channel.id in favorites) && (browsePlaylist == null || playlist == browsePlaylist) && (group == null || channel.group == group) &&
                 (searchTerm.isEmpty() || channel.searchKey.contains(searchTerm))
-            val selectedFilter = playlistFilters[playlistId(channel)] ?: filters
+            val selectedFilter = (if (byPlaylist) playlistFilters[playlist] else null) ?: filters
             eligible && (selectedFilter.groups.isEmpty() || channel.group in selectedFilter.groups)
         }
         adapter.submit(filtered)
@@ -2043,7 +2059,7 @@ class MainActivity : Activity() {
         emptyInfo.visibility = if (filtered.isEmpty() && guide.channels.isNotEmpty() && !loadingSelection) View.VISIBLE else View.GONE
         emptyInfo.text = if (hidden > 0) "Unavailable channels are temporarily hidden. Retry or restore them in Settings → Temporarily hidden channels." else "No channels match. Try another category, clear Search, or choose Categories in Settings."
         if (localOnly) emptyInfo.text = if (localLoading) "Finding local channels…" else "No local stations matched. Check your city/state in Settings → Local channels and visible categories. Matches use your existing playlist."
-        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; catchupTab.isVisible = guide.channels.any(Catchup::supported); localProgress.isVisible = localOnly && localLoading }
+        if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; catchupTab.isVisible = hasCatchup(); localProgress.isVisible = localOnly && localLoading }
         if (localOnly && localLoading) filterInfo.text = "Finding local channels… · ${store.localLocation}"
         updateGroups()
         if (::sportsPanel.isInitialized) {
@@ -2152,6 +2168,8 @@ class MainActivity : Activity() {
         headerInfo.setPadding(dp(12), dp(6), dp(if (preview) 348 else 12), dp(6))
         headerSurface.layoutParams = LinearLayout.LayoutParams(-1, dp(if (preview) 188 else 104))
         previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
+        // With the channel in the small preview nothing shows behind the guide, so it is painted solid: same look, less work per frame.
+        if (guideSolid != preview) { guideSolid = preview; guidePanel.background = GuideTheme.guideBackground(store.guideOpacity, preview) }
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
         listOf(previewCaption, nowPlaying, loadingPanel, playbackLoading, retryPanel, favoriteFeedback).forEach(root::bringChildToFront)
         onboarding?.takeIf { it.opened }?.let(root::bringChildToFront)
@@ -3691,7 +3709,7 @@ class MainActivity : Activity() {
     private fun applyTheme() {
         configureAppearance()
 
-        guidePanel.background = GuideTheme.guideBackground(store.guideOpacity)
+        guidePanel.background = GuideTheme.guideBackground(store.guideOpacity, guideSolid)
         fun visit(view: View) {
             if (view is Button) { view.background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30)); view.setTextColor(GuideTheme.ink()) }
             else if (view is ImageButton) view.background = GuideTheme.background(resources.displayMetrics.density)

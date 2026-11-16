@@ -79,4 +79,5 @@ class UnavailableChannels(private val until: MutableMap<String, Long> = linkedMa
     fun prune(now: Long): Boolean = until.entries.removeAll { it.value <= now }
     fun clear() = until.clear()
     fun snapshot() = until.toMap()
+    val isEmpty get() = until.isEmpty()
 }
