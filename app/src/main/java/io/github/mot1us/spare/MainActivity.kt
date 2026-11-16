@@ -1399,7 +1399,8 @@ class MainActivity : Activity() {
     }
     private fun updateDockHint() {
         if (!::dockHint.isInitialized) return
-        val inset = if (!store.hiddenDock || navigationRail.expanded || navigationRail.moving) DOCK_INSET_DP else 24
+        // The menu draws over the screen when it opens; the screen keeps its place instead of being pushed aside.
+        val inset = if (!store.hiddenDock) DOCK_INSET_DP else 24
         guidePanel.setPadding(dp(inset), dp(18), dp(18), dp(14))
         if (::library.isInitialized) library.panel.setPadding(dp(inset), dp(18), dp(24), dp(18))
         dockHint.isVisible = navigationRail.isVisible && store.hiddenDock && !navigationRail.expanded && !navigationRail.moving
@@ -3904,6 +3905,8 @@ class MainActivity : Activity() {
             showGuide(true); if (toCards) sportsPanel.back()
         }
         else if (list.hasFocus() && guideTimeline.ahead((focused ?: current)?.id)) resetTime()
+        // Back from the main menu while in Sports goes to the live TV guide, like choosing Guide.
+        else if (sportsVisible && navigationRail.hasFocus()) openSection(false)
         else if (sportsVisible && sportsPanel.back()) return
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
         else if (sidebar.hasFocus()) openNavigation()

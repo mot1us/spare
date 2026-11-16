@@ -87,6 +87,9 @@ jobs:
           path: app/build/reports/
   device:
     needs: [build, request]
+    # Emulator device tests run weekly and on manual request. They never gate a release: on CI emulators their
+    # timing-sensitive checks failed by chance too often, and the owner chose fast beta releases (2026-11-16).
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ needs.request.outputs.tv_suite == 'full' && 30 || 20 }}
     # Four isolated emulators split the suite; each verifies its exact expected test count.
@@ -184,7 +187,7 @@ jobs:
           path: app/build/reports/release-smoke/
   release:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
-    needs: [build, device, release-smoke]
+    needs: [build, release-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write

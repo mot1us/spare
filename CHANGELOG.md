@@ -5,6 +5,9 @@
 - Opening Spare and going straight to Sports is faster. Library's catalog preparation, which could take half a minute of processor on an onn 4K Pro, now waits until you are idle and not in Sports. If you open Library first, it prepares what it needs then.
 - One set of Sports settings. Settings › Sports now opens the same screen as Leagues and teams in Sports, at the section you choose (Preferences, Leagues, Your teams, Stream quality, Score delay, Sports overlay), instead of its own partial copy with a second "Sports settings" button. Sports overlay moved into that screen.
 - Library shows ratings: the banner and details page lead with the provider's 0–10 score (for example "★ 7.8"), or Cinemeta's IMDb score when a metadata source is set and the provider has none.
+- Back on the main menu while in Sports now goes to the live TV guide. Before, it returned to the Sports cards.
+- With the hidden main menu, opening it no longer pushes the guide, Sports or Library screen aside; the menu draws over the screen.
+- Releases now publish once the app builds and passes its unit tests, lint and release check. Emulator device tests still run weekly and on request but no longer hold up a release.
 - Fixed a crash when Spare closed just after moving in Library: a queued request for the focused title's details reached Library's helper after it had stopped.
 - The cast on the details page reads "Starring A · B · C" with the first six names, instead of a long run-on line.
 

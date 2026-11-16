@@ -2483,6 +2483,33 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsMenuOverlaysWithoutMovingCardsAndBackGoesToTheGuide() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Menu fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NFL"); store.hiddenDock = true
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot((1..8).map { LiveEvent("menu-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL") }, now, setOf("NFL")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.hasFocus() == true }
+                fun cards(): String { var at = ""; scenario.onActivity { a -> val v = a.window.decorView.findViewWithTag<View>("sports-games"); val p = IntArray(2); v.getLocationOnScreen(p); at = "${p[0]},${p[1]} ${v.width}x${v.height}" }; return at }
+                val before = cards()
+                // Left from the first card opens the (hidden) menu, as on the remote.
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
+                device.pressDPadLeft()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<NavigationRail>("app-navigation").hasFocus() }
+                instrumentation.waitForIdleSync(); Thread.sleep(400)
+                assertEquals("Opening the menu draws over Sports without moving the cards", before, cards())
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.isShown == true && it.window.decorView.findViewWithTag<View>("sports-panel")?.isShown != true }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.hiddenDock = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
