@@ -34,23 +34,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     private val help = TextView(context)
     private var pendingChange = false
     private val applyChange = Runnable { if (pendingChange) { pendingChange = false; changed() } }
-    private data class Preset(val name: String, val palette: String, val style: String, val font: String, val description: String)
-    private val presets = listOf(
-        Preset("Classic", "Monochrome", "Flat", "Default", "Black and white · square edges"),
-        Preset("Glass", "Monochrome", "Glass", "Default", "Soft translucent panels"),
-        Preset("Midnight", "Ocean", "Cinema", "Compact", "Deep blue · compact lettering"),
-        Preset("Arena", "Mint", "Broadcast", "Condensed bold", "Clean sports broadcast"),
-        Preset("Warm", "Amber", "Soft", "Serif", "Warm colors · rounded panels"),
-        Preset("Nostalgia", "Phosphor", "Nostalgia", "Monospace", "Retro green · pixel-inspired guide"),
-        Preset("Neon Night", "Neon", "Glass", "Default", "Electric cyan on deep navy glass"),
-        Preset("Synthwave", "Synthwave", "Rounded", "Default", "Hot pink on violet · rounded"),
-        Preset("Stadium", "Crimson", "Broadcast", "Condensed bold", "Red sports-broadcast graphics"),
-        Preset("Gilded", "Gold", "Cinema", "Serif", "Gold accents · cinematic panels"),
-        Preset("Aurora", "Aurora", "Soft", "Default", "Glowing teal on midnight blue"),
-        Preset("Ember", "Tangerine", "Flat", "Condensed bold", "Bold orange · flat edges"),
-        Preset("Emerald", "Emerald", "Outline", "Default", "Vivid green outlines"),
-        Preset("Ultraviolet", "Ultraviolet", "Glass", "Compact", "Purple glass · compact lettering"),
-    )
+    private val presets = ThemePresets.all
     private val tabs = linkedMapOf<String, TextView>()
     private val controls = mutableListOf<View>()
     private val updates = mutableListOf<() -> Unit>()
@@ -126,9 +110,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
             controls.clear(); updates.clear(); rows.removeAllViews()
             presets.forEach { preset ->
                 val row = action("${preset.name}\n${preset.description}") {
-                    store.theme = preset.palette; store.themeStyle = preset.style; store.font = preset.font
-                    store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
-                    store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = SecureStore.DEFAULT_GUIDE_OPACITY
+                    ThemePresets.apply(store, preset)
                 }.apply { tag = "theme-preset:${preset.name}"; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), 0, dp(8), 0); maxLines = 2 }
                 val focus = row.onFocusChangeListener
                 row.setOnFocusChangeListener { view, active -> focus?.onFocusChange(view, active); previewPreset = if (active) preset else previewPreset?.takeUnless { it == preset }; refreshPreview() }
@@ -141,7 +123,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 }
                 row.setCompoundDrawables(swatch, null, null, null); row.compoundDrawablePadding = dp(12)
                 updates.add {
-                    val selected = store.theme == preset.palette && store.themeStyle == preset.style && store.font == preset.font && store.customAccent == 0 && store.customBackground == -1 && store.cornerRadius == -1 && store.borderWidth == -1 && store.guideTextScale == 100 && store.guideRowHeight == 32 && store.guideRowGap == 3 && store.guideOpacity == -1
+                    val selected = ThemePresets.applied(store, preset)
                     row.text = "${preset.name}${if (selected) "  ✓" else ""}\n${preset.description}"
                     row.contentDescription = "${preset.name}, ${preset.description}${if (selected) ", applied" else ""}. OK to apply."
                 }
@@ -299,7 +281,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
     private fun hexValue(value: Int) = String.format(Locale.US, "%06X", value and 0xFFFFFF)
     private fun colorValue(value: Int, automatic: Int) = if (value == automatic) "Palette" else "#${hexValue(value)}"
     /** The preset under the cursor is previewed live, before OK applies it. */
-    private var previewPreset: Preset? = null
+    private var previewPreset: ThemePresets.Preset? = null
     private fun themeName() = previewPreset?.palette ?: store.theme
     private fun styleName() = previewPreset?.style ?: store.themeStyle
     private fun fontName() = previewPreset?.font ?: store.font

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.51.0 — 2026-11-16
+
+- First-run setup. A new install opens four quick steps: add your playlist, pick the sports you watch, choose a look, and choose how the guide works (see-through or solid, text size, and whether OK plays full screen). Every step can be changed later in Settings.
+- Set up from your phone. The first step shows a QR code. Scan it with your phone's camera, fill in your M3U link or Xtream login there, and press Send. The TV shows the details in Add playlist so you can check them before saving. The same option is in Settings › Playlists › Add playlist as "Fill in from my phone". The form is served by the TV itself over your home Wi-Fi, so nothing passes through an outside service. Each code works once, expires after ten minutes, and only accepts devices on your home network.
+- Sports no longer stops to ask for your leagues the first time you open it. Leagues are chosen in setup; anyone who skips it starts with the NFL, MLB, NBA, NHL, Premier League, MLS and Champions League, changeable in Sports settings.
+- Theme presets show their check mark again after you apply one.
+
 ## 0.50.8 — 2026-11-16
 
 - Search opens ready to type, with the keyboard up. Before, opening it from the menu started voice search and Android's microphone prompt. Voice still starts from the Voice button or the remote's search key. The Done button is gone; Back closes Search.

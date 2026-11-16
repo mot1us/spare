@@ -7,7 +7,7 @@ https://github.com/androidx/media/blob/1.11.1/libraries/test_data/src/test/asset
 
 Its SHA-256 is `6aecd03e411743feec6e9d2bb0209ada82f176ad45a4a44cbd2df0ee8290c8f6`. The Media3 Apache-2.0 license is included in the bundled license directory. The fixture is never included in the production APK, and the app ships no IPTV channels.
 
-Test tooling also uses JUnit 4 (EPL-1.0), Hamcrest (BSD-3-Clause), kXML (BSD-style), and JSON-java (public domain). These are development/test dependencies and are not redistributed in production APKs.
+Test tooling also uses JUnit 4 (EPL-1.0), Hamcrest (BSD-3-Clause), kXML (BSD-style), JSON-java (public domain), and ZXing core (Apache-2.0, to check the QR codes Spare draws). These are development/test dependencies and are not redistributed in production APKs.
 
 The test-only `no-aud.ts` is Media3 1.11.1 `sample_h264_no_access_unit_delimiters.ts`, under the same Apache-2.0 license: https://github.com/androidx/media/blob/1.11.1/libraries/test_data/src/test/assets/media/ts/sample_h264_no_access_unit_delimiters.ts
 

@@ -404,6 +404,10 @@ class SecureStore(private val context: Context) {
     var guideAutoCategories: Boolean
         get() = preferences.getBoolean("guide-auto-categories", true)
         set(value) { preferences.edit { putBoolean("guide-auto-categories", value) } }
+    /** First-run setup finished or skipped; later launches without a playlist open Add playlist directly. */
+    var onboarded: Boolean
+        get() = preferences.getBoolean("onboarded", false)
+        set(value) { preferences.edit { putBoolean("onboarded", value) } }
     var guideOpenFullscreen: Boolean
         get() = preferences.getBoolean("guide-open-fullscreen", true)
         set(value) { preferences.edit { putBoolean("guide-open-fullscreen", value) } }

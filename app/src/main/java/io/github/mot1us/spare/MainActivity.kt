@@ -257,7 +257,8 @@ class MainActivity : Activity() {
     private var sportsVisible = false
     private var sportsTeam: String? = null
     private var sportsBrowseLeague: String? = null
-    private var sportsLeaguePicker: SportsLeaguePicker? = null
+    private var onboarding: OnboardingPanel? = null
+    private var onboardingTune: Channel? = null
     private var sportsRenderPending = false
     private var sportsComputing = false
     private var sportsDirty = false
@@ -896,7 +897,7 @@ class MainActivity : Activity() {
             emptyList()
         }
         val selected = sources.firstOrNull { it.enabled && it.id == store.active } ?: sources.firstOrNull { it.enabled }
-        if (selected == null) { status.text = if (sources.isEmpty()) "Add a playlist in Settings to start watching" else "Enable a playlist in Settings to start watching"; if (sources.isEmpty()) handler.post { editSource(null) } }
+        if (selected == null) { status.text = if (sources.isEmpty()) "Add a playlist in Settings to start watching" else "Enable a playlist in Settings to start watching"; if (sources.isEmpty()) handler.post { if (store.onboarded) editSource(null) else openOnboarding() } }
         else load(selected)
         PlaylistRefresh.listen(this) { selectedSource, result ->
             if (!closed && selectedSource.enabled && sources.any { it == selectedSource } && selectedSource !in ownRefreshes) {
@@ -1338,9 +1339,10 @@ class MainActivity : Activity() {
     }
     private fun switchMode(sports: Boolean) {
         clearGuideSearch(); sportsVisible = sports
+        // Leagues are chosen during first-run setup; anyone who skipped it starts with the pro leagues.
+        if (sports && !store.sportsLeaguesChosen) store.sportsLeagues = OnboardingPanel.DEFAULT_LEAGUES
         if (sports) { ensureSportsLeague(); sportsPanel.loading("Finding live games…") }
         applyFilter(); showGuide(true)
-        if (sports && !store.sportsLeaguesChosen) openSportsLeaguePicker()
     }
     private fun moveTime(channel: Channel?, amount: Int) {
         channel ?: return
@@ -1716,6 +1718,8 @@ class MainActivity : Activity() {
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
     private fun tune(channel: Channel) = tune(channel, null)
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
+        // A playlist added during first-run setup loads in the background; its first channel waits until setup ends.
+        if (onboarding?.opened == true) { onboardingTune = channel; return }
         clearSleepEnded()
         startupPlaybackPending = false
         watchingRedZone = false; redZoneAutoPending = false
@@ -2150,11 +2154,13 @@ class MainActivity : Activity() {
         previewCaption.layoutParams = FrameLayout.LayoutParams(dp(320), dp(20), Gravity.TOP or Gravity.END).apply { topMargin = dp(178) + searchInset; marginEnd = dp(18) }
         if (preview) root.bringChildToFront(video) else root.bringChildToFront(guidePanel)
         listOf(previewCaption, nowPlaying, loadingPanel, playbackLoading, retryPanel, favoriteFeedback).forEach(root::bringChildToFront)
+        onboarding?.takeIf { it.opened }?.let(root::bringChildToFront)
         previewCaption.visibility = if (preview) View.VISIBLE else View.GONE
         previewCaption.text = if (current == null) "Select a channel" else "Full screen · ${current?.name}"
         positionPlaybackLoading()
     }
     private fun showNowPlaying() {
+        if (onboarding?.opened == true) return
         if (::scoreStrip.isInitialized && scoreStrip.isVisible && store.scoreOverlayPosition == "Bottom") return
         if (onDemand != null) return
         val channel = current ?: return
@@ -2313,7 +2319,7 @@ class MainActivity : Activity() {
         reminderPending?.let { (game, checked) ->
             if (!reminders.has(game) || due.none { it.key == game.key } || now - checked > 120000L) reminderPending = null
             else if (reminderGame == null && !gameWatchPanel.isVisible && !vodStartPanel.isVisible &&
-                sportsLeaguePicker?.isShown != true && android.os.SystemClock.elapsedRealtime() - lastInputAt >= 800L &&
+                onboarding?.opened != true && android.os.SystemClock.elapsedRealtime() - lastInputAt >= 800L &&
                 (currentFocus?.rootView === window.decorView || currentFocus == null) &&
                 player.playWhenReady && (current != null || onDemand != null)) {
                 reminderGame = game; reminderReturnFocus = currentFocus
@@ -2533,15 +2539,17 @@ class MainActivity : Activity() {
         sportsPanel.setLeagueFilter(league); scheduleSports()
         if (league !in liveSports.leagues) checkLiveSports(force = true)
     }
-    private fun openSportsLeaguePicker() {
-        val picker = sportsLeaguePicker ?: SportsLeaguePicker(this, ::button, { leagues ->
-            store.sportsLeagues = leagues; sportsBrowseLeague = store.sportsLastLeague
-            sportsLeaguePicker?.visibility = View.GONE; ensureSportsLeague()
-            sportsPanel.focusLeagueFilter(); checkLiveSports(force = true); scheduleSports()
-        }, ::closeSportsLeaguePicker).also { sportsLeaguePicker = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
-        root.bringChildToFront(picker); picker.open(if (store.sportsLeaguesChosen) store.sportsLeagues else emptySet())
+    private fun openOnboarding() {
+        val panel = onboarding ?: OnboardingPanel(this, store, ::button, { sources.isNotEmpty() }, { prefill -> editSource(null, prefill) },
+            { if (!closed) appearanceChanged() }) {
+            store.onboarded = true
+            onboarding?.let { root.removeView(it) }; onboarding = null
+            showGuide(true); applyTheme()
+            onboardingTune?.let { channel -> onboardingTune = null; if (!player.isPlaying) tune(channel) }
+            (if (guide.channels.isEmpty()) navigationRail.findViewWithTag<View>("settings") else list)?.requestFocus()
+        }.also { onboarding = it; root.addView(it, FrameLayout.LayoutParams(-1, -1)) }
+        root.bringChildToFront(panel); panel.open()
     }
-    private fun closeSportsLeaguePicker() { sportsLeaguePicker?.visibility = View.GONE; if (!store.sportsLeaguesChosen) switchMode(false) else sportsPanel.focusLeagueFilter() }
     private fun openSportsCalendar() {
         suspendSportsOverlay()
         showGuide(false); nowPlaying.hide(immediate = true)
@@ -2667,7 +2675,7 @@ class MainActivity : Activity() {
     }
     private fun confirmSportsReset() {
         val panel = sportsManager ?: return
-        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, asks you to choose leagues again, turns off My teams only and automatic playback, resets this playlist’s stream quality, and hides completed scores. Sports will open on Today.")
+        panel.page("Reset Sports settings?", "This clears followed teams and saved reminders, returns to the main leagues, turns off My teams only and automatic playback, resets this playlist’s stream quality, and hides completed scores. Sports will open on Today.")
         panel.action("Cancel") { panel.refresh("Reset Sports settings") }
         panel.action("Reset Sports") {
             store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; scoreStripOpen = false; cancelScoreTune(); scoreStrip.suspend()
@@ -2684,7 +2692,7 @@ class MainActivity : Activity() {
         sportsManager?.visibility = View.GONE
         if (sportsPreferencesChanged) { sportsPreferencesChanged = false; ensureSportsLeague(); liveSportsAttempt = 0; checkLiveSports(force = true); scheduleSports() }
         if (sportsManagerReturnSettings) { settingsPanel?.visibility = View.VISIBLE; settingsPanel?.let { root.bringChildToFront(it); it.selectSetting("Sports") } }
-        else { showGuide(sportsManagerReturnGuide); if (sportsVisible && guideVisible) { if (!store.sportsLeaguesChosen) openSportsLeaguePicker() else sportsPanel.teamsButton.requestFocus() } }
+        else { showGuide(sportsManagerReturnGuide); if (sportsVisible && guideVisible) { if (!store.sportsLeaguesChosen) store.sportsLeagues = OnboardingPanel.DEFAULT_LEAGUES; sportsPanel.teamsButton.requestFocus() } }
     }
     private fun showGameInfo(game: SportsGame) {
         if (redZoneAutoPending && !sportsPanel.redZoneFocused) { redZoneAutoPending = false; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); sportsPanel.finishTuning() }
@@ -3322,12 +3330,13 @@ class MainActivity : Activity() {
         focused = guide.channels.firstOrNull { it.id == focused?.id }
         syncReplayDiscovery()
     }
-    private fun editSource(existing: Source?) = SourceDialog.show(this, existing, { selected ->
+    private fun editSource(existing: Source?, prefill: PhoneSetupResult? = null) = SourceDialog.show(this, existing, { selected ->
         existing?.let(store::bindProvider)
         runCatching { val next = if (existing == null) sources + selected else sources.map { if (it.id == selected.id) selected else it }; configurePlaylists(next) }
             .onSuccess {
                 existing?.let { library.invalidateProvider(it.id) }
                 if (settingsPanel?.opened == true) closeSettings()
+                onboarding?.playlistAdded()
                 if (existing != null || !::playlists.isInitialized || guide.channels.isEmpty()) source?.let { load(it, force = existing != null && it.id == selected.id) }
                 else { stopSportsPrefetch(clear = true); loadAdditionalPlaylist(selected, force = true); updateGroups() }
             }.onFailure { notice("Could not save", "Android could not securely save this source. Try again.") }
@@ -3343,7 +3352,7 @@ class MainActivity : Activity() {
                 if (settingsPanel?.opened == true) closeSettings()
                 if (source == null) clearRemovedPlaylist() else { detachPlaylist(removed); updateGroups(); applyFilter() }
             }.onFailure { notice("Could not remove", "Android could not update source storage. Try again.") }
-    })
+    }, prefill, { onboarding?.playlistCancelled() })
     /** Deleting the last source must also clear VOD/resume and every source-owned callback. */
     private fun clearRemovedPlaylist() {
         stopSportsPrefetch(clear = true); clearSportsPlayback()
@@ -3740,6 +3749,11 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
+        onboarding?.takeIf { it.opened }?.let { panel ->
+            // Loading the new playlist must not pull the remote out of setup.
+            if (!panel.hasFocus()) { if (event.action == KeyEvent.ACTION_DOWN) panel.refocus(); return true }
+            return super.dispatchKeyEvent(event)
+        }
         if (::reminderBanner.isInitialized && reminderBanner.isShown) {
             reminderBanner.focusActions()
             if (event.keyCode == KeyEvent.KEYCODE_BACK) {
@@ -3763,10 +3777,6 @@ class MainActivity : Activity() {
         if (::searchPanel.isInitialized && searchPanel.isVisible) {
             if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) finishSearch(true); return true }
             if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) voiceSearch(); return true }
-            return super.dispatchKeyEvent(event)
-        }
-        if (sportsLeaguePicker?.isShown == true) {
-            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) closeSportsLeaguePicker(); return true }
             return super.dispatchKeyEvent(event)
         }
         if (sportsCalendar?.opened == true) return sportsCalendar!!.dispatchKeyEvent(event)
@@ -3917,9 +3927,10 @@ class MainActivity : Activity() {
         syncPlaybackMonitoring()
         if (::sportsPanel.isInitialized && guideVisible && sportsVisible) sportsPanel.resumeImages()
         if (::updater.isInitialized) updater.resume()
+        onboarding?.resume()
     }
     override fun onPause() {
-        sportsLeaguePicker?.visibility = View.GONE
+        onboarding?.pause()
         if (::updater.isInitialized) updater.pause()
         // Stop audio before any cache, image or lifecycle cleanup. A paused TV app
         // must never continue playing over the launcher or another app.

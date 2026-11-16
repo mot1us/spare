@@ -22,7 +22,8 @@ import java.net.URI
 
 @SuppressLint("SetTextI18n")
 object SourceDialog {
-    fun show(activity: Activity, existing: Source?, save: (Source) -> Unit, remove: (Source) -> Unit): AlertDialog {
+    fun show(activity: Activity, existing: Source?, save: (Source) -> Unit, remove: (Source) -> Unit,
+        prefill: PhoneSetupResult? = null, closedWithoutSaving: () -> Unit = {}): AlertDialog {
         val density = activity.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
         val form = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(12), dp(24), dp(16)) }
@@ -39,6 +40,11 @@ object SourceDialog {
                 form.addView(this)
             }
         }
+        // Typing long links with a remote is slow, so a new playlist can be filled in from a phone instead.
+        val fromPhone = if (existing == null) android.widget.Button(activity).apply {
+            id = View.generateViewId(); tag = "playlist-from-phone"; isAllCaps = false; text = "Fill in from my phone (scan a QR code)"
+            form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(12) })
+        } else null
         val name = input("Name (optional)", existing?.name.orEmpty())
         val kinds = RadioGroup(activity).apply { orientation = RadioGroup.HORIZONTAL }
         val m3u = RadioButton(activity).apply { id = View.generateViewId(); text = "M3U URL" }
@@ -98,12 +104,33 @@ object SourceDialog {
             showAdvanced(); updateFocus()
         }
         kinds.check(if (existing?.kind == "xtream") xtream.id else m3u.id)
+        fun fill(result: PhoneSetupResult) {
+            if (result.name.isNotBlank()) name.setText(result.name.take(64))
+            kinds.check(if (result.xtream) xtream.id else m3u.id)
+            url.setText(result.url); user.setText(result.username); password.setText(result.password); epg.setText(result.epg)
+            error.text = ""
+        }
+        prefill?.let(::fill)
         advanced.setOnCheckedChangeListener { _, _ -> showAdvanced(); updateFocus() }
         val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add playlist" else "Edit playlist")
             .setView(ScrollView(activity).apply { addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
             .apply { if (existing != null) setNeutralButton("Remove") { _, _ -> remove(existing) } }.create()
         // Match the app's panels instead of the stock black system dialog.
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.InsetDrawable(GuideTheme.glass(density), (24 * density).toInt()))
+        var saved = false
+        dialog.setOnDismissListener { if (!saved) closedWithoutSaving() }
+        fromPhone?.setOnClickListener {
+            lateinit var phoneDialog: AlertDialog
+            val view = PhoneSetupView(activity) { result ->
+                fill(result); phoneDialog.dismiss()
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+            }.apply { setPadding(dp(24), dp(16), dp(24), dp(8)) }
+            phoneDialog = AlertDialog.Builder(activity).setTitle("Fill in from my phone").setView(view).setNegativeButton("Cancel", null).create()
+            phoneDialog.window?.setBackgroundDrawable(android.graphics.drawable.InsetDrawable(GuideTheme.glass(density), (24 * density).toInt()))
+            phoneDialog.setOnDismissListener { view.stop() }
+            phoneDialog.show(); view.start()
+            phoneDialog.window?.setLayout((720 * density).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
         fun configureDialog() {
             val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             val cancelButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
@@ -111,7 +138,7 @@ object SourceDialog {
                 val isXtream = kinds.checkedRadioButtonId == xtream.id
                 val extras = if (advanced.isChecked) (if (isXtream) listOf(backup) else emptyList()) + agent else emptyList()
                 val fields = listOf(name, url) + (if (isXtream) listOf(user, password) else emptyList()) + listOf(epg) + extras
-                val controls = listOf<View>(name, if (isXtream) xtream else m3u, url) +
+                val controls = listOfNotNull<View>(fromPhone, name, if (isXtream) xtream else m3u, url) +
                     (if (isXtream) listOf(user, password, showPassword) else emptyList()) + listOf(epg, allow, advanced) + extras + saveButton
                 controls.forEachIndexed { index, view ->
                     view.isFocusableInTouchMode = true
@@ -161,11 +188,12 @@ object SourceDialog {
                 val source = Source(existing?.id ?: java.util.UUID.randomUUID().toString(), name.text.toString().trim().take(64).ifBlank { URI(address).host },
                     if (isXtream) "xtream" else "m3u", address, if (isXtream) user.text.toString() else "", if (isXtream) password.text.toString() else "", guideAddress, allow.isChecked, existing?.enabled ?: true, existing?.maxStreams ?: 0,
                     userAgent, backupAddress)
-                save(source); dialog.dismiss()
+                saved = true; save(source); dialog.dismiss()
             }
         }
         dialog.show()
         configureDialog()
+        if (prefill != null) dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
         dialog.window?.setLayout((760 * density).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
         return dialog
     }

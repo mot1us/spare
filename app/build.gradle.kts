@@ -62,6 +62,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
     testImplementation("net.sf.kxml:kxml2:2.3.0")
+    // Test only: decodes the QR codes Spare draws, so the encoder is checked against an independent reader.
+    testImplementation("com.google.zxing:core:3.5.3")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

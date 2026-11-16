@@ -13,3 +13,7 @@ The security contracts are split by boundary:
 - [Updates and release](docs/specs/updates-and-release.md): official metadata URLs, APK digest/package/signer checks, private installer sessions and trusted signing jobs.
 
 Use synthetic fixtures for security and playback reports. Do not collect real provider credentials or reproduce private source URLs in test artifacts. Review local-only configuration only with the owner's explicit authorization, and keep signing keys, passwords and machine paths out of checked-in files. Production release signing belongs only in trusted main-branch jobs with protected secrets.
+
+## Phone setup
+
+"Set up from my phone" runs a small web server on the TV only while that screen is open. It listens on the TV's private home-network address, answers only private-network clients, and serves one form at a random 128-bit link shown in the QR code. It accepts one completed form, then closes; it also closes after ten minutes or 30 wrong links. Requests are size-limited, the page runs no scripts and loads nothing from outside, and the TV still asks the viewer to review and save. The form travels over plain HTTP on the home network, because a phone cannot verify a certificate made by the TV.

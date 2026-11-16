@@ -34,8 +34,8 @@ Spare includes no channels or subscriptions.
 ## Get started
 
 1. Download **spare.apk** from [Releases](https://github.com/mot1us/spare/releases) and install it on your Android TV (for example with the Downloader app).
-2. Open Spare, go to **Settings → Playlists** and add your M3U link or Xtream login.
-3. Open **Sports**, pick your leagues, and press OK on a game.
+2. Open Spare and scan the QR code with your phone to add your M3U link or Xtream login (or type it with the remote). Pick your sports, a look, and how the guide works; all of it can be changed later in Settings.
+3. Open **Sports** and press OK on a game.
 
 Spare updates itself: new versions appear under **Settings → Updates**.
 

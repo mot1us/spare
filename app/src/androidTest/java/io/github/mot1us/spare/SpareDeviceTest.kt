@@ -50,7 +50,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
+    @Before fun resetGuideStyle() { store.onboarded = true; store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -746,7 +746,7 @@ class SpareDeviceTest {
                     abandonedImport = removedCatalog.Writer(seed, "movie", indexOnly = true).apply {
                         append(listOf(OnDemand("movie:909", "Abandoned import", "Films", "${server.base}/channel1.mp4")))
                     }
-                    val removal = MainActivity::class.java.getDeclaredMethod("editSource", Source::class.java).apply { isAccessible = true }.invoke(activity, seed) as AlertDialog
+                    val removal = MainActivity::class.java.getDeclaredMethod("editSource", Source::class.java, PhoneSetupResult::class.java).apply { isAccessible = true }.invoke(activity, seed, null) as AlertDialog
                     removal.getButton(AlertDialog.BUTTON_NEUTRAL).performClick()
                 }
                 waitFor(scenario) { store.sources().isEmpty() }
@@ -2580,7 +2580,75 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun sportsLeagueRailChoosesOnFirstVisitAndPreservesEachLeagueAndCalendar() {
+    @Test fun firstLaunchSetupTakesAPlaylistFromAPhoneThenSportsThemeAndGuideChoices() {
+        FixtureServer().use { server ->
+            store.saveSources(emptyList()); store.active = ""; store.onboarded = false; store.resetSportsLeagues()
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                fun title(activity: MainActivity) = activity.window.decorView.findViewWithTag<TextView>("onboarding-title")?.takeIf { it.isShown }?.text?.toString()
+                var link = ""
+                waitFor(scenario) { activity ->
+                    link = activity.window.decorView.findViewWithTag<TextView>("phone-setup-link")?.text?.toString()?.removePrefix("Or open ").orEmpty()
+                    title(activity) == "Welcome to Spare" && link.startsWith("http://") && activity.window.decorView.findViewWithTag<View>("onboarding-type").hasFocus()
+                }
+                assertTrue("The QR link is the private one-time form", link.matches(Regex("http://[0-9.]+:\\d+/p/[A-Za-z0-9_-]{22}")))
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "onboarding-phone.png"))
+                // The phone's side: open the form, then send a playlist.
+                fun phone(body: String?): String {
+                    val connection = java.net.URL(link).openConnection() as java.net.HttpURLConnection
+                    if (body != null) { connection.requestMethod = "POST"; connection.doOutput = true; connection.outputStream.use { it.write(body.toByteArray()) } }
+                    return connection.inputStream.bufferedReader().use { it.readText() }
+                }
+                assertTrue(phone(null).contains("Send to TV"))
+                val playlist = "${server.base}/playlist.m3u"
+                assertTrue(phone("type=m3u&name=Phone+list&m3u=" + java.net.URLEncoder.encode(playlist, "UTF-8")).contains("Sent to your TV"))
+                // The TV shows the details filled in, with Save ready.
+                waitFor(scenario) {
+                    device.findObject(androidx.test.uiautomator.By.text(playlist)) != null && device.findObject(androidx.test.uiautomator.By.text("Save"))?.isFocused == true
+                }
+                assertNotNull("Name came from the phone", device.findObject(androidx.test.uiautomator.By.text("Phone list")))
+                device.pressDPadCenter()
+                waitFor(scenario) { title(it) == "Which sports do you watch?" && store.sources().size == 1 }
+                scenario.onActivity { activity ->
+                    assertEquals("Phone list", store.sources().single().name); assertEquals(playlist, store.sources().single().url)
+                    assertTrue("Pro leagues start on", activity.window.decorView.findViewWithTag<View>("onboarding-league:NFL").isSelected)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("onboarding-league:NCAAF").isSelected)
+                    activity.window.decorView.findViewWithTag<View>("onboarding-league:NCAAF").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-league:EPL").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
+                }
+                waitFor(scenario) { title(it) == "Pick a look" }
+                scenario.onActivity { activity ->
+                    assertTrue("NCAAF" in store.sportsLeagues); assertFalse("EPL" in store.sportsLeagues)
+                    activity.window.decorView.findViewWithTag<View>("onboarding-theme:Midnight").performClick()
+                    assertEquals("Ocean", store.theme)
+                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
+                }
+                waitFor(scenario) { title(it) == "How should the guide work?" }
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "onboarding-guide.png"))
+                device.pressBack(); waitFor(scenario) { title(it) == "Pick a look" }
+                device.pressBack(); waitFor(scenario) { title(it) == "Which sports do you watch?" }
+                device.pressBack(); waitFor(scenario) { title(it) == "Your playlist is ready" }
+                scenario.onActivity { activity ->
+                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
+                    assertEquals("How should the guide work?", title(activity))
+                    activity.window.decorView.findViewWithTag<View>("onboarding-guide:Guide background:Solid").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-guide:Text size:Large").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-guide:OK on a channel:Preview first").performClick()
+                    assertEquals(100, store.guideOpacity); assertEquals(115, store.guideTextScale); assertFalse(store.guideOpenFullscreen)
+                    activity.window.decorView.findViewWithTag<View>("onboarding-done").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("onboarding") == null && channelList(it)?.isShown == true && channelList(it)?.adapter?.itemCount == 8 }
+                assertTrue(store.onboarded)
+                scenario.recreate()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { assertNull("Setup runs once", it.window.decorView.findViewWithTag<View>("onboarding")) }
+            } } finally { store.saveSources(emptyList()); store.active = ""; store.onboarded = true; store.guideTextScale = 100; store.guideOpenFullscreen = true }
+        }
+    }
+
+    @Test fun sportsLeagueRailPreservesEachLeagueAndCalendar() {
         FixtureServer().use { server ->
             val source = Source(name = "League setup fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val channel = Channel("league-feed", "News", "News", "${server.base}/channel1.mp4")
@@ -2591,7 +2659,7 @@ class SpareDeviceTest {
                 LiveEvent("rail-nfl-2", setOf("nfl:BUF", "nfl:KC"), now - 60000, league = "NFL")
             ), now, setOf("NFL", "NBA"))
             store.saveSources(listOf(source)); store.active = source.id
-            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source); store.resetSportsLeagues()
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source); store.sportsLeagues = setOf("NFL", "NBA")
             val calls = java.util.concurrent.atomic.AtomicInteger()
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
             val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
@@ -2604,20 +2672,20 @@ class SpareDeviceTest {
                 var playing: Player? = null
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> playing = p; p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true }
+                // Leagues are picked during first-run setup; Sports itself never stops to ask.
+                // Three live games, plus RedZone when the NFL window is on.
+                waitFor(scenario) { (it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount ?: 0) >= 3 }
                 scenario.onActivity { activity ->
-                    assertEquals("Do not fetch every league before setup", 0, calls.get())
-                    assertFalse(activity.window.decorView.findViewWithTag<View>("sports-league-continue").isEnabled)
-                    listOf("NFL", "NBA").forEach { activity.window.decorView.findViewWithTag<View>("sports-setup:$it").performClick() }
-                    activity.window.decorView.findViewWithTag<View>("sports-league-continue").performClick()
-                }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 }
-                scenario.onActivity { activity ->
+                    assertNull("Sports never interrupts with a league picker", activity.window.decorView.findViewWithTag<View>("sports-league-picker"))
                     assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
                     assertNull("No mixed-league option", activity.window.decorView.findViewWithTag<View>("sports-league:all"))
                     assertNull("Disabled leagues stay out of the rail", activity.window.decorView.findViewWithTag<View>("sports-league:MLB"))
-                    val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
-                    grid.findViewHolderForAdapterPosition(1)!!.itemView.requestFocus()
+                    activity.window.decorView.findViewWithTag<View>("sports-league:NFL").apply { requestFocus(); performClick() }
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewWithTag<View>("NFL:rail-nfl-2") != null && it.window.decorView.findViewWithTag<View>("NBA:rail-nba") == null }
+                scenario.onActivity { activity ->
+                    // Each league remembers its own focused game.
+                    activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").findViewWithTag<View>("NFL:rail-nfl-2").requestFocus()
                     activity.window.decorView.findViewWithTag<View>("sports-league:NBA").apply { requestFocus(); performClick() }
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 1 && it.window.decorView.findViewWithTag<View>("NBA:rail-nba")?.isShown == true }
@@ -2644,7 +2712,6 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NBA:rail-nba")?.isShown == true }
                 scenario.onActivity { activity ->
-                    assertFalse("Saved league choices do not reopen setup", activity.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true)
                     assertEquals(setOf("NFL", "NBA"), store.sportsLeagues)
                 }
                 device.takeScreenshot(File(context.getExternalFilesDir(null), "sports-league-filter.png"))
@@ -3197,17 +3264,13 @@ class SpareDeviceTest {
                         manager.findViewWithTag<View>("settings-option:Cancel").performClick(); assertTrue("nfl:ARI" in store.followedTeams)
                         manager.findViewWithTag<View>("settings-option:Reset Sports settings").performClick(); manager.findViewWithTag<View>("settings-option:Reset Sports").performClick()
                         assertTrue(store.followedTeams.isEmpty()); assertEquals(SportsLeagues.byId.keys, store.sportsLeagues)
-                        assertFalse("Reset asks for leagues again", store.sportsLeaguesChosen)
+                        assertFalse("Reset returns to the default leagues", store.sportsLeaguesChosen)
                         assertFalse(store.sportsFollowedOnly); assertTrue("OK plays live games by default", SecureStore(context).sportsAutoPlay); assertEquals(GuideFilters(), store.sportsFilters(source)); assertTrue(store.hideCompletedScores); assertEquals("today", store.sportsTeam)
                         assertEquals(source.id, store.active)
                     }
                     device.pressBack(); device.pressBack()
                     waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("sports-manager").isShown && it.window.decorView.findViewWithTag<View>("sports-panel").isShown }
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league-picker")?.isShown == true }
-                    scenario.onActivity { activity ->
-                        activity.window.decorView.findViewWithTag<View>("sports-setup:NFL").performClick()
-                        activity.window.decorView.findViewWithTag<View>("sports-league-continue").performClick()
-                    }
+                    scenario.onActivity { assertEquals(OnboardingPanel.DEFAULT_LEAGUES, store.sportsLeagues) }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 9 }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-live").requestFocus() }
                     device.pressDPadLeft(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-mode").hasFocus() }
@@ -5407,8 +5470,9 @@ class SpareDeviceTest {
             val launch = device.executeShellCommand("am start -W -n $releasePackage/.MainActivity")
             assertTrue(launch, launch.contains("Status: ok"))
             assertTrue(device.wait(Until.hasObject(By.pkg(releasePackage)), 10000))
-            device.pressMenu()
-            button("Add playlist").click()
+            // A fresh install opens first-run setup; the release build must get through it with the remote.
+            assertNotNull("First-run setup offers a phone QR code", device.wait(Until.findObject(By.pkg(releasePackage).desc("QR code for setting up from your phone")), 8000))
+            button("Type it on the TV").click()
             val fields = device.wait(Until.findObjects(By.pkg(releasePackage).clazz(EditText::class.java)), 8000)
             check(fields != null && fields.size >= 2) { "Playlist URL field is missing" }
             val playlist = "${server.base}/playlist.m3u"
@@ -5424,6 +5488,15 @@ class SpareDeviceTest {
             repeat(2) { if (!button("Save").isFocused) device.pressDPadDown() }
             assertTrue("Focus reached Save", button("Save").isFocused)
             device.pressDPadCenter()
+            // A tap on a TV button first gives it focus; tap again if the step has not moved on.
+            fun leave(title: String, action: String) {
+                button(title)
+                repeat(2) { if (device.hasObject(By.pkg(releasePackage).text(title))) { button(action).click(); device.wait(Until.gone(By.pkg(releasePackage).text(title)), 3000) } }
+                assertFalse("Setup moved past $title", device.hasObject(By.pkg(releasePackage).text(title)))
+            }
+            leave("Which sports do you watch?", "Continue")
+            leave("Pick a look", "Continue")
+            leave("How should the guide work?", "Start watching")
             val firstChannel = By.pkg(releasePackage).descStartsWith("Test Channel 1.")
             val playbackDeadline = android.os.SystemClock.elapsedRealtime() + 20000
             var selectedChannel = false
