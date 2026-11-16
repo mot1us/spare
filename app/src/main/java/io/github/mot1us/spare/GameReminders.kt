@@ -240,7 +240,7 @@ object SportsStreams {
     }
     /** Cards name the channel; a quality line appears only when there is something real to say. */
     private fun cardQuality(channel: Channel, quality: Map<String, VideoInfo>) =
-        channel.qualityLabel(quality[channel.id]).takeUnless { it == "Quality unknown" }?.let { "\n$it" }.orEmpty()
+        channel.qualityTag(quality[channel.id]).takeIf { it.isNotEmpty() }?.let { "  ·  $it" }.orEmpty()
     fun cardSummary(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): String {
         if (game.state == "pre") {
@@ -251,7 +251,7 @@ object SportsStreams {
         }
         val channel = automaticChoices(game, filters, quality, guide, now, available).firstOrNull()
         if (channel != null) {
-            return channel.name + cardQuality(channel, quality)
+            return EventChannelNames.name(channel) + cardQuality(channel, quality)
         }
         val matches = rank(game, filters, quality, available)
         if (matches.isEmpty()) return "No playlist match found"

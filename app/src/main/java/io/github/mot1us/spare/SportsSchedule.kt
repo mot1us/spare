@@ -129,6 +129,7 @@ object SportsSchedule {
         return (0 until minOf(calendar.length(), 500)).mapNotNull { index -> runCatching { java.time.OffsetDateTime.parse(calendar.optString(index)).toLocalDate() }.getOrNull() }
             .filter { !it.isBefore(date) && !it.isAfter(date.plusDays(45)) }.minOrNull()?.format(DateTimeFormatter.BASIC_ISO_DATE)
     }
+    const val SAVED_LIVE_MS = 20 * 60000L
     fun selectedDate(scope: String?, now: Long = System.currentTimeMillis()): java.time.LocalDate? = when {
         scope == "tomorrow" -> Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate().plusDays(1)
         scope?.startsWith("date:") == true -> runCatching { java.time.LocalDate.parse(scope.removePrefix("date:")) }.getOrNull()
@@ -138,7 +139,9 @@ object SportsSchedule {
     fun games(snapshot: LiveSportsSnapshot, guide: Guide, team: String?, favorites: Set<String>, now: Long, matchChannels: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<SportsGame> {
         val selectedDay = selectedDate(team, now)
         val events = if (selectedDay != null) snapshot.events.filter { it.scoreboard && Instant.ofEpochMilli(it.start).atZone(zone).toLocalDate() == selectedDay }
-            else if (team == "live") snapshot.events.filter { it.scoreboard && it.state == "in" && it.start <= now + 60000 && snapshot.fresh(now) }
+            // Live now shows games from a saved copy up to 20 minutes old (marked as checking) instead of an empty
+            // screen while the first scoreboard reply downloads; the fresh reply replaces them in place.
+            else if (team == "live") snapshot.events.filter { it.scoreboard && it.state == "in" && it.start <= now + 60000 && (snapshot.fresh(now) || now - snapshot.checked in 0..SAVED_LIVE_MS) }
             else if (team == "today") snapshot.events.filter { it.scoreboard && (onDay(it.start, now, zone) || it.state == "in" && it.start in (now - 18 * 3600000L)..now) }
             else if (team == null || team.startsWith("league:")) snapshot.events.filter { it.scoreboard && (team == null || it.teams.any { id -> (it.league.ifBlank { SportsCatalog.byId[id]?.league.orEmpty() }) == team.substringAfter(':') }) }
             else snapshot.events.filter { team in it.teams && (it.state == "in" || it.state == "pre" && it.start > now) }

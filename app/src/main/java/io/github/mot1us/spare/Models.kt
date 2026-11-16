@@ -43,6 +43,11 @@ data class Channel(val id: String, val name: String, val group: String, val url:
             interlaced = if (observed.height <= 0 && (!observed.fps.isFinite() || observed.fps <= 0)) provider.interlaced else observed.interlaced)
     }
     /** Keep source declarations separate from rates actually observed during playback. */
+    /** A short tag for cards ("4K", "FHD", "HD"), or blank when unknown; the full label stays for stream choices. */
+    fun qualityTag(observed: VideoInfo?): String {
+        val height = quality(observed)?.height ?: return ""
+        return when { height >= 2160 -> "4K"; height >= 1080 -> "FHD"; height >= 720 -> "HD"; else -> "" }
+    }
     fun qualityLabel(observed: VideoInfo?): String {
         val info = quality(observed) ?: return "Quality unknown"
         val observedRate = observed?.fps?.let { it.isFinite() && it > 0f } == true

@@ -163,14 +163,14 @@ class SportsStreamCacheTest {
         assertTrue(SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains(unknown.name))
         assertFalse("Cards omit an unknown quality instead of repeating it on every game", SportsStreams.cardSummary(unverified, filters, emptyMap(), guide, now).contains("Quality unknown"))
         assertEquals(listOf(unknown), SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now))
-        assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).contains("50 fps"))
+        assertTrue(SportsStreams.cardSummary(game.copy(titleMatches = listOf(low)), filters, emptyMap(), guide, now).startsWith(low.name))
         val hd = channel("720", 29.97f).copy(reportedQuality = VideoInfo(1280, 720, 29.97f))
         assertEquals("A lone HD/30 game must still be playable under FHD/60 preferences", listOf(hd),
             SportsStreams.automaticChoices(game.copy(titleMatches = listOf(hd)), filters, emptyMap(), Guide(listOf(hd), emptyMap()), now))
         assertTrue("Unavailable streams stay excluded", SportsStreams.automaticChoices(unverified, filters, emptyMap(), guide, now) { false }.isEmpty())
         assertTrue("Category visibility remains respected", SportsStreams.automaticChoices(unverified, filters.copy(groups = setOf("Other")), emptyMap(), guide, now).isEmpty())
         val verified = mapOf(unknown.id to VideoInfo(3840, 2160, 59.94f))
-        assertTrue(SportsStreams.cardSummary(unverified, filters, verified, guide, now).contains("59.94"))
+        assertTrue("A measured 4K stream shows its short tag", SportsStreams.cardSummary(unverified, filters, verified, guide, now).endsWith("·  4K"))
     }
     @Test fun scheduledMatchesAreDisplayOnlyAndExpireAtKickoff() {
         val future = game.copy(state = "pre", start = now + 3600000L, end = now + 4 * 3600000L)

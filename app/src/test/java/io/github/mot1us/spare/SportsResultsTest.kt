@@ -82,7 +82,8 @@ class SportsResultsTest {
         val guide = Guide(listOf(hd, stale), mapOf(hd.id to listOf(listing(hd)), stale.id to listOf(listing(stale, "Local headlines"))))
         assertEquals(listOf(hd), SportsStreams.results(matched, GuideFilters(), emptyMap(), guide, now))
         assertEquals(listOf(hd), SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), guide, now))
-        assertTrue(SportsStreams.cardSummary(matched, GuideFilters(), emptyMap(), guide, now).startsWith(hd.name + "\n"))
+        // Cards name the channel with a short quality tag ("HD"), not the full technical label.
+        assertEquals(hd.name + "  ·  HD", SportsStreams.cardSummary(matched, GuideFilters(), emptyMap(), guide, now))
         val missing = guide.copy(programmes = guide.programmes - stale.id)
         assertEquals("A still-active saved EPG match remains usable without fresh guide data", listOf(stale, hd),
             SportsStreams.automaticChoices(matched, GuideFilters(), emptyMap(), missing, now))

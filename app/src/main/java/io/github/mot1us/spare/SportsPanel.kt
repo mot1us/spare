@@ -331,7 +331,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var displayedRedZone = false
     private var redZoneSummary = "Finding RedZone…"
     fun updateRedZone(channels: List<Channel>, quality: Map<String, VideoInfo>) {
-        val summary = channels.firstOrNull()?.let { it.name + "\n" + it.qualityLabel(quality[it.id]) } ?: "Select to check provider guide"
+        val summary = channels.firstOrNull()?.let { it.name + it.qualityTag(quality[it.id]).takeIf { tag -> tag.isNotEmpty() }?.let { tag -> "  ·  $tag" }.orEmpty() } ?: "Select to check provider guide"
         if (summary == redZoneSummary) return
         redZoneSummary = summary
         for (i in 0 until rows.childCount) (rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard)?.takeIf { it.box.tag == REDZONE }?.let { it.stream.text = summary }
@@ -721,8 +721,16 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (skeleton.visibility != VISIBLE) return
         skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
-        gridArea.alpha = 0f; heroContent.alpha = 0f
-        gridArea.animate().alpha(1f).setDuration(180).start(); heroContent.animate().alpha(1f).setDuration(180).start()
+        heroContent.alpha = 0f; heroContent.animate().alpha(1f).setDuration(260).start()
+        // Cards settle in one after another with a short rise, instead of the whole grid appearing at once.
+        gridArea.alpha = 1f
+        rows.post {
+            for (i in 0 until rows.childCount) rows.getChildAt(i).apply {
+                alpha = 0f; translationY = dp(10).toFloat()
+                animate().alpha(1f).translationY(0f).setStartDelay(minOf(i, 8) * 45L).setDuration(240)
+                    .setInterpolator(android.view.animation.DecelerateInterpolator(1.5f)).start()
+            }
+        }
     }
     fun loading(message: String) { contextLine.text = message; loadingGames = games.isEmpty(); progress.isVisible = true; status.text = message; if (games.isEmpty()) { empty.text = "Loading scores and schedules…"; empty.isVisible = true; if (initialReveal) showSkeleton() } }
     /** [hidden] counts games left out by "Show only my teams", so an empty-looking screen says why. */
@@ -884,7 +892,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
      * column ran under the main menu and was cut off.
      */
     private fun lift(view: View, active: Boolean) {
-        view.animate().cancel(); view.scaleX = 1f; view.scaleY = 1f; view.translationZ = 0f
+        view.animate().cancel(); view.scaleX = 1f; view.scaleY = 1f; view.translationZ = 0f; view.alpha = 1f; view.translationY = 0f
         view.foreground = if (active) GradientDrawable().apply {
             setStroke(dp(3), GuideTheme.current.accent); cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density
         } else null

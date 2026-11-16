@@ -92,7 +92,7 @@ class PlaybackDetails(
     private fun refreshIcons() {
         controls.forEachIndexed { index, control ->
             fun glyph(color: Int) = context.getDrawable(icons[index])!!.mutate().apply { setTint(color) }
-            val drawable = StateListDrawable().apply {
+            val drawable = StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS);
                 addState(intArrayOf(android.R.attr.state_focused), glyph(GuideTheme.focusText))
                 addState(intArrayOf(), glyph(if (GuideTheme.style == "Nostalgia") GuideTheme.current.accent else Color.WHITE))
                 setBounds(0, 0, dp(18), dp(18))

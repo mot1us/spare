@@ -397,7 +397,6 @@ class MainActivity : Activity() {
     private val hideFavoriteFeedback = Runnable { favoriteFeedback.animate().alpha(0f).setDuration(150).withEndAction { favoriteFeedback.visibility = View.GONE }.start() }
     private val guideTimeline = GuideTimeline()
     private lateinit var logos: LogoLoader
-    private lateinit var metadata: LiveMetadata
     private lateinit var store: SecureStore
     private lateinit var updater: Updater
     private lateinit var player: ExoPlayer
@@ -719,7 +718,8 @@ class MainActivity : Activity() {
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
-        metadata = LiveMetadata(store) { (if (guideVisible) focused ?: current else current)?.let(::showInfo) }
+        // The optional metadata service was removed in 0.50.8; drop its saved address and poster cache.
+        imports.execute { runCatching { store.delete("metadata-addon.enc"); store.delete("metadata-posters.enc") } }
         logos = LogoLoader(160, 12 * 1024 * 1024, GuideLogoFiles(this))
         configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "live"
         // Build the team-name index off the screen thread; its first use there froze the screen for about half a second.
@@ -915,7 +915,7 @@ class MainActivity : Activity() {
         minWidth = 0; minimumWidth = 0; minHeight = dp(34); minimumHeight = dp(34); typeface = AppFont.face(true)
         setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(GuideTheme.focusText, Color.WHITE)))
         fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(4).toFloat() }
-        background = StateListDrawable().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
+        background = StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS); addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
         background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30))
         stateListAnimator = null
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply { marginEnd = dp(8) }
@@ -983,7 +983,7 @@ class MainActivity : Activity() {
         guidePanel.addView(guideTabs, LinearLayout.LayoutParams(-1, dp(38)))
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         guidePanel.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
-        navigationRail = NavigationRail(this, ::search, { openSection(false) }, { openSection(true) }, { openLibrary() }, ::playbackMenu,
+        navigationRail = NavigationRail(this, ::typedSearch, { openSection(false) }, { openSection(true) }, { openLibrary() }, ::playbackMenu,
             ::enterNavigationContent, { ++focusEpoch; pendingFocusList = null })
         searchButton = navigationRail.search; settingsButton = navigationRail.settings; guideMode = navigationRail.guide
         sportsMode = navigationRail.sports; libraryButton = navigationRail.library; updateBadge = navigationRail.badge
@@ -1189,7 +1189,10 @@ class MainActivity : Activity() {
         if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
         if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.resume() }
         showNavigation(if (archive) "guide-mode" else "library")
+        fadeIn(library.panel)
     }
+    /** A short fade when switching between Guide, Sports and Library, instead of an instant swap. */
+    private fun fadeIn(view: View) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(1f).setDuration(180).start() }
     private fun reopenLibrary() {
         saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(onDemand); root.bringChildToFront(library.panel); showNavigation("library")
     }
@@ -1379,6 +1382,7 @@ class MainActivity : Activity() {
         if (onDemand != null) returnToLive()
         if (sports) { sportsTeam = "live"; sportsBrowseLeague = null; liveSportsQuickRetries = SPORTS_QUICK_RETRIES }
         switchMode(sports)
+        fadeIn(if (sports) sportsPanel else list)
         // After the league reset in switchMode, which cancels a pending entry: games take the cursor once they load.
         if (sports) sportsPanel.home()
     }
@@ -2004,11 +2008,10 @@ class MainActivity : Activity() {
         val programme = guide.at(channel, if (guideVisible) maxOf(System.currentTimeMillis(), guideTimeline.start(channel.id)) else System.currentTimeMillis())
         channelInfo.text = programme?.title ?: channel.name
         val quality = channel.quality(videoInfo[channel.id])?.let { it.label() + (if ((videoInfo[channel.id]?.fps ?: 0f) > 0) "" else " · Provider reported") } ?: "Quality unverified"
-        val enriched = programme?.let { metadata.get(it) }
-        val art = programme?.artwork.orEmpty().ifBlank { enriched?.backdrop.orEmpty().ifBlank { enriched?.poster.orEmpty() } }.ifBlank { channel.logo }
+        val art = programme?.artwork.orEmpty().ifBlank { channel.logo }
         headerArtwork.scaleType = if (art == channel.logo) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
         programmeArtwork.show(if (guideVisible && !sportsVisible) art else "", owner(channel)?.allowHttp == true)
-        programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${enriched?.description?.ifBlank { it.description } ?: it.description}" } ?: "\n${epgErrors[channel.id] ?: if (owner(channel)?.id in restoringProgrammes) "Loading saved programme guide…" else if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
+        programmeInfo.text = channelLabel(channel) + "  ·  " + quality + (programme?.let { "  ·  ${GuideAdapter.time(it.start)}–${GuideAdapter.time(it.end)}\n${it.description}" } ?: "\n${epgErrors[channel.id] ?: if (owner(channel)?.id in restoringProgrammes) "Loading saved programme guide…" else if (epgInFlight.any { it == "$generation:${channel.id}" }) "Loading programme guide…" else "No programme information"}")
     }
     private fun applyFilter() {
         requestLocalMatches()
@@ -2048,8 +2051,8 @@ class MainActivity : Activity() {
             timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
             list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "↑ Filters    OK Select game    Hold OK More options    Hold Back Full screen"
-                else "← Earlier / categories    → Later on this channel    Back Categories, then main menu    Hold Back Full screen    Hold OK Favorite"
+            remoteHint.text = if (sportsVisible) "OK Watch    Hold OK More options    ↑ Filters    Hold Back Full screen"
+                else "OK Watch    Hold OK Favorite    ← Categories    → Later    Hold Back Full screen"
             if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
         }
     }
@@ -2159,8 +2162,10 @@ class MainActivity : Activity() {
         nowPlaying.update(channel, guide.at(channel, System.currentTimeMillis()), videoInfo[channel.id]); nowPlaying.reveal()
         handler.postDelayed(hideNowPlaying, 2800)
     }
-    private fun search() = searchWithQuery(query)
-    private fun searchWithQuery(initial: String) { if (vodRequest != null) closeVodStart(restore = false); openPlaylistSearch(initial, true) }
+    /** The remote's search key starts voice search; the menu, Library and other entry points open ready to type. */
+    private fun search() = searchWithQuery(query, voice = true)
+    private fun typedSearch() = searchWithQuery(query)
+    private fun searchWithQuery(initial: String, voice: Boolean = false) { if (vodRequest != null) closeVodStart(restore = false); openPlaylistSearch(initial, voice) }
     private fun openPlaylistSearch(initial: String, useVoice: Boolean) {
         settingsPanel?.visibility = View.GONE
         if (::library.isInitialized && library.opened) library.dismiss()
@@ -2172,8 +2177,8 @@ class MainActivity : Activity() {
         handler.removeCallbacks(filterSearch); ++focusEpoch; pendingFocusList = null
         searchPanel.recent = store.recentSearches
         searchPanel.show(query); root.bringChildToFront(searchPanel); showNavigation("search")
-        updatePlaylistSearch(); guideSearch.voice.requestFocus()
-        if (useVoice) voiceSearch() else guideSearch.message("Speak a title or channel name, or select the field to type.")
+        updatePlaylistSearch()
+        if (useVoice) { guideSearch.voice.requestFocus(); voiceSearch() } else { guideSearch.message("Type a channel, movie or show, or press Voice."); guideSearch.startTyping() }
     }
     private fun watchVodFromBeginning() {
         val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
@@ -2876,7 +2881,7 @@ class MainActivity : Activity() {
         val available: (Channel) -> Boolean = { (hidden[it.id] ?: 0) <= now }
         if (match.game.live(now)) {
             val choices = SportsStreams.automaticChoices(match.game, profile, quality, evidence, now, available)
-            streamHealth.order(choices, quality, android.os.SystemClock.elapsedRealtime()).firstOrNull()?.let { return channelLabel(it) + "\n" + it.qualityLabel(quality[it.id]) }
+            streamHealth.order(choices, quality, android.os.SystemClock.elapsedRealtime()).firstOrNull()?.let { return channelLabel(it) + it.qualityTag(quality[it.id]).takeIf { tag -> tag.isNotEmpty() }?.let { tag -> "  ·  $tag" }.orEmpty() }
         }
         return SportsStreams.cardSummary(match.game, profile, quality, evidence, now) { match.game.state == "pre" || available(it) }
     }
@@ -3375,7 +3380,7 @@ class MainActivity : Activity() {
         root.bringChildToFront(panel)
         showNavigation("settings")
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
-        panel.open(listOf("Playlists", "Local channels", "Playback", "Theme", "Guide", "Categories", "Sports", "Metadata", "Updates", "About Spare", "Open-source licenses", "Exit Spare"))
+        panel.open(listOf("Playlists", "Local channels", "Playback", "Theme", "Guide", "Categories", "Sports", "Updates", "About Spare", "Open-source licenses", "Exit Spare"))
         syncScoreStrip()
     }
     private fun closeSettings() {
@@ -3515,13 +3520,6 @@ class MainActivity : Activity() {
                 val editor = ThemeEditor(this, store, { if (!closed) appearanceChanged() }, { panel.focusNavigation() })
                 themeEditor = editor; panel.custom(editor, 390)
             }
-            "Metadata" -> {
-                panel.page("Metadata", "Provider artwork and descriptions are used by default. Optional AIO Metadata enrichment uses your configured Stremio addon URL. IPTV credentials and playback URLs stay in Spare. Enrichment is cached and never blocks playback.")
-                panel.action("Refresh metadata artwork", "Retry missing movie and series posters without reloading your playlist") { metadata.clear(); library.clearMetadata(); panel.note("Metadata cache cleared · Missing posters will load as you browse.") }
-                panel.action("Provider metadata") { imports.execute { store.saveMetadataAddon(""); handler.post { if (!closed) { metadata.clear(); library.clearMetadata(); panel.note("Provider metadata selected.") } } } }
-                panel.action("Configure AIO Metadata", "Enter the configured manifest.json URL from your existing setup") { configureMetadata() }
-                panel.note("Movies and series use provider IDs or an exact, unambiguous title/year match. Identifiable live programmes can also show enriched descriptions. Ambiguous matches retain provider data.")
-            }
             "Time format" -> {
                 panel.page(page, "Use the same clock format throughout the guide, channel details, and Sports.")
                 listOf("12 hour · 7:30 PM", "24 hour · 19:30").forEachIndexed { index, label -> panel.action(label, selected = store.clock24 == (index == 1)) {
@@ -3586,17 +3584,6 @@ class MainActivity : Activity() {
         panel.action("Refresh playlist only") { refreshCurrent(selected, true, false); renderRefreshSettings(selected, "Refresh playlist only") }
         panel.action("Refresh EPG only") { refreshCurrent(selected, false, true); renderRefreshSettings(selected, "Refresh EPG only") }
         focus?.let(panel::focusOption)
-    }
-    private fun configureMetadata() {
-        val input = android.widget.EditText(this).apply { hint = "https://…/manifest.json"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI; isSingleLine = true }
-        AlertDialog.Builder(this).setTitle("AIO Metadata addon").setMessage("Paste your configured addon manifest URL. It is saved encrypted on this TV.").setView(input)
-            .setPositiveButton("Connect") { _, _ ->
-                val value = input.text.toString()
-                imports.execute {
-                    val result = runCatching { val url = MetadataAddon.validate(value); MetadataAddon.manifest(url); store.saveMetadataAddon(url) }
-                    handler.post { if (!closed) { result.onSuccess { metadata.clear(); library.clearMetadata(); settingsPanel?.note("AIO Metadata connected · Missing posters load as you browse Movies and Series."); toast("AIO Metadata connected") }.onFailure { notice("Could not connect metadata", "Use a valid configured HTTPS manifest.json URL. The addon must be reachable. Your playlist is unchanged.") } } }
-                }
-            }.setNegativeButton("Cancel", null).create().also(::themed).show()
     }
     private fun renderCategoryChoices() {
         val panel = settingsPanel ?: return
@@ -3983,7 +3970,6 @@ class MainActivity : Activity() {
         PlaylistRefresh.unlisten(this)
         if (::programmeArtwork.isInitialized) programmeArtwork.close()
         if (::multiview.isInitialized) multiview.close()
-        metadata.close()
         details.closeImages()
         library.destroy()
         sportsPanel.closeImages()

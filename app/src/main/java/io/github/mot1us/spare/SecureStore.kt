@@ -222,8 +222,6 @@ class SecureStore(private val context: Context) {
         require(entries.length() <= Importers.MAX_CHANNELS)
         return root.getLong("updated") to List(entries.length()) { OnDemand.from(entries.getJSONObject(it)) }
     }
-    fun metadataAddon(): String = read("metadata-addon.enc")?.toString(Charsets.UTF_8).orEmpty()
-    fun saveMetadataAddon(value: String) { write("metadata-addon.enc", value.toByteArray()) }
     fun cacheCatalog(source: Source, kind: String, entries: List<OnDemand>) = synchronized(cacheLock) {
         require(kind in setOf("movie", "series"))
         if (!providerCurrent(source)) return@synchronized

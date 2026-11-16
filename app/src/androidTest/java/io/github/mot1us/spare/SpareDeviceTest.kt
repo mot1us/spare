@@ -50,7 +50,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER; store.saveMetadataAddon("") }
+    @Before fun resetGuideStyle() { store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -903,9 +903,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA") != null }
                 scenario.onActivity { assertEquals("Typing a draft must not overwrite saved regions", "", SecureStore(context).localLocation) }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("local-location-input").requestFocus() }
-                device.pressDPadDown()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-add-region")?.hasFocus() == true }
-                device.pressDPadDown()
+                device.pressDPadDown() // Suggestions sit right under the box, so Down lands on the first one.
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("local-location-suggestion:Seattle, WA")?.hasFocus() == true }
                 device.pressDPadCenter()
                 waitFor(scenario) { activity ->
@@ -1572,7 +1570,10 @@ class SpareDeviceTest {
                     scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; assertTrue(it.window.decorView.findViewWithTag<View>("search").requestFocus()) }
                     instrumentation.waitForIdleSync()
                     scenario.onActivity { assertTrue("Search icon must retain remote focus", it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
+                    // Search from the menu opens ready to type; Voice starts listening.
                     device.pressDPadCenter()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-search-input")?.hasFocus() == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").apply { requestFocus(); performClick() } }
                     waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 && activity.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results")?.hasFocus() == true }
                     assertEquals("Native speech must not launch a chooser/activity", 0, monitor.hits)
                     scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertEquals(1f, find<PlayerView>(it.window.decorView)!!.player!!.volume, 0f) }
@@ -3302,7 +3303,9 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search").performClick() }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("One") }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:favorite:1")?.isShown == true }
-                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == false }
+                // The first Back closes the on-screen keyboard, the next closes Search.
+                repeat(3) { var open = false; scenario.onActivity { open = it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == true }; if (open) { device.pressBack(); instrumentation.waitForIdleSync() } }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("playlist-search")?.isShown == false }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("guide-categories").findViewHolderForAdapterPosition(1)!!.itemView.requestFocus() }; device.pressDPadCenter()
                 waitFor(scenario) { channelList(it)?.adapter?.itemCount == 2 && channelList(it)?.hasFocus() == true }
                 scenario.onActivity { activity ->
@@ -4215,11 +4218,6 @@ class SpareDeviceTest {
                 assertEquals(1, server.requests["/redirect.mp4"]); assertEquals(1, server.requests["/redirect-relative.mp4"])
             } finally { source.close() }
         }
-        val url = "https://metadata.example/private-config-token/manifest.json"
-        store.saveMetadataAddon(url)
-        assertEquals(url, SecureStore(context).metadataAddon())
-        assertFalse(File(context.filesDir, "metadata-addon.enc").readBytes().toString(Charsets.UTF_8).contains("private-config-token"))
-        store.saveMetadataAddon("")
         FixtureServer().use { server ->
             var panel: MediaBrowserPanel? = null; var cover: android.widget.ImageView? = null; var fallback: ((String) -> Unit)? = null
             instrumentation.runOnMainSync {

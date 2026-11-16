@@ -44,8 +44,8 @@ class GuideSearchBar(
     }
     val voice = makeButton("Voice", onVoice).apply { tag = "guide-search-voice"; contentDescription = "Search by voice" }
     private val clear = makeButton("Clear") { input.setText(""); input.requestFocus() }.apply { tag = "guide-search-clear" }
-    private val done = makeButton("Done") { hideKeyboard(); onClose() }.apply { tag = "guide-search-done" }
-    internal val controls = listOf(input, voice, clear, done)
+    // Back closes Search, so there is no separate Done button.
+    internal val controls = listOf(input, voice, clear)
     internal var direction: ((Int, Int) -> Unit)? = null
     private val hint = TextView(context).apply { textSize = 11f; setTextColor(Color.LTGRAY); tag = "guide-search-hint" }
     init {
@@ -55,7 +55,6 @@ class GuideSearchBar(
         row.addView(input, LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(12) })
         row.addView(voice)
         row.addView(clear)
-        row.addView(done)
         addView(row); addView(hint, LayoutParams(-1, dp(20)))
         for (i in 0 until row.childCount) row.getChildAt(i).setOnKeyListener { view, code, event ->
             when {
@@ -68,10 +67,12 @@ class GuideSearchBar(
                 else -> false
             }
         }
-        message("Speak a title or channel name, or select the field to type.")
+        message("Type a channel, movie or show, or press Voice.")
     }
     fun query() = input.text.toString().trim().take(128)
     fun setQuery(value: String) { if (input.text.toString() != value) { input.setText(value); input.setSelection(input.length()) } }
     fun message(value: String) { hint.text = value }
     fun hideKeyboard() { keyboard.hideSoftInputFromWindow(input.windowToken, 0) }
+    /** Put the cursor in the box and bring up the keyboard, ready to type. */
+    fun startTyping() { input.requestFocus(); input.post { keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) } }
 }

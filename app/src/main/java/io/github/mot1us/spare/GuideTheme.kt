@@ -6,6 +6,9 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 
 /** Appearance changes never recreate the player. */
+/** Highlight cross-fade when focus moves: short enough to keep remote repeats crisp, long enough to feel smooth. */
+const val FOCUS_FADE_MS = 110
+
 object GuideTheme {
     data class Palette(val name: String, val accent: Int, val background: Int)
     val palettes = listOf(
@@ -93,7 +96,7 @@ object GuideTheme {
                 else -> 0x22FFFFFF
             })
         }
-        return StateListDrawable().apply {
+        return StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS);
             addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
             addState(intArrayOf(android.R.attr.state_selected), shape(selected))
             addState(intArrayOf(), shape(idle))

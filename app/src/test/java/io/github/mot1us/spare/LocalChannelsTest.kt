@@ -7,6 +7,11 @@ class LocalChannelsTest {
     private val local = LocalChannels("KING\tSeattle\tWA\tWashington\nKIRO\tSeattle\tWA\tWashington\nKAPP\tYakima\tWA\tWashington\nWABC\tNew York\tNY\tNew York\n")
     private fun channel(id: String, name: String, group: String = "US Locals", guide: String = "") = Channel(id, name, group, "https://example.com/$id", guideId = guide)
     private val channels = listOf(channel("king", "NBC KING5 FHD"), channel("kiro", "CBS HD", guide = "KIRODT.us"), channel("yakima", "KAPP HD"), channel("ny", "WABC FHD"), channel("label", "FOX Seattle 4K"), channel("sport", "Seattle Seahawks game", "NFL"))
+    @Test fun biggerTvMarketsAreSuggestedFirst() {
+        val places = LocalChannels(listOf("KPAT\tPort Arthur\tTX\tTexas", "KPTV\tPortland\tOR\tOregon", "KGW\tPortland\tOR\tOregon", "KOIN\tPortland\tOR\tOregon",
+            "KPOR\tPortales\tNM\tNew Mexico").joinToString("\n"))
+        assertEquals("Portland, OR", places.locations("Port").first())
+    }
     @Test fun cityAndCityStateMatchCallSignsAndProviderLabelsWithoutSportsFalsePositives() {
         assertEquals(setOf("king", "kiro", "label"), local.find(channels, "Seattle, WA"))
         assertEquals(local.find(channels, "Seattle"), local.find(channels, "Seattle, WA"))

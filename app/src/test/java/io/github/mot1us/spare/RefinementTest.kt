@@ -104,37 +104,5 @@ class RefinementTest {
         assertFalse(SportsStreams.broadcasterMatches("BTN", other))
         assertTrue(SportsStreams.broadcasterMatches("SECN", Channel("sec", "SEC Network FHD", "US", "https://example.com/sec")))
     }
-    @Test fun addonEnrichmentUsesOnlyMetadataIdAndPreservesProviderPlayback() {
-        val item = OnDemand("movie:1", "A film", "Films", "https://provider.example/movie/secret-user/secret-pass/1.mp4", externalId = "tt1234567")
-        val requests = mutableListOf<String>()
-        val enriched = MetadataAddon.enrich("https://addon.example/user-config/manifest.json", item) { url -> requests.add(url); """{"meta":{"description":"A description","poster":"https://images.example/poster.jpg","year":"2025"}}""" }
-        assertEquals(item.url, enriched.url); assertEquals("A description", enriched.description); assertEquals("2025", enriched.year)
-        assertTrue(requests.single().endsWith("/meta/movie/tt1234567.json")); assertFalse(requests.single().contains("secret-pass"))
-        assertThrows(IllegalArgumentException::class.java) { MetadataAddon.validate("http://addon.example/manifest.json") }
-        assertEquals("https://addon.example/manifest.json", MetadataAddon.validate("stremio://addon.example/manifest.json"))
-    }
-    @Test fun addonTitleSearchRejectsAmbiguousRemakes() {
-        val item = OnDemand("movie:1", "The Film", "Films")
-        val result = MetadataAddon.enrich("https://addon.example/config/manifest.json", item) { url ->
-            if (url.endsWith("/manifest.json")) """{"catalogs":[{"type":"movie","id":"search","extra":[{"name":"search"}]}]}"""
-            else """{"metas":[{"id":"tt1234567","name":"The Film","releaseInfo":"1990"},{"id":"tt9876543","name":"The Film","releaseInfo":"2025"}]}"""
-        }
-        assertEquals(item, result)
-    }
-    @Test fun addonSeriesArtworkFallsBackFromProviderIdToExactCatalogSearch() {
-        val item = OnDemand("series:1", "US | The Show (2025) FHD", "Shows", "https://provider.example/secret", kind = "series", year = "0", externalId = "tmdb:12")
-        val requests = mutableListOf<String>()
-        val result = MetadataAddon.enrich("https://addon.example/config/manifest.json", item) { url ->
-            requests.add(url)
-            when {
-                url.endsWith("/manifest.json") -> """{"catalogs":[{"type":"series","id":"search","extra":[{"name":"search"}]}]}"""
-                url.contains("/catalog/") -> """{"metas":[{"id":"tvdb:123","name":"The Show","releaseInfo":"2025","poster":"https://images.example/show.jpg","background":"https://images.example/show-wide.jpg"}]}"""
-                else -> throw IllegalStateException("No detail metadata")
-            }
-        }
-        assertEquals("https://images.example/show.jpg", result.poster); assertEquals("https://images.example/show-wide.jpg", result.backdrop)
-        assertEquals(item.url, result.url); assertEquals("tvdb:123", result.externalId)
-        assertTrue(requests.any { it.endsWith("/meta/series/tmdb%3A12.json") }); assertFalse(requests.any { it.contains("provider.example") || it.contains("secret") })
-    }
 
 }

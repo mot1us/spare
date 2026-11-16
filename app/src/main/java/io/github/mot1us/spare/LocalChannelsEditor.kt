@@ -45,7 +45,7 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
         setOnEditorActionListener { _, action, event -> if (action == EditorInfo.IME_ACTION_DONE || event?.keyCode == KeyEvent.KEYCODE_ENTER) { commit(text.toString()); true } else false }
         setOnKeyListener { _, key, event -> when (key) {
             KeyEvent.KEYCODE_DPAD_CENTER -> { if (event.action == KeyEvent.ACTION_UP) keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT); true }
-            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); addRegion.requestFocus() }; true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) { hideKeyboard(); (suggestionRows.firstOrNull() ?: addRegion).requestFocus() }; true }
             else -> false
         } }
         doAfterTextChanged { renderSuggestions(); addRegion.text = if (editing == null) "Add region" else "Save changes" }
@@ -54,15 +54,15 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
         tag = "local-add-region"
         setOnClickListener { if (input.text.isNotBlank()) commit(input.text.toString()) else { editing = null; input.requestFocus(); keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) } }
         setOnKeyListener { _, key, event -> when (key) {
-            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) input.requestFocus(); true }
-            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) (suggestionRows.firstOrNull() ?: openGuide).requestFocus(); true }
+            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) (suggestionRows.lastOrNull() ?: input).requestFocus(); true }
+            KeyEvent.KEYCODE_DPAD_DOWN -> { if (event.action == KeyEvent.ACTION_DOWN) (savedFirst() ?: openGuide).requestFocus(); true }
             else -> false
         } }
     }
     private val openGuide: TextView = option("Open Local guide").apply {
         tag = "local-open-guide"; setOnClickListener { hideKeyboard(); onOpenGuide() }
         setOnKeyListener { _, key, event -> when (key) {
-            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) (suggestionRows.lastOrNull() ?: addRegion).requestFocus(); true }
+            KeyEvent.KEYCODE_DPAD_UP -> { if (event.action == KeyEvent.ACTION_DOWN) (savedLast() ?: addRegion).requestFocus(); true }
             KeyEvent.KEYCODE_DPAD_DOWN -> true
             else -> false
         } }
@@ -70,13 +70,15 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
     val location get() = LocalRegions.saved(regions.joinToString("; "))
     init {
         orientation = VERTICAL; tag = "local-channels-editor"
-        addView(label("Cities or states · Up to 8 regions", 12f), LayoutParams(-1, dp(26)))
+        // The box and its suggestions come first, so the suggestions sit above the on-screen keyboard and Down from the
+        // box lands on the first one; saved regions follow.
+        addView(input, LayoutParams(-1, dp(46)))
+        addView(suggestions, LayoutParams(-1, -2).apply { topMargin = dp(4) })
+        addView(addRegion, LayoutParams(-1, dp(36)).apply { topMargin = dp(4) })
+        addView(matches, LayoutParams(-1, dp(30)))
+        addView(label("Your regions · up to 8", 12f), LayoutParams(-1, dp(26)))
         addView(savedSummary, LayoutParams(-1, -2))
         addView(savedScroll, LayoutParams(-1, -2))
-        addView(input, LayoutParams(-1, dp(46)))
-        addView(addRegion, LayoutParams(-1, dp(36)))
-        addView(matches, LayoutParams(-1, dp(30)))
-        addView(suggestions, LayoutParams(-1, -2))
         addView(openGuide, LayoutParams(-1, dp(38)).apply { topMargin = dp(6) })
         renderRegions(); renderMatches()
         directoryTask = worker.submit {
@@ -116,16 +118,18 @@ class LocalChannelsEditor(context: Context, initialLocation: String, private val
     } }
     private fun renderSuggestions() {
         suggestions.removeAllViews(); suggestionRows.clear()
-        directory?.locations(input.text.toString(), 3).orEmpty().forEach { value ->
+        directory?.locations(input.text.toString(), 5).orEmpty().forEach { value ->
             val row = option(value).apply {
                 tag = "local-location-suggestion:$value"; setOnClickListener { commit(value) }
                 setOnKeyListener { view, key, event -> if (key in listOf(KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) {
-                    if (event.action == KeyEvent.ACTION_DOWN) { val index = suggestionRows.indexOf(view) + if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1; (suggestionRows.getOrNull(index) ?: if (index < 0) addRegion else openGuide).requestFocus() }; true
+                    if (event.action == KeyEvent.ACTION_DOWN) { val index = suggestionRows.indexOf(view) + if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1; (suggestionRows.getOrNull(index) ?: if (index < 0) input else addRegion).requestFocus() }; true
                 } else false }
             }
             suggestionRows.add(row); suggestions.addView(row, LayoutParams(-1, dp(34)).apply { bottomMargin = dp(3) })
         }
     }
+    private fun savedFirst(): View? = (savedRows.getChildAt(0) as? LinearLayout)?.getChildAt(0)
+    private fun savedLast(): View? = (savedRows.getChildAt(savedRows.childCount - 1) as? LinearLayout)?.getChildAt(0)
     fun focusEditor() { input.requestFocus() }
     override fun focusContent() = input.requestFocus()
     override fun handlesLeft(focused: View?) = focused === input

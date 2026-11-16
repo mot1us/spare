@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.50.8 — 2026-11-16
+
+- Search opens ready to type, with the keyboard up. Before, opening it from the menu started voice search and Android's microphone prompt. Voice still starts from the Voice button or the remote's search key. The Done button is gone; Back closes Search.
+- Sports cards show the channel with a short HD, FHD or 4K tag instead of technical detail such as "Quality unknown" or "FPS unavailable · Playback resolution". The full detail stays in the stream list. Hints now read "OK Watch", and the guide's hint line is shorter.
+- Opening Sports shows the last saved live games straight away (up to 20 minutes old, marked "Saved score · checking live status") while fresh scores download. Before, it showed placeholders for several seconds. Cards then settle in one after another.
+- Smoother movement: focus highlights cross-fade across the app, Guide, Sports and Library fade in when you switch to them, and posters fade in softly as they load.
+- Local channels: the city box and its suggestions sit at the top, above the on-screen keyboard. Down from the box reaches the first suggestion, and OK adds it. Bigger TV markets are suggested first ("Port" offers Portland before Port Arthur), and up to five are shown.
+- Removed the Metadata setting and the optional metadata service behind it. Library and the guide use your provider's own artwork, descriptions and ratings.
+
 ## 0.50.7 — 2026-11-16
 
 - Opening Sports no longer freezes briefly while it builds the first screen of game cards. Spare now builds them ahead of time while the app is idle, one per frame, and keeps them ready.

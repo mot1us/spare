@@ -102,7 +102,7 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         if (key == appearanceKey) { tint(); return }
         appearanceKey = key
         // A bright ring drawn over the artwork: the accent background alone is mostly hidden behind the poster.
-        foreground = android.graphics.drawable.StateListDrawable().apply {
+        foreground = android.graphics.drawable.StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS);
             addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density; setStroke(dp(3), Color.WHITE)
             })

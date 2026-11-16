@@ -8,11 +8,14 @@ class LocalChannels(text: String) {
         if (p.size == 4 && p.all { it.isNotBlank() && it.length <= 80 })
             Station(p[0].trim(), key(p[1]), key(p[2]), key(p[3]), p[1].trim(), p[2].trim().uppercase(java.util.Locale.ROOT), p[3].trim()) else null
     }.toList()
-    private data class Location(val label: String, val aliases: List<String>) { val labelKey = key(label) }
-    private val locations = (
-        stations.distinctBy { it.state }.map { Location(it.displayName, listOf(it.name, it.state)) } +
-            stations.distinctBy { it.city to it.state }.map { Location("${it.displayCity}, ${it.displayState}", listOf(it.city, "${it.city} ${it.state}", "${it.city} ${it.name}")) }
+    /** [stations] is how many stations the place has: bigger TV markets are suggested first. */
+    private data class Location(val label: String, val aliases: List<String>, val stations: Int) { val labelKey = key(label) }
+    private val locations = run {
+        val perCity = stations.groupingBy { it.city to it.state }.eachCount(); val perState = stations.groupingBy { it.state }.eachCount()
+        (stations.distinctBy { it.state }.map { Location(it.displayName, listOf(it.name, it.state), perState[it.state] ?: 0) } +
+            stations.distinctBy { it.city to it.state }.map { Location("${it.displayCity}, ${it.displayState}", listOf(it.city, "${it.city} ${it.state}", "${it.city} ${it.name}"), perCity[it.city to it.state] ?: 0) }
         ).distinctBy { it.labelKey }.sortedBy { it.labelKey }
+    }
 
     /** Bounded typeahead from the bundled reference; unknown places can still match provider labels. */
     fun locations(query: String, limit: Int = 6): List<String> {
@@ -23,8 +26,8 @@ class LocalChannels(text: String) {
                 location.aliases.any { it.startsWith(normalized) } -> 1
                 else -> return@mapNotNull null
             }
-            rank to location.label
-        }.sortedBy { it.first }.take(limit.coerceAtMost(20)).map { it.second }.toList()
+            Triple(rank, -location.stations, location.label)
+        }.sortedWith(compareBy<Triple<Int, Int, String>> { it.first }.thenBy { it.second }).take(limit.coerceAtMost(20)).map { it.third }.toList()
     }
     fun find(channels: List<Channel>, location: String): Set<String> {
         val regions = LocalRegions.parse(location)
