@@ -439,8 +439,9 @@ class SecureStore(private val context: Context) {
     var performanceOverlay: Boolean
         get() = preferences.getBoolean("performance-overlay", false)
         set(value) { preferences.edit { putBoolean("performance-overlay", value) } }
+    /** Off by default: the channel plays behind the see-through guide unless the viewer picks the small preview. */
     var smallPreview: Boolean
-        get() = preferences.getBoolean("small-preview", true)
+        get() = preferences.getBoolean("small-preview", false)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }
     var active: String
         get() = preferences.getString("active", "").orEmpty()

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.6 — 2026-11-16
+
+- The guide now plays the channel behind it by default, instead of in a small preview at the top right. TVs where "Guide video" was never changed switch to this on update; a choice you made yourself is kept. Change it in Settings › Guide › Guide video.
+
 ## 0.51.5 — 2026-11-16
 
 - Lighter guide drawing, aimed at smoother scrolling on budget boxes. Guide rows no longer use rounded clipping or a drop shadow under the highlighted row, and a duplicate black layer behind the whole app is gone. The guide looks the same. Measured on an onn 4K Pro, the TV's graphics chip, not the app's own code, was the slow part of each guide frame.

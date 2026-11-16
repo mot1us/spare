@@ -262,7 +262,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         store.theme = GuideTheme.palettes.first().name
         store.themeStyle = "Glass"; store.font = "Default"
         store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
-        store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = true
+        store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = false
     }
     fun refreshPreview() {
         modes.forEach { (name, view) ->
