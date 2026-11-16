@@ -1659,7 +1659,10 @@ class MainActivity : Activity() {
         source = selected; focused = null; store.active = selected.id; favorites = emptySet()
         filters = store.filters(selected); sportsFilters = store.sportsFilters(selected).copy(minHeight = 0); videoInfo = mutableMapOf(); unavailable = UnavailableChannels(); unavailable.prune(System.currentTimeMillis()); workingUrls.clear(); lastWorkingChannel = null
         group = null; query = ""; favoritesOnly = false; guide = Guide.EMPTY; updateGroups(); applyFilter()
-        status.text = "Loading ${selected.name}…"; importProgress(epoch, "Opening playlist"); showGuide(true)
+        // A playlist already saved on this TV is read from storage, not downloaded again; say so.
+        val savedBefore = !force && store.playlistRefreshed(selected) > 0
+        status.text = if (savedBefore) "Opening ${selected.name} from this TV…" else "Loading ${selected.name}…"
+        importProgress(epoch, if (savedBefore) "Opening your saved playlist" else "Opening playlist"); showGuide(true)
         val began = Timings.now()
         importTask = imports.submit {
             if (providerChanged) store.invalidateProviderFiles(selected)

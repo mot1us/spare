@@ -5247,6 +5247,15 @@ class SpareDeviceTest {
                 // Down: Top rated (best rating first), then the first provider category.
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5239" }
                 device.pressDPadDown(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5003" }
+                // Leaving and reopening Library returns to the same poster, with the banner filled in for it.
+                var bannerTitle = ""
+                waitFor(scenario) { a -> bannerTitle = a.window.decorView.findViewWithTag<TextView>("library-spot-title").text.toString(); bannerTitle.isNotBlank() }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
+                waitFor(scenario) { channelList(it)?.isShown == true && !it.window.decorView.findViewWithTag<View>("library-shelves").isShown }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5003" }
+                Thread.sleep(1500)
+                scenario.onActivity { a -> assertEquals("The banner is filled in when Library reopens", bannerTitle, a.window.decorView.findViewWithTag<TextView>("library-spot-title").text.toString()) }
                 // The category row ends with See all, which opens the category grid; Back returns to the rows on the same tile.
                 repeat(20) { device.pressDPadRight(); Thread.sleep(120) }
                 waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }

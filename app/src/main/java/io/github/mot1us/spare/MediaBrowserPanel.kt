@@ -61,6 +61,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var spotKey: String? = null
     private val spotLater = Runnable { requestSpotDetails() }
     private var spotWaiting: BrowserRow? = null
+    private var shelfFocus: BrowserRow? = null
     private val spotApply = Runnable { spotWaiting?.let { spotWaiting = null; showSpot(it) } }
     private var spotRow: BrowserRow? = null
     // Fixed heights: a wrap-content FrameLayout would stretch its full-bleed artwork to the whole screen.
@@ -121,7 +122,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Library visit after a restart draws saved artwork instead of downloading it again.
     // Tiles decode at the size they are drawn (about 213x320 px on a 1080p TV, ~135 KB in RGB_565), so 36 MB holds
     // some 270 posters; only the details page asks for the larger 480 px copy. TMDB artwork is fetched at w342.
-    private val images = LogoLoader(480, 36 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4, source = PosterUrls::sized)
+    private val images = LogoLoader(480, 36 * 1024 * 1024, posterFiles(context), opaque = true, threads = 4, source = PosterUrls::sized, newestFirst = true)
     private val tileDecode = posterDecodeSize(resources.displayMetrics)
     private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
     private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)); decode = tileDecode }
@@ -216,7 +217,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         body.addView(lists, LayoutParams(0, -1, 1f))
         shelves.exitUp = { if (search.isVisible) search.requestFocus() else focusToolbar() }
         shelves.exitLeft = { navigation?.invoke() }
-        shelves.focused = { row -> rememberedKey = row.key; ++focusEpoch; pending = null; showSpot(row) }
+        shelves.focused = { row -> rememberedKey = row.key; ++focusEpoch; pending = null; shelfFocus = row; showSpot(row) }
         addView(hero, LayoutParams(-1, dp(HERO_COMPACT_DP)))
         addView(loading, LayoutParams(-1, dp(3)))
         addView(titleLine, LayoutParams(-1, dp(28)).apply { leftMargin = dp(6) })
@@ -532,7 +533,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (spotKey == null) {
             clearSpot()
             // Keep the spotlight in step with a poster that already holds the cursor.
-            rows.focusedChild?.let(rows::getChildAdapterPosition)?.let { shownRows.getOrNull(it) }?.let(::showSpot)
+            // On the home rows the poster keeps the cursor when Library reopens, so no new focus event arrives to fill the banner.
+            if (shelvesShown && shelves.hasFocus()) shelfFocus?.let(::showSpot)
+            else rows.focusedChild?.let(rows::getChildAdapterPosition)?.let { shownRows.getOrNull(it) }?.let(::showSpot)
         }
     }
     private fun clearSpot() {

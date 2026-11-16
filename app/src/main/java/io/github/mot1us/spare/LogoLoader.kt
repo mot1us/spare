@@ -12,7 +12,6 @@ import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import android.util.LruCache
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 
 /**
  * Posters pass [opaque] = true: RGB_565 halves memory (twice as many fit in the cache) and they never need mipmaps.
@@ -20,7 +19,25 @@ import java.util.concurrent.Executors
  * Callers that draw the same image at different sizes pass a decode size below [maxDimension]; each size is cached on its own.
  */
 class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false, threads: Int = 2,
-    private val source: (String) -> String = { it }) {
+    private val source: (String) -> String = { it },
+    /**
+     * For long scrolling lists: the image asked for last is loaded first, and the oldest waiting ones are let go when
+     * the line is full. Otherwise posters on screen wait behind rows that were scrolled past.
+     */
+    private val newestFirst: Boolean = false) {
+    private class Job(val order: Long, val drop: () -> Unit, private val work: () -> Unit) : Runnable { override fun run() = work() }
+    /** Ordered by when the image was asked for, so the saved-copy check and the download agree on what is newest. */
+    private class NewestFirst(private val limit: Int) : java.util.concurrent.PriorityBlockingQueue<Runnable>(64, compareByDescending<Runnable> { (it as Job).order }) {
+        override fun offer(e: Runnable): Boolean {
+            super.offer(e)
+            while (size > limit) { val oldest = minByOrNull { (it as Job).order } as? Job ?: break; if (remove(oldest)) oldest.drop() }
+            return true
+        }
+    }
+    private val asked = java.util.concurrent.atomic.AtomicLong()
+    private fun pool(threads: Int) = java.util.concurrent.ThreadPoolExecutor(threads, threads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+        if (newestFirst) NewestFirst(32) else java.util.concurrent.LinkedBlockingQueue())
+    private val waitingLimit = if (newestFirst) 80 else 48
     private fun size(dimension: Int) = if (dimension <= 0) maxDimension else dimension.coerceAtMost(maxDimension)
     private fun key(url: String, dimension: Int) = if (dimension == maxDimension) url else "$url\n$dimension"
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
@@ -38,9 +55,9 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private val bindings = WeakHashMap<ImageView, Binding>()
     private class Failure(val until: Long, val attempts: Int)
     private val failed = ConcurrentHashMap<String, Failure>()
-    private val workers = Executors.newFixedThreadPool(threads) as java.util.concurrent.ThreadPoolExecutor
+    private val workers = pool(threads)
     /** One thread, in order: saved images are quick to read, and a strict order keeps the download line bounded. */
-    private val readers = Executors.newFixedThreadPool(1) as java.util.concurrent.ThreadPoolExecutor
+    private val readers = pool(1)
     /**
      * Images accepted but not yet started by a download thread: in either line, or in the reader's hands between them.
      * One count for the whole path; checking each line separately let an image through while another was moving
@@ -178,10 +195,10 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         if (closed || (paused && !warm) || !Network.allowed(url, http) || unavailable(url)) return null
         synchronized(pending) {
             pending[key]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
-            if (waiting.get() >= 48) return null
+            if (waiting.get() >= waitingLimit) return null
             pending[key] = mutableListOf(redraw); queued(); waiting.incrementAndGet()
         }
-        val token = generation; val queuedAt = SystemClock.uptimeMillis()
+        val token = generation; val queuedAt = SystemClock.uptimeMillis(); val order = asked.incrementAndGet()
         fun stale() = closed || (paused && !warm) || token != generation
         fun finish(bitmap: Bitmap?, startedAt: Long) {
             if (bitmap != null && !closed) cache.put(key, bitmap)
@@ -198,20 +215,26 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         }
         // The sized address is worked out on the image threads, never the screen's.
         fun address() = source(url).takeIf { it == url || Network.allowed(it, http) } ?: url
-        fun download() = workers.execute {
+        // Let go before it started: free its place and tell its image, which asks again if it is still on screen.
+        fun giveUp() {
+            started()
+            val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
+            handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(null) } }
+        }
+        fun download() = workers.execute(Job(order, ::giveUp) {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             started()
-            if (stale()) return@execute
+            if (stale()) return@Job
             val startedAt = SystemClock.uptimeMillis()
             val address = address()
             val fetch = { Network.get(address, http, 2 * 1024 * 1024, timeoutMs = 4000) }
             finish(runCatching { decode(files?.bytes(address, fetch) ?: fetch(), dimension) }.getOrNull(), startedAt)
-        }
+        })
         // Posters already saved on this TV are read and decoded by their own threads, so they never wait in line
         // behind downloads that can take seconds each.
-        if (files == null) download() else readers.execute {
+        if (files == null) download() else readers.execute(Job(order, ::giveUp) {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            if (stale()) { started(); return@execute }
+            if (stale()) { started(); return@Job }
             val startedAt = SystemClock.uptimeMillis()
             val saved = runCatching { files?.saved(address()) }.getOrNull()
             // A saved copy, or giving up, ends this image's wait here; a download keeps it counted until a thread takes it.
@@ -219,14 +242,12 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (saved == null) {
                 // No saved copy and the download line is full: give up this time, as request() does, so a visible
                 // image retries later and a detached one is simply forgotten instead of waiting in a long line.
-                if (workers.queue.size < 48 && !closed && runCatching { download() }.isSuccess) return@execute
-                started()
-                val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
-                handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(null) } }
-                return@execute
+                if ((newestFirst || workers.queue.size < 48) && !closed && runCatching { download() }.isSuccess) return@Job
+                giveUp()
+                return@Job
             }
             finish(runCatching { decode(saved, dimension) }.getOrNull(), startedAt)
-        }
+        })
         return null
     }
     private fun decode(bytes: ByteArray, dimension: Int): Bitmap? {

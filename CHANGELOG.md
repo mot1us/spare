@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.7 — 2026-11-16
+
+- Library posters load in the order you need them. Posters for the row you stopped on now load first, and requests for rows you scrolled past are let go. Before, they loaded in the order they were asked for, so a new row waited behind every row passed on the way: on an onn 4K Pro each poster took about 0.1 seconds to load but waited about 2 seconds in line.
+- Library's banner (title, rating and description) is filled in when Library reopens on the poster you left. It stayed blank until you moved.
+- Starting Spare with a saved playlist says "Opening your saved playlist" instead of "Loading", since nothing is downloaded again.
+
 ## 0.51.6 — 2026-11-16
 
 - The guide now plays the channel behind it by default, instead of in a small preview at the top right. TVs where "Guide video" was never changed switch to this on update; a choice you made yourself is kept. Change it in Settings › Guide › Guide video.
