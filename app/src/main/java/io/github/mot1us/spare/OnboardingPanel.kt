@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.view.FocusFinder
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -32,11 +33,12 @@ class OnboardingPanel(context: Context, private val store: SecureStore, private 
     private val phone = PhoneSetupView(context) { result -> addPlaylist(result) }
     private var step = 0
     private var firstControl: View? = null
+    private var lastFocus: View? = null
     private val leagues = linkedSetOf<String>()
     val opened get() = isVisible
 
     init {
-        tag = "onboarding"; visibility = GONE; isClickable = true
+        tag = "onboarding"; visibility = GONE; isClickable = true; isFocusable = false
         card.addView(progress); card.addView(title, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(2) })
         card.addView(hint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4); bottomMargin = dp(16) })
         card.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -57,7 +59,11 @@ class OnboardingPanel(context: Context, private val store: SecureStore, private 
     fun pause() = phone.stop()
     fun resume() { if (opened && step == 0 && !hasPlaylist()) phone.start() }
 
-    fun refocus() { firstControl?.requestFocus() }
+    /** Back to where the remote was, after something behind setup took focus. */
+    fun refocus() { (lastFocus?.takeIf { it.isAttachedToWindow && it.isShown && it.isEnabled } ?: firstControl)?.requestFocus() }
+    override fun requestChildFocus(child: View?, focused: View?) { super.requestChildFocus(child, focused); lastFocus = focused }
+    /** The remote moves only between setup's own buttons, never to the guide behind it. */
+    override fun focusSearch(focused: View?, direction: Int): View? = FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
     fun back() { if (step > 0) show(step - 1) }
 
     private fun show(next: Int) {
@@ -66,7 +72,7 @@ class OnboardingPanel(context: Context, private val store: SecureStore, private 
         card.background = GuideTheme.glass(resources.displayMetrics.density)
         listOf(title).forEach { it.typeface = AppFont.face(true) }; listOf(progress, hint).forEach { it.typeface = AppFont.face() }
         progress.text = "Step ${next + 1} of 4  ·  Change any of this later in Settings"
-        content.removeAllViews(); actions.removeAllViews(); phone.stop()
+        lastFocus = null; content.removeAllViews(); actions.removeAllViews(); phone.stop()
         val first: View = when (next) {
             0 -> playlistStep()
             1 -> sportsStep()

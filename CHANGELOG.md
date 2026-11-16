@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.13 — 2026-11-16
+
+- First-run setup keeps the remote on its own buttons. Pressing Right or Down past Continue (or past any button at the edge of a step) used to move the cursor to a guide button hidden behind setup, and the next press threw it back to the first choice, so Continue could be impossible to stay on. The cursor now stays put at the edge.
+- When a loading playlist takes the cursor during setup, the next press puts it back where it was and carries on from there, instead of jumping to the first choice and swallowing the press.
+- Releases are now published as regular GitHub releases instead of pre-releases, so `https://github.com/mot1us/spare/releases/latest/download/spare.apk` always downloads the newest APK (for a Downloader shortcut, for example). From this version the in-app updater reads the same latest release; older installs keep finding updates the way they did.
+
 ## 0.51.12 — 2026-11-16
 
 - Pressing Back in the guide no longer switches category. Back moves the cursor from the channels to the category list, and it used to land on the category the cursor last rested on, which selected it. If the list had been changed another way since (the All channels tab, for example), Back alone jumped to the earlier category. The cursor now lands on the category whose channels are on screen.

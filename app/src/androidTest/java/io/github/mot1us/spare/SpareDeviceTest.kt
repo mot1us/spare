@@ -2637,6 +2637,53 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun firstLaunchSetupKeepsTheRemoteOnItsOwnButtonsOnEveryStep() {
+        store.saveSources(emptyList()); store.active = ""; store.onboarded = false; store.resetSportsLeagues()
+        try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            fun title(activity: MainActivity) = activity.window.decorView.findViewWithTag<TextView>("onboarding-title")?.takeIf { it.isShown }?.text?.toString()
+            fun tagged(activity: MainActivity, tag: String) = activity.window.decorView.findViewWithTag<View>(tag)
+            fun inside(panel: View, view: View?): Boolean { var at: View? = view; while (at != null && at !== panel) at = at.parent as? View; return at === panel }
+            /** From every button of the step, in every direction, the next stop is still one of setup's buttons. */
+            fun everyMoveStaysInSetup(activity: MainActivity) {
+                val panel = tagged(activity, "onboarding")
+                val buttons = panel.getFocusables(View.FOCUS_DOWN)
+                assertTrue(buttons.size > 1)
+                buttons.forEach { from -> listOf(View.FOCUS_UP, View.FOCUS_DOWN, View.FOCUS_LEFT, View.FOCUS_RIGHT).forEach { direction ->
+                    assertTrue("${(from as? TextView)?.text} direction $direction leaves setup", inside(panel, from.focusSearch(direction)))
+                } }
+            }
+            fun pressAndCheck(code: Int, check: (MainActivity) -> Unit) {
+                device.pressKeyCode(code); InstrumentationRegistry.getInstrumentation().waitForIdleSync(); scenario.onActivity { check(it) }
+            }
+            waitFor(scenario) { title(it) == "Welcome to Spare" && tagged(it, "onboarding-type").hasFocus() }
+            scenario.onActivity(::everyMoveStaysInSetup)
+            pressAndCheck(KeyEvent.KEYCODE_DPAD_RIGHT) { assertTrue(tagged(it, "onboarding-type").hasFocus()) }
+            pressAndCheck(KeyEvent.KEYCODE_DPAD_LEFT) { assertTrue(tagged(it, "onboarding-skip").hasFocus()) }
+            device.pressDPadCenter()
+            listOf("Which sports do you watch?", "Pick a look").forEach { step ->
+                waitFor(scenario) { title(it) == step }
+                scenario.onActivity(::everyMoveStaysInSetup)
+                var reached = false
+                repeat(8) { if (!reached) pressAndCheck(KeyEvent.KEYCODE_DPAD_DOWN) { reached = tagged(it, "onboarding-next").hasFocus() } }
+                assertTrue("Down reaches Continue on $step", reached)
+                // Continue sits at the edge: pressing on past it stays put instead of landing on the guide behind setup.
+                listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN).forEach { code ->
+                    pressAndCheck(code) { assertTrue("Continue keeps the remote on $step", tagged(it, "onboarding-next").hasFocus()) }
+                }
+                device.pressDPadCenter()
+            }
+            waitFor(scenario) { title(it) == "How should the guide work?" }
+            scenario.onActivity(::everyMoveStaysInSetup)
+            var done = false
+            repeat(8) { if (!done) pressAndCheck(KeyEvent.KEYCODE_DPAD_DOWN) { done = tagged(it, "onboarding-done").hasFocus() } }
+            assertTrue("Down reaches Start watching", done)
+            pressAndCheck(KeyEvent.KEYCODE_DPAD_RIGHT) { assertTrue(tagged(it, "onboarding-done").hasFocus()) }
+            device.pressDPadCenter()
+            waitFor(scenario) { it.window.decorView.findViewWithTag<View>("onboarding") == null }
+            assertTrue(store.onboarded)
+        } } finally { store.onboarded = true; store.resetSportsLeagues() }
+    }
+
     @Test fun firstLaunchSetupTakesAPlaylistFromAPhoneThenSportsThemeAndGuideChoices() {
         FixtureServer().use { server ->
             store.saveSources(emptyList()); store.active = ""; store.onboarded = false; store.resetSportsLeagues()
@@ -2671,8 +2718,36 @@ class SpareDeviceTest {
                     assertFalse(activity.window.decorView.findViewWithTag<View>("onboarding-league:NCAAF").isSelected)
                     activity.window.decorView.findViewWithTag<View>("onboarding-league:NCAAF").performClick()
                     activity.window.decorView.findViewWithTag<View>("onboarding-league:EPL").performClick()
-                    activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
                 }
+                // The remote reaches Continue and never wanders to the guide loaded behind setup.
+                fun focusInSetup(activity: MainActivity) = activity.window.decorView.findViewWithTag<View>("onboarding").hasFocus()
+                fun onContinue(activity: MainActivity) = activity.window.decorView.findViewWithTag<View>("onboarding-next")?.hasFocus() == true
+                waitFor(scenario) { channelList(it)?.adapter?.itemCount == 8 }
+                fun walkToContinue() {
+                    var reached = false
+                    repeat(8) {
+                        if (!reached) {
+                            device.pressDPadDown(); InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                            scenario.onActivity { activity -> assertTrue("Down stays in setup", focusInSetup(activity)); reached = onContinue(activity) }
+                        }
+                    }
+                    assertTrue("Down reaches Continue", reached)
+                    listOf(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT).forEach { code ->
+                        device.pressKeyCode(code); InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                        scenario.onActivity { activity -> assertTrue("Continue keeps the remote at the edge of setup", onContinue(activity)) }
+                    }
+                }
+                walkToContinue()
+                // Something behind setup taking focus costs nothing: the next press carries on from where the remote was.
+                scenario.onActivity { activity -> channelList(activity)?.requestFocus(); assertFalse(focusInSetup(activity)) }
+                device.pressDPadRight(); InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                scenario.onActivity { activity -> assertTrue("Focus came back to Continue", onContinue(activity)) }
+                device.pressDPadCenter()
+                waitFor(scenario) { title(it) == "Pick a look" }
+                walkToContinue()
+                device.pressDPadCenter()
+                waitFor(scenario) { title(it) == "How should the guide work?" }
+                device.pressBack()
                 waitFor(scenario) { title(it) == "Pick a look" }
                 scenario.onActivity { activity ->
                     assertTrue("NCAAF" in store.sportsLeagues); assertFalse("EPL" in store.sportsLeagues)

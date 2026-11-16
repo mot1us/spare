@@ -21,7 +21,7 @@ Request a release only after implementation is ready: update `release-request.js
 
 The marker may keep the last requested version while the tracked native version advances for unreleased configuration/documentation work. Mismatched versions skip publication. Never advance the marker for intermediate commits.
 
-`releaseChannel=prerelease` keeps the initial version outside stable updates until the physical checklist passes. After that checkpoint, a new versioned update can set `releaseChannel=stable`; subsequent explicitly requested, tested updates then publish into the in-app stable update channel. Existing release tags and artifacts are not replaced. The manual workflow can force a prerelease but cannot bypass the tracked prerelease channel.
+Since 0.51.13 `releaseChannel=stable` (owner decision, 2026-11-16: the `releases/latest` download link must work for a Downloader shortcut, and Spare stays a fast-moving beta), so every release is a regular GitHub release. Before that, `releaseChannel=prerelease` kept versions outside stable updates. After that checkpoint, a new versioned update can set `releaseChannel=stable`; subsequent explicitly requested, tested updates then publish into the in-app stable update channel. Existing release tags and artifacts are not replaced. The manual workflow can force a prerelease but cannot bypass the tracked prerelease channel.
 
 The workflow publishes `spare.apk`, `SHA256SUMS`, and `update.json` at `v<versionName>`. Existing tags/releases are not overwritten. The metadata pins the APK URL to its exact version; the app also checks the APK’s package, higher version code, and signing identity. Android still verifies the package at installation.
 

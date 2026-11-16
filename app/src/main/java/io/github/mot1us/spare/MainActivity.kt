@@ -3784,8 +3784,8 @@ class MainActivity : Activity() {
         if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
         Diagnostics.key(event)
         onboarding?.takeIf { it.opened }?.let { panel ->
-            // Loading the new playlist must not pull the remote out of setup.
-            if (!panel.hasFocus()) { if (event.action == KeyEvent.ACTION_DOWN) panel.refocus(); return true }
+            // Loading the new playlist must not pull the remote out of setup: put it back, and let the press carry on from there.
+            if (!panel.hasFocus()) { if (event.action == KeyEvent.ACTION_DOWN) panel.refocus(); if (!panel.hasFocus()) return true }
             return super.dispatchKeyEvent(event)
         }
         if (::reminderBanner.isInitialized && reminderBanner.isShown) {
