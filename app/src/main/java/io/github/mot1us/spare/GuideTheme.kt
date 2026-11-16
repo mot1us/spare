@@ -6,8 +6,25 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 
 /** Appearance changes never recreate the player. */
-/** Highlight cross-fade when focus moves: short enough to keep remote repeats crisp, long enough to feel smooth. */
-const val FOCUS_FADE_MS = 110
+/**
+ * How the highlight moves between items and how Guide, Sports and Library appear; chosen in Settings › Theme.
+ * "Instant" is the default: fades made fast scrolling feel slower and left a trail of half-lit rows behind the cursor.
+ * "Fade in" lights the new item gradually and clears the old one at once, so nothing trails; "Cross-fade" fades both.
+ */
+object Motion {
+    val styles = listOf("Instant", "Fade in", "Cross-fade")
+    val speeds = listOf("Fast", "Normal", "Slow")
+    @Volatile var enter = 0; private set
+    @Volatile var exit = 0; private set
+    /** Fade when switching between Guide, Sports and Library; 0 swaps at once. */
+    @Volatile var panel = 0L; private set
+    fun use(style: String, speed: String) {
+        val ms = when (speed) { "Fast" -> 60; "Slow" -> 180; else -> 110 }
+        enter = if (style == "Instant") 0 else ms
+        exit = if (style == "Cross-fade") ms else 0
+        panel = if (style == "Instant") 0L else ms * 18L / 11
+    }
+}
 
 object GuideTheme {
     data class Palette(val name: String, val accent: Int, val background: Int)
@@ -100,7 +117,7 @@ object GuideTheme {
                 else -> 0x22FFFFFF
             })
         }
-        return StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS);
+        return StateListDrawable().apply { setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit);
             addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
             addState(intArrayOf(android.R.attr.state_selected), shape(selected))
             addState(intArrayOf(), shape(idle))

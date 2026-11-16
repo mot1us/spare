@@ -566,7 +566,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotKey = row.key; spotRow = row
         spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
         // The new title's words fade in rather than snapping, as the cursor moves along a row.
-        spotlight.animate().cancel(); spotlight.alpha = .55f; spotlight.animate().alpha(1f).setDuration(150).start()
+        spotlight.animate().cancel(); if (Motion.enter == 0) spotlight.alpha = 1f else { spotlight.alpha = .55f; spotlight.animate().alpha(1f).setDuration(150).start() }
         spotArtwork(row.backdrop.ifBlank { row.poster })
         // Wait for the cursor to settle so fast scrolling never queues provider requests.
         searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)

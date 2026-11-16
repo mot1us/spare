@@ -445,6 +445,13 @@ class SecureStore(private val context: Context) {
     var smallPreview: Boolean
         get() = preferences.getBoolean("small-preview", false)
         set(value) { preferences.edit { putBoolean("small-preview", value) } }
+    /** Settings › Theme: how the highlight and sections move. Instant unless the viewer picks a fade. */
+    var navigationAnimation: String
+        get() = preferences.getString("navigation-animation", null).takeIf { it in Motion.styles } ?: Motion.styles.first()
+        set(value) { preferences.edit { putString("navigation-animation", value) } }
+    var navigationSpeed: String
+        get() = preferences.getString("navigation-speed", null).takeIf { it in Motion.speeds } ?: "Normal"
+        set(value) { preferences.edit { putString("navigation-speed", value) } }
     var active: String
         get() = preferences.getString("active", "").orEmpty()
         set(value) { preferences.edit { putString("active", value) } }

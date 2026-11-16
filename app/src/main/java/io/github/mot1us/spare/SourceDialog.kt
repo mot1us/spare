@@ -47,7 +47,7 @@ object SourceDialog {
             // Same clear focus as the rest of Spare: white when highlighted, dark otherwise.
             fun shape(color: Int) = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = 6 * density }
             background = android.graphics.drawable.StateListDrawable().apply {
-                setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS)
+                setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit)
                 addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(40, 44, 52)))
             }
             setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))

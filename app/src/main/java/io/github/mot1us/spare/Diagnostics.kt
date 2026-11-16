@@ -90,6 +90,22 @@ internal object Diagnostics {
 
     @Synchronized private fun posterLine() = if (posters == 0) null else "Posters: $posters loaded · waited ${posterWait / posters} ms · took ${posterWork / posters} ms each (worst $posterWorst) · $posterFailed failed"
 
+    // Recent actions: what changed the screen or the channel and what caused it, so a jump nobody asked for can be traced.
+    private class Action(val at: Long, val text: String) { var times = 1 }
+    private val actions = java.util.ArrayDeque<Action>()
+    /** Repeats of the same action (a held or repeated key) are counted on one line. Channel and key names only; never addresses. */
+    fun action(text: String) = synchronized(actions) {
+        val last = actions.peekLast()
+        if (last != null && last.text == text) { last.times++; return@synchronized }
+        actions.addLast(Action(SystemClock.elapsedRealtime(), text.take(120))); while (actions.size > 40) actions.removeFirst()
+    }
+    fun key(event: android.view.KeyEvent) {
+        if (event.action != android.view.KeyEvent.ACTION_DOWN || event.repeatCount > 0) return
+        val from = event.device?.name?.takeIf { it.isNotBlank() } ?: "no device"
+        action("Key ${android.view.KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · from $from")
+    }
+    internal fun actionLines() = synchronized(actions) { actions.map { "  ${clock(it.at)} ${it.text}${if (it.times > 1) " ×${it.times}" else ""}" } }
+
     /** What is playing right now (format, buffer, dropped frames, display rate); set by the activity, read on the UI thread. */
     var playback: (() -> String)? = null
     fun report(): String {
@@ -108,7 +124,8 @@ internal object Diagnostics {
         lines += playback.map { "  $it" }
         val background = synchronized(jobs) { jobs.toList() }
         if (background.isNotEmpty()) { lines += "Background jobs:"; lines += background.map { "  $it" } }
+        actionLines().takeIf { it.isNotEmpty() }?.let { lines += "Recent actions (oldest first; keys say which remote sent them):"; lines += it }
         return lines.joinToString("\n")
     }
-    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
+    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(actions) { actions.clear() }; synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
 }

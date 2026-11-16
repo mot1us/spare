@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.10 — 2026-11-16
+
+- Moving through channels and categories is instant again, as it was before 0.50.8. The highlight fade added then made fast scrolling feel slower and left a trail of half-lit rows behind the cursor. Guide, Sports and Library also switch at once again.
+- New in Settings › Theme › Advanced › Guide: "Navigation animation" (Instant, Fade in, or Cross-fade) and "Animation speed" (Fast, Normal, Slow). "Fade in" lights the new item gradually and clears the old one at once, so nothing trails; "Cross-fade" is the 0.50.8 behaviour.
+- Settings › About Spare › Performance report now ends with "Recent actions": the last 40 things that changed the screen or the channel (keys pressed and which remote or device sent them, channel and category changes, the guide and Library opening and closing, Spare leaving and returning to the screen). It is there to trace a channel or category change nobody asked for. Like the rest of the report it is kept in memory only and never sent anywhere.
+
 ## 0.51.9 — 2026-11-16
 
 - Opening Spare from a saved playlist reads the channel list much faster. The list is now saved in a compact form that is read straight into channels; before, it was saved as JSON, and every start rebuilt each channel from text and worked out its quality from its name again. In a test with 15,800 channels on the emulator, reading the list took 66 ms instead of 449 ms, and the saved file is less than half the size. The saved list from an older version is converted the first time it is read; nothing is downloaded again.

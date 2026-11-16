@@ -50,7 +50,7 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.onboarded = true; store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
+    @Before fun resetGuideStyle() { store.onboarded = true; store.navigationAnimation = "Instant"; store.navigationSpeed = "Normal"; Motion.use("Instant", "Normal"); store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -1436,6 +1436,11 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("settings").requestFocus()
                 }
                 device.pressDPadCenter(); assertTrue(device.wait(Until.hasObject(By.text("Theme")), 5000))
+                assertEquals("Highlights move at once unless a fade is chosen", 0, Motion.enter); assertEquals(0L, Motion.panel)
+                setThemeControl(scenario, "Guide", "Navigation animation", "Cross-fade"); assertEquals(110, Motion.enter); assertEquals(110, Motion.exit); assertTrue(Motion.panel > 0)
+                setThemeControl(scenario, "Guide", "Animation speed", "Fast"); assertEquals(60, Motion.enter); assertEquals(60, Motion.exit)
+                setThemeControl(scenario, "Guide", "Navigation animation", "Fade in"); assertEquals(60, Motion.enter); assertEquals("The old highlight clears at once", 0, Motion.exit)
+                setThemeControl(scenario, "Guide", "Navigation animation", "Instant"); assertEquals(0, Motion.enter); assertEquals("Instant", store.navigationAnimation)
                 setThemeControl(scenario, "Guide", "Guide video", "Small preview"); leaveSettings(scenario)
                 waitFor(scenario) { activity -> find<PlayerView>(activity.window.decorView)?.let { it.width < activity.window.decorView.width / 2 && it.player?.isPlaying == true } == true }
                 assertTrue(store.smallPreview)
@@ -5180,6 +5185,13 @@ class SpareDeviceTest {
             val report = Diagnostics.report()
             assertTrue(report, report.contains("blockTheScreenBriefly") && report.contains("Screen stalls (what blocked the screen)"))
             assertTrue(report, report.contains("Dropped 9 frames · buffer 4.2 s") && report.contains("Posters: 1 loaded") && report.contains("Parse lineup"))
+            // What changed the screen, and which remote sent each key; repeats share a line.
+            Diagnostics.action("Category: Fixture")
+            repeat(3) { Diagnostics.key(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN)) }
+            Diagnostics.key(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN))
+            val actions = Diagnostics.report().substringAfter("Recent actions")
+            assertTrue(actions, actions.contains("Category: Fixture") && Regex("Key DPAD_DOWN · from .+ ×3").containsMatchIn(actions))
+            Diagnostics.reset(); assertFalse(Diagnostics.report().contains("Recent actions"))
         } finally { Diagnostics.stop(); Diagnostics.reset() }
     }
     private fun blockTheScreenBriefly() { Thread.sleep(600) }

@@ -724,6 +724,7 @@ class MainActivity : Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
+        Motion.use(store.navigationAnimation, store.navigationSpeed)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         // The optional metadata service was removed in 0.50.8; drop its saved address and poster cache.
         imports.execute { runCatching { store.delete("metadata-addon.enc"); store.delete("metadata-posters.enc") } }
@@ -922,7 +923,7 @@ class MainActivity : Activity() {
         minWidth = 0; minimumWidth = 0; minHeight = dp(34); minimumHeight = dp(34); typeface = AppFont.face(true)
         setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(GuideTheme.focusText, Color.WHITE)))
         fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(4).toFloat() }
-        background = StateListDrawable().apply { setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS); addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
+        background = StateListDrawable().apply { setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit); addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
         background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30))
         stateListAnimator = null
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply { marginEnd = dp(8) }
@@ -1195,19 +1196,20 @@ class MainActivity : Activity() {
     private fun openCatchup(channel: Channel? = null) = openBrowser(true, channel)
     private fun openBrowser(archive: Boolean, channel: Channel? = null) {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
+        Diagnostics.action(if (archive) "Catch-up opened" else "Library opened")
         root.bringChildToFront(library.panel)
         if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
         if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.resume() }
         showNavigation(if (archive) "guide-mode" else "library")
         fadeIn(library.panel)
     }
-    /** A short fade when switching between Guide, Sports and Library, instead of an instant swap. */
-    private fun fadeIn(view: View) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(1f).setDuration(180).start() }
+    /** A short fade when switching between Guide, Sports and Library, when Settings › Theme asks for one. */
+    private fun fadeIn(view: View) { view.animate().cancel(); if (Motion.panel == 0L) { view.alpha = 1f; return }; view.alpha = 0f; view.animate().alpha(1f).setDuration(Motion.panel).start() }
     private fun reopenLibrary() {
         saveDemandProgress(); player.pause(); demandPaused = true; demandControls.visibility = View.GONE; library.reopen(onDemand); root.bringChildToFront(library.panel); showNavigation("library")
     }
     private fun closeLibrary() {
-        library.dismiss(); retryPanel.visibility = View.GONE
+        library.dismiss(); retryPanel.visibility = View.GONE; Diagnostics.action("Library closed")
         // Browsing must never replace or reopen the stream that is already playing.
         if (player.currentMediaItem != null && player.playbackState != Player.STATE_IDLE) {
             if (onDemand != null) player.playWhenReady = !demandPaused
@@ -1439,6 +1441,7 @@ class MainActivity : Activity() {
         if (!enter && !localOnly && !sportsVisible && !guideSearch.isVisible && browsePlaylist == playlist && group == category && favoritesOnly == favorite) return
         val hadSearch = guideSearch.isVisible
         browsePlaylist = playlist; clearGuideSearch(); sportsVisible = false; localOnly = false; favoritesOnly = favorite; group = category
+        Diagnostics.action("Category: ${if (favorite) "Favorites" else category ?: "All channels"}")
         focused = null; list.stopScroll(); (list.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
         applyFilter(); focused = adapter.channels.firstOrNull(); focused?.let(::showInfo); updateTimes()
         if (hadSearch) showGuide(true)
@@ -1732,6 +1735,7 @@ class MainActivity : Activity() {
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
         // A playlist added during first-run setup loads in the background; its first channel waits until setup ends.
         if (onboarding?.opened == true) { onboardingTune = channel; return }
+        Diagnostics.action("Channel: ${channel.name}")
         clearSleepEnded()
         startupPlaybackPending = false
         watchingRedZone = false; redZoneAutoPending = false
@@ -2143,6 +2147,7 @@ class MainActivity : Activity() {
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
     private fun showGuide(show: Boolean) {
         val returningToGuide = show && !guideVisible
+        if (show != guideVisible) Diagnostics.action(if (show) "Guide shown" else "Guide hidden")
         if (returningToGuide) navigationRail.prepareForContent()
         closeDetails()
         if (!show && ::searchPanel.isInitialized && searchPanel.isVisible) { searchPanel.dismiss(); playlistSearch.pause() }
@@ -3774,6 +3779,7 @@ class MainActivity : Activity() {
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
+        Diagnostics.key(event)
         onboarding?.takeIf { it.opened }?.let { panel ->
             // Loading the new playlist must not pull the remote out of setup.
             if (!panel.hasFocus()) { if (event.action == KeyEvent.ACTION_DOWN) panel.refocus(); return true }
@@ -3940,7 +3946,7 @@ class MainActivity : Activity() {
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.action("Spare came to the front"); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -3966,7 +3972,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() {
-        Diagnostics.stop(); Diagnostics.playback = null
+        Diagnostics.action("Spare left the screen"); Diagnostics.stop(); Diagnostics.playback = null
         performanceOverlay?.close()
         performanceOverlay = null
         scoreStripEntryPressed = false; if (::scoreStrip.isInitialized) { cancelScoreTune(); scoreStripOpen = false; scoreStrip.suspend() }; sportsRecovery.pause(); if (vodRequest != null) closeVodStart(restore = false); if (::playlistSearch.isInitialized) playlistSearch.pause(cancel = true); replayDiscovery?.pause(); if (::player.isInitialized) player.stop(); calendarSchedule?.cancel(); flushVideoReadings(); pausedPlayback = null; ++sportsMatchEpoch; sportsMatchTask?.cancel(true); pendingSportsTune = null; if (::gameWatchPanel.isInitialized) gameWatchPanel.dismiss(); dismissGameReminder(); handler.removeCallbacks(refreshTick); if (::programmeArtwork.isInitialized) programmeArtwork.pause(); if (::multiview.isInitialized) multiview.close(); saveDemandProgress(); handler.removeCallbacks(demandTick); handler.removeCallbacks(pollLiveSports); handler.removeCallbacks(retryLiveSports); handler.removeCallbacks(restoreAdditionalLater); handler.removeCallbacks(hideDemandControls); cancelCaptionProbe(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false; started = false; firstFrame = false; expectedMediaId = ""; closeDetails(); cancelEpgSave(); cacheEpg.run(); handler.removeCallbacks(backHold); handler.removeCallbacks(fetchVisibleEpg); cancelEpgSave(); handler.removeCallbacks(renderSports); sportsRenderPending = false; ++sportsEpoch; sportsComputing = false; sportsDirty = false; sportsTask?.cancel(true); cancelPlaybackCallbacks(); if (::frameRates.isInitialized) frameRates.clear()

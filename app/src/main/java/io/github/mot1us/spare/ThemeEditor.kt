@@ -163,6 +163,8 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 choice("Row gap", { "${store.guideRowGap} dp" }, { step -> store.guideRowGap = cycle((2..8).toList(), store.guideRowGap, step) })
                 choice("Opacity", { if (store.guideOpacity < 0) "Style default" else "${store.guideOpacity}%" }, { step -> store.guideOpacity = cycle(listOf(-1) + (0..100 step 10).toList(), store.guideOpacity, step) })
                 choice("Guide video", { if (store.smallPreview) "Small preview" else "Background video" }, { _ -> store.smallPreview = !store.smallPreview })
+                choice("Navigation animation", { store.navigationAnimation }, { step -> store.navigationAnimation = cycle(Motion.styles, store.navigationAnimation, step); Motion.use(store.navigationAnimation, store.navigationSpeed) })
+                choice("Animation speed", { if (store.navigationAnimation == "Instant") "No animation" else store.navigationSpeed }, { step -> store.navigationSpeed = cycle(Motion.speeds, store.navigationSpeed, step); Motion.use(store.navigationAnimation, store.navigationSpeed) })
             }
         }
         refreshPreview()
@@ -263,6 +265,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         store.themeStyle = "Glass"; store.font = "Default"
         store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
         store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = false
+        store.navigationAnimation = Motion.styles.first(); store.navigationSpeed = "Normal"; Motion.use(store.navigationAnimation, store.navigationSpeed)
     }
     fun refreshPreview() {
         modes.forEach { (name, view) ->
