@@ -26,12 +26,16 @@ class PhoneSetupTest {
 
     @Test fun phoneFormFillsTheTvOnceThenStops() {
         val results = java.util.Collections.synchronizedList(mutableListOf<PhoneSetupResult>())
-        val server = PhoneSetupServer({ it.run() }, { results += it }, bind = InetAddress.getLoopbackAddress())
+        val opens = java.util.concurrent.atomic.AtomicInteger()
+        val server = PhoneSetupServer({ it.run() }, { results += it }, bind = InetAddress.getLoopbackAddress(), opened = { opens.incrementAndGet() })
         val url = server.start()!!
+        assertEquals("Nothing announced before a phone opens the form", 0, opens.get())
         assertTrue(url.matches(Regex("http://127\\.0\\.0\\.1:\\d+/p/[A-Za-z0-9_-]{22}")))
         val (code, page) = request(url)
         assertEquals(200, code); assertTrue(page.contains("Send to TV")); assertFalse("No scripts on the phone page", page.contains("<script"))
         assertEquals(404, request(url.substringBeforeLast('/') + "/wrongtoken").first)
+        request(url)
+        assertEquals("The TV hears about the phone once, not on every reload, and never for a wrong link", 1, opens.get())
         val incomplete = request(url, form("type" to "xtream", "server" to "http://example.test:8080", "username" to "<b>me</b>"))
         assertTrue(incomplete.second.contains("Enter the username and password."))
         assertTrue("Values are escaped", incomplete.second.contains("&lt;b&gt;me&lt;/b&gt;"))

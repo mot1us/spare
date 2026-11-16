@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.2 — 2026-11-16
+
+- Phone setup: as soon as your phone opens the form, the TV shows "✓ Phone connected" and points you to your phone, and the QR code fades back. Before, the TV looked unchanged until you pressed Send. The TV still shows nothing you type until you send it, so passwords never appear on screen while you type.
+
 ## 0.51.1 — 2026-11-16
 
 - Add playlist now opens with the remote on "Fill in from my phone", so OK starts phone setup straight away. Before, focus started on the form itself and OK did nothing until you pressed Down. The button also shows a clear white highlight like the rest of Spare.

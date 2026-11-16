@@ -2591,6 +2591,10 @@ class SpareDeviceTest {
                 link = device.findObject(androidx.test.uiautomator.By.textStartsWith("Or open http://"))?.text?.removePrefix("Or open ").orEmpty()
                 link.isNotEmpty()
             }
+            // Opening the form on the phone tells the TV the scan worked.
+            assertTrue(java.net.URL(link).openStream().bufferedReader().use { it.readText() }.contains("Send to TV"))
+            assertNotNull(device.wait(Until.findObject(By.text("✓ Phone connected")), 5000))
+            assertNull("The link is hidden once a phone is connected", device.findObject(By.textStartsWith("Or open http://")))
             val connection = java.net.URL(link).openConnection() as java.net.HttpURLConnection
             connection.requestMethod = "POST"; connection.doOutput = true
             connection.outputStream.use { it.write("type=xtream&server=http%3A%2F%2Fprovider.test%3A8080&username=viewer&password=secret+1".toByteArray()) }

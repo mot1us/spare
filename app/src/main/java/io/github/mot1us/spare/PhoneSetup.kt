@@ -95,11 +95,12 @@ ${field("Guide (XMLTV) link, optional", "epg", url)}
  * Nothing leaves the home network and no outside service is involved.
  */
 class PhoneSetupServer(private val post: (Runnable) -> Unit, private val deliver: (PhoneSetupResult) -> Unit,
-    private val lifetimeMs: Long = 10 * 60_000L, private val bind: InetAddress? = null) {
+    private val lifetimeMs: Long = 10 * 60_000L, private val bind: InetAddress? = null, private val opened: () -> Unit = {}) {
     @Volatile private var socket: ServerSocket? = null
     @Volatile var url: String? = null; private set
     private val token = ByteArray(16).also(SecureRandom()::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
     private var misses = 0
+    private var announced = false
 
     /** Returns the link for the QR code, or null when the TV has no home network address. */
     fun start(): String? {
@@ -142,7 +143,11 @@ class PhoneSetupServer(private val post: (Runnable) -> Unit, private val deliver
             return reply(client, 404, PhoneSetupForm.gone())
         }
         when (method) {
-            "GET" -> reply(client, 200, PhoneSetupForm.page())
+            "GET" -> {
+                reply(client, 200, PhoneSetupForm.page())
+                // Tell the TV a phone has the form, so the viewer knows the scan worked.
+                if (!announced) { announced = true; post(Runnable { opened() }) }
+            }
             "POST" -> {
                 val length = lines.firstNotNullOfOrNull { line -> line.takeIf { it.startsWith("content-length:", true) }?.substringAfter(':')?.trim()?.toIntOrNull() } ?: -1
                 if (length !in 0..PhoneSetupForm.MAX_BODY) return reply(client, 413, PhoneSetupForm.page(error = "That was too long to send."))

@@ -42,7 +42,11 @@ class PhoneSetupView(context: Context, private val received: (PhoneSetupResult) 
         stop()
         title.typeface = AppFont.face(true); steps.typeface = AppFont.face(); status.typeface = AppFont.face()
         status.text = "Starting…"; link.text = ""; code.setImageDrawable(null)
-        val next = PhoneSetupServer({ main.post(it) }, { result -> if (server != null) { stop(); status.text = "Received. Check the details and choose Save."; received(result) } }, LIFETIME_MS)
+        title.text = "Scan with your phone's camera"; steps.visibility = VISIBLE
+        code.animate().cancel(); code.scaleX = 1f; code.scaleY = 1f; code.alpha = 1f
+        lateinit var next: PhoneSetupServer
+        next = PhoneSetupServer({ main.post(it) }, { result -> if (server != null) { stop(); status.text = "Received. Check the details and choose Save."; received(result) } }, LIFETIME_MS,
+            opened = { if (server === next) connected() })
         server = next
         // Finding the address and opening the port touch the network, so they stay off the screen thread.
         Thread({
@@ -60,6 +64,15 @@ class PhoneSetupView(context: Context, private val received: (PhoneSetupResult) 
                 main.postDelayed(renew, LIFETIME_MS - 5000)
             }
         }, "spare-phone-setup-start").start()
+    }
+
+    /** The phone opened the form: shrink the code and point the viewer at their phone. */
+    private fun connected() {
+        main.removeCallbacks(renew)
+        title.text = "✓ Phone connected"
+        steps.visibility = GONE; link.text = ""
+        status.text = "Fill in the form on your phone and press Send. The details appear here for you to check before saving."
+        code.animate().scaleX(0.6f).scaleY(0.6f).alpha(0.35f).setDuration(260).start()
     }
 
     fun stop() { main.removeCallbacks(renew); server?.stop(); server = null }
