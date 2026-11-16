@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.3 — 2026-11-16
+
+- "Guide video" is now in Settings › Guide and in first-run setup ("Channel while browsing"): play the channel in a small preview at the top right, or behind the guide. It was only in Theme › Advanced › Guide, where it was hard to find. Settings itself always shows the channel behind its panel.
+
 ## 0.51.2 — 2026-11-16
 
 - Phone setup: as soon as your phone opens the form, the TV shows "✓ Phone connected" and points you to your phone, and the QR code fades back. Before, the TV looked unchanged until you pressed Send. The TV still shows nothing you type until you send it, so passwords never appear on screen while you type.

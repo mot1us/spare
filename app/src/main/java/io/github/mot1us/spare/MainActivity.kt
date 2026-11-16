@@ -3476,12 +3476,15 @@ class MainActivity : Activity() {
                 }
             }
             "Guide" -> {
-                panel.page(page, "Browsing preferences. Appearance, fonts, spacing, opacity and preview layout are in Theme.")
+                panel.page(page, "How the guide behaves. Colors, fonts, spacing and opacity are in Theme.")
                 panel.action("Clear recent searches", if (store.recentSearches.isEmpty()) "None saved" else "${store.recentSearches.size} saved on this TV") {
                     store.recentSearches = emptyList(); searchPanel.recent = emptyList(); refresh("Clear recent searches")
                 }
                 panel.action("Switch categories on highlight", if (store.guideAutoCategories) "On · show channels as you browse" else "Off · press OK to select", store.guideAutoCategories) {
                     store.guideAutoCategories = !store.guideAutoCategories; cancelCategoryPreview(); refresh("Switch categories on highlight")
+                }
+                panel.action("Guide video", if (store.smallPreview) "Small preview · the channel plays in a box at the top right" else "Behind the guide · the channel fills the screen behind it", store.smallPreview) {
+                    store.smallPreview = !store.smallPreview; appearanceChanged(); refresh("Guide video")
                 }
                 panel.action("Open channels full screen", if (store.guideOpenFullscreen) "On · OK plays full screen" else "Off · preview first; select again for full screen", store.guideOpenFullscreen) {
                     store.guideOpenFullscreen = !store.guideOpenFullscreen; refresh("Open channels full screen")

@@ -2664,6 +2664,10 @@ class SpareDeviceTest {
                     activity.window.decorView.findViewWithTag<View>("onboarding-next").performClick()
                     assertEquals("How should the guide work?", title(activity))
                     activity.window.decorView.findViewWithTag<View>("onboarding-guide:Guide background:Solid").performClick()
+                    activity.window.decorView.findViewWithTag<View>("onboarding-guide:Channel while browsing:Small preview").performClick()
+                    assertTrue(store.smallPreview)
+                    activity.window.decorView.findViewWithTag<View>("onboarding-guide:Channel while browsing:Behind the guide").performClick()
+                    assertFalse(store.smallPreview)
                     activity.window.decorView.findViewWithTag<View>("onboarding-guide:Text size:Large").performClick()
                     activity.window.decorView.findViewWithTag<View>("onboarding-guide:OK on a channel:Preview first").performClick()
                     assertEquals(100, store.guideOpacity); assertEquals(115, store.guideTextScale); assertFalse(store.guideOpenFullscreen)
@@ -2673,7 +2677,15 @@ class SpareDeviceTest {
                 assertTrue(store.onboarded)
                 scenario.recreate()
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
-                scenario.onActivity { assertNull("Setup runs once", it.window.decorView.findViewWithTag<View>("onboarding")) }
+                scenario.onActivity { activity ->
+                    assertNull("Setup runs once", activity.window.decorView.findViewWithTag<View>("onboarding"))
+                    // The same choice lives in Settings › Guide, not only deep in Theme.
+                    activity.window.decorView.findViewWithTag<View>("settings").performClick()
+                    val panel = activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel")
+                    panel.selectSetting("Guide")
+                    panel.findViewWithTag<View>("settings-option:Guide video").performClick()
+                    assertTrue(store.smallPreview)
+                }
             } } finally { store.saveSources(emptyList()); store.active = ""; store.onboarded = true; store.guideTextScale = 100; store.guideOpenFullscreen = true }
         }
     }

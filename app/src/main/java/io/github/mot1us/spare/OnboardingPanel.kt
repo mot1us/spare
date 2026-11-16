@@ -183,6 +183,9 @@ class OnboardingPanel(context: Context, private val store: SecureStore, private 
         choice("Guide background", listOf("See-through", "Solid"), { if (store.guideOpacity in 0..99) 0 else 1 }) { index ->
             store.guideOpacity = if (index == 0) SecureStore.DEFAULT_GUIDE_OPACITY else 100; appearance(); restyle()
         }
+        choice("Channel while browsing", listOf("Small preview", "Behind the guide"), { if (store.smallPreview) 0 else 1 }) { index ->
+            store.smallPreview = index == 0; appearance()
+        }
         choice("Text size", listOf("Standard", "Large"), { if (store.guideTextScale > 100) 1 else 0 }) { index ->
             store.guideTextScale = if (index == 0) 100 else 115; appearance()
         }
