@@ -43,6 +43,14 @@ object SourceDialog {
         // Typing long links with a remote is slow, so a new playlist can be filled in from a phone instead.
         val fromPhone = if (existing == null) android.widget.Button(activity).apply {
             id = View.generateViewId(); tag = "playlist-from-phone"; isAllCaps = false; text = "Fill in from my phone (scan a QR code)"
+            isFocusableInTouchMode = true; stateListAnimator = null; textSize = 15f
+            // Same clear focus as the rest of Spare: white when highlighted, dark otherwise.
+            fun shape(color: Int) = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = 6 * density }
+            background = android.graphics.drawable.StateListDrawable().apply {
+                setEnterFadeDuration(FOCUS_FADE_MS); setExitFadeDuration(FOCUS_FADE_MS)
+                addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(40, 44, 52)))
+            }
+            setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))
             form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(12) })
         } else null
         val name = input("Name (optional)", existing?.name.orEmpty())
@@ -113,7 +121,7 @@ object SourceDialog {
         prefill?.let(::fill)
         advanced.setOnCheckedChangeListener { _, _ -> showAdvanced(); updateFocus() }
         val dialog = AlertDialog.Builder(activity).setTitle(if (existing == null) "Add playlist" else "Edit playlist")
-            .setView(ScrollView(activity).apply { addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
+            .setView(ScrollView(activity).apply { isFocusable = false; addView(form) }).setPositiveButton("Save", null).setNegativeButton("Cancel", null)
             .apply { if (existing != null) setNeutralButton("Remove") { _, _ -> remove(existing) } }.create()
         // Match the app's panels instead of the stock black system dialog.
         dialog.window?.setBackgroundDrawable(android.graphics.drawable.InsetDrawable(GuideTheme.glass(density), (24 * density).toInt()))
@@ -193,7 +201,8 @@ object SourceDialog {
         }
         dialog.show()
         configureDialog()
-        if (prefill != null) dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+        // Start the remote on the first control (the phone option for a new playlist), never on the scroll container.
+        if (prefill != null) dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus() else fromPhone?.requestFocus()
         dialog.window?.setLayout((760 * density).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
         return dialog
     }

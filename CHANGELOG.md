@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.1 — 2026-11-16
+
+- Add playlist now opens with the remote on "Fill in from my phone", so OK starts phone setup straight away. Before, focus started on the form itself and OK did nothing until you pressed Down. The button also shows a clear white highlight like the rest of Spare.
+
 ## 0.51.0 — 2026-11-16
 
 - First-run setup. A new install opens four quick steps: add your playlist, pick the sports you watch, choose a look, and choose how the guide works (see-through or solid, text size, and whether OK plays full screen). Every step can be changed later in Settings.

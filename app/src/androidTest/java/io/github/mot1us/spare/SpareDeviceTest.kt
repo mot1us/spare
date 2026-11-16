@@ -2580,6 +2580,32 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun addPlaylistStartsOnThePhoneOptionAndFillsTheFormFromAPhone() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            var dialog: AlertDialog? = null
+            scenario.onActivity { activity -> dialog = SourceDialog.show(activity, null, {}, {}) }
+            waitFor(scenario) { dialog?.window?.decorView?.findViewWithTag<View>("playlist-from-phone")?.hasFocus() == true }
+            device.pressDPadCenter() // The remote reaches the phone option without pressing Down first.
+            var link = ""
+            waitFor(scenario) {
+                link = device.findObject(androidx.test.uiautomator.By.textStartsWith("Or open http://"))?.text?.removePrefix("Or open ").orEmpty()
+                link.isNotEmpty()
+            }
+            val connection = java.net.URL(link).openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "POST"; connection.doOutput = true
+            connection.outputStream.use { it.write("type=xtream&server=http%3A%2F%2Fprovider.test%3A8080&username=viewer&password=secret+1".toByteArray()) }
+            assertTrue(connection.inputStream.bufferedReader().use { it.readText() }.contains("Sent to your TV"))
+            waitFor(scenario) { dialog!!.window!!.decorView.findViewWithTag<EditText>("Xtream username")?.text?.toString() == "viewer" }
+            scenario.onActivity {
+                val root = dialog!!.window!!.decorView
+                assertEquals("http://provider.test:8080", root.findViewWithTag<EditText>("Playlist URL").text.toString())
+                assertEquals("secret 1", root.findViewWithTag<EditText>("Xtream password").text.toString())
+                assertTrue("Save is ready after the phone sends", dialog!!.getButton(AlertDialog.BUTTON_POSITIVE).hasFocus())
+                dialog!!.dismiss()
+            }
+        }
+    }
+
     @Test fun firstLaunchSetupTakesAPlaylistFromAPhoneThenSportsThemeAndGuideChoices() {
         FixtureServer().use { server ->
             store.saveSources(emptyList()); store.active = ""; store.onboarded = false; store.resetSportsLeagues()
