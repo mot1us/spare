@@ -2490,13 +2490,16 @@ class MainActivity : Activity() {
     private fun refreshEventNames() {
         val now = android.os.SystemClock.elapsedRealtime()
         if (eventNamesAt != 0L && now - eventNamesAt < EventChannelNames.REFRESH_MS || eventNamesTask?.isDone == false) return
-        val snapshot = guide
-        val wanted = enabledSources().filter { it.kind == "xtream" }.associateWith { owner ->
-            EventChannelNames.eventGroups(snapshot.channels.filter { playlistId(it) == owner.id })
-        }.filterValues { it.isNotEmpty() }
+        val snapshot = guide; val owners = enabledSources().filter { it.kind == "xtream" }
+        val legacy = if (::playlists.isInitialized) playlists.legacySource else source?.id.orEmpty()
         eventNamesAt = now
-        if (wanted.isEmpty()) return
+        if (owners.isEmpty()) return
         eventNamesTask = eventNameWorker.submit {
+            // Scanning every channel name (tens of thousands) froze the screen for 0.7 s when it ran on the screen thread.
+            val wanted = owners.associateWith { owner ->
+                EventChannelNames.eventGroups(snapshot.channels.filter { it.playlistId.ifBlank { legacy } == owner.id })
+            }.filterValues { it.isNotEmpty() }
+            if (wanted.isEmpty() || Thread.currentThread().isInterrupted) return@submit
             val fresh = wanted.mapNotNull { (owner, groups) -> runCatching { owner.id to EventChannelNames.fetch(owner, groups) }.getOrNull() }.toMap()
             if (fresh.isEmpty() || Thread.currentThread().isInterrupted) return@submit
             handler.post {

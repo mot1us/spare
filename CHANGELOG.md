@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.50.5 — 2026-11-16
+
+- Removed a 0.7-second screen freeze when opening Sports: the check for renamed event channels (Game Pass, PPV) scanned every channel name on the screen thread. It now runs in the background.
+
 ## 0.50.4 — 2026-11-16
 
 - Opening Spare and going straight to Sports is faster. Library's catalog preparation, which could take half a minute of processor on an onn 4K Pro, now waits until you are idle and not in Sports. If you open Library first, it prepares what it needs then.
