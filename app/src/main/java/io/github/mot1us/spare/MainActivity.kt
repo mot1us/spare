@@ -102,7 +102,15 @@ class MainActivity : Activity() {
     private var epgSaveQuiet = false
     private fun cancelEpgSave() { handler.removeCallbacks(cacheEpg); epgSavePending = false }
     private val fetchBackgroundEpg = Runnable { pumpEpg() }
-    private val prewarmLibrary = Runnable { if (started && !closed && ::library.isInitialized) enabledSources().firstOrNull { it.kind == "xtream" }?.let(library::prewarm) }
+    /**
+     * Prepare the Library catalog in the background, but only while the viewer is idle and not in Sports. On an onn 4K
+     * Pro this took up to half a minute of processor and slowed finding and starting a game, the reason Spare exists.
+     */
+    private val prewarmLibrary = object : Runnable { override fun run() {
+        if (!started || closed || !::library.isInitialized) return
+        if (sportsVisible || !bulkRefreshReady()) { handler.removeCallbacks(this); handler.postDelayed(this, 30000); return }
+        enabledSources().firstOrNull { it.kind == "xtream" }?.let(library::prewarm)
+    } }
     private var epgWanted = emptyList<Channel>()
     /** Rows needed on screen now; the rest of epgWanted is background read-ahead. */
     private var epgUrgent = 0
@@ -2565,7 +2573,13 @@ class MainActivity : Activity() {
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
-        root.bringChildToFront(panel); panel.open(listOf("Preferences", "Stream quality", "Score delay", "Leagues") + SportsLeagues.all.map { it.name }); syncScoreStrip()
+        root.bringChildToFront(panel); panel.open(SPORTS_SECTIONS.map { it.first }.filter { it != "Your teams" } + SportsLeagues.all.map { it.name }); syncScoreStrip()
+    }
+    /** Open the one Sports settings screen at [section]; "Your teams" goes to the first chosen league's teams. */
+    private fun openSportsSettings(section: String) {
+        if (sportsManager?.opened != true) sportsTeams()
+        val page = if (section == "Your teams") (SportsLeagues.all.firstOrNull { it.id in store.sportsLeagues } ?: SportsLeagues.all.first()).name else section
+        sportsManager?.selectSetting(page); sportsManager?.focusContent()
     }
     private fun openSportsQuality() {
         if (sportsManager?.opened != true) sportsTeams()
@@ -2598,6 +2612,12 @@ class MainActivity : Activity() {
         val panel = sportsManager ?: return
         if (page == "Stream quality") { renderSportsQuality(panel); return }
         if (page == "Score delay") { renderScoreDelay(panel); return }
+        if (page == "Sports overlay") {
+            panel.page(page, "Open Sports overlay from a live channel’s OK menu; it stays visible until closed. Press Up to focus it, Left/Right to browse games, OK to watch, and Back to return focus to playback.")
+            panel.action("Show sports overlay", if (store.scoreOverlayPinned) "Visible until closed" else "Open from OK → Sports overlay", store.scoreOverlayPinned) { store.scoreOverlayPinned = !store.scoreOverlayPinned; syncScoreStrip(); panel.refresh("Show sports overlay") }
+            listOf("Top", "Bottom").forEach { position -> panel.action(position, selected = store.scoreOverlayPosition == position) { store.scoreOverlayPosition = position; syncScoreStrip(); panel.refresh(position) } }
+            return
+        }
         if (page == "Preferences") {
             panel.page("Your sports", "Choose leagues and teams on the left. Enable automatic playback to watch a live game directly from its card. Upcoming and completed games keep their reminder and replay options.")
             panel.action("Play best stream on selection", "Play the highest-resolution matching stream. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; panel.refresh("Play best stream on selection") }
@@ -3365,7 +3385,6 @@ class MainActivity : Activity() {
             "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Developer tools" -> "Playback diagnostics"
             "Performance report" -> "About Spare"
-            "Sports overlay" -> "Sports"
             "Navigation dock", "Time format" -> "Guide"
             "Category order" -> "Categories"
             else -> null
@@ -3512,25 +3531,11 @@ class MainActivity : Activity() {
                 } }
             }
             "Subtitles" -> renderCaptionSettings()
-            "Sports overlay" -> {
-                panel.page(page, "Open Sports overlay from a live channel’s OK menu; it stays visible until closed. Press Up to focus it, Left/Right to browse games, OK to watch, and Back to return focus to playback.")
-                panel.action("Show sports overlay", if (store.scoreOverlayPinned) "Visible until closed" else "Open from OK → Sports overlay", store.scoreOverlayPinned) { store.scoreOverlayPinned = !store.scoreOverlayPinned; syncScoreStrip(); refresh("Show sports overlay") }
-                listOf("Top", "Bottom").forEach { position -> panel.action(position, selected = store.scoreOverlayPosition == position) { store.scoreOverlayPosition = position; syncScoreStrip(); refresh(position) } }
-            }
             "Sports" -> {
-                panel.page("Sports", "Mark upcoming games with Remind me. Reminders appear at the scheduled start over playback while Spare is open. Schedule updates adjust rescheduled games. Watch best prefers the highest-resolution matching game stream. Known FPS breaks resolution ties. Broadcaster matches are labelled when game coverage is unconfirmed. All qualities remain playable.")
-                panel.action("Sports overlay", "Compact live scores · ${store.scoreOverlayPosition}" ) { renderSettingsPage("Sports overlay"); panel.focusContent() }
-                panel.action("Play best stream on selection", "Skip live-game actions and play the highest-resolution match. Known FPS breaks resolution ties. Failed starts can try another match, up to three attempts. FPS is learned from normal playback.", selected = store.sportsAutoPlay) { store.sportsAutoPlay = !store.sportsAutoPlay; refresh("Play best stream on selection") }
-                panel.action("Hide completed-game scores", selected = store.hideCompletedScores) { store.hideCompletedScores = !store.hideCompletedScores; sportsPanel.setSpoilers(store.hideCompletedScores); selectedGame?.let(::showGameInfo); refresh("Hide completed-game scores") }
-                panel.action("Stream quality", "Resolution and FPS preferences apply to Sports only") { openSportsQuality() }
-                panel.action("Score delay", delayLabel(store.sportsScoreDelay)) { openSportsScoreDelay() }
-                panel.action("Sports settings") { sportsTeams() }; panel.action("Open live sports") { closeSettings(); switchMode(true) }
-                panel.note("Saved reminders")
-                if (reminders.events.isEmpty()) panel.note("No reminders. Choose an upcoming game in Sports.")
-                reminders.events.forEach { event ->
-                    val label = event.teams.mapNotNull { SportsCatalog.byId[it]?.name }.joinToString(" vs ")
-                    panel.action("Remove · $label", GuideClock.sportsDate(event.start)) { reminders.remove("${event.league}:${event.id}"); saveGameReminders(); refresh() }
-                }
+                // One set of Sports settings: these open the same screen as Sports › Leagues and teams, at that section.
+                panel.page("Sports", "Leagues, teams and Sports preferences. These are the same settings as Leagues and teams in Sports.")
+                SPORTS_SECTIONS.forEach { section -> panel.action(section.first, section.second) { openSportsSettings(section.first) } }
+                panel.action("Open live sports") { closeSettings(); openSection(true) }
             }
             "Updates" -> { panel.page(page, "Spare ${BuildConfig.VERSION_NAME}. Updates are downloaded from verified GitHub releases. Android may request installation permission or confirmation."); panel.action(availableUpdate?.let { "Update $it" } ?: "Check for updates") { updater.offer() } }
             "Stream format" -> {
@@ -4055,6 +4060,11 @@ class MainActivity : Activity() {
 
 /** Where screens start beside the resting main menu: its margin, its slim icon column and a gap. */
 private const val DOCK_INSET_DP = 84
+/** The sections of the one Sports settings screen, in order, with a short description for Settings › Sports. */
+private val SPORTS_SECTIONS = listOf("Preferences" to "Play on OK, my teams only, spoilers, reminders and reset",
+    "Leagues" to "Leagues shown in Sports", "Your teams" to "Follow teams in each league",
+    "Stream quality" to "Resolution and frame rate for game streams", "Score delay" to "Match scores to your stream",
+    "Sports overlay" to "Compact live scores over playback")
 private const val SPORTS_QUICK_RETRIES = 4
 private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L

@@ -35,7 +35,9 @@ object MetadataAddon {
         fun list(key: String) = result.optJSONArray(key)?.let { a -> (0 until minOf(a.length(), 20)).map { a.optString(it).take(80) }.joinToString(", ") }.orEmpty()
         return preview.copy(externalId = id.orEmpty(), poster = image("poster").ifBlank { preview.poster }, backdrop = image("background").ifBlank { preview.backdrop },
             description = result.optString("description").take(4096).ifBlank { preview.description }, year = result.optString("year").take(16).ifBlank { preview.year },
-            genre = list("genres").ifBlank { preview.genre }, runtime = result.optString("runtime").take(40).ifBlank { preview.runtime }, cast = list("cast").ifBlank { preview.cast })
+            genre = list("genres").ifBlank { preview.genre }, runtime = result.optString("runtime").take(40).ifBlank { preview.runtime }, cast = list("cast").ifBlank { preview.cast },
+            // Cinemeta's IMDb score fills in only when the provider gave none.
+            rating = preview.rating.takeIf { it > 0f } ?: LibraryFacts.parseRating(result.optString("imdbRating")))
     }
     private fun validId(id: String) = id.matches(Regex("[A-Za-z0-9][A-Za-z0-9:._-]{0,159}")) && id !in setOf("null", "undefined", "0")
     private fun year(item: OnDemand) = Regex("(?:19|20)[0-9]{2}").find(item.year)?.value ?: Regex("\\b(?:19|20)[0-9]{2}\\b").find(item.title)?.value.orEmpty()

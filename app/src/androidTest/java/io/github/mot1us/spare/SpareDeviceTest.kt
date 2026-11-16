@@ -1040,8 +1040,16 @@ class SpareDeviceTest {
                         }
                     } finally { releaseReminderSearch.countDown() }
                     assertFalse(SecureStore(context).sportsAutoPlay)
-                    device.pressMenu(); activateSetting(scenario, "Sports"); activateSetting(scenario, "Play best stream on selection")
+                    // Settings › Sports opens the same Sports settings screen as Sports › Leagues and teams.
+                    device.pressMenu(); activateSetting(scenario, "Sports"); activateSetting(scenario, "Preferences")
+                    waitFor(scenario) { activity ->
+                        activity.window.decorView.findViewWithTag<View>("sports-manager")?.takeIf { it.isShown }
+                            ?.findViewWithTag<View>("settings-option:Play best stream on selection")?.apply { requestFocus(); performClick() } != null
+                    }
                     assertTrue("Automatic playback persists from main Settings", SecureStore(context).sportsAutoPlay)
+                    // Back leaves the option for the section list, then closes the Sports settings.
+                    repeat(3) { var open = false; scenario.onActivity { open = it.window.decorView.findViewWithTag<View>("sports-manager")?.isShown == true }; if (open) { device.pressBack(); instrumentation.waitForIdleSync() } }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-manager")?.isShown != true }
                     leaveSettings(scenario)
                     val releaseWarmWorker = java.util.concurrent.CountDownLatch(1)
                     val largeLineup = (1..25000).map { Channel("filler:$it", "Local news $it", "News", "${server.base}/unused.mp4") }
@@ -3341,8 +3349,11 @@ class SpareDeviceTest {
                         assertEquals("Score hidden", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.toString())
                         activity.window.decorView.findViewWithTag<View>("settings").performClick()
                         activity.window.decorView.findViewWithTag<SettingsPanel>("settings-panel").selectSetting("Sports")
-                        activity.window.decorView.findViewWithTag<View>("settings-option:Hide completed-game scores").performClick()
+                        // Settings › Sports › Preferences opens the one Sports settings screen.
+                        activity.window.decorView.findViewWithTag<View>("settings-option:Preferences").performClick()
+                        activity.window.decorView.findViewWithTag<View>("sports-manager").findViewWithTag<View>("settings-option:Hide completed-game scores").performClick()
                         assertFalse(SecureStore(context).hideCompletedScores)
+                        MainActivity::class.java.getDeclaredMethod("closeSportsManager").apply { isAccessible = true }.invoke(activity)
                         MainActivity::class.java.getDeclaredMethod("closeSettings").apply { isAccessible = true }.invoke(activity)
                     }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.contains("24") }

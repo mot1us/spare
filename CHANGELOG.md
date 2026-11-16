@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.50.4 — 2026-11-16
+
+- Opening Spare and going straight to Sports is faster. Library's catalog preparation, which could take half a minute of processor on an onn 4K Pro, now waits until you are idle and not in Sports. If you open Library first, it prepares what it needs then.
+- One set of Sports settings. Settings › Sports now opens the same screen as Leagues and teams in Sports, at the section you choose (Preferences, Leagues, Your teams, Stream quality, Score delay, Sports overlay), instead of its own partial copy with a second "Sports settings" button. Sports overlay moved into that screen.
+- Library shows ratings: the banner and details page lead with the provider's 0–10 score (for example "★ 7.8"), or Cinemeta's IMDb score when a metadata source is set and the provider has none.
+- Fixed a crash when Spare closed just after moving in Library: a queued request for the focused title's details reached Library's helper after it had stopped.
+- The cast on the details page reads "Starring A · B · C" with the first six names, instead of a long run-on line.
+
 ## 0.50.3 — 2026-11-15
 
 - Picking a live game plays straight away when your guide or a channel's name already confirms the game. Before, Spare first asked your provider about every other candidate channel in case one was sharper, which took about six seconds on an onn 4K Pro while the picture stood still. That check still runs when nothing local confirms the game.

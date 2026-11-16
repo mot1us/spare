@@ -564,7 +564,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val spotWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-spotlight") }
     private var spotTask: java.util.concurrent.Future<*>? = null
     private val seriesSpots = linkedMapOf<String, Spotlight>()
-    private fun spotlight(value: OnDemand) = Spotlight(listOf(value.year, value.genre.substringBefore(',').trim(), value.runtime, value.category).filter { it.isNotBlank() }.distinct().joinToString("  ·  "), value.description, value.backdrop)
+    private fun spotlight(value: OnDemand) = Spotlight(LibraryFacts.meta(value), value.description, value.backdrop)
     /** One request at a time for the poster under the cursor; results are shared with the details page. */
     private fun spotlightDetails(item: OnDemand, done: (Spotlight) -> Unit) {
         val selected = selectedSource() ?: return
@@ -572,8 +572,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val key = "${selected.id}:${item.id}"
         details[key]?.let { done(spotlight(it.copy(category = item.category))); return }
         seriesSpots[key]?.let { done(it); return }
+        if (destroyed) return
         spotTask?.cancel(true)
-        spotTask = spotWorker.submit {
+        // A request already posted when Spare closes must not reach the stopped worker (it crashed the app).
+        spotTask = runCatching { spotWorker.submit {
             val began = Timings.now()
             val (loaded, entries) = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) to emptyList() else VodCatalog.seriesInfo(selected, item) }.getOrNull() ?: return@submit
             Timings.since(if (item.kind == "movie") "Movie details" else "Series info", began)
@@ -584,7 +586,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 else { rememberSeries(key, spot, entries) }
                 done(spot)
             }
-        }
+        } }.getOrNull()
     }
     /** The spotlight's series fetch already holds the episode list, so opening that series is instant. */
     private fun rememberSeries(key: String, spot: Spotlight, entries: List<OnDemand>) {

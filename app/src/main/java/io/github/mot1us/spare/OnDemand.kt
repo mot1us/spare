@@ -95,7 +95,7 @@ object VodCatalog {
                 backdrop = artwork(j.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source), year = listOf(j.optString("year"), j.optString("releaseDate"), j.optString("release_date")).mapNotNull { yearPattern.find(it)?.value }.firstOrNull().orEmpty(),
                 genre = j.optString("genre").take(256), cast = j.optString("cast").take(1024), externalId = externalId(j),
                 added = (j.optString("added").toLongOrNull() ?: j.optString("last_modified").toLongOrNull() ?: 0L).coerceIn(0, 99999999999L),
-                rating = (j.optString("rating").toFloatOrNull()?.takeIf { it.isFinite() && it > 0f } ?: j.optString("rating_5based").toFloatOrNull()?.takeIf { it.isFinite() }?.times(2f) ?: 0f).coerceIn(0f, 10f))
+                rating = LibraryFacts.parseRating(j.optString("rating"), j.optString("rating_5based")))
         }.distinctBy { it.id }
     }
     fun episodes(source: Source, series: OnDemand, timeoutMs: Int = 6000): List<OnDemand> = parseEpisodes(seriesRoot(source, series, timeoutMs), source, series)
@@ -137,6 +137,7 @@ object VodCatalog {
             backdrop = artwork(info.optJSONArray("backdrop_path")?.optString(0).orEmpty(), source).ifBlank { item.backdrop },
             year = info.optString("releasedate").take(4).ifBlank { item.year }, genre = info.optString("genre").take(256).ifBlank { item.genre },
             runtime = info.optString("duration").take(40).ifBlank { item.runtime }, cast = info.optString("cast").take(1024).ifBlank { item.cast },
+            rating = item.rating.takeIf { it > 0f } ?: LibraryFacts.parseRating(info.optString("rating"), info.optString("rating_5based")),
             externalId = externalId(info).ifBlank { item.externalId }, url = data?.let { playbackUrl(source, "movie", id, it, item.url) } ?: item.url)
     }
     /** Spotlight/details text for a series without its episode list being needed by the caller. */
@@ -148,6 +149,7 @@ object VodCatalog {
             poster = series.poster.ifBlank { artwork(info.optString("cover"), source) },
             year = series.year.ifBlank { Regex("(?:19|20)[0-9]{2}").find(info.optString("releaseDate") + " " + info.optString("release_date"))?.value.orEmpty() },
             genre = info.optString("genre").take(256).ifBlank { series.genre }, cast = info.optString("cast").take(1024).ifBlank { series.cast },
+            rating = series.rating.takeIf { it > 0f } ?: LibraryFacts.parseRating(info.optString("rating"), info.optString("rating_5based")),
             runtime = info.optString("episode_run_time").take(12).takeIf { it.isNotBlank() && it != "0" }?.let { "$it min episodes" } ?: series.runtime)
     }
     /** One provider file per selection; never guess or probe alternate movie formats. */

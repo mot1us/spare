@@ -40,7 +40,7 @@ class PosterMetadata(private val store: SecureStore) {
             val stored = saved?.optJSONObject(key)?.let { runCatching { OnDemand.from(it) }.getOrNull() }
             val result = stored ?: if (url.isBlank()) item.copy(poster = "") else runCatching { MetadataAddon.enrich(url, item) }.getOrDefault(item.copy(poster = ""))
             // The cache deliberately excludes provider URLs, source identifiers and credentials.
-            val art = OnDemand("metadata", result.title, "", kind = item.kind, poster = result.poster, backdrop = result.backdrop, description = result.description, year = result.year, genre = result.genre, runtime = result.runtime, cast = result.cast, externalId = result.externalId)
+            val art = OnDemand("metadata", result.title, "", kind = item.kind, poster = result.poster, backdrop = result.backdrop, description = result.description, year = result.year, genre = result.genre, runtime = result.runtime, cast = result.cast, externalId = result.externalId, rating = result.rating)
             handler.post {
                 if (!closed && token == generation) {
                     saved?.keys()?.asSequence()?.take(160)?.forEach { id -> runCatching { OnDemand.from(saved.getJSONObject(id)) }.getOrNull()?.let { cache.putIfAbsent(id, it) } }
@@ -57,7 +57,7 @@ class PosterMetadata(private val store: SecureStore) {
             }
         }
     }
-    private fun merge(item: OnDemand, art: OnDemand) = item.copy(poster = art.poster.ifBlank { item.poster }, backdrop = art.backdrop.ifBlank { item.backdrop }, description = art.description.ifBlank { item.description }, externalId = art.externalId.ifBlank { item.externalId })
+    private fun merge(item: OnDemand, art: OnDemand) = item.copy(rating = item.rating.takeIf { it > 0f } ?: art.rating, cast = item.cast.ifBlank { art.cast }, poster = art.poster.ifBlank { item.poster }, backdrop = art.backdrop.ifBlank { item.backdrop }, description = art.description.ifBlank { item.description }, externalId = art.externalId.ifBlank { item.externalId })
     fun clear() {
         ++generation; persist?.let(handler::removeCallbacks); workers.queue.clear(); pending.clear(); cache.clear(); addon = null
         synchronized(this) { loaded = true; savedEntries = null }

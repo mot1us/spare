@@ -592,7 +592,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         // The details page uses the spotlight for its backdrop, title and facts; the pane holds poster, plot and actions.
         spotKey = item.id; spotRow = null; searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
         spotTitle.text = item.title
-        spotMeta.text = listOf(item.year, item.genre.substringBefore(',').trim(), item.runtime, item.category).filter { it.isNotBlank() }.distinct().joinToString("  ·  ")
+        spotMeta.text = LibraryFacts.meta(item)
         spotArtwork(item.backdrop.ifBlank { item.poster })
         val hero = LinearLayout(context)
         val cover = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(0xFF202835.toInt()) }
@@ -601,7 +601,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         cover.setImageBitmap(images.get(item.poster, artworkHttp, redraw = ::redraw) ?: images.peek(item.poster, tileDecode)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
         val copy = LinearLayout(context).apply { orientation = VERTICAL }
         copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 8; setLineSpacing(0f, 1.15f) }, LayoutParams(-1, -2))
-        if (item.cast.isNotBlank()) copy.addView(label(11f).apply { text = "Cast · ${item.cast}"; maxLines = 3; setTextColor(Color.LTGRAY); setPadding(0, dp(12), 0, 0) })
+        LibraryFacts.cast(item.cast).takeIf { it.isNotBlank() }?.let { starring ->
+            copy.addView(label(12f).apply { tag = "library-cast"; text = starring; maxLines = 2; setTextColor(Color.LTGRAY); setPadding(0, dp(14), 0, 0) })
+        }
         // Actions lead the column beside the poster, so they stay in view above a long plot.
         val actions = LinearLayout(context)
         val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); actions.addView(makeButton("Back", back).apply { tag = "library-back" }, LayoutParams(-2, dp(38)))
@@ -619,7 +621,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun resumeImages() { images.resume(); backdrops.resume() }
     fun trimImages() { images.trim(); backdrops.trim() }
-    fun closeImages() { images.close(); backdrops.close() }
+    /** Closing also drops pending delayed work (search, spotlight), which must never run after its owner is gone. */
+    fun closeImages() { searchHandler.removeCallbacksAndMessages(null); images.close(); backdrops.close() }
     private class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
     private companion object {
         const val HERO_COMPACT_DP = 44; const val HERO_SPOTLIGHT_DP = 200; const val HERO_SERIES_DP = 250; const val CATEGORY_WIDTH_DP = 200
