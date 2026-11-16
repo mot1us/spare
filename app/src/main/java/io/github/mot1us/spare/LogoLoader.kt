@@ -41,6 +41,13 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private val workers = Executors.newFixedThreadPool(threads) as java.util.concurrent.ThreadPoolExecutor
     /** One thread, in order: saved images are quick to read, and a strict order keeps the download line bounded. */
     private val readers = Executors.newFixedThreadPool(1) as java.util.concurrent.ThreadPoolExecutor
+    /**
+     * Images accepted but not yet started by a download thread: in either line, or in the reader's hands between them.
+     * One count for the whole path; checking each line separately let an image through while another was moving
+     * between lines, and a detached one then downloaded in the background.
+     */
+    private val waiting = java.util.concurrent.atomic.AtomicInteger()
+    private fun started() { waiting.updateAndGet { maxOf(0, it - 1) } }
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var closed = false
     @Volatile private var paused = false
@@ -170,8 +177,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         if (closed || (paused && !warm) || !Network.allowed(url, http) || unavailable(url)) return null
         synchronized(pending) {
             pending[key]?.let { if (it.size < 32) { it.add(redraw); queued() }; return null }
-            if (workers.queue.size >= 48 || readers.queue.size >= 48) return null
-            pending[key] = mutableListOf(redraw); queued()
+            if (waiting.get() >= 48) return null
+            pending[key] = mutableListOf(redraw); queued(); waiting.incrementAndGet()
         }
         val token = generation; val queuedAt = SystemClock.uptimeMillis()
         fun stale() = closed || (paused && !warm) || token != generation
@@ -192,6 +199,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         fun address() = source(url).takeIf { it == url || Network.allowed(it, http) } ?: url
         fun download() = workers.execute {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            started()
             if (stale()) return@execute
             val startedAt = SystemClock.uptimeMillis()
             val address = address()
@@ -202,13 +210,16 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         // behind downloads that can take seconds each.
         if (files == null) download() else readers.execute {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            if (stale()) return@execute
+            if (stale()) { started(); return@execute }
             val startedAt = SystemClock.uptimeMillis()
             val saved = runCatching { files?.saved(address()) }.getOrNull()
+            // A saved copy, or giving up, ends this image's wait here; a download keeps it counted until a thread takes it.
+            if (saved != null) started()
             if (saved == null) {
                 // No saved copy and the download line is full: give up this time, as request() does, so a visible
                 // image retries later and a detached one is simply forgotten instead of waiting in a long line.
                 if (workers.queue.size < 48 && !closed && runCatching { download() }.isSuccess) return@execute
+                started()
                 val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
                 handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(null) } }
                 return@execute
@@ -255,7 +266,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     fun warm(url: String, http: Boolean = false, dimension: Int = 0) { request(url, http, size(dimension), {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }
     fun trim() { cache.evictAll() }
-    fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); readers.queue.clear(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }
+    fun pause() { clearBindings(); paused = true; ++generation; workers.queue.clear(); readers.queue.clear(); waiting.set(0); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false }
     fun resume() { paused = false }
     fun close() { clearBindings(); closed = true; workers.shutdownNow(); readers.shutdownNow(); synchronized(pending) { pending.clear() }; handler.removeCallbacksAndMessages(null); retryPosted = false; cache.evictAll() }
 }

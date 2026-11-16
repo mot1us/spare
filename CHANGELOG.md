@@ -3,6 +3,7 @@
 ## 0.50.3 — 2026-11-15
 
 - Picking a live game plays straight away when your guide or a channel's name already confirms the game. Before, Spare first asked your provider about every other candidate channel in case one was sharper, which took about six seconds on an onn 4K Pro while the picture stood still. That check still runs when nothing local confirms the game.
+- Fixed a race in the image loader: an image turned away because 48 were already waiting could slip through while another moved between the saved-copy and download stages, then download in the background after it had left the screen.
 - Smoother Sports browsing: team crests, card logos and banner photos now load at the size they are shown, not two to three times bigger. Measured on an onn 4K Pro, every cursor move was copying oversized pictures to the video chip, and most frames missed their deadline.
 
 ## 0.50.2 — 2026-11-15
