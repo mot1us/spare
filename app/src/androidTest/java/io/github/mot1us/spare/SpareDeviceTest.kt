@@ -2905,7 +2905,7 @@ class SpareDeviceTest {
         FixtureServer(longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Delayed score fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             val now = System.currentTimeMillis(); val ids = setOf("nba:POR", "nba:LAL")
-            val first = LiveEvent("delayed-fixture", ids, now - 60000, scores = mapOf("nba:POR" to "11", "nba:LAL" to "22"), status = "Q1", league = "NBA")
+            val first = LiveEvent("delayed-fixture", ids, earlierToday(now), scores = mapOf("nba:POR" to "11", "nba:LAL" to "22"), status = "Q1", league = "NBA")
             val initial = LiveSportsSnapshot(listOf(first), now, setOf("NBA"))
             var latest = initial
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
@@ -5292,6 +5292,12 @@ class SpareDeviceTest {
         }
     }
 
+    /** A start time a minute ago, but never before today's midnight: just after midnight (CI runs on UTC) it would be yesterday. */
+    private fun earlierToday(now: Long): Long {
+        val midnight = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+            .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        return maxOf(now - 60000, minOf(now, midnight + 1000))
+    }
     /** A start time later today on this device's clock, whatever the time zone (CI emulators run on UTC). */
     private fun laterToday(now: Long): Long {
         val midnight = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneId.systemDefault()).toLocalDate().plusDays(1)
