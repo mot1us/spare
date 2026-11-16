@@ -42,7 +42,58 @@ object GuideDisk {
         } }
         writer.endArray().name("categories").beginArray().endArray().endObject()
     }
+    /** "SPL1": a saved lineup in the compact form below. Older files are JSON and start with '{'. */
+    private const val LINEUP = 0x53504C31
+    /**
+     * The channel list as plain lengths and bytes. Reading 15,000 channels back from JSON built an object tree per
+     * channel and re-derived each one's quality from its name on every start; this form is read straight into channels.
+     */
+    fun lineupBytes(guide: Guide): ByteArray {
+        val bytes = java.io.ByteArrayOutputStream(guide.channels.size * 192 + 64); val out = java.io.DataOutputStream(bytes)
+        fun text(value: String) { if (value.isEmpty()) out.writeInt(0) else { val encoded = value.toByteArray(); out.writeInt(encoded.size); out.write(encoded) } }
+        out.writeInt(LINEUP); out.writeInt(guide.channels.size)
+        for (c in guide.channels) {
+            text(c.id); text(c.name); text(c.group); text(c.url); text(c.logo); text(c.guideId)
+            out.writeByte(c.catchupDays.coerceIn(0, 30)); text(c.catchupMode); text(c.catchupTemplate)
+            val quality = c.reportedQuality
+            out.writeByte((if (c.media) 1 else 0) or (if (c.archiveMetadataKnown) 2 else 0) or (if (quality != null) 4 else 0))
+            if (quality != null) {
+                out.writeInt(quality.width); out.writeInt(quality.height); out.writeFloat(quality.fps); out.writeBoolean(quality.interlaced)
+                out.writeFloat(quality.encodedFps); text(quality.evidence); out.writeInt(quality.detector)
+            }
+            text(c.playlistId); text(c.providerId); text(c.providerGuideId); text(c.xmltvId)
+        }
+        out.writeInt(guide.categoryOrder.size); guide.categoryOrder.forEach(::text)
+        out.flush(); return bytes.toByteArray()
+    }
+    private fun compactLineup(bytes: ByteArray): Guide {
+        val data = java.nio.ByteBuffer.wrap(bytes); data.int
+        // Category, playlist and catch-up names repeat on thousands of channels: keep one copy of each.
+        val shared = HashMap<String, String>()
+        fun text(limit: Int = 8192): String {
+            val length = data.int; if (length == 0) return ""
+            require(length in 1..minOf(limit * 4, data.remaining()))
+            return String(bytes, data.position(), length, Charsets.UTF_8).also { data.position(data.position() + length) }
+        }
+        fun repeated(limit: Int = 8192) = text(limit).let { shared.getOrPut(it) { it } }
+        val count = data.int; require(count in 0..Importers.MAX_CHANNELS)
+        val channels = ArrayList<Channel>(count)
+        repeat(count) {
+            val id = text(); val name = text(); val group = repeated(); val url = text(); val logo = text(); val guideId = text()
+            val days = data.get().toInt().coerceIn(0, 30); val mode = repeated(); val template = text()
+            val flags = data.get().toInt()
+            val quality = if (flags and 4 == 0) null else {
+                val width = data.int; val height = data.int; val fps = data.float; val interlaced = data.get().toInt() != 0
+                VideoInfo(width, height, fps, interlaced, data.float, repeated(64), data.int)
+            }
+            channels.add(Channel(id, name, group, url, logo, guideId, days, mode, template, flags and 1 != 0, quality, flags and 2 != 0,
+                repeated(), text(), text(), text(256).take(256)))
+        }
+        val categories = data.int; require(categories in 0..20000)
+        return Guide(channels, emptyMap(), List(categories) { text(128).take(128) })
+    }
     fun lineup(bytes: ByteArray): Guide {
+        if (bytes.size >= 8 && java.nio.ByteBuffer.wrap(bytes).int == LINEUP) return compactLineup(bytes)
         val channels = mutableListOf<Channel>(); val categories = mutableListOf<String>()
         JsonReader(bytes.inputStream().reader()).use { reader ->
             reader.beginObject()

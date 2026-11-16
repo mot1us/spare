@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.9 — 2026-11-16
+
+- Opening Spare from a saved playlist reads the channel list much faster. The list is now saved in a compact form that is read straight into channels; before, it was saved as JSON, and every start rebuilt each channel from text and worked out its quality from its name again. In a test with 15,800 channels on the emulator, reading the list took 66 ms instead of 449 ms, and the saved file is less than half the size. The saved list from an older version is converted the first time it is read; nothing is downloaded again.
+
 ## 0.51.8 — 2026-11-16
 
 - Library posters no longer wait behind an unrelated download. While one poster was downloading, the check for whether another poster was already saved on the TV could be made to wait for it, and every poster behind that check waited too. Downloads now run without holding that lock. On an onn 4K Pro a row's new posters started appearing about 1.5 seconds after scrolling stopped and then arrived one or two at a time; whether this change removes that delay is still to be measured there.

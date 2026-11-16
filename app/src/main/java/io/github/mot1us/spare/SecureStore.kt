@@ -155,7 +155,7 @@ class SecureStore(private val context: Context) {
         synchronized(cacheLock) {
             if (!providerCurrent(source)) return
 
-        write("lineup-${source.id}.enc", guide.copy(programmes = emptyMap()).json().toString().toByteArray())
+        write("lineup-${source.id}.enc", GuideDisk.lineupBytes(guide))
         preferences.edit { putBoolean("epg-mapping-${source.id}", true) }
         if (guide.channels.isNotEmpty() && guide.channels.all { it.archiveMetadataKnown }) preferences.edit { putBoolean("archive-metadata-${source.id}", true) }
         if (url.isNotBlank()) write("guide-url-${source.id}.enc", url.toByteArray())
@@ -173,7 +173,9 @@ class SecureStore(private val context: Context) {
         } ?: return null
         // Parse outside the account-transition lock; a large guide must not hold up UI binding.
         val parseBegan = Timings.now()
-        return GuideDisk.lineup(saved.first).also { Timings.since("Parse lineup", parseBegan) }.also { if (saved.second) saveLineup(source, it) }
+        // A lineup still saved as JSON by an older version is saved again in the compact form, once.
+        val json = saved.first.firstOrNull() == '{'.code.toByte()
+        return GuideDisk.lineup(saved.first).also { Timings.since("Parse lineup", parseBegan) }.also { if (saved.second || json) saveLineup(source, it) }
     }
     fun cachedProgrammes(source: Source): Map<String, List<Programme>> {
         val saved = synchronized(cacheLock) {
