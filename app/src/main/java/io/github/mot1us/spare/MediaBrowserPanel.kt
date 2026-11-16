@@ -434,7 +434,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private fun watchLabel(saved: Boolean) = if (saved) "✓ In Watchlist" else "Add to Watchlist"
     fun favoriteTitle(item: OnDemand?, saved: Boolean, canMarkWatched: Boolean = false, allWatched: Boolean = false) {
         savedNow = saved; detailWatch?.text = watchLabel(saved)
-        saveTitle.isVisible = item != null; saveTitle.text = watchLabel(saved)
+        // A movie's details page has its own Watchlist button beside Play; the tab line shows one only where that is missing.
+        saveTitle.isVisible = item != null && detailWatch?.isAttachedToWindow != true; saveTitle.text = watchLabel(saved)
         saveTitle.contentDescription = if (saved) "Remove ${item?.title} from Watchlist" else "Add ${item?.title} to Watchlist"
         markWatched.isVisible = item?.kind == "series" && saved && canMarkWatched
         markWatched.text = if (allWatched) "Mark unwatched" else "Mark all watched"
@@ -617,6 +618,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         // The remote's Back button leaves this page, so the second action is the useful one: Watchlist.
         val watch = makeButton(watchLabel(savedNow)) { favoriteAction?.invoke() }.apply { tag = "library-detail-watchlist" }
         detailWatch = watch; actions.addView(watch, LayoutParams(-2, dp(38)))
+        saveTitle.isVisible = false
         copy.addView(actions, 0, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(14) })
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()

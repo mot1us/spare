@@ -4059,8 +4059,12 @@ class SpareDeviceTest {
                 // The details page carries the title and facts in the spotlight above poster, plot and actions.
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-spot-title")?.let { title -> title.isShown && title.text.toString() == "Fixture movie" } == true && it.window.decorView.findViewWithTag<View>("library-details").isShown && it.window.decorView.findViewWithTag<View>("library-play").hasFocus() }
                 instrumentation.waitForIdleSync(); device.waitForIdle(); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-details.png"))
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-favorite").performClick() }
+                scenario.onActivity {
+                    assertFalse("Details show one Watchlist button, beside Play", it.window.decorView.findViewWithTag<View>("library-favorite").isShown)
+                    it.window.decorView.findViewWithTag<View>("library-detail-watchlist").performClick()
+                }
                 waitFor(scenario) { store.libraryFavorites(source).contains("movie:101") }
+                scenario.onActivity { assertFalse(it.window.decorView.findViewWithTag<View>("library-favorite").isShown) }
                 scenario.onActivity { activity ->
                     val panel = activity.window.decorView.findViewWithTag<MediaBrowserPanel>("library-panel")
                     val play = panel.findViewWithTag<View>("library-play")

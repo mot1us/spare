@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.11 — 2026-11-16
+
+- A movie's details page in Library shows one Watchlist button, beside Play. The second one on the tab line is hidden there; series pages, which have no button beside Play, keep it.
+
 ## 0.51.10 — 2026-11-16
 
 - Moving through channels and categories is instant again, as it was before 0.50.8. The highlight fade added then made fast scrolling feel slower and left a trail of half-lit rows behind the cursor. Guide, Sports and Library also switch at once again.
