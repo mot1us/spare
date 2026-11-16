@@ -1061,6 +1061,8 @@ class MainActivity : Activity() {
             if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
+        // Ready Sports' cards once startup has settled, so opening Sports does not build them all at once.
+        handler.postDelayed({ if (!closed && !sportsVisible) sportsPanel.prewarmCards() }, 8000)
         sportsPanel.leagueSelected = ::selectSportsLeague
         sportsPanel.cardsReady = { queueSportsPrefetch(); syncReplayDiscovery() }
         sportsPanel.scorePresentation = ::presentScore

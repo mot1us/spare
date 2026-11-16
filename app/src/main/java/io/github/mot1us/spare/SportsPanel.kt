@@ -855,6 +855,18 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (enter && !streams.hasFocus()) { if (choices.isNotEmpty()) focusStream(0) else focusStreamsHeader() }
     }
     private fun showGames() { removeCallbacks(settleGameFocus); setSearching(false); rows.post { updateScrollHint() }; matchNotice.visibility = GONE; gridArea.animate().cancel(); heroContent.animate().cancel(); gridArea.alpha = 1f; heroContent.alpha = 1f; actionsOpen = false; heroActions(false); progress.visibility = INVISIBLE; empty.visibility = GONE; replayMode = false; replays = emptyList(); watchMode = false; matchingKey = null; streams.isVisible = false; streamsArea.isVisible = false; rows.isVisible = true; gridArea.isVisible = true; streamsHeader.isVisible = false; filtersButton.isVisible = false; presentationChanged?.invoke() }
+    /**
+     * Build game cards ahead of time, one per frame while Sports is closed, and keep them ready in the grid's pool.
+     * Building the first screenful at once when Sports opened froze the screen for about 0.3 s on an onn 4K Pro.
+     */
+    fun prewarmCards(count: Int = 12) {
+        fun step() {
+            if (isShown || rows.adapter == null || rows.recycledViewPool.getRecycledViewCount(0) >= count) return
+            rows.recycledViewPool.putRecycledView(cards.createViewHolder(rows, 0))
+            postOnAnimation(::step)
+        }
+        post(::step)
+    }
     fun home() { showGames(); pendingEnter = true; pendingInput = inputEpoch }
     fun back(): Boolean {
         if (watchMode || actionsOpen) { showGames(); focusGames(); return true }

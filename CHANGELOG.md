@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.50.7 — 2026-11-16
+
+- Opening Sports no longer freezes briefly while it builds the first screen of game cards. Spare now builds them ahead of time while the app is idle, one per frame, and keeps them ready.
+
 ## 0.50.6 — 2026-11-16
 
 - New playlists allow HTTP links by default. Most IPTV providers send streams over plain HTTP, often by redirecting from an HTTPS address. Without this setting those streams failed with "HTTP 302", which looked like a broken channel. Turn it off in the playlist's settings if your provider uses HTTPS throughout. Existing playlists keep their setting.

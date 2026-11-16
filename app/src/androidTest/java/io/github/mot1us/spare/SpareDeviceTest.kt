@@ -2510,6 +2510,26 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsCardsAreBuiltAheadWhileSportsIsClosed() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Prewarm fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NFL")
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot((1..6).map { LiveEvent("warm-$it", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL") }, now, setOf("NFL")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<SportsPanel>("sports-panel").prewarmCards() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").recycledViewPool.getRecycledViewCount(0) >= 12 }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("NFL:warm-1")?.isShown == true }
+                scenario.onActivity { assertTrue("Opening Sports used the cards built ahead", it.window.decorView.findViewWithTag<RecyclerView>("sports-games").recycledViewPool.getRecycledViewCount(0) < 12) }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
