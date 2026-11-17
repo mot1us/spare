@@ -1628,6 +1628,41 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun googleTvStreamerChoosesSoftwareAvcBeforeTheFirstFrame() {
+        FixtureServer(tsMode = true, heldPlaylist = true, parallelClients = true).use { server ->
+            val source = Source(name = "Decoder fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    val activity = MainActivity::class.java
+                    val mode = activity.getDeclaredField("preferSoftwareAvc").apply { isAccessible = true }
+                    val decoder = activity.getDeclaredField("videoDecoderName").apply { isAccessible = true }
+                    val firstFrame = activity.getDeclaredField("firstFrame").apply { isAccessible = true }
+                    scenario.onActivity {
+                        activity.getDeclaredField("liveAvcDecoder").apply { isAccessible = true }.set(it, LiveAvcDecoder("kirkwood"))
+                        find<PlayerView>(it.window.decorView)!!.player!!.repeatMode = Player.REPEAT_MODE_ONE
+                    }
+                    server.finishPlaylist.countDown()
+                    waitFor(scenario) { firstFrame.getBoolean(it) }
+                    scenario.onActivity {
+                        assertTrue(mode.getBoolean(it))
+                        val name = decoder.get(it) as String
+                        assertTrue("Selected a software decoder before playback: $name",
+                            android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos.any { info ->
+                                info.name == name && info.isSoftwareOnly
+                            })
+                        assertEquals(0, activity.getDeclaredField("playbackReconnects").apply { isAccessible = true }.getInt(it))
+                        val initial = activity.getDeclaredField("current").apply { isAccessible = true }.get(it) as Channel
+                        activity.getDeclaredMethod("tune", Channel::class.java).apply { isAccessible = true }
+                            .invoke(it, initial.copy(url = "${server.base}/channel2.mp4"))
+                    }
+                    waitFor(scenario) { !mode.getBoolean(it) && firstFrame.getBoolean(it) }
+                    assertEquals("/channel2.mp4", playingPath(scenario))
+                }
+            } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun inlineSearchUsesNativeRecognitionAndKeepsFailedVoiceEditable() {
         assertTrue("Reset isolated voice fixture", device.executeShellCommand("run-as ${instrumentation.context.packageName} rm -f files/voice-first-result").isBlank())
         val previous = device.executeShellCommand("settings get secure voice_recognition_service").trim()
@@ -3956,7 +3991,11 @@ class SpareDeviceTest {
                     assertEquals(media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                 }
                 assertTrue("OK only checks saved titles", server.catalogTargets.isEmpty())
-                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, "Missing from the VOD fixture", false) }
+                scenario.onActivity {
+                    val root = it.window.decorView
+                    root.findViewWithTag<View>("search").performClick()
+                    root.findViewWithTag<EditText>("guide-search-input").setText("Missing from the VOD fixture")
+                }
                 waitFor(scenario) { server.catalogTargets.isNotEmpty() }
                 server.finishVodCatalog.countDown()
                 waitFor(scenario) { activity ->

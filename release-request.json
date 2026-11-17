@@ -1,11 +1,10 @@
 {
-  "versionName": "0.51.23",
-  "versionCode": 188,
+  "versionName": "0.51.24",
+  "versionCode": 189,
   "attempt": 1,
-  "tvSuite": "focused",
+  "tvSuite": "full",
   "tvTests": [
-    "idleBrowsingWarmsOnlyArtworkFromSavedCatalogs",
-    "nostalgiaSweepStopsWhenTheWaitIsHidden",
-    "sportsReplayFindsArchiveHidesScoresAndReturnsToTheGame"
+    "actualStreamStallUsesBufferingAndResumesWithoutReconnect",
+    "googleTvStreamerChoosesSoftwareAvcBeforeTheFirstFrame"
   ]
 }

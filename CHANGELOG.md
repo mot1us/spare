@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.24 — 2026-11-16
+
+- On Google TV Streamer, prefer a compatible software H.264 decoder when opening a live MPEG-TS channel to avoid the device's frozen-picture issue. Playback diagnostics show when this device policy applies.
+
 ## 0.51.23 — 2026-11-16
 
 - During steady live playback, Spare warms artwork from saved Library catalogs and a small set of today's Sports scoreboards and crests. Background warming pauses on input and buffering.

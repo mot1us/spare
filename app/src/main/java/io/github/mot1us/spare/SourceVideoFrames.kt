@@ -7,10 +7,12 @@ import androidx.media3.common.util.ThrowingRunnable
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.decoder.CryptoInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 
 /** Observes existing decoder input without reading payloads or creating another stream connection. */
 @UnstableApi
-class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory, private val token: () -> Int) : MediaCodecAdapter.Factory {
+class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory,
+    private val canRequestOperatingRate: (MediaCodecInfo) -> Boolean = { true }, private val token: () -> Int) : MediaCodecAdapter.Factory {
     @Volatile private var reading = -1 to 0f
     fun rate(epoch: Int): Float = reading.takeIf { it.first == epoch }?.second ?: 0f
 
@@ -19,7 +21,9 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory, private
         private set
 
     override fun createAdapter(configuration: MediaCodecAdapter.Configuration): MediaCodecAdapter {
-        if (MimeTypes.isVideo(configuration.format.sampleMimeType)) operatingRate = requestSpeed(configuration)
+        if (MimeTypes.isVideo(configuration.format.sampleMimeType)) {
+            operatingRate = if (canRequestOperatingRate(configuration.codecInfo)) requestSpeed(configuration) else 0f
+        }
         val adapter = delegate.createAdapter(configuration)
         return if (MimeTypes.isVideo(configuration.format.sampleMimeType)) wrapVideo(adapter) else adapter
     }
