@@ -437,7 +437,11 @@ class SecureStore(private val context: Context) {
         set(value) { preferences.edit { putBoolean("tunneling-failed", value) } }
     var frameRateMatching: Boolean
         get() = preferences.getBoolean("frame-rate-matching", true)
-        set(value) { preferences.edit { putBoolean("frame-rate-matching", value) } }
+        set(value) { preferences.edit { putBoolean("frame-rate-matching", value); if (value) putBoolean("frame-rate-matching-stalled", false) } }
+    /** Frame-rate matching was switched off because the picture kept stalling with video buffered (see [PresentationStalls]). */
+    var frameRateMatchingStalled: Boolean
+        get() = preferences.getBoolean("frame-rate-matching-stalled", false)
+        set(value) { preferences.edit { putBoolean("frame-rate-matching-stalled", value) } }
     var performanceOverlay: Boolean
         get() = preferences.getBoolean("performance-overlay", false)
         set(value) { preferences.edit { putBoolean("performance-overlay", value) } }

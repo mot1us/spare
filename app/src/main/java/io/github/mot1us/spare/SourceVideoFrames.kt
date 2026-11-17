@@ -7,12 +7,10 @@ import androidx.media3.common.util.ThrowingRunnable
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.decoder.CryptoInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
-import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 
 /** Observes existing decoder input without reading payloads or creating another stream connection. */
 @UnstableApi
-class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory,
-    private val canRequestOperatingRate: (MediaCodecInfo) -> Boolean = { true }, private val token: () -> Int) : MediaCodecAdapter.Factory {
+class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory, private val token: () -> Int) : MediaCodecAdapter.Factory {
     @Volatile private var reading = -1 to 0f
     fun rate(epoch: Int): Float = reading.takeIf { it.first == epoch }?.second ?: 0f
 
@@ -21,9 +19,7 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory,
         private set
 
     override fun createAdapter(configuration: MediaCodecAdapter.Configuration): MediaCodecAdapter {
-        if (MimeTypes.isVideo(configuration.format.sampleMimeType)) {
-            operatingRate = if (canRequestOperatingRate(configuration.codecInfo)) requestSpeed(configuration) else 0f
-        }
+        if (MimeTypes.isVideo(configuration.format.sampleMimeType)) operatingRate = requestSpeed(configuration)
         val adapter = delegate.createAdapter(configuration)
         return if (MimeTypes.isVideo(configuration.format.sampleMimeType)) wrapVideo(adapter) else adapter
     }
@@ -36,6 +32,9 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory,
     private fun requestSpeed(configuration: MediaCodecAdapter.Configuration): Float {
         val media = configuration.mediaFormat
         if (media.containsKey(MediaFormat.KEY_OPERATING_RATE)) return 0f
+        // Measured on Amlogic decoders (onn 4K Pro): without a target they ran at 30 for 59.94 fps channels and dropped frames.
+        // Other decoders keep Media3's own behaviour, as other players do; a MediaTek one (Google TV Streamer) gained nothing from it.
+        if (!amlogic(configuration.codecInfo.name)) return 0f
         val width = configuration.format.width.takeIf { it > 0 } ?: media.getIntegerOr(MediaFormat.KEY_WIDTH)
         val height = configuration.format.height.takeIf { it > 0 } ?: media.getIntegerOr(MediaFormat.KEY_HEIGHT)
         if (width <= 0 || height <= 0) return 0f
@@ -43,6 +42,7 @@ class SourceVideoFrames(private val delegate: MediaCodecAdapter.Factory,
         media.setFloat(MediaFormat.KEY_OPERATING_RATE, 60f)
         return 60f
     }
+    companion object { internal fun amlogic(decoder: String) = decoder.contains("amlogic", ignoreCase = true) }
     private fun MediaFormat.getIntegerOr(key: String) = if (containsKey(key)) runCatching { getInteger(key) }.getOrDefault(0) else 0
 
     internal fun wrapVideo(adapter: MediaCodecAdapter): MediaCodecAdapter {

@@ -8,8 +8,10 @@ import java.net.URI
 import java.util.zip.GZIPInputStream
 
 object Network {
-    /** Spare's own User-Agent, sent unless a playlist names its own for its servers. */
-    val defaultUserAgent get() = "Spare/${BuildConfig.VERSION_NAME}"
+    /**
+     * Without a playlist User-Agent, requests carry Android's own (as Just Player and IPVIO do). Some providers slowed
+     * streams for the unfamiliar "Spare/<version>": a Google TV Streamer stalled on channels TiviMate played smoothly.
+     */
     /** A playlist's User-Agent: printable ASCII only (no line breaks that could add headers), at most 200 characters. */
     fun userAgent(value: String): String = value.trim().takeIf { it.length <= 200 && it.all { c -> c in ' '..'~' } }.orEmpty()
     @Volatile private var agents: Map<String, String> = emptyMap()
@@ -20,7 +22,7 @@ object Network {
             listOf(source.url, source.backupUrl).filter { it.isNotBlank() }.mapNotNull(::origin).forEach { put(it, source.userAgent) }
         } }
     }
-    fun userAgentFor(url: String): String = origin(url)?.let(agents::get) ?: defaultUserAgent
+    fun userAgentFor(url: String): String? = origin(url)?.let(agents::get)
     /** Large downloads (playlists, guides) may run up to ten minutes of network time, as long as they never stall. */
     const val LARGE_DEADLINE_MS = 600_000L
     /** A large download must bring at least this much in each read-timeout window (20 s by default). */
@@ -72,7 +74,7 @@ object Network {
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = minOf(12000, timeoutMs)
                 connection.readTimeout = timeoutMs
-                connection.setRequestProperty("User-Agent", userAgentFor(destination))
+                userAgentFor(destination)?.let { connection.setRequestProperty("User-Agent", it) }
                 connection.setRequestProperty("Accept-Encoding", "gzip")
                 val status = connection.responseCode
                 if (status in listOf(301, 302, 303, 307, 308)) {

@@ -1,10 +1,6 @@
 {
-  "versionName": "0.51.24",
-  "versionCode": 189,
+  "versionName": "0.51.25",
+  "versionCode": 190,
   "attempt": 1,
-  "tvSuite": "full",
-  "tvTests": [
-    "actualStreamStallUsesBufferingAndResumesWithoutReconnect",
-    "googleTvStreamerChoosesSoftwareAvcBeforeTheFirstFrame"
-  ]
+  "tvSuite": "full"
 }

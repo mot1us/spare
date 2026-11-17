@@ -30,7 +30,6 @@ import androidx.core.net.toUri
 import androidx.core.view.isVisible
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -42,7 +41,6 @@ import androidx.media3.common.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
@@ -425,6 +423,17 @@ class MainActivity : Activity() {
         val wanted = store.tunneledPlayback && !multiview.active
         if (selector.parameters.tunnelingEnabled != wanted) selector.setParameters(selector.buildUponParameters().setTunnelingEnabled(wanted))
     }
+    private val presentationStalls = PresentationStalls()
+    /** The picture stalled twice with video buffered: switch off tunneled playback first, then frame-rate matching, for good on this box. */
+    private fun presentationStalled() {
+        when {
+            tunneled() -> { Diagnostics.hiccup("Tunneled playback switched off: the picture stalled with video buffered", player.totalBufferedDuration); tunnelingFailed() }
+            store.frameRateMatching -> {
+                Diagnostics.hiccup("Frame-rate matching switched off: the picture stalled with video buffered", player.totalBufferedDuration)
+                store.frameRateMatching = false; store.frameRateMatchingStalled = true; frameRates.enabled = false
+            }
+        }
+    }
     /** Tunneled playback did not start a stream on this TV: switch it off for good and try the stream again normally. */
     private fun tunnelingFailed(): Boolean {
         if (!tunneled()) return false
@@ -698,8 +707,6 @@ class MainActivity : Activity() {
     private var startupFailures = StartupFailures()
     private var reconnects = ReconnectBudget()
     private val playbackProgress = PlaybackProgress()
-    private val liveAvcDecoder = LiveAvcDecoder(Build.DEVICE)
-    @Volatile private var preferSoftwareAvc = false
     private val sportsRecovery = SportsBufferRecovery()
     @Volatile private var progressFrameToken = -1
     @Volatile private var progressFrameUs = Long.MIN_VALUE
@@ -809,22 +816,10 @@ class MainActivity : Activity() {
         providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true } else ProviderDataSource { playbackSource()?.allowHttp == true } }
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
         val loadControl = PlaybackLoadControl()
-        sourceVideoFrames = SourceVideoFrames(
-            androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this),
-            canRequestOperatingRate = { codec -> !preferSoftwareAvc || !codec.softwareOnly || codec.mimeType != MimeTypes.VIDEO_H264 },
-        ) { playbackToken }
+        sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
         val renderers = object : DefaultRenderersFactory(this) {
             override fun getCodecAdapterFactory() = sourceVideoFrames
-        }.setEnableDecoderFallback(true).setMediaCodecSelector { mime, secure, tunneling ->
-            val defaults = MediaCodecSelector.DEFAULT
-            if (preferSoftwareAvc && mime == MimeTypes.VIDEO_H264 && !secure) {
-                val decoders = defaults.getDecoderInfos(mime, false, false)
-                // Media3 queries tunneled support before choosing the actual video renderer configuration.
-                if (tunneling && decoders.any { it.softwareOnly }) emptyList()
-                else if (tunneling) defaults.getDecoderInfos(mime, false, true)
-                else liveAvcDecoder.preferSoftware(decoders) { it.softwareOnly }
-            } else defaults.getDecoderInfos(mime, secure, tunneling)
-        }
+        }.setEnableDecoderFallback(true)
         player = ExoPlayer.Builder(this, renderers).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
             .setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
@@ -936,6 +931,7 @@ class MainActivity : Activity() {
                 if (state == Player.STATE_BUFFERING && firstFrame && hasPlayedChannel && player.playWhenReady) {
                     playbackRebuffers++; journal(PlaybackJournal.Event.BUFFERING)
                     Diagnostics.hiccup("Stream stalled", player.totalBufferedDuration)
+                    if (onDemand == null && !multiview.active && presentationStalls.stalled(player.totalBufferedDuration, android.os.SystemClock.elapsedRealtime())) presentationStalled()
                     if (onDemand == null && !multiview.active) current?.let { streamHealth.problem(it.id, android.os.SystemClock.elapsedRealtime()) }
                 }
                 // Rebuffering only defers new Sports searches (prefetchSportsStream waits for READY).
@@ -1858,18 +1854,11 @@ class MainActivity : Activity() {
     private fun playAttempt(phase: PlaybackPhase = PlaybackPhase.OPENING) {
         if (playbackUrl.isBlank() || pausedPlayback != null) return
         cancelPlaybackCallbacks()
-        val uri = playbackUrl.toUri()
-        val preferSoftware = liveAvcDecoder.prefersSoftware(onDemand == null, uri.path)
-        if (preferSoftware != preferSoftwareAvc) {
-            preferSoftwareAvc = preferSoftware
-            // Do not reuse the previous channel's decoder when the selection policy changes.
-            if (player.currentMediaItem != null) player.stop()
-        }
         performanceOverlay?.attempt()
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         performanceOverlay?.sports?.playing?.attempt(expectedMediaId)
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
-        val itemBuilder = MediaItem.Builder().setUri(uri).setMediaId(expectedMediaId)
+        val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand?.kind in setOf("movie", "episode")) itemBuilder.setTag(PlaybackLoadControl.VOD)
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
@@ -3468,7 +3457,7 @@ class MainActivity : Activity() {
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${current?.let { videoInfo[it.id]?.evidence }.orEmpty()}"
         val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
         val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
-        val presentation = "Video · ${decoderLabel()}${if (preferSoftwareAvc && format?.sampleMimeType == MimeTypes.VIDEO_H264) " · Google TV Streamer compatibility" else ""} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
+        val presentation = "Video · ${decoderLabel()} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
         val audio = player.audioFormat
         return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(), presentation,
             audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())
@@ -3646,7 +3635,7 @@ class MainActivity : Activity() {
                     refresh("Tunneled playback")
                 }
                 listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels").forEach { label ->
-                    panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }
+                    panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else if (store.frameRateMatchingStalled) "Off · switched off after the picture kept stalling with it on" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }
                 }
                 panel.note("Live buffering adapts to available data. Sustained stalls reconnect automatically; OK offers other streams for recognized games.")
             }

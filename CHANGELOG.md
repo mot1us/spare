@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.51.25 — 2026-11-17
+
+- Playback on boxes other than the onn 4K Pro now follows what other open-source Android players (Just Player, IPVIO) do. A Google TV Streamer stalled on channels that TiviMate played smoothly on the same box; its report showed the stream running out of data while the hardware decoder was fine.
+- Requests to providers carry Android's own User-Agent instead of "Spare/<version>", which some providers treat as an unknown app. A User-Agent set on a playlist is still used for that playlist.
+- The video decoder is only asked to run at 60 fps on Amlogic decoders (the onn 4K Pro, where it was measured to help). Other boxes keep Media3's own decoder settings.
+- The Google TV Streamer is no longer switched to the software H.264 decoder (0.51.24). Its hardware decoder played with no dropped frames.
+- If the picture stalls twice within ten minutes while seconds of video are already buffered, Spare switches off tunneled playback, and on a later repeat frame-rate matching, for good on that box. Settings › Playback says when this happened; switching the option back on clears it. Stalls with an empty buffer (the provider or network) do not count.
+
 ## 0.51.24 — 2026-11-16
 
 - On Google TV Streamer, prefer a compatible software H.264 decoder when opening a live MPEG-TS channel to avoid the device's frozen-picture issue. Playback diagnostics show when this device policy applies.

@@ -25,8 +25,8 @@ class PlaylistOptionsTest {
         try {
             assertEquals("FixturePlayer/2.0", Network.userAgentFor("https://main.example.test:8443/live/user/secret/1.ts"))
             assertEquals("FixturePlayer/2.0", Network.userAgentFor("https://backup.example.test/player_api.php"))
-            assertEquals(Network.defaultUserAgent, Network.userAgentFor("https://other.example.test/live/1.ts"))
-            assertEquals("Another port is another server", Network.defaultUserAgent, Network.userAgentFor("https://main.example.test/live/1.ts"))
+            assertNull("Android's own User-Agent", Network.userAgentFor("https://other.example.test/live/1.ts"))
+            assertNull("Another port is another server", Network.userAgentFor("https://main.example.test/live/1.ts"))
         } finally { Network.useSources(emptyList()) }
     }
 
