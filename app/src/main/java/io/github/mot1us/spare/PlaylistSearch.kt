@@ -51,10 +51,6 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
             }
         }
     }
-    fun refresh(selected: Source, mode: String) {
-        prepare(selected)
-        synchronized(lock) { if (!closed) { ++context; cancelLoads(); failures.clear(); load(selected, mode, context, force = true) } }
-    }
     private val publish = Runnable {
         val value = synchronized(lock) {
             publishPending = false
@@ -110,20 +106,23 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
             }
         }
     }
-    private fun load(selected: Source, mode: String, token: Int, force: Boolean = false) {
+    private fun load(selected: Source, mode: String, token: Int) {
         failures.remove(mode)
         loading.add(mode)
         publish()
         loads[mode] = io.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
-                repository.load(selected, mode, force = force) { snapshot ->
+                fun accept(snapshot: LibraryCatalog.Snapshot) {
                     synchronized(lock) {
                         if (token == context && snapshot.count >= (catalogs[mode]?.count ?: 0)) {
                             catalogs[mode] = snapshot; if (active) read(); publish()
                         }
                     }
                 }
+                val saved = repository.cached(selected, mode)
+                if (saved?.complete == true && saved.count > 0) accept(saved)
+                else repository.load(selected, mode, progress = ::accept)
             } catch (_: Exception) { synchronized(lock) { if (token == context && !Thread.currentThread().isInterrupted) failures.add(mode) } }
             finally { synchronized(lock) {
                 if (token == context) {
@@ -134,8 +133,7 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
         }
     }
     private fun cancelLoads() { loads.values.forEach { it?.cancel(true) }; loads.clear(); loading.clear(); restoring = false; ++readEpoch; reading = false; readTask?.cancel(true) }
-    // Leaving the search surface must not throw away a nearly finished metadata-only import.
-    fun pause(cancel: Boolean = false) { synchronized(lock) {
+    fun pause(cancel: Boolean = true) { synchronized(lock) {
         active = false; ++readEpoch; reading = false; readTask?.cancel(true)
         if (cancel) { ++context; cancelLoads() }
         handler.removeCallbacks(publish); publishPending = false
@@ -182,12 +180,11 @@ class PlaylistSearch(private val store: SecureStore, private val repository: Lib
         val values = wanted(source).filter { it.kind == "xtream" }.map { session(it).engine.catalogStatus(it, kinds) }
         return CatalogStatus(values.any { it.checking }, values.isNotEmpty() && values.all { it.complete }, values.any { it.failed })
     }
-    fun refresh(source: Source, mode: String) { session(source).engine.refresh(source, mode) }
     fun search(source: Source, query: String, known: List<OnDemand>, kinds: Set<String> = setOf("movie", "series")) {
         active = false; val wanted = configure(source)
-        wanted.forEach { selected -> val state = session(selected); state.items = emptyList(); state.busy = query.isNotBlank(); state.engine.serialImports = wanted.size > 1; state.engine.prepare(selected); state.engine.search(selected, query, known.filter { it.playlistId.isBlank() && selected.id == source.id || it.playlistId == selected.id }, kinds) }
+        wanted.forEach { selected -> val state = session(selected); state.items = emptyList(); state.busy = query.isNotBlank(); state.engine.serialImports = true; state.engine.prepare(selected); state.engine.search(selected, query, known.filter { it.playlistId.isBlank() && selected.id == source.id || it.playlistId == selected.id }, kinds) }
         active = true; publish()
     }
-    fun pause(cancel: Boolean = false) { active = false; sessions.values.forEach { it.engine.pause(cancel) } }
+    fun pause(cancel: Boolean = true) { active = false; sessions.values.forEach { it.engine.pause(cancel) } }
     fun close() { pause(true); sessions.values.forEach { it.engine.close() }; sessions.clear(); io.shutdownNow(); reader.shutdownNow() }
 }

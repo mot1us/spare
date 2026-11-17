@@ -576,7 +576,14 @@ class SpareDeviceTest {
                     MainActivity::class.java.getDeclaredField("epgBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
                     MainActivity::class.java.getDeclaredMethod("pumpEpg").apply { isAccessible = true }.invoke(activity)
                 }
-                // Full screen, never visiting the guide: the last channel still gets programmes.
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:1"]?.isNotEmpty() == true
+                }
+                assertTrue("Fullscreen only requests the playing channel after the grace period", server.requestedEpgTargets.all { it.contains("stream_id=1&") || it.endsWith("stream_id=1") })
+                device.pressBack()
+                waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                // Once you're browsing, the guide fills out and saves its listings for the next visit.
                 waitFor(scenario) { activity ->
                     val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
                     guide.channels.all { channel -> guide.programmes[guide.key(channel)].orEmpty().isNotEmpty() }
@@ -5402,20 +5409,21 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
-                lateinit var library: LibraryController
-                scenario.onActivity { activity ->
-                    library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
-                    library.prewarm(source)
-                }
-                waitFor(scenario) { library.repository.memory(source, "movie")?.complete == true && library.repository.memory(source, "series")?.complete == true }
-                val before = server.catalogTargets.size
-                assertEquals("The whole movie catalog is requested once", 1, server.catalogTargets.count { it.contains("get_vod_streams") && !it.contains("category_id=") })
+                val libraryField = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }
+                fun catalogReady(activity: MainActivity, mode: String) =
+                    (libraryField.get(activity) as LibraryController).repository.memory(source, mode)?.complete == true
+                assertTrue("Live startup does not import either catalog", server.vodImportTargets.isEmpty())
                 device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                waitFor(scenario) { catalogReady(it, "movie") && it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                assertEquals("Movies downloads only Movies, once", listOf("movie"), server.vodImportTargets.toList())
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:series").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
-                assertEquals("Browsing imported categories asks the provider for nothing", before, server.catalogTargets.size)
+                waitFor(scenario) { catalogReady(it, "series") && it.window.decorView.findViewWithTag<View>("library-item:series:1")?.isShown == true }
+                assertEquals(listOf("movie", "series"), server.vodImportTargets.toList())
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-tab:movie").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:movie:101")?.isShown == true }
+                assertEquals("Returning to the imported catalog asks the provider for nothing", listOf("movie", "series"), server.vodImportTargets.toList())
+
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
@@ -5426,7 +5434,7 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
             // The whole catalog as a background import leaves it: three categories, with provider "added" times and ratings.
             val seeded = LibraryCatalog(store)
-            seeded.Writer(source, "movie").apply {
+            seeded.Writer(source, "movie", stamp = System.currentTimeMillis() - 48 * 3600000L).apply {
                 (1..240).map { n -> OnDemand("movie:${5000 + n}", "Home title $n", "Category ${1 + n % 3}", "${server.base}/movie/test/test-secret/${5000 + n}.mp4", "movie", poster = "${server.base}/logo.png", year = "2024", added = 1_700_000_000L + n, rating = (n % 10).toFloat()) }
                     .chunked(64).forEach(::append)
                 finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy"))
@@ -5447,7 +5455,7 @@ class SpareDeviceTest {
                     assertFalse("Rows use the full width; the category list belongs to the grid", root.findViewWithTag<View>("library-categories").isShown)
                     assertNull("Special rows have no See all tile", root.findViewWithTag<View>("library-shelf-more:recent"))
                 }
-                assertTrue("Rows come from the saved catalog, not the provider", server.catalogTargets.none { it.contains("get_vod_streams") })
+                assertTrue("Even an older saved catalog opens from disk without a provider import", server.vodImportTargets.isEmpty())
                 Thread.sleep(1200); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-home.png"))
                 // The main menu rests as icons and widens with labels over the screen when the cursor enters it.
                 scenario.onActivity { activity ->
@@ -5840,6 +5848,7 @@ class SpareDeviceTest {
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         val requestedEpgTargets = java.util.Collections.synchronizedList(mutableListOf<String>())
         val catalogTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val vodImportTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         private val shortEpg: ByteArray
         init {
             if (embeddedCaptions != 0) captionTransport // Build fixtures before starting HTTP, so generation errors fail directly.
@@ -5861,7 +5870,10 @@ class SpareDeviceTest {
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
                         if (target.contains("get_short_epg")) requestedEpgTargets.add(target)
-                        if (target.contains("get_vod_streams")) catalogTargets.add(target)
+                        if (target.contains("action=get_vod_streams")) {
+                            catalogTargets.add(target); vodImportTargets.add("movie")
+                        }
+                        if (target.contains("action=get_series&") || target.endsWith("action=get_series")) vodImportTargets.add("series")
                         if (target.contains("get_simple_data_table")) archiveRequests.incrementAndGet()
                         if (slowEpisodes && target.contains("get_series_info")) { episodesRequested.countDown(); finishEpisodes.await(12, java.util.concurrent.TimeUnit.SECONDS) }
                         if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {

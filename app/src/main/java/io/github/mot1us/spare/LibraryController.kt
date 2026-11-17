@@ -15,7 +15,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val sourceFor: (Channel) -> Source? = { channel -> if (channel.playlistId.isBlank()) source() else resolveSource(channel.playlistId) }) {
     private var playlist: String? = null
     private fun selectedSource(): Source? = playlist?.let(resolveSource) ?: if (playlist == null) source() else null
-    val currentSource get() = selectedSource()
     fun selectPlaylist(selected: Source?) { if (playlist != selected?.id) { task?.cancel(true); ++epoch; playlist = selected?.id; detailItem = null; parentSeries = null; favoriteSource = ""; shelfCategory = null } }
     private val handler = Handler(Looper.getMainLooper())
     private val worker = Executors.newFixedThreadPool(2)
@@ -46,7 +45,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private val catalogs = linkedMapOf<String, LibraryCatalog.Snapshot>()
     val repository = LibraryCatalog(store)
     var catalogChanged: (() -> Unit)? = null
-    var refreshCatalogs: ((String) -> Unit)? = null
     private val indexChanged = Runnable {
         if (!destroyed) {
             catalogChanged?.invoke()
@@ -207,7 +205,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         episodeList = entries; playSelected(item); return true
     }
     fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
-        warmTask?.cancel(true); warmTask = null
         spotTask?.cancel(true)
         if (!keepCategory || mode != kind) { shelfCategory = null; gridFromHome = false; homeSearch = false }
         // A hidden tab cannot keep a category download ahead of the selected tab.
@@ -246,8 +243,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
     @Volatile private var firstTitlesRecorded = false
     private fun catalog(selected: Source, mode: String, force: Boolean, focus: Boolean = false) {
         val root = "${selected.id}:$mode"; activeCatalog = root
-        // Never re-import while someone is browsing: only fetch here when there is no catalog at all.
-        if (wholeCatalog(selected, "movie") == null || wholeCatalog(selected, "series") == null) warm(selected, posters = false)
         openBegan = Timings.now(); firstTitlesRecorded = false
         Diagnostics.libraryOpened("Library chosen · $mode${if (wholeCatalog(selected, mode) != null) " · catalog already in memory" else ""}")
         val title = if (mode == "movie") "Movies" else "Series"
@@ -270,8 +265,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         request { token ->
             val names = categoriesFor(selected, mode, force)
             Timings.since("Category list", openBegan); Diagnostics.library("Category list read · ${names.size} categories")
-            // Joins the background import if it is already running; the rows home needs the whole catalog.
-            // A saved catalog of any age opens at once; it is refreshed in the background while Library is closed.
+            // Restore the selected tab before deciding whether it needs a download.
+            // Even an older complete catalog is usable until the viewer asks to refresh it.
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
             Diagnostics.library("Saved catalog ready")
@@ -394,44 +389,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }, { loadCatalogPage(null, activeQuery, true) }, if (wholeCatalog(selected, mode) != null) "Home" else "All categories", initialGroup = scope,
             picked = { next -> if (next == null) { shelfCategory = null; panel.clearCategorySelection(); if (wholeCatalog(selected, mode) != null) returnHome() else bulkCatalog(selected, mode, false) } else openCategory(selected, mode, root, names, next, focus = true) })
         if (focus) panel.requestContentFocus()
-    }
-    private val warming = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-warm") }
-    private var warmTask: java.util.concurrent.Future<*>? = null
-    /**
-     * Quietly prepare what Library opens to — the category list and the first ("Featured")
-     * category of Movies and Series — so the first visit reads saved pages instead of waiting
-     * on the provider. Skipped while Library is open; never touches the player.
-     */
-    fun prewarm(selected: Source) { if (!opened) warm(selected, posters = true) }
-    /** Import (or restore) the whole Movies and Series catalogs off-screen, so browsing reads memory instead of the provider. */
-    private fun warm(selected: Source, posters: Boolean) {
-        if (destroyed || selected.kind != "xtream" || !selected.enabled || warmTask?.isDone == false) return
-        warmTask = warming.submit {
-            for (mode in listOf("movie", "series")) {
-                if (Thread.currentThread().isInterrupted || destroyed) return@submit
-                val names = runCatching { categoriesFor(selected, mode, false) }.getOrDefault(emptyMap())
-                val began = Timings.now()
-                val saved = runCatching { repository.cached(selected, mode) }.getOrNull()?.takeIf { it.complete && it.count > 0 }
-                val stale = saved == null || saved.schema < LibraryCatalog.SCHEMA || System.currentTimeMillis() - saved.updated !in 0 until CATALOG_REFRESH_MS
-                // Re-downloading a large catalog competes with the stream being watched: live TV froze every half minute on a
-                // small TV. A usable catalog is refreshed only once Library has been opened; the first import still runs early.
-                if (saved == null || (stale && opened)) runCatching { repository.load(selected, mode, "", stale && saved != null, names) }.onSuccess { Timings.since(if (mode == "movie") "All movies" else "All series", began) }
-                val first = names.keys.firstOrNull() ?: continue
-                if (!posters || opened) continue
-                // Library opens on rows: decode the first screen of them (the special rows and the first categories) now.
-                wholeCatalog(selected, mode)?.let { full ->
-                    val urls = runCatching { repository.home(full, names, perRow = CatalogShelves.COLUMNS, special = CatalogShelves.COLUMNS).let { it.recent + it.top + it.categories.values.take(2).flatten() } }
-                        .getOrDefault(emptyList()).map { it.poster }.filter { it.isNotBlank() }.distinct().take(3 * CatalogShelves.COLUMNS)
-                    handler.post { if (!destroyed && !opened) panel.warmPosters(urls, selected.allowHttp) }
-                    continue
-                }
-                (repository.category(selected, mode, first, names) ?: runCatching { repository.load(selected, mode, first, false, names) }.getOrNull())?.let { snapshot ->
-                    // Decode the posters Library opens to now, so the first visit is not waiting on disk and network.
-                    val urls = runCatching { repository.query(snapshot, null, "", 0, 21).entries.map { it.poster }.filter { it.isNotBlank() } }.getOrDefault(emptyList())
-                    handler.post { if (!destroyed && !opened) panel.warmPosters(urls, selected.allowHttp) }
-                }
-            }
-        }
     }
     private fun scopedCatalog(selected: Source, mode: String, root: String, scope: String, names: Map<String, String>, query: String, force: Boolean) {
         val key = "$root:category:$scope"
@@ -831,7 +788,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         } else open(if (item?.kind == "episode") "series" else kind)
     }
     fun next(item: OnDemand) = playingEpisodes.indexOfFirst { it.id == item.id }.takeIf { it >= 0 }?.let { playingEpisodes.getOrNull(it + 1) }
-    fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind == "upnext" && parentSeries == null -> upNext(selected, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> { refreshCatalogs?.invoke(kind); catalog(selected, kind, true) }; else -> open(kind) } }
+    fun refresh() { val selected = selectedSource() ?: return; when { archive != null -> openCatchup(archive!!, directCatchup); parentSeries != null -> episodes(selected, parentSeries!!, force = true); kind == "favorites" -> { displayFavorites(); checkFavoriteEpisodes(selected, true) }; kind == "upnext" && parentSeries == null -> upNext(selected, force = true); kind in setOf("movie", "series") && selected.kind == "xtream" -> catalog(selected, kind, true); else -> open(kind) } }
     fun back() {
         when {
             directCatchup -> { directCatchup = false; dismiss(); (catchupClosed ?: closed).invoke() }
@@ -857,6 +814,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
-    fun destroy() { warmTask?.cancel(true); warming.shutdownNow(); spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { const val CATALOG_REFRESH_MS = 24 * 3600000L; const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    fun destroy() { spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

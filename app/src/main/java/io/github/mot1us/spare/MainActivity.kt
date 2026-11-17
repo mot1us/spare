@@ -102,15 +102,6 @@ class MainActivity : Activity() {
     private var epgSaveQuiet = false
     private fun cancelEpgSave() { handler.removeCallbacks(cacheEpg); epgSavePending = false }
     private val fetchBackgroundEpg = Runnable { pumpEpg() }
-    /**
-     * Prepare the Library catalog in the background, but only while the viewer is idle and not in Sports. On an onn 4K
-     * Pro this took up to half a minute of processor and slowed finding and starting a game, the reason Spare exists.
-     */
-    private val prewarmLibrary = object : Runnable { override fun run() {
-        if (!started || closed || !::library.isInitialized) return
-        if (sportsVisible || !bulkRefreshReady()) { handler.removeCallbacks(this); handler.postDelayed(this, 30000); return }
-        enabledSources().firstOrNull { it.kind == "xtream" }?.let(library::prewarm)
-    } }
     private var epgWanted = emptyList<Channel>()
     /** Rows needed on screen now; the rest of epgWanted is background read-ahead. */
     private var epgUrgent = 0
@@ -565,24 +556,50 @@ class MainActivity : Activity() {
     private val programmeIndexWorker = workers.pool("programme-index", background = true)
     private val programmeIndexBuilder = GuideProgrammeIndex.Builder()
     @Volatile private var programmeIndex: GuideProgrammeIndex? = null
-    private val programmeIndexUpdates = LatestTask<Guide>(programmeIndexWorker) { snapshot ->
-        val ready = programmeIndexBuilder.prepare(snapshot, System.currentTimeMillis())
-        handler.post {
-            if (!closed && ready.isFor(guide)) {
-                programmeIndex = ready
-                if (::searchPanel.isInitialized && searchPanel.isVisible && query.isNotBlank()) searchLivePlaylist()
+    private var programmeIndexTask: java.util.concurrent.Future<*>? = null
+    private var programmeIndexStartedAt: Long? = null
+    private val prepareProgrammeIndex = Runnable { buildProgrammeIndex() }
+
+    private fun scheduleProgrammeIndex() {
+        handler.removeCallbacks(prepareProgrammeIndex)
+        if (!started || !guideVisible || closed || guide.programmes.isEmpty() || programmeIndex?.isFor(guide) == true) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // A short EPG batch can arrive every fraction of a second. Do not rebuild the lineup for each one.
+        val next = programmeIndexStartedAt?.let { it + 30000 - now } ?: 0L
+        handler.postDelayed(prepareProgrammeIndex, maxOf(1800L, next))
+    }
+
+    private fun buildProgrammeIndex() {
+        if (!started || !guideVisible || closed || programmeIndex?.isFor(guide) == true) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastInputAt < 1200 || programmeIndexTask?.isDone == false) {
+            scheduleProgrammeIndex()
+            return
+        }
+        val snapshot = guide
+        programmeIndexStartedAt = now
+        programmeIndexTask = programmeIndexWorker.submit {
+            val ready = programmeIndexBuilder.prepare(snapshot, System.currentTimeMillis())
+            if (Thread.currentThread().isInterrupted) return@submit
+            handler.post {
+                if (started && guideVisible && !closed && ready.isFor(guide)) {
+                    programmeIndex = ready
+                    if (::searchPanel.isInitialized && searchPanel.isVisible && query.isNotBlank()) searchLivePlaylist()
+                }
             }
         }
     }
-    private val prepareProgrammeIndex = Runnable { if (!closed) programmeIndexUpdates.submit(guide) }
+
+    private fun pauseProgrammeIndex() {
+        handler.removeCallbacks(prepareProgrammeIndex)
+        if (programmeIndexTask?.cancel(true) == true) programmeIndexStartedAt = null
+        programmeIndexTask = null
+    }
     private var guide = Guide.EMPTY
         set(value) {
             val changed = field.channels !== value.channels || field.programmes !== value.programmes
             field = value
-            if (changed) {
-                handler.removeCallbacks(prepareProgrammeIndex)
-                handler.postDelayed(prepareProgrammeIndex, 150)
-            }
+            if (changed) scheduleProgrammeIndex()
         }
     private var channelIndex = GuideChannelIndex()
     private data class SidebarPlaylistShape(val id: String, val name: String, val groups: List<String>, val visible: Set<String>, val collapsed: Boolean, val loading: Boolean)
@@ -1164,7 +1181,6 @@ class MainActivity : Activity() {
         library.catchupClosed = ::returnToLiveChannel
         library.panel.globalSearch = ::searchWithQuery
         library.catalogChanged = { if (details.isVisible) refreshDetails() }
-        library.refreshCatalogs = { mode -> library.currentSource?.let { playlistSearch.refresh(it, mode) } }
         guidePanel.removeView(guideSearch)
         searchPanel = PlaylistSearchPanel(this, guideSearch, ::button, ::openNavigation).apply {
             backgroundContent = guidePanel
@@ -1371,8 +1387,9 @@ class MainActivity : Activity() {
             Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}")
             ensureSportsLeague()
             sportsPanel.loading("Finding live games…")
-        }
-        applyFilter(); showGuide(true)
+            showGuideSection()
+        } else applyFilter()
+        showGuide(true)
     }
     private fun moveTime(channel: Channel?, amount: Int) {
         channel ?: return
@@ -1710,7 +1727,6 @@ class MainActivity : Activity() {
                                     Timings.since("Saved guide", began)
                                     status.text = store.refreshError(selected).takeIf { it.isNotBlank() }?.let { "Using saved guide · $it" }.orEmpty()
                                     scheduleEpg(); autoRefresh(selected, true)
-                                    handler.removeCallbacks(prewarmLibrary); handler.postDelayed(prewarmLibrary, 45000)
                                 }
                             }
                         }
@@ -1908,12 +1924,8 @@ class MainActivity : Activity() {
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
     private fun collectVisibleEpg() {
-        if (!started || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
-        if (!guideVisible) { epgWanted = listOfNotNull(current); pumpEpg(); return }
-        if (sportsVisible && guideVisible) {
-            epgWanted = (listOfNotNull(current) + sportsChannels).distinctBy { guide.key(it) }.take(5)
-            pumpEpg(); return
-        }
+        if (!started || library.opened || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
+        if (!guideVisible || sportsVisible || searchPanel.isVisible) { pumpEpg(); return }
         val channels = adapter.channels
         val layout = list.layoutManager as LinearLayoutManager
         val first = if (guideVisible) layout.findFirstVisibleItemPosition().coerceAtLeast(0) else channels.indexOfFirst { it.id == current?.id }.coerceAtLeast(0)
@@ -1931,9 +1943,17 @@ class MainActivity : Activity() {
         pumpEpg()
     }
     private fun pumpEpg() {
-        if (closed || !started || onDemand != null || multiview.active) return
+        if (closed || !started || library.opened || onDemand != null || multiview.active) return
         val epoch = generation; val now = System.currentTimeMillis()
         if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
+        // Re-evaluate the visible screen after each completed request. A previous guide view must not keep filling rows behind another screen.
+        val readingGuide = guideVisible && !sportsVisible && !searchPanel.isVisible
+        val wanted = when {
+            readingGuide -> epgWanted
+            guideVisible && sportsVisible && sportsPanel.watching -> (listOfNotNull(current) + sportsChannels).distinctBy(guide::key).take(5)
+            else -> listOfNotNull(current)
+        }
+        val urgent = if (readingGuide) epgUrgent else wanted.size
         fun depth(channel: Channel) = if (sportsVisible && guideVisible) 4 else if (guideVisible && guideTimeline.ahead(channel.id)) 72 else 24
         fun needs(channel: Channel): Boolean {
             val selected = owner(channel) ?: return false
@@ -1945,11 +1965,14 @@ class MainActivity : Activity() {
         }
         while (epgActive < 3) {
             val readAhead = now >= epgAheadPausedUntil
-            val candidates = if (readAhead) epgWanted else epgWanted.take(epgUrgent.coerceAtLeast(1))
+            val candidates = if (readAhead) wanted else wanted.take(urgent.coerceAtLeast(1))
             val index = candidates.indexOfFirst { "$epoch:${it.id}" !in epgInFlight && needs(it) }
-            if (index < 0) { warmGuideInBackground(epoch, now); return }
+            if (index < 0) {
+                if (readingGuide) warmGuideInBackground(epoch, now)
+                return
+            }
             // Keep one worker free for rows the viewer can see right now.
-            if (index >= epgUrgent && epgActive >= 2) return
+            if (index >= urgent && epgActive >= 2) return
             val channel = candidates[index]
             val selected = owner(channel) ?: return
             startEpgRequest(channel, selected, depth(channel), epoch, now, background = false)
@@ -1963,11 +1986,10 @@ class MainActivity : Activity() {
      */
     private fun warmGuideInBackground(epoch: Int, now: Long) {
         if (epgActive > 0 || now < epgAheadPausedUntil || epgBackgroundRequests >= EPG_BACKGROUND_LIMIT) return
-        if (sportsVisible && guideVisible && now < sportsBackoffUntil) return
         // A game being matched to channels gets the provider to itself.
         if (sportsMatchTask?.isDone == false || sportsWarmActive.isNotEmpty()) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, 5000); return }
         // Let startup playback and the first visible rows settle before quiet background work.
-        val wait = epgBackgroundNotBefore - android.os.SystemClock.elapsedRealtime()
+        val wait = maxOf(epgBackgroundNotBefore, lastInputAt + 5000) - android.os.SystemClock.elapsedRealtime()
         if (wait > 0) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, wait); return }
         if (epgBackgroundFor !== guide.channels) {
             // Ranking thousands of channels is CPU work: build the order off the UI thread.
@@ -2092,18 +2114,24 @@ class MainActivity : Activity() {
         if (::guideTabs.isInitialized) { guideTabs.isVisible = !sportsVisible; allChannelsTab.isSelected = !localOnly; localTab.isSelected = localOnly; catchupTab.isVisible = hasCatchup(); localProgress.isVisible = localOnly && localLoading }
         if (localOnly && localLoading) filterInfo.text = "Finding local channels… · ${store.localLocation}"
         updateGroups()
-        if (::sportsPanel.isInitialized) {
-            if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
-            categoryColumn.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            sidebar.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            categoryHeading.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            sportsPanel.visibility = if (sportsVisible) View.VISIBLE else View.GONE
-            timeline.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            times.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            list.visibility = if (sportsVisible) View.GONE else View.VISIBLE
-            remoteHint.text = if (sportsVisible) "OK Watch    Hold OK More options    ↑ Filters    Hold Back Full screen"
-                else "OK Watch    Hold OK Favorite    ← Categories    → Later    Hold Back Full screen"
-            if (sportsVisible) { emptyInfo.visibility = View.GONE; scheduleSports() }
+        showGuideSection()
+    }
+    private fun showGuideSection() {
+        if (!::sportsPanel.isInitialized) return
+        if (guideVisible) navigationRail.activate(if (guideSearch.isVisible) "search" else if (sportsVisible) "sports-mode" else "guide-mode")
+        categoryColumn.isVisible = !sportsVisible
+        sidebar.isVisible = !sportsVisible
+        categoryHeading.isVisible = !sportsVisible
+        sportsPanel.isVisible = sportsVisible
+        timeline.isVisible = !sportsVisible
+        times.isVisible = !sportsVisible
+        list.isVisible = !sportsVisible
+        guideTabs.isVisible = !sportsVisible
+        remoteHint.text = if (sportsVisible) "OK Watch    Hold OK More options    ↑ Filters    Hold Back Full screen"
+            else "OK Watch    Hold OK Favorite    ← Categories    → Later    Hold Back Full screen"
+        if (sportsVisible) {
+            emptyInfo.visibility = View.GONE
+            scheduleSports()
         }
     }
     private fun updateGroups() {
@@ -2183,6 +2211,7 @@ class MainActivity : Activity() {
             sportsCoverageTask?.cancel(true)
         }
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) scheduleProgrammeIndex() else pauseProgrammeIndex()
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
         layoutGuideSurface()
@@ -4008,7 +4037,7 @@ class MainActivity : Activity() {
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
         else focusChannel()
     }
-    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.action("Spare came to the front"); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
+    override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.action("Spare came to the front"); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; scheduleProgrammeIndex(); if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }
     private var pausedPlayback: Boolean? = null
     override fun onResume() {
         super.onResume()
@@ -4034,6 +4063,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() {
+        pauseProgrammeIndex()
         handler.removeCallbacks(resumeSportsCoverage)
         sportsCoverageTask?.cancel(true)
         Diagnostics.action("Spare left the screen"); Diagnostics.stop(); Diagnostics.playback = null

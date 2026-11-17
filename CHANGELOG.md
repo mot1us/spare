@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.18 — 2026-11-16
+
+- Browse saved Movies and Series without refreshing either catalog in the background. On a first visit, only the selected tab imports. Search reuses saved catalogs, starts missing catalogs one at a time per playlist, and stops their downloads when closed.
+- Keep guide read-ahead and the whole-lineup guide fill on the Guide screen. Library starts no guide requests, and Sports browsing reads only the playing channel unless you open game coverage. The programme index rebuilds after the screen settles and at most every 30 seconds while guide data is changing.
+- Opening Sports no longer filters the hidden channel grid. Library limits concurrent poster downloads to two to reduce work alongside playback.
+
 ## 0.51.17 — 2026-11-16
 
 - Artwork retries in Library and Sports check only images still waiting to retry, in batches of four. Binding or laying out a poster no longer walks every tracked image on the screen thread.
