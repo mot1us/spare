@@ -141,6 +141,7 @@ class LibraryCatalog(private val store: SecureStore) {
      * categories. Every other category row reads its titles with [row] when it scrolls into view.
      */
     fun home(snapshot: Snapshot, names: Map<String, String>, perRow: Int = 20, special: Int = 40, eager: Int = 3): HomeRows {
+        val homeBegan = Timings.now()
         val index = indexOf(snapshot); val scope = snapshot.dbScope; val gen = snapshot.dbGen
         if (index == null || scope == null || gen == null) return HomeRows(emptyList(), emptyList(), emptyMap(), emptyMap())
         val counts = index.counts.mapKeys { it.key.removePrefix("Category ") }
@@ -151,11 +152,14 @@ class LibraryCatalog(private val store: SecureStore) {
         // A rating alone ranks obscure titles first on many providers; newer titles break ties.
         val top = (0 until index.size).filter { index.rating[it] > 0f }.sortedWith(compareByDescending<Int> { index.rating[it] }.thenByDescending { index.added[it] }).take(special)
         val positions = (recent + top + wanted.values.flatten()).distinct()
+        val pickedAt = Timings.now()
         val byId = store.catalogDb.titlesAt(scope, gen, positions)
+        Diagnostics.library("Rows picked in ${pickedAt - homeBegan} ms · ${byId.size} titles read in ${Timings.now() - pickedAt} ms")
         // titlesAt skips positions that are gone, so pair titles back to positions by reading them one list at a time.
         val byPos = if (byId.size == positions.size) positions.zip(byId).toMap() else positions.associateWith { store.catalogDb.titlesAt(scope, gen, listOf(it)).firstOrNull() }.filterValues { it != null }.mapValues { it.value!! }
         fun at(list: List<Int>) = items(snapshot, list.mapNotNull(byPos::get), names)
-        return HomeRows(at(recent), at(top), wanted.mapValues { at(it.value) }, counts)
+        val builtAt = Timings.now()
+        return HomeRows(at(recent), at(top), wanted.mapValues { at(it.value) }, counts).also { Diagnostics.library("Rows built in ${Timings.now() - builtAt} ms") }
     }
     /** The first titles of one category row of the whole catalog. */
     fun row(snapshot: Snapshot, scope: String, names: Map<String, String>, perRow: Int = 20): List<OnDemand> {
@@ -202,8 +206,13 @@ class LibraryCatalog(private val store: SecureStore) {
         }
         val wholeKey = store.catalogDb.scopeKey(source, mode, "")
         store.catalogDb.meta(wholeKey)?.let { meta ->
+            Diagnostics.library("$mode database opened in ${Timings.now() - restoreBegan} ms")
             if (meta.provider != source.providerKey()) return null
-            val index = store.read("${prefix}keys.enc")?.let { Index.read(it, meta.gen) } ?: rebuildIndex(wholeKey, meta.gen).also { runCatching { store.write("${prefix}keys.enc", it.bytes(meta.gen)) } }
+            val fileBegan = Timings.now(); val file = store.read("${prefix}keys.enc")
+            Diagnostics.library("$mode index file read in ${Timings.now() - fileBegan} ms · ${(file?.size ?: 0) / 1024} KB")
+            val parseBegan = Timings.now()
+            val index = file?.let { Index.read(it, meta.gen) }?.also { Diagnostics.library("$mode index parsed in ${Timings.now() - parseBegan} ms · ${it.size} titles") }
+                ?: rebuildIndex(wholeKey, meta.gen).also { Diagnostics.library("$mode index rebuilt from the database in ${Timings.now() - parseBegan} ms"); runCatching { store.write("${prefix}keys.enc", it.bytes(meta.gen)) } }
             indexes[indexKey(wholeKey, meta.gen)] = index
             return Snapshot(meta.updated, emptyList(), index.size, meta.labels, complete = meta.complete, source = source, dbScope = wholeKey, dbGen = meta.gen, whole = true)
                 .also { remember(prefix, it); Timings.since("Saved category", restoreBegan) }

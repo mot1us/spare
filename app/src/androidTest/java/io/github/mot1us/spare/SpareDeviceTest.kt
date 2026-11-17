@@ -5441,6 +5441,9 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val root = activity.window.decorView
                     assertNotNull(root.findViewWithTag<View>("library-shelf:recent")); assertNotNull(root.findViewWithTag<View>("library-shelf:top"))
+                    // The performance report traces the opening, so a slow first open on a real box can be explained.
+                    val report = Diagnostics.report()
+                    assertTrue("Library opening is traced: $report", "Last Library opening" in report && "Library chosen" in report && "Rows shown" in report && Regex("titles read in \\d+ ms").containsMatchIn(report))
                     assertFalse("Rows use the full width; the category list belongs to the grid", root.findViewWithTag<View>("library-categories").isShown)
                     assertNull("Special rows have no See all tile", root.findViewWithTag<View>("library-shelf-more:recent"))
                 }

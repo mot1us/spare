@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.16 — 2026-11-16
+
+- The performance report (Settings › About Spare) has a Last Library opening section: how long the saved catalog's database, index file and index took to read, how long the rows took to pick, read and build, and when they showed. A first Library open before the app has warmed it took about 6 s on an onn 4K Pro; this is to find which step that time goes to. Nothing about how Library loads has changed yet.
+
 ## 0.51.15 — 2026-11-16
 
 - Sports opens with its games in about a second instead of several. Measured on an onn 4K Pro with a 15,800-channel playlist, the saved schedule was ready 0.8 s after choosing Sports, but the cards waited 7 s: every time the cards were prepared, the app first read every channel's guide listing looking for live golf, tennis, racing and fights, which took 1.5 to 6.8 s there and ran four times in the first half minute. The games no longer wait for that reading. It runs once on its own, is reused for a minute, and those extra cards join the games when it finishes.

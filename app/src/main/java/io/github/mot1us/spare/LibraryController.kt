@@ -249,6 +249,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         // Never re-import while someone is browsing: only fetch here when there is no catalog at all.
         if (wholeCatalog(selected, "movie") == null || wholeCatalog(selected, "series") == null) warm(selected, posters = false)
         openBegan = Timings.now(); firstTitlesRecorded = false
+        Diagnostics.libraryOpened("Library chosen · $mode${if (wholeCatalog(selected, mode) != null) " · catalog already in memory" else ""}")
         val title = if (mode == "movie") "Movies" else "Series"
         fun proceed(names: Map<String, String>) {
             categoryNames[root] = names
@@ -268,11 +269,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
         panel.page(title, "Getting your library ready…", true)
         request { token ->
             val names = categoriesFor(selected, mode, force)
-            Timings.since("Category list", openBegan)
+            Timings.since("Category list", openBegan); Diagnostics.library("Category list read · ${names.size} categories")
             // Joins the background import if it is already running; the rows home needs the whole catalog.
             // A saved catalog of any age opens at once; it is refreshed in the background while Library is closed.
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
+            Diagnostics.library("Saved catalog ready")
             ui(token) { proceed(names) }
         }
     }
@@ -310,7 +312,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val title = if (mode == "movie") "Movies" else "Series"
         fun show(home: Home, personal: Map<String, Pair<String, CatalogShelves.Data>>) {
             homeToken = -1; pageTask?.cancel(true); ++pageEpoch
-            if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
+            if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan); Diagnostics.library("Rows shown") }
             panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
             panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, { id -> loadShelf(root, names, full, id) }, {}, { id -> when {
                     id == HOME_CONTINUE -> open("continue"); id == HOME_WATCHLIST -> open("favorites")
@@ -324,6 +326,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         request { token ->
             // Continue watching and Watchlist change with every visit: two small saved files, read each time the rows are shown.
             val personal = personalShelves(selected, mode)
+            Diagnostics.library("Continue watching and Watchlist read")
             if (ready != null) { ui(token) { show(ready, personal) }; return@request }
             val rows = repository.home(full, names)
             val shelves = linkedMapOf<String, String>(); val data = HashMap<String, CatalogShelves.Data>()
