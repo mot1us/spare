@@ -2407,7 +2407,7 @@ class SpareDeviceTest {
                     assertTrue("The game shows while later replies are still arriving, not after the last one (took $waited ms)", !finished.get() && waited < 4000)
                     // The performance report says what arrived when, so a slow open on a real box can be traced.
                     val report = Diagnostics.report()
-                    assertTrue("Sports opening is traced: $report", "Last Sports opening" in report && "Sports chosen" in report && "Scoreboard reply" in report && Regex("Prepared 1 games in \\d+ ms").containsMatchIn(report))
+                    assertTrue("Sports opening is traced: $report", "Last Sports opening" in report && "Sports chosen" in report && "Scoreboard reply" in report && "Guide read for other live sports" in report && Regex("Prepared 1 games in \\d+ ms").containsMatchIn(report))
                 }
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)

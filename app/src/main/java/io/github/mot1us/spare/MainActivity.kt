@@ -2445,6 +2445,9 @@ class MainActivity : Activity() {
         if (!sportsVisible || !guideVisible || closed) return
         if (!sportsRenderPending) { sportsRenderPending = true; handler.postDelayed(renderSports, 120) }
     }
+    private var sportsCoverageFound: Triple<Guide, Long, List<SportsCoverage>>? = null
+    private var sportsCoverageTask: java.util.concurrent.Future<*>? = null
+    private val sportsCoverageWorker = workers.pool("sports-coverage")
     private fun refreshSports() {
         if (!sportsVisible || !guideVisible || !started || closed || !store.sportsLeaguesChosen) return
         ensureSportsLeague()
@@ -2459,6 +2462,25 @@ class MainActivity : Activity() {
         val replaySnapshot = replayCache.toMap(); val selectedSourceId = source?.id
         val redZoneProfile = sportsStreamFilters(); val hidden = unavailable.snapshot()
         val now = System.currentTimeMillis()
+        // Golf, tennis, racing and fights come from reading every channel's guide listing, which takes seconds on a TV box.
+        // The games never wait for that: they use the last result for this guide, and a fresh one joins when it is ready.
+        val wantCoverage = selectedTeam == "live" && selectedLeague == null
+        val knownCoverage = sportsCoverageFound?.takeIf { it.first === snapshot }
+        if (wantCoverage && (knownCoverage == null || now - knownCoverage.second !in 0..SPORTS_COVERAGE_MS) && sportsCoverageTask?.isDone != false) {
+            sportsCoverageTask = sportsCoverageWorker.submit {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                val began = android.os.SystemClock.elapsedRealtime()
+                val found = runCatching { SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now } }.getOrNull() ?: return@submit
+                handler.post {
+                    if (closed || guide !== snapshot) return@post
+                    Diagnostics.sports("Guide read for other live sports in ${android.os.SystemClock.elapsedRealtime() - began} ms · ${found.size} found")
+                    val changed = sportsCoverageFound?.takeIf { it.first === snapshot }?.third != found
+                    sportsCoverageFound = Triple(snapshot, now, found)
+                    if (changed) scheduleSports()
+                }
+            }
+        }
+        val coverageFound = if (wantCoverage) knownCoverage?.third.orEmpty() else emptyList()
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
@@ -2468,10 +2490,7 @@ class MainActivity : Activity() {
             }
             val inLeague = rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) }
             // Live now also lists golf, tennis, racing and fights the guide marks as live (no scoreboard for those).
-            val coverage = if (selectedTeam == "live" && selectedLeague == null) runCatching {
-                SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now }
-                    .map { item -> item.copy(channels = item.channels.sortedWith(SportsStreams.preferenceComparator(redZoneProfile, qualitySnapshot))) }
-            }.getOrDefault(emptyList()) else emptyList()
+            val coverage = coverageFound.map { item -> item.copy(channels = item.channels.sortedWith(SportsStreams.preferenceComparator(redZoneProfile, qualitySnapshot))) }
             val games = SportsPanel.ordered(inLeague.filter { selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed } }, followed, now)
             val hiddenByTeams = inLeague.size - games.size
             handler.post {
@@ -4117,3 +4136,5 @@ private val SPORTS_SECTIONS = listOf("Preferences" to "Play on OK, my teams only
 private const val SPORTS_QUICK_RETRIES = 4
 private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L
+/** How long one reading of the guide for other live sports is used before it is read again. */
+private const val SPORTS_COVERAGE_MS = 60000L

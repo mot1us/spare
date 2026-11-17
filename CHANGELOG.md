@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.15 — 2026-11-16
+
+- Sports opens with its games in about a second instead of several. Measured on an onn 4K Pro with a 15,800-channel playlist, the saved schedule was ready 0.8 s after choosing Sports, but the cards waited 7 s: every time the cards were prepared, the app first read every channel's guide listing looking for live golf, tennis, racing and fights, which took 1.5 to 6.8 s there and ran four times in the first half minute. The games no longer wait for that reading. It runs once on its own, is reused for a minute, and those extra cards join the games when it finishes.
+- The Last Sports opening section of the performance report also says how long that guide reading took.
+
 ## 0.51.14 — 2026-11-16
 
 - Navigation animations (Settings › Theme › Advanced › Guide) no longer leave a ghost behind. With Fade in or Cross-fade, moving quickly through channels or categories could leave a row frozen part-way through its fade: a grey highlight on a row the cursor had left, or a row missing its background. The fade is now drawn by the clock, so a skipped frame shows the finished state instead of sticking.
