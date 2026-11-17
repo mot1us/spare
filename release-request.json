@@ -1,14 +1,11 @@
 {
-  "versionName": "0.51.22",
-  "versionCode": 187,
+  "versionName": "0.51.23",
+  "versionCode": 188,
   "attempt": 1,
   "tvSuite": "focused",
   "tvTests": [
-    "posterQueueKeepsTheNewestWorkInLeftToRightOrder",
-    "shelfPlaceholderStaysVisibleDuringPosterFade",
-    "instantMotionShowsNewPosterAtFullOpacity",
-    "inlineSearchUsesNativeRecognitionAndKeepsFailedVoiceEditable",
-    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive",
-    "libraryHomeShowsRowsFromTheImportedCatalogAndReturnsFromGridsAndSearch"
+    "idleBrowsingWarmsOnlyArtworkFromSavedCatalogs",
+    "nostalgiaSweepStopsWhenTheWaitIsHidden",
+    "sportsReplayFindsArchiveHidesScoresAndReturnsToTheGame"
   ]
 }

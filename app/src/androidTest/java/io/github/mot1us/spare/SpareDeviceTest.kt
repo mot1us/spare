@@ -560,6 +560,70 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun idleBrowsingWarmsOnlyArtworkFromSavedCatalogs() {
+        FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
+            val source = Source(name = "Idle Library", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.bindProvider(source)
+            val poster = "${server.base}/logo.png"
+            val reader = LibraryCatalog(store)
+            val worker = Executors.newSingleThreadExecutor()
+            var warmer: IdleBrowse? = null
+            try {
+                val entries = (1..24).map { OnDemand("movie:$it", "Saved title $it", "Test", "", "movie", poster = if (it <= 8) poster else "${server.base}/art-$it.png") }
+                reader.Writer(source, "movie").apply { append(entries); finish(emptyMap()) }
+                instrumentation.runOnMainSync { warmer = IdleBrowse(context, worker, reader) {} }
+                val until = android.os.SystemClock.uptimeMillis() + 10000
+                var ready = false
+                val files = posterFiles(context)
+                while (!ready && android.os.SystemClock.uptimeMillis() < until) {
+                    instrumentation.runOnMainSync { warmer?.step(source, emptyList()) }
+                    ready = files.saved(poster) != null
+                    if (!ready) Thread.sleep(50)
+                }
+                assertTrue("The poster is cached on disk before Library opens", ready)
+                assertEquals(1, server.requests["/logo.png"])
+                assertTrue("A cold idle pass reads only the first saved titles", server.requests.keys.none { it.startsWith("/art-") })
+                assertTrue("No provider catalog import", server.vodImportTargets.isEmpty())
+            } finally {
+                instrumentation.runOnMainSync { warmer?.pause() }
+                worker.shutdownNow(); reader.close(); store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun nostalgiaSweepStopsWhenTheWaitIsHidden() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            val accent = Color.GREEN
+            lateinit var bar: TuningBar
+            lateinit var sweep: android.graphics.drawable.Animatable
+            lateinit var standard: android.graphics.drawable.Drawable
+            scenario.onActivity { activity ->
+                bar = TuningBar(activity).apply { isIndeterminate = true; visibility = View.GONE }
+                standard = bar.indeterminateDrawable
+                bar.useNostalgia(true, accent)
+                sweep = bar.indeterminateDrawable as android.graphics.drawable.Animatable
+                assertNotSame(standard, sweep)
+                assertFalse(sweep.isRunning)
+                activity.addContentView(bar, android.widget.FrameLayout.LayoutParams(320, 14))
+                bar.visibility = View.VISIBLE
+            }
+            waitFor(scenario) { sweep.isRunning }
+            scenario.onActivity {
+                val bitmap = Bitmap.createBitmap(320, 14, Bitmap.Config.ARGB_8888)
+                try {
+                    bar.draw(Canvas(bitmap))
+                    assertTrue("The CRT sweep draws accent-colored pixels", (0 until 320).any { x -> Color.green(bitmap.getPixel(x, 7)) > 0 })
+                } finally { bitmap.recycle() }
+                bar.visibility = View.GONE
+            }
+            waitFor(scenario) { !sweep.isRunning }
+            scenario.onActivity {
+                bar.useNostalgia(false, accent)
+                assertSame(standard, bar.indeterminateDrawable)
+            }
+        }
+    }
+
     @Test fun backgroundGuideFillCoversUnvisitedChannelsOnceAndSavesThem() {
         FixtureServer(channelCount = 40, longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Background guide", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

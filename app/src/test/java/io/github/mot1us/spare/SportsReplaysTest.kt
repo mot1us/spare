@@ -22,6 +22,22 @@ class SportsReplaysTest {
         assertTrue(item.url.contains("/timeshift/user/pass/120/")); assertFalse(item.url.contains("/live/"))
         assertEquals(correct.start + 2 * 86400000L, replay.expires)
     }
+    @Test fun adjacentListingsExtendTheSameGameAndKeepTheArchivePlaylist() {
+        val archive = channel.copy(playlistId = "second")
+        val first = listing(end = game.start + 77 * 60000)
+        val second = listing(start = first.end, end = game.end, title = first.title + " (Part 2)")
+        val otherGame = listing(start = second.end, end = now, title = "NFL: Rams vs Saints")
+        val replay = SportsReplays.find(game, Guide(listOf(archive), mapOf(archive.id to listOf(first, second, otherGame))), now).single()
+        assertEquals(game.end, replay.programme.end)
+        assertEquals(replay, SportsReplays.rank(listOf(SportsReplay(archive, first), replay)).single())
+        assertEquals(replay, SportsReplays.extend(game, SportsReplay(archive, first), listOf(first, second), now))
+        val item = replay.item(game, false, now)!!
+        assertEquals("second", item.playlistId)
+        assertTrue(item.url.contains("/timeshift/user/pass/120/"))
+        val separated = second.copy(start = first.end + 30 * 60000)
+        assertEquals(first, SportsReplays.extend(game, SportsReplay(archive, first), listOf(first, separated), now).programme)
+    }
+
     @Test fun lowerQualityArchiveIsAvailableEvenWhenTheBestLiveVariantHasNoCatchup() {
         val liveOnly = channel.copy(id = "4k-live", catchupDays = 0, reportedQuality = VideoInfo(3840, 2160, 60f))
         val archive = channel.copy(id = "hd-archive", reportedQuality = VideoInfo(1280, 720, 30f))

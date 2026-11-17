@@ -165,6 +165,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
                 choice("Guide video", { if (store.smallPreview) "Small preview" else "Background video" }, { _ -> store.smallPreview = !store.smallPreview })
                 choice("Navigation animation", { store.navigationAnimation }, { step -> store.navigationAnimation = cycle(Motion.styles, store.navigationAnimation, step); Motion.use(store.navigationAnimation, store.navigationSpeed) })
                 choice("Animation speed", { if (store.navigationAnimation == "Instant") "No animation" else store.navigationSpeed }, { step -> store.navigationSpeed = cycle(Motion.speeds, store.navigationSpeed, step); Motion.use(store.navigationAnimation, store.navigationSpeed) })
+                choice("Loading animation", { if (store.nostalgiaLoading) "Nostalgia" else "Standard" }, { store.nostalgiaLoading = !store.nostalgiaLoading })
             }
         }
         refreshPreview()
@@ -265,7 +266,7 @@ class ThemeEditor(context: Context, private val store: SecureStore, private val 
         store.themeStyle = "Glass"; store.font = "Default"
         store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1
         store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.guideOpacity = -1; store.smallPreview = false
-        store.navigationAnimation = Motion.styles.first(); store.navigationSpeed = "Normal"; Motion.use(store.navigationAnimation, store.navigationSpeed)
+        store.nostalgiaLoading = false; store.navigationAnimation = Motion.styles.first(); store.navigationSpeed = "Normal"; Motion.use(store.navigationAnimation, store.navigationSpeed)
     }
     fun refreshPreview() {
         modes.forEach { (name, view) ->

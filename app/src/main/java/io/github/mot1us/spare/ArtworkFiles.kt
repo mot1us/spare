@@ -11,17 +11,22 @@ class ArtworkFiles(context: Context) : ImageFiles {
     override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
         require(Network.allowed(url, false))
         val key = Channel.stableId(url); val file = File(directory, "$key.img")
-        return synchronized(locks[(key.hashCode() and Int.MAX_VALUE) % locks.size]) {
-            val now = System.currentTimeMillis()
+        val lock = locks[(key.hashCode() and Int.MAX_VALUE) % locks.size]
+        val now = System.currentTimeMillis()
+        synchronized(lock) {
             if (file.exists() && file.length() in 1..2097152 && now - file.lastModified() in 0..14 * 86400000L) {
-                runCatching { file.readBytes() }.getOrNull()?.takeIf(::valid)?.let { file.setLastModified(now); return@synchronized it }
+                runCatching { file.readBytes() }.getOrNull()?.takeIf(::valid)?.let { file.setLastModified(now); return it }
             }
-            val atomic = AtomicFile(file); atomic.delete()
-            val bytes = fetch(); require(valid(bytes))
+        }
+        // An idle download must never hold a shared picture lock as the Sports page opens.
+        val bytes = fetch(); require(valid(bytes))
+        synchronized(lock) {
+            val atomic = AtomicFile(file)
             val output = atomic.startWrite()
             try { output.write(bytes); atomic.finishWrite(output) } catch (e: Exception) { atomic.failWrite(output); throw e }
-            trim(now); bytes
         }
+        trim(now)
+        return bytes
     }
     private fun valid(bytes: ByteArray): Boolean {
         if (bytes.size !in 1..2097152) return false

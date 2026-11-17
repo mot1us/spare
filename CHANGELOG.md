@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.23 — 2026-11-16
+
+- During steady live playback, Spare warms artwork from saved Library catalogs and a small set of today's Sports scoreboards and crests. Background warming pauses on input and buffering.
+- Choose a Nostalgia loading animation for foreground waits in Theme settings.
+- Sports replays combine adjacent archived listings for the same game and use the playlist that owns the archive feed.
+
 ## 0.51.22 — 2026-11-16
 
 - Library starts poster requests in shelf order and drops old requests if the queue fills.

@@ -19,7 +19,6 @@ import androidx.core.view.isVisible
 import androidx.leanback.widget.BaseGridView
 import androidx.leanback.widget.VerticalGridView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
@@ -67,7 +66,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val hero = FrameLayout(context)
     /** The page's name and state ("Fixture cinema · 80 titles") between the banner and the titles. */
     private val titleLine = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; tag = "library-title-line" }
-    private val loading = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
+    private var nostalgiaLoading = false
+    private val loading = TuningBar(context).apply { isIndeterminate = true; visibility = GONE; tag = "library-loading" }
     var globalSearch: ((String) -> Unit)? = null
     // The search box only shows while it holds text, or as the archive filter; the tab line's search icon opens Search.
     private val search = EditText(context).apply { hint = "Search archived channels and programmes"; visibility = GONE; textSize = 13f; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); isSingleLine = true; tag = "library-search"; typeface = AppFont.face(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH; showSoftInputOnFocus = false }
@@ -316,7 +316,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         layoutParams = RecyclerView.LayoutParams(-1, dp(height)).apply { bottomMargin = dp(5) }
         setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pending = null } }
     }
-    fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.isVisible = busy && archive }
+    fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.isVisible = busy && (archive || nostalgiaLoading && shownRows.isEmpty() && !shelvesShown && !detailPane.isVisible) }
     fun confirmation(value: String) { message.text = value; message.announceForAccessibility(value) }
     @SuppressLint("NotifyDataSetChanged")
     fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true, initialGroup: String? = null, allTitle: String = "All") {
@@ -499,7 +499,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
     }
     fun hideKeyboard() { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0) }
-    fun appearance(opacity: Int = -1) {
+    fun appearance(opacity: Int = -1, nostalgia: Boolean = false) {
+        nostalgiaLoading = nostalgia
+        if (!archive && !nostalgia) loading.isVisible = false
+        loading.useNostalgia(nostalgia, GuideTheme.current.accent)
         background = GuideTheme.guideBackground(opacity); AppFont.apply(this)
         search.background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000); search.setPadding(dp(12), 0, dp(12), 0); search.setTextColor(GuideTheme.ink())
         heading.textSize = 15f * GuideTheme.textScale; message.textSize = 11f * GuideTheme.textScale; search.textSize = 13f * GuideTheme.textScale

@@ -145,6 +145,15 @@ class LibraryCatalog(private val store: SecureStore) {
     private val missing = java.util.concurrent.ConcurrentHashMap<String, Long>()
     var changed: (() -> Unit)? = null
     fun memory(source: Source, mode: String): Snapshot? = synchronized(snapshots) { snapshots[prefix(source, mode)]?.takeIf { it.source == source } }
+    /** Bounded artwork seed from a saved catalog. A cold start reads a handful of records, without restoring the index. */
+    internal fun idlePosters(source: Source, mode: String): List<String> {
+        val scope = store.catalogDb.scopeKey(source, mode, "")
+        val meta = store.catalogDb.meta(scope)?.takeIf { it.complete && it.provider == source.providerKey() } ?: return emptyList()
+        val ranks = indexes[indexKey(scope, meta.gen)]?.homeRanks(8)
+        val seed = if (ranks != null) store.catalogDb.titlesAt(scope, meta.gen, (ranks.first + ranks.second).distinct()) else emptyList()
+        return (seed + store.catalogDb.titles(scope, meta.gen, 0, 8)).asSequence()
+            .map { it.poster }.filter { it.isNotBlank() }.map(PosterUrls::sized).distinct().take(16).toList()
+    }
     /** One category of the whole catalog: no provider request, and its titles are read from the database a page at a time. */
     fun category(source: Source, mode: String, scope: String, names: Map<String, String>): Snapshot? {
         val full = memory(source, mode)?.takeIf { it.complete && it.whole } ?: return null

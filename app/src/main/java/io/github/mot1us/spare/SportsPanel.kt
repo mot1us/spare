@@ -12,7 +12,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.DiffUtil
@@ -140,7 +139,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         reminder.isEnabled = game.state == "pre"
         reminder.text = if (hasReminder(game)) "Reminder set ✓" else "Remind me"
     }
-    private val progress = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true; tag = "sports-loading"; visibility = INVISIBLE }
+    private var nostalgiaLoading = false
+    private val progress = TuningBar(context).apply { isIndeterminate = true; tag = "sports-loading"; visibility = INVISIBLE }
     private val headerTitle = label(13f).apply { typeface = AppFont.face(true); text = "Sports" }
     private val contextLine = label(10f).apply { tag = "sports-context"; setTextColor(Color.LTGRAY); maxLines = 1 }
     private val streamsHeader = LinearLayout(context).apply { tag = "sports-stream-header"; gravity = Gravity.CENTER_VERTICAL; visibility = GONE }
@@ -708,9 +708,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (skeleton.isVisible) return
         removeCallbacks(revealSkeleton); postDelayed(revealSkeleton, SKELETON_DELAY_MS)
     }
+    fun nostalgiaLoading(enabled: Boolean) {
+        nostalgiaLoading = enabled
+        progress.useNostalgia(enabled && skeleton.isVisible, GuideTheme.current.accent)
+    }
     private fun showSkeletonNow() {
         scrollHint.visibility = INVISIBLE; Diagnostics.sports("Placeholders shown")
-        skeleton.isVisible = true; heroSkeleton.isVisible = true; rows.visibility = INVISIBLE; gridArea.isVisible = true
+        skeleton.isVisible = true; progress.useNostalgia(nostalgiaLoading, GuideTheme.current.accent); heroSkeleton.isVisible = true; rows.visibility = INVISIBLE; gridArea.isVisible = true
         heroContent.visibility = INVISIBLE; crests.visibility = INVISIBLE; backdrop.visibility = INVISIBLE; credit.visibility = INVISIBLE
         empty.text = "Loading Sports…"; empty.isVisible = true
     }
@@ -718,7 +722,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         removeCallbacks(revealSkeleton)
         if (skeleton.visibility != VISIBLE) return
         Diagnostics.sports("Cards shown · ${games.size} games")
-        skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
+        skeleton.visibility = GONE; progress.useNostalgia(false, GuideTheme.current.accent); heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
         val duration = Motion.panel
         heroContent.animate().cancel()

@@ -98,6 +98,14 @@ object SportsSchedule {
         } finally { pool.shutdownNow() }
         return LiveSportsSnapshot(events.values.toList(), now, leagues)
     }
+    /** One scoreboard for idle preloading, shared with the normal Sports scoreboard cache. */
+    internal fun warmToday(leagueId: String, now: Long, get: (String) -> String = ::fetch): LiveSportsSnapshot {
+        val league = SportsLeagues.byId[leagueId] ?: return LiveSportsSnapshot.EMPTY
+        val day = Instant.ofEpochMilli(now).atZone(ZoneId.of("America/New_York")).toLocalDate()
+        val url = league.scoreboards(day).firstOrNull() ?: return LiveSportsSnapshot.EMPTY
+        val events = scoreboard(leagueId, url, now, get)
+        return LiveSportsSnapshot(events, boardCache[url]?.first ?: now, setOf(leagueId))
+    }
     /** Multiple endpoints can describe the same game. Arrival order is not freshness. */
     internal fun preferEvent(previous: LiveEvent?, previousChecked: Long, incoming: LiveEvent, incomingChecked: Long): Boolean {
         if (previous == null) return true

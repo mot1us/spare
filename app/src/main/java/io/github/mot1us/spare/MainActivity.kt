@@ -174,6 +174,17 @@ class MainActivity : Activity() {
         if (now - lastInputAt < 3000) return false
         return current == null || playbackWarmup.ready(playbackToken, now, started && firstFrame && player.isPlaying, player.totalBufferedDuration, 30000, 15000, 60000)
     }
+    private fun warmBrowseWhileIdle() {
+        if (!started || current == null || !firstFrame || !player.isPlaying || player.totalBufferedDuration < 5000 ||
+            guideVisible || details.isVisible || demandControls.isVisible || scoreStrip.isVisible || settingsPanel?.opened == true ||
+            playbackLoading.isVisible || loadingPanel.isVisible || enabledSources().any { PlaylistRefresh.running(it.id) } ||
+            !bulkRefreshReady()) {
+            idleBrowse.pause()
+            return
+        }
+        val selected = sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source
+        idleBrowse.step(selected, if (store.sportsLeaguesChosen) store.sportsLeagues.sorted() else emptyList())
+    }
     private fun updateRefreshIndicator() { if (::refreshBar.isInitialized) refreshBar.isVisible = guide.channels.isEmpty() && (playlistLoading.isNotEmpty() || enabledSources().any { PlaylistRefresh.running(it.id) }) }
 
     private val ownRefreshes = mutableSetOf<Source>()
@@ -195,6 +206,7 @@ class MainActivity : Activity() {
                 if (busy && guide.channels.isEmpty()) { loadingPanel.visibility = View.VISIBLE; loadingText.text = PlaylistRefresh.stage(selected.id) }
                 if (!busy && started && System.currentTimeMillis() >= refreshRetryAt) autoRefresh(selected, false)
             }
+            warmBrowseWhileIdle()
             handler.postDelayed(this, 1000)
         }
     }
@@ -366,6 +378,7 @@ class MainActivity : Activity() {
     }
 
     private val pollLiveSports = Runnable { if (started && (sportsVisible && guideVisible || ::scoreStrip.isInitialized && scoreStrip.isVisible)) { checkLiveSports(); scheduleSports() } }
+    private lateinit var idleBrowse: IdleBrowse
     private lateinit var library: LibraryController
     private lateinit var libraryButton: Button
     private lateinit var demandControls: OnDemandControls
@@ -466,8 +479,8 @@ class MainActivity : Activity() {
     private lateinit var emptyInfo: TextView
     private lateinit var loadingPanel: LinearLayout
     private lateinit var loadingText: TextView
-    private lateinit var loadingBar: ProgressBar
-    private lateinit var playbackLoading: ProgressBar
+    private lateinit var loadingBar: TuningBar
+    private lateinit var playbackLoading: TuningBar
     private lateinit var voiceInput: NativeVoiceInput
     private var voiceVolume = 1f
     private var voiceDucked = false
@@ -912,7 +925,7 @@ class MainActivity : Activity() {
                 // Rebuffering only defers new Sports searches (prefetchSportsStream waits for READY).
                 // Cancelling the one in flight restarted it on every stall, so slow devices never
                 // finished matching a game.
-                if (state == Player.STATE_BUFFERING) playbackWarmup.reset()
+                if (state == Player.STATE_BUFFERING) { playbackWarmup.reset(); idleBrowse.pause() }
                 if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
                 syncPlaybackMonitoring(); syncReplayDiscovery()
                 if (state == Player.STATE_ENDED && started && onDemand != null) { saveDemandProgress(ended = true); showDemandControls() }
@@ -1170,14 +1183,14 @@ class MainActivity : Activity() {
         root.addView(reminderBanner, FrameLayout.LayoutParams(dp(420), -2, Gravity.BOTTOM or Gravity.END).apply { marginEnd = dp(24); bottomMargin = dp(24) })
         gameWatchPanel = GameWatchPanel(this, ::button, ::cancelReminderWatch)
         root.addView(gameWatchPanel, FrameLayout.LayoutParams(-1, -1))
-        playbackLoading = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+        playbackLoading = TuningBar(this).apply {
             isIndeterminate = true; visibility = View.GONE; tag = "playback-status"
             indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
         }
         root.addView(playbackLoading, FrameLayout.LayoutParams(-1, dp(3), Gravity.BOTTOM))
         loadingPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10)); setBackgroundColor(0xF20B1018.toInt()); visibility = View.GONE; tag = "import-progress" }
         loadingText = text("Loading playlist…", 11f); loadingPanel.addView(loadingText)
-        loadingBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100; isIndeterminate = true }; loadingPanel.addView(loadingBar, LinearLayout.LayoutParams(-1, dp(10)))
+        loadingBar = TuningBar(this).apply { max = 100; isIndeterminate = true }; loadingPanel.addView(loadingBar, LinearLayout.LayoutParams(-1, dp(10)))
         root.addView(loadingPanel, FrameLayout.LayoutParams(dp(300), -2, Gravity.BOTTOM or Gravity.END).apply { marginEnd = dp(20); bottomMargin = dp(16) })
         retryPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(20), dp(24), dp(20)); setBackgroundColor(0xF20B1018.toInt()); visibility = View.GONE }
         playbackError = text("", 14f); retryPanel.addView(playbackError, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
@@ -1201,6 +1214,11 @@ class MainActivity : Activity() {
         library = LibraryController(this, store, ::button, { sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source }, { guide }, ::playOnDemand, ::closeLibrary, { id -> sources.firstOrNull { it.id == id && it.enabled } }, { channel -> owner(channel) })
         library.panel.navigation = { ++focusEpoch; (if (library.browsingCatchup) guideMode else libraryButton).requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
+        idleBrowse = IdleBrowse(this, workers.pool("idle-browse", background = true), library.repository) { scores ->
+            if (liveSportsDay == null && !liveSportsChecking && (scores.checked >= liveSports.checked || scores.leagues.any { it !in liveSports.leagues })) {
+                liveSports = liveSports.mergeRefresh(scores)
+            }
+        }
         library.panel.globalSearch = ::searchWithQuery
         library.catalogChanged = { if (details.isVisible) refreshDetails() }
         guidePanel.removeView(guideSearch)
@@ -2994,9 +3012,11 @@ class MainActivity : Activity() {
         val selected = owner(replay.channel) ?: return
         val game = selectedGame?.takeIf { it.state == "post" } ?: return
         if (guide.channels.none { it.id == replay.channel.id && it.url == replay.channel.url }) { toast("Playlist changed · find this replay again"); return }
-        val item = replay.item(game, selected.allowHttp, System.currentTimeMillis()) ?: run { toast("This replay has expired or is unavailable"); findSportsReplay(game); return }
+        val now = System.currentTimeMillis()
+        val window = SportsReplays.extend(game, replay, guide.programmes[guide.key(replay.channel)].orEmpty(), now)
+        val item = window.item(game, selected.allowHttp, now) ?: run { toast("This replay has expired or is unavailable"); findSportsReplay(game); return }
         if (::multiview.isInitialized) multiview.close()
-        library.dismiss(); playOnDemand(item, 0); sportsReplayGame = game
+        library.dismiss(); playOnDemand(item.copy(playlistId = selected.id), 0); sportsReplayGame = game
     }
     private fun returnToSportsReplay() {
         if (sportsReplayGame == null) return
@@ -3853,7 +3873,14 @@ class MainActivity : Activity() {
             else if (view.tag?.toString()?.startsWith("settings-option:") == true) view.background = GuideTheme.background(resources.displayMetrics.density, 0x66323D4B)
             if (view is ViewGroup && view !is RecyclerView) for (i in 0 until view.childCount) visit(view.getChildAt(i))
         }
-        visit(root); navigationRail.appearance(); AppFont.apply(root); if (::library.isInitialized) library.panel.appearance(store.guideOpacity); playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(GuideTheme.current.accent)
+        visit(root); navigationRail.appearance(); AppFont.apply(root)
+        val nostalgia = store.nostalgiaLoading
+        val accent = GuideTheme.current.accent
+        if (::library.isInitialized) library.panel.appearance(store.guideOpacity, nostalgia)
+        playbackLoading.indeterminateTintList = android.content.res.ColorStateList.valueOf(accent)
+        playbackLoading.useNostalgia(nostalgia, accent)
+        loadingBar.useNostalgia(nostalgia, accent)
+        sportsPanel.nostalgiaLoading(nostalgia)
         settingsPanel?.background = GuideTheme.guideBackground(store.guideOpacity)
         sportsManager?.background = GuideTheme.guideBackground(store.guideOpacity)
         sportsCalendar?.background = GuideTheme.guideBackground(store.guideOpacity)
@@ -3905,7 +3932,10 @@ class MainActivity : Activity() {
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN) lastInputAt = android.os.SystemClock.elapsedRealtime()
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            lastInputAt = android.os.SystemClock.elapsedRealtime()
+            if (::idleBrowse.isInitialized) idleBrowse.pause()
+        }
         Diagnostics.key(event)
         onboarding?.takeIf { it.opened }?.let { panel ->
             // Loading the new playlist must not pull the remote out of setup: put it back, and let the press carry on from there.
@@ -4088,6 +4118,7 @@ class MainActivity : Activity() {
         onboarding?.resume()
     }
     override fun onPause() {
+        idleBrowse.pause()
         onboarding?.pause()
         if (::updater.isInitialized) updater.pause()
         // Stop audio before any cache, image or lifecycle cleanup. A paused TV app

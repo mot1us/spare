@@ -449,6 +449,9 @@ class SecureStore(private val context: Context) {
     var navigationAnimation: String
         get() = preferences.getString("navigation-animation", null).takeIf { it in Motion.styles } ?: Motion.styles.first()
         set(value) { preferences.edit { putString("navigation-animation", value) } }
+    var nostalgiaLoading: Boolean
+        get() = preferences.getBoolean("nostalgia-loading", false)
+        set(value) { preferences.edit { putBoolean("nostalgia-loading", value) } }
     var navigationSpeed: String
         get() = preferences.getString("navigation-speed", null).takeIf { it in Motion.speeds } ?: "Normal"
         set(value) { preferences.edit { putString("navigation-speed", value) } }

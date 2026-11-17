@@ -6,7 +6,7 @@ import kotlin.math.abs
 data class SportsReplay(val channel: Channel, val programme: Programme) {
     val expires: Long get() = programme.start + channel.catchupDays * 86400000L
     fun item(game: SportsGame, http: Boolean, now: Long): OnDemand? = Catchup.url(channel, programme, http, now)?.let {
-        OnDemand("catchup:${channel.id}:${programme.start}", game.title, channel.name, it, "catchup")
+        OnDemand("catchup:${channel.id}:${programme.start}", game.title, channel.name, it, "catchup", playlistId = channel.playlistId)
     }
 }
 
@@ -21,7 +21,11 @@ object SportsReplays {
         for (channel in guide.channels) {
             if (Thread.currentThread().isInterrupted) break
             if (!eligible(game, channel, now)) continue
-            val match = guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { p ->
+            val history = guide.programmes[guide.key(channel)].orEmpty()
+            fun matches(p: Programme) = parsed.getOrPut(p.title to p.description) {
+                SportsGuide.teams(p, game.teams.first().league)?.map { it.id }?.toSet() == target
+            }
+            val match = history.asSequence().filter { p ->
                 if (!Catchup.available(channel, p, now) || abs(p.start - game.start) > 90 * 60000L || p.end <= game.start) false else {
                     // Most listings are ASCII. Reject unrelated programmes without
                     // allocating and normalizing the entire description for every game.
@@ -29,24 +33,49 @@ object SportsReplays {
                         ((p.title.any { it.code > 127 } || p.description.any { it.code > 127 }) &&
                             SportsCatalog.normalize(p.title + " " + p.description).let { text -> hints.all { aliases -> aliases.any { it in text } } })
                 }
-            }.filter { p -> parsed.getOrPut(p.title to p.description) { SportsGuide.teams(p, game.teams.first().league)?.map { it.id }?.toSet() == target } }
-                .minByOrNull { abs(it.start - game.start) }
-            if (match != null) result.add(SportsReplay(channel, match))
+            }.filter(::matches).minByOrNull { abs(it.start - game.start) }
+            if (match != null) result.add(extend(SportsReplay(channel, match), history, now, ::matches))
         }
         return rank(result)
     }
+    /** Xtream and duration-based archive URLs can request adjoining pieces as one programme. */
+    private fun extend(replay: SportsReplay, history: List<Programme>, now: Long, matches: (Programme) -> Boolean): SportsReplay {
+        val first = replay.programme
+        var end = first.end
+        val limit = first.start + 8 * 3600000L
+        val parts = history.asSequence().filter { it.start >= first.start && it.start < limit && it.end in (first.end + 1)..limit }
+            .sortedBy { it.start }
+        for (part in parts) {
+            if (part.start > end + 120000L) break
+            if (part.end > end && Catchup.available(replay.channel, part, now) && matches(part)) end = part.end
+        }
+        return if (end == first.end) replay else replay.copy(programme = first.copy(end = end))
+    }
+
+    /** Refresh a cached choice against the channel's current guide before its archive URL is built. */
+    fun extend(game: SportsGame, replay: SportsReplay, history: List<Programme>, now: Long): SportsReplay {
+        val teams = game.teams.map { it.id }.toSet()
+        return extend(replay, history, now) { part -> SportsGuide.teams(part, game.teams.first().league)?.map { it.id }?.toSet() == teams }
+    }
+
     /** Provider histories belong to a stream ID, even when XMLTV IDs are shared. */
     fun findListings(game: SportsGame, guide: Guide, listings: Map<String, List<Programme>>, now: Long): List<SportsReplay> =
         rank(guide.channels.asSequence().filter { listings.containsKey(it.id) }.flatMap { channel ->
             find(game, Guide(listOf(channel), mapOf(guide.key(channel) to listings.getValue(channel.id))), now).asSequence()
         }.toList())
     /** Live-channel quality is a preference for its archive, never an eligibility rule. */
-    fun rank(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): List<SportsReplay> =
-        choices.distinctBy { it.channel.id }.sortedWith(compareByDescending<SportsReplay> { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
+    fun rank(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): List<SportsReplay> {
+        val feeds = linkedMapOf<String, SportsReplay>()
+        for (choice in choices) {
+            val current = feeds[choice.channel.id]
+            if (current == null || current.programme.start == choice.programme.start && choice.programme.end > current.programme.end) feeds[choice.channel.id] = choice
+        }
+        return feeds.values.sortedWith(compareByDescending<SportsReplay> { it.channel.quality(quality[it.channel.id])?.height ?: 0 }
             .thenByDescending { SportsStreams.preferenceRank(it.channel, quality[it.channel.id]) }
             .thenByDescending { it.channel.quality(quality[it.channel.id])?.fps?.takeIf { fps -> fps.isFinite() && fps > 0f } ?: 0f }
             .thenByDescending { it.channel.id in favorites }
             .thenByDescending { it.expires })
+    }
     fun best(choices: List<SportsReplay>, quality: Map<String, VideoInfo> = emptyMap(), favorites: Set<String> = emptySet()): SportsReplay? =
         rank(choices, quality, favorites).firstOrNull()
     fun retained(choices: List<SportsReplay>, channels: Map<String, Channel>, now: Long): List<SportsReplay> = choices.mapNotNull { replay ->
