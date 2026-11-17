@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.51.22 — 2026-11-16
+
+- Library starts poster requests in shelf order and drops old requests if the queue fills.
+- Posters use a static theme-tinted placeholder with the title on shelves. With fades selected, artwork fades over it at the chosen speed.
+- Search opens the in-app microphone. A spoken query replaces the current search, and opening the keyboard starts a fresh query.
+- Library leaves background catalog progress out of the browsing UI.
+
 ## 0.51.21 — 2026-11-16
 
 - Library shows catalog and cached details while browsing. Press OK to load full movie or series details.

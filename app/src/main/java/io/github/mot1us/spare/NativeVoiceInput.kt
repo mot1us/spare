@@ -21,7 +21,7 @@ class NativeVoiceInput(private val context: Context, private val message: (Strin
             val engine = SpeechRecognizer.createSpeechRecognizer(context)
             recognizer = engine
             engine.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { if (recognizer === engine) message("Listening… speak a channel name") }
+                override fun onReadyForSpeech(params: Bundle?) { if (recognizer === engine) message("Listening… say a channel, movie or show") }
                 override fun onBeginningOfSpeech() = Unit
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
@@ -40,7 +40,7 @@ class NativeVoiceInput(private val context: Context, private val message: (Strin
                     val words = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
                     stop()
                     if (words == null) message("No match. Choose Voice to retry, or type.")
-                    else { message("Search complete. Choose Voice to speak again, or edit the field."); result(words.replace(Regex("[\\p{Cc}]+"), " ").trim().take(128)) }
+                    else { message("Search complete. Choose Voice to speak again, or select the field to type."); result(words.replace(Regex("[\\p{Cc}]+"), " ").trim().take(128)) }
                 }
                 override fun onPartialResults(partialResults: Bundle?) = Unit
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit

@@ -23,6 +23,7 @@ class GuideSearchBar(
     makeButton: (String, () -> Unit) -> Button,
     onChanged: () -> Unit,
     onVoice: () -> Unit,
+    private val onTyping: () -> Unit,
     onResults: () -> Unit,
     onClose: () -> Unit,
 ) : LinearLayout(context) {
@@ -34,7 +35,7 @@ class GuideSearchBar(
         setSingleLine(true); textSize = 14f; filters = arrayOf(InputFilter.LengthFilter(128))
         imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         showSoftInputOnFocus = false
-        setOnClickListener { keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT) }
+        setOnClickListener { openKeyboard() }
         setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_SEARCH || action == EditorInfo.IME_ACTION_DONE || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
                 hideKeyboard(); onResults(); true
@@ -58,7 +59,7 @@ class GuideSearchBar(
         addView(row); addView(hint, LayoutParams(-1, dp(20)))
         for (i in 0 until row.childCount) row.getChildAt(i).setOnKeyListener { view, code, event ->
             when {
-                view === input && code == KeyEvent.KEYCODE_DPAD_CENTER -> { if (event.action == KeyEvent.ACTION_UP) keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT); true }
+                view === input && code == KeyEvent.KEYCODE_DPAD_CENTER -> { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) openKeyboard(); true }
                 direction != null && code in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (event.action == KeyEvent.ACTION_DOWN) direction?.invoke(i, code)
                     true
@@ -73,6 +74,10 @@ class GuideSearchBar(
     fun setQuery(value: String) { if (input.text.toString() != value) { input.setText(value); input.setSelection(input.length()) } }
     fun message(value: String) { hint.text = value }
     fun hideKeyboard() { keyboard.hideSoftInputFromWindow(input.windowToken, 0) }
-    /** Put the cursor in the box and bring up the keyboard, ready to type. */
-    fun startTyping() { input.requestFocus(); input.post { keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) } }
+    private fun openKeyboard() {
+        onTyping()
+        // TV keyboards can reset the selection when opening, so give dictation an empty field.
+        input.text.clear()
+        keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+    }
 }

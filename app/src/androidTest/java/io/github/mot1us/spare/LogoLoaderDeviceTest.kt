@@ -66,23 +66,81 @@ class LogoLoaderDeviceTest {
         }
     }
 
-    @Test fun newestFirstLoadsTheLatestRequestsAndLetsTheOldestGo() {
-        val bytes = png(); val hold = CountDownLatch(1); val order = java.util.Collections.synchronizedList(mutableListOf<String>())
+    @Test fun posterQueueKeepsTheNewestWorkInLeftToRightOrder() {
+        val bytes = png()
+        val first = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val order = java.util.Collections.synchronizedList(mutableListOf<Int>())
         val loader = LogoLoader(files = object : ImageFiles {
-            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray { order += url.substringAfterLast('/'); hold.await(5, TimeUnit.SECONDS); return bytes }
-        }, threads = 1, newestFirst = true)
+            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
+                order += url.substringAfterLast('/').toInt()
+                first.countDown()
+                check(release.await(8, TimeUnit.SECONDS))
+                return bytes
+            }
+        }, threads = 1, dropOldest = true)
         val answered = AtomicInteger()
+        fun request(index: Int) { loader.get("https://images.example/$index", false) { answered.incrementAndGet() } }
         try {
-            // One download is held while a long list scrolls past, as on a slow connection.
-            instrumentation.runOnMainSync { repeat(70) { i -> loader.get("https://images.example/p$i", false) { answered.incrementAndGet() } } }
-            // The saved-copy check runs on a low-priority thread; give it time to pass the requests on, even on a busy device.
-            Thread.sleep(2000); hold.countDown()
-            await("Every request is answered: loaded, or let go", 8000) { answered.get() >= 60 && order.size >= 20 }
-            Thread.sleep(500)
-            val after = order.drop(1)
-            assertTrue("The newest request is downloaded among the first once a thread is free: $order", after.indexOf("p69") in 0..3)
-            assertTrue("Requests for rows long scrolled past are let go: $order", order.size < 70 && "p5" !in after)
-        } finally { instrumentation.runOnMainSync { loader.close() } }
+            instrumentation.runOnMainSync { request(0) }
+            assertTrue(first.await(5, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync { (1..69).forEach(::request) }
+            // The busy worker forces a backlog. The surviving row should still load from its first tile.
+            await("On overflow, 37 queued posters are dropped") { answered.get() == 37 }
+            release.countDown()
+            await("All requests have finished") { answered.get() == 70 }
+            assertEquals(listOf(0) + (38..69).toList(), order)
+        } finally {
+            release.countDown()
+            instrumentation.runOnMainSync { loader.close() }
+        }
+    }
+
+    @Test fun shelfPlaceholderStaysVisibleDuringPosterFade() = withActivity { scenario ->
+        val bytes = png()
+        val loading = CountDownLatch(1)
+        val loader = LogoLoader(opaque = true, files = object : ImageFiles {
+            override fun bytes(url: String, fetch: () -> ByteArray): ByteArray {
+                check(loading.await(8, TimeUnit.SECONDS))
+                return bytes
+            }
+        })
+        lateinit var label: android.widget.TextView
+        lateinit var image: ImageView
+        val store = SecureStore(context)
+        try {
+            scenario.onActivity { activity ->
+                Motion.use("Fade in", "Slow")
+                val tile = LibraryPosterTile(activity, artworkOnly = true)
+                activity.addContentView(tile, FrameLayout.LayoutParams(160, 240))
+                val title = "A Library title"
+                tile.bind("fixture", LibraryPosterTile.Content(title, "", "https://images.example/shelf.png"), loader, false)
+                label = tile.findViewWithTag("poster-placeholder")
+                image = tile.findViewWithTag("poster-artwork")
+                assertEquals(title, label.text.toString())
+                assertEquals(android.view.View.VISIBLE, label.visibility)
+                assertTrue(label.background is android.graphics.drawable.GradientDrawable)
+            }
+            loading.countDown()
+            await("Artwork fades in over the title") {
+                var bothVisible = false
+                instrumentation.runOnMainSync {
+                    bothVisible = image.drawable != null && image.alpha < 1f && label.visibility == android.view.View.VISIBLE
+                }
+                bothVisible
+            }
+            await("The title disappears after the fade") {
+                var hidden = false
+                instrumentation.runOnMainSync { hidden = label.visibility == android.view.View.INVISIBLE }
+                hidden
+            }
+        } finally {
+            loading.countDown()
+            instrumentation.runOnMainSync {
+                loader.close()
+                Motion.use(store.navigationAnimation, store.navigationSpeed)
+            }
+        }
     }
 
     @Test fun visibleFailedLogoRetriesWithoutRebindingAndPauseCancelsRetry() = withActivity { scenario ->

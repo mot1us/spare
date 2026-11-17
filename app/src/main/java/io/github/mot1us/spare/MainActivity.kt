@@ -1024,7 +1024,7 @@ class MainActivity : Activity() {
         root.removeView(video); root.addView(video, FrameLayout.LayoutParams(-1, -1))
         guideSearch = GuideSearchBar(this, ::button, {
             handler.removeCallbacks(filterSearch); handler.postDelayed(filterSearch, 150)
-        }, ::voiceSearch, { finishSearch(false) }, { finishSearch(true) })
+        }, ::voiceSearch, { voiceInput.stop(); voiceSearchPending = false }, { finishSearch(false) }, { finishSearch(true) })
         guidePanel.addView(guideSearch, LinearLayout.LayoutParams(-1, -2))
         guideTabs = LinearLayout(this).apply { tag = "guide-tabs" }
         allChannelsTab = button("All channels") { browsePlaylist = null; localOnly = false; group = null; favoritesOnly = false; applyFilter(); focusChannelAt(0) }.apply { tag = "guide-all" }
@@ -1044,7 +1044,7 @@ class MainActivity : Activity() {
         guidePanel.addView(guideTabs, LinearLayout.LayoutParams(-1, dp(38)))
         val body = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         guidePanel.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
-        navigationRail = NavigationRail(this, ::typedSearch, { openSection(false) }, { openSection(true) }, { openLibrary() }, ::playbackMenu,
+        navigationRail = NavigationRail(this, ::search, { openSection(false) }, { openSection(true) }, { openLibrary() }, ::playbackMenu,
             ::enterNavigationContent, { ++focusEpoch; pendingFocusList = null })
         searchButton = navigationRail.search; settingsButton = navigationRail.settings; guideMode = navigationRail.guide
         sportsMode = navigationRail.sports; libraryButton = navigationRail.library; updateBadge = navigationRail.badge
@@ -2271,11 +2271,9 @@ class MainActivity : Activity() {
         nowPlaying.update(channel, guide.at(channel, System.currentTimeMillis()), videoInfo[channel.id]); nowPlaying.reveal()
         handler.postDelayed(hideNowPlaying, 2800)
     }
-    /** The remote's search key starts voice search; the menu, Library and other entry points open ready to type. */
-    private fun search() = searchWithQuery(query, voice = true)
-    private fun typedSearch() = searchWithQuery(query)
-    private fun searchWithQuery(initial: String, voice: Boolean = false) { if (vodRequest != null) closeVodStart(restore = false); openPlaylistSearch(initial, voice) }
-    private fun openPlaylistSearch(initial: String, useVoice: Boolean) {
+    private fun search() = searchWithQuery(query)
+    private fun searchWithQuery(initial: String) {
+        if (vodRequest != null) closeVodStart(restore = false)
         settingsPanel?.visibility = View.GONE
         if (::library.isInitialized && library.opened) library.dismiss()
         if (onDemand != null) returnToLive()
@@ -2287,7 +2285,7 @@ class MainActivity : Activity() {
         searchPanel.recent = store.recentSearches
         searchPanel.show(query); root.bringChildToFront(searchPanel); showNavigation("search")
         updatePlaylistSearch()
-        if (useVoice) { guideSearch.voice.requestFocus(); voiceSearch() } else { guideSearch.message("Type a channel, movie or show, or press Voice."); guideSearch.startTyping() }
+        voiceSearch()
     }
     private fun watchVodFromBeginning() {
         val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
@@ -2395,7 +2393,7 @@ class MainActivity : Activity() {
     }
     private fun voiceSearch() {
         if (!guideSearch.isVisible) return
-        guideSearch.hideKeyboard(); ++focusEpoch
+        guideSearch.hideKeyboard(); ++focusEpoch; guideSearch.voice.requestFocus()
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             if (voiceSearchPending) return
             voiceSearchPending = true

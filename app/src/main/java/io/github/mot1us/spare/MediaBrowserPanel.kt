@@ -121,7 +121,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     // Library visit after a restart draws saved artwork instead of downloading it again.
     // Tiles decode at the size they are drawn (about 213x320 px on a 1080p TV, ~135 KB in RGB_565), so 36 MB holds
     // some 270 posters; only the details page asks for the larger 480 px copy. TMDB artwork is fetched at w342.
-    private val images = LogoLoader(480, 36 * 1024 * 1024, posterFiles(context), opaque = true, threads = 2, source = PosterUrls::sized, newestFirst = true)
+    private val images = LogoLoader(480, 36 * 1024 * 1024, posterFiles(context), opaque = true, threads = 2, source = PosterUrls::sized, dropOldest = true)
     private val tileDecode = posterDecodeSize(resources.displayMetrics)
     private val backdrops = LogoLoader(960, 12 * 1024 * 1024, posterFiles(context), opaque = true)
     private val shelves = CatalogShelves(context, images).apply { setPadding(dp(8), dp(4), dp(8), dp(12)); decode = tileDecode }
@@ -316,7 +316,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         layoutParams = RecyclerView.LayoutParams(-1, dp(height)).apply { bottomMargin = dp(5) }
         setOnFocusChangeListener { _, active -> if (active) { ++focusEpoch; pending = null } }
     }
-    fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.visibility = if (busy) VISIBLE else GONE }
+    fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.isVisible = busy && archive }
     fun confirmation(value: String) { message.text = value; message.announceForAccessibility(value) }
     @SuppressLint("NotifyDataSetChanged")
     fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true, initialGroup: String? = null, allTitle: String = "All") {
@@ -420,7 +420,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         empty.visibility = if (values.isEmpty()) VISIBLE else GONE; empty.text = "No matching titles."
         if (!append && ((focus && !samePrefix) || catalogFocusRequested) && values.isNotEmpty()) { catalogFocusRequested = false; rememberedKey = restore; focusRows() }
     }
-    fun catalogBusy(block: Boolean = false) { hasMore = false; loading.visibility = VISIBLE; if (block) { contentsAvailable = false; rows.alpha = .35f } }
+    fun catalogBusy(block: Boolean = false) { hasMore = false; if (block) { contentsAvailable = false; rows.alpha = .35f } }
     fun stopCatalog() { if (catalogQuery != null) { rememberAnchor(); contexts[catalogContext] = group to search.text.toString() }; catalogQuery = null; catalogMore = null; hasMore = false; searchHandler.removeCallbacks(searchLater) }
     fun selectTab(key: String) {
         selectedTab = key
@@ -451,7 +451,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     }
     fun refreshPosters() { rows.adapter?.notifyItemRangeChanged(0, shownRows.size) }
     fun archiveMode(value: Boolean) {
-        archive = value; archiveHome.isVisible = value; spotMode()
+        archive = value; if (!value) loading.isVisible = false
+        archiveHome.isVisible = value; spotMode()
         sectionControls.filter { it !== archiveHome }.forEach { it.isVisible = !value }
         showSearchBox()
     }

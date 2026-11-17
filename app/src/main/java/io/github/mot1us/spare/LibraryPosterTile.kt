@@ -3,6 +3,7 @@ package io.github.mot1us.spare
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -10,7 +11,9 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.isVisible
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
@@ -37,8 +40,14 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-    private val placeholder = label(24f).apply { gravity = Gravity.CENTER; setTextColor(0xFFBAC4D1.toInt()) }
+    private val image = ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP; tag = "poster-artwork" }
+    private val placeholder = label(11.5f).apply {
+        gravity = Gravity.BOTTOM or Gravity.START
+        maxLines = 3
+        setPadding(dp(10), 0, dp(10), dp(12))
+        setTextColor(0xFFE1E6EE.toInt())
+        tag = "poster-placeholder"
+    }
     private val badge = if (artworkOnly) null else label(8f).apply {
         setPadding(dp(5), dp(3), dp(5), dp(3)); setTextColor(Color.WHITE); typeface = AppFont.face(true)
         setBackgroundColor(0xDB151C25.toInt())
@@ -64,6 +73,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     private var boundHttp = false
     private var boundDecode = 0
     private var appearanceKey: Any? = null
+    private val hidePlaceholder = Runnable { placeholder.visibility = INVISIBLE }
 
     init {
         isFocusableInTouchMode = true; isClickable = true
@@ -102,7 +112,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         if (key == appearanceKey) return
         appearanceKey = key
         // A bright ring drawn over the artwork: the accent background alone is mostly hidden behind the poster.
-        foreground = FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.GradientDrawable().apply {
+        foreground = FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply {
                 cornerRadius = GuideTheme.cornerRadiusDp * resources.displayMetrics.density; setStroke(dp(3), Color.WHITE)
             })
             addState(intArrayOf(), Color.TRANSPARENT.toDrawable())
@@ -110,6 +120,11 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         background = GuideTheme.background(resources.displayMetrics.density, GuideTheme.current.background or 0x66000000)
         title?.typeface = AppFont.face(true); detail?.typeface = AppFont.face()
         badge?.typeface = AppFont.face(true); placeholder.typeface = AppFont.face(true)
+        val base = GuideTheme.current.background or Color.BLACK
+        val tint = GuideTheme.current.accent
+        placeholder.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            intArrayOf(ColorUtils.blendARGB(base, tint, .16f), ColorUtils.blendARGB(base, tint, .045f)))
+        placeholder.textSize = 11.5f * GuideTheme.textScale
         title?.textSize = 12f * GuideTheme.textScale; detail?.textSize = 9f * GuideTheme.textScale
         tint()
     }
@@ -121,8 +136,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         if (key == identity && content == previous && http == boundHttp && decode == boundDecode) return
         if (content.title != previous?.title) {
             title?.text = content.title
-            placeholder.text = content.title.trim().split(wordSeparator, limit = 3).take(2)
-                .mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
+            if (artworkOnly) placeholder.text = content.title
         }
         if (content.subtitle != previous?.subtitle) detail?.apply {
             text = content.subtitle
@@ -134,22 +148,34 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         }
         identity = key; bound = content; boundHttp = http; boundDecode = decode
         val request = ++generation
-        placeholder.visibility = VISIBLE
+        showPlaceholder(image.drawable == null)
         var requested = false
         images.bind(image, content.poster, http, decode) { bitmap ->
             if (generation == request) {
-                placeholder.visibility = if (bitmap == null) VISIBLE else INVISIBLE
+                showPlaceholder(bitmap == null)
                 if (bitmap == null && !requested && requestPoster != null && (content.poster.isBlank() || images.unavailable(content.poster))) {
                     requested = true
                     requestPoster { fallback ->
                         if (generation == request && fallback.isNotBlank() && fallback != content.poster) {
                             images.bind(image, fallback, http, decode) { found ->
-                                if (generation == request) placeholder.visibility = if (found == null) VISIBLE else INVISIBLE
+                                if (generation == request) showPlaceholder(found == null)
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    private fun showPlaceholder(missing: Boolean) {
+        image.removeCallbacks(hidePlaceholder)
+        if (missing) {
+            placeholder.visibility = VISIBLE
+        } else if (image.alpha < 1f && placeholder.isVisible) {
+            // Keep the title and tint under the image during its fade, then stop drawing them.
+            image.postOnAnimationDelayed(hidePlaceholder, Motion.panel)
+        } else {
+            placeholder.visibility = INVISIBLE
         }
     }
 
@@ -174,9 +200,6 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     private fun tint() {
         title?.setTextColor(if (hasFocus()) GuideTheme.focusText else Color.WHITE)
         detail?.setTextColor(if (hasFocus()) GuideTheme.focusText else Color.LTGRAY)
-    }
-    private companion object {
-        val wordSeparator = Regex("\\s+")
     }
 }
 

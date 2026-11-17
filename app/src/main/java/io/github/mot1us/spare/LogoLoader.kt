@@ -20,26 +20,24 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024 * 1024, private val files: ImageFiles? = null, private val opaque: Boolean = false, threads: Int = 2,
     private val source: (String) -> String = { it },
-    /**
-     * For long scrolling lists: the image asked for last is loaded first, and the oldest waiting ones are let go when
-     * the line is full. Otherwise posters on screen wait behind rows that were scrolled past.
-     */
-    private val newestFirst: Boolean = false) {
-    private class Job(val order: Long, val drop: () -> Unit, private val work: () -> Unit) : Runnable { override fun run() = work() }
-    /** Ordered by when the image was asked for, so the saved-copy check and the download agree on what is newest. */
-    private class NewestFirst(private val limit: Int) : java.util.concurrent.PriorityBlockingQueue<Runnable>(64, compareByDescending<Runnable> { (it as Job).order }) {
-        override fun offer(e: Runnable): Boolean {
-            super.offer(e)
-            while (size > limit) { val oldest = minByOrNull { (it as Job).order } as? Job ?: break; if (remove(oldest)) oldest.drop() }
+    /** Let new work replace an old backlog while drawing each newly visible row in bind order. */
+    private val dropOldest: Boolean = false) {
+    private class Job(val drop: () -> Unit, private val work: () -> Unit) : Runnable { override fun run() = work() }
+    private class RecentQueue(private val limit: Int) : java.util.concurrent.LinkedBlockingQueue<Runnable>() {
+        override fun offer(job: Runnable): Boolean {
+            super.offer(job)
+            while (size > limit) {
+                val oldest = poll() as? Job ?: break
+                oldest.drop()
+            }
             return true
         }
     }
     /** Names this loader's images in the Sports opening trace of the performance report. */
     var trace: String? = null
-    private val asked = java.util.concurrent.atomic.AtomicLong()
     private fun pool(threads: Int) = java.util.concurrent.ThreadPoolExecutor(threads, threads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-        if (newestFirst) NewestFirst(32) else java.util.concurrent.LinkedBlockingQueue())
-    private val waitingLimit = if (newestFirst) 80 else 48
+        if (dropOldest) RecentQueue(32) else java.util.concurrent.LinkedBlockingQueue())
+    private val waitingLimit = if (dropOldest) 80 else 48
     private fun size(dimension: Int) = if (dimension <= 0) maxDimension else dimension.coerceAtMost(maxDimension)
     private fun key(url: String, dimension: Int) = if (dimension == maxDimension) url else "$url\n$dimension"
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
@@ -206,7 +204,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (waiting.get() >= waitingLimit) return null
             pending[key] = mutableListOf(redraw); queued(); waiting.incrementAndGet()
         }
-        val token = generation; val queuedAt = SystemClock.uptimeMillis(); val order = asked.incrementAndGet()
+        val token = generation; val queuedAt = SystemClock.uptimeMillis()
         fun stale() = closed || (paused && !warm) || token != generation
         fun finish(bitmap: Bitmap?, startedAt: Long) {
             if (bitmap != null && !closed) cache.put(key, bitmap)
@@ -230,7 +228,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             val callbacks = synchronized(pending) { pending.remove(key).orEmpty() }
             handler.post { if (!closed && !paused && token == generation) callbacks.forEach { it(null) } }
         }
-        fun download() = workers.execute(Job(order, ::giveUp) {
+        fun download() = workers.execute(Job(::giveUp) {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             started()
             if (stale()) return@Job
@@ -241,7 +239,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         })
         // Posters already saved on this TV are read and decoded by their own threads, so they never wait in line
         // behind downloads that can take seconds each.
-        if (files == null) download() else readers.execute(Job(order, ::giveUp) {
+        if (files == null) download() else readers.execute(Job(::giveUp) {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             if (stale()) { started(); return@Job }
             val startedAt = SystemClock.uptimeMillis()
@@ -251,7 +249,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (saved == null) {
                 // No saved copy and the download line is full: give up this time, as request() does, so a visible
                 // image retries later and a detached one is simply forgotten instead of waiting in a long line.
-                if ((newestFirst || workers.queue.size < 48) && !closed && runCatching { download() }.isSuccess) return@Job
+                if ((dropOldest || workers.queue.size < 48) && !closed && runCatching { download() }.isSuccess) return@Job
                 giveUp()
                 return@Job
             }

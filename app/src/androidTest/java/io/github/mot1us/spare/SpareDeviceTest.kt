@@ -1582,14 +1582,18 @@ class SpareDeviceTest {
                     scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId; assertTrue(it.window.decorView.findViewWithTag<View>("search").requestFocus()) }
                     instrumentation.waitForIdleSync()
                     scenario.onActivity { assertTrue("Search icon must retain remote focus", it.window.decorView.findViewWithTag<View>("search").hasFocus()) }
-                    // Search from the menu opens ready to type; Voice starts listening.
+                    // OK on the menu's Search icon starts native voice without a keyboard step.
                     device.pressDPadCenter()
-                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("guide-search-input")?.hasFocus() == true }
-                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").apply { requestFocus(); performClick() } }
                     waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<EditText>("guide-search-input")?.text.toString() == "Channel 2" && channelList(activity)?.adapter?.itemCount == 1 && activity.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results")?.hasFocus() == true }
                     assertEquals("Native speech must not launch a chooser/activity", 0, monitor.hits)
                     scenario.onActivity { assertEquals(attempt, find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId); assertEquals(1f, find<PlayerView>(it.window.decorView)!!.player!!.volume, 0f) }
                     assertEquals("/channel1.mp4", playingPath(scenario))
+                    assertTrue("Reset isolated voice fixture for a second voice result", device.executeShellCommand("run-as ${instrumentation.context.packageName} rm -f files/voice-first-result").isBlank())
+                    scenario.onActivity {
+                        it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Old search")
+                        it.window.decorView.findViewWithTag<View>("guide-search-voice").apply { requestFocus(); performClick() }
+                    }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<EditText>("guide-search-input").text.toString() == "Channel 2" }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-search-voice").requestFocus() }
                     instrumentation.waitForIdleSync()
                     scenario.onActivity { assertTrue("Pending channel navigation must not steal Voice focus", it.window.decorView.findViewWithTag<View>("guide-search-voice").hasFocus()) }
@@ -1599,6 +1603,10 @@ class SpareDeviceTest {
                 val keyboardPackage = android.content.ComponentName.unflattenFromString(android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD))!!.packageName
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").requestFocus() }; device.pressDPadCenter()
                 assertTrue(device.wait(Until.hasObject(By.pkg(keyboardPackage)), 5000))
+                scenario.onActivity {
+                    val field = it.window.decorView.findViewWithTag<EditText>("guide-search-input")
+                    assertEquals("The TV keyboard starts with an empty query for typing or dictation", "", field.text.toString())
+                }
                 device.findObject(By.desc("Search playlist")).text = "Channel 7"
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("playlist-search-results").getChildAt(0)?.contentDescription?.contains("Test Channel 7") == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) }
@@ -4232,7 +4240,10 @@ class SpareDeviceTest {
                 assertTrue("Browsing one category must not download other categories", server.catalogTargets.none { it.contains("category_id=2") || it.contains("category_id=3") })
                 chooseLibraryCategory(scenario, 2)
                 waitFor(scenario) { server.actionCatalogStarted.count == 0L && it.window.decorView.findViewWithTag<RecyclerView>("library-items").adapter?.itemCount == 80 }
-                scenario.onActivity { activity -> assertEquals("Action", activity.window.decorView.findViewWithTag<TextView>("library-heading").text.toString()) }
+                scenario.onActivity { activity ->
+                    assertEquals("Action", activity.window.decorView.findViewWithTag<TextView>("library-heading").text.toString())
+                    assertFalse("An ongoing category download must not animate a bar over browsable titles", activity.window.decorView.findViewWithTag<View>("library-loading").isShown)
+                }
                 scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("library-items").findViewHolderForAdapterPosition(0)!!.itemView.requestFocus() }
                 device.pressKeyCode(KeyEvent.KEYCODE_PAGE_DOWN)
                 waitFor(scenario) { activity -> activity.window.decorView.findViewWithTag<RecyclerView>("library-items").let { list -> list.focusedChild?.let(list::getChildAdapterPosition)?.let { it >= PosterGridLayout.COLUMNS } == true } }
