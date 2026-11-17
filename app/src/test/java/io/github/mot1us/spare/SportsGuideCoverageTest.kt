@@ -39,6 +39,14 @@ class SportsGuideCoverageTest {
         assertEquals(listOf("Round 4"), SportsGuideCoverage.find(guide, now).map { it.title })
     }
 
+    @Test fun liveListingUsesSharedGuideKeyAndKeepsOnlyUsableFeeds() {
+        val channels = listOf(channel("movie", "Golf").copy(guideId = "shared", media = true),
+            channel("blocked", "Golf Channel").copy(guideId = "shared"),
+            channel("a", "Golf Channel").copy(guideId = "shared"), channel("b", "Golf HD").copy(guideId = "shared"))
+        val guide = Guide(channels, mapOf(on("shared", "Round 4", "Live PGA Tour Golf"), on("unmapped", "Live tennis")))
+        assertEquals(listOf("a", "b"), SportsGuideCoverage.find(guide, now) { it.id != "blocked" }.single().channels.map { it.id })
+    }
+
     @Test fun onlyWhatIsAiringNow() {
         val guide = Guide(listOf(channel("a", "Golf Channel")), mapOf("a" to listOf(Programme("a", "LIVE: LPGA Tour Golf", now + 600000, now + 7200000))))
         assertTrue(SportsGuideCoverage.find(guide, now).isEmpty())

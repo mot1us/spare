@@ -39,12 +39,25 @@ object SportsGuideCoverage {
     fun find(guide: Guide, now: Long, usable: (Channel) -> Boolean = { true }): List<SportsCoverage> {
         data class Found(val sport: String, val title: String, val channels: MutableList<Channel>, var start: Long, var end: Long)
         val found = LinkedHashMap<String, Found>()
-        for ((key, channels) in guide.channels.groupBy(guide::key)) {
+        // Find live listings first. Most guide keys need no channel grouping or coverage matching.
+        if (guide.channels.isEmpty() || guide.programmes.isEmpty()) return emptyList()
+        val current = HashMap<String, Programme>()
+        for ((key, programmes) in guide.programmes) {
+            if (Thread.currentThread().isInterrupted) return emptyList()
+            val programme = programmes.firstOrNull { now >= it.start && now < it.end } ?: continue
+            if (programme.title.contains("live", true) || programme.description.contains("live", true)) current[key] = programme
+        }
+        if (current.isEmpty()) return emptyList()
+        val channelsByKey = LinkedHashMap<String, MutableList<Channel>>()
+        for (channel in guide.channels) {
+            if (Thread.currentThread().isInterrupted) return emptyList()
+            val key = guide.key(channel)
+            if (key in current) channelsByKey.getOrPut(key, ::ArrayList).add(channel)
+        }
+        for ((key, channels) in channelsByKey) {
             if (Thread.currentThread().isInterrupted) return emptyList()
             val channel = channels.firstOrNull { !it.media && usable(it) } ?: continue
-            val programme = guide.at(channel, now) ?: continue
-            // Cheap check first: tens of thousands of listings are read on a TV, and most never say "live".
-            if (!programme.title.contains("live", true) && !programme.description.contains("live", true)) continue
+            val programme = current.getValue(key)
             val sport = sport(programme, channel) ?: continue
             val title = title(programme)
             val entry = found.getOrPut("${sport.lowercase()}:${SportsCatalog.normalize(title)}") { Found(sport, title, mutableListOf(), programme.start, programme.end) }

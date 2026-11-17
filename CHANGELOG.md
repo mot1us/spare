@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.17 — 2026-11-16
+
+- Artwork retries in Library and Sports check only images still waiting to retry, in batches of four. Binding or laying out a poster no longer walks every tracked image on the screen thread.
+- Sports checks only guide keys with a current listing marked live before grouping their channels, and defers that search briefly on open so scoreboards and cards get a head start.
+- The performance report records short stops in the playback clock during tunneled playback, including the buffer and which screen was open. Library opening appears near the top of the report.
+
 ## 0.51.16 — 2026-11-16
 
 - The performance report (Settings › About Spare) has a Last Library opening section: how long the saved catalog's database, index file and index took to read, how long the rows took to pick, read and build, and when they showed. A first Library open before the app has warmed it took about 6 s on an onn 4K Pro; this is to find which step that time goes to. Nothing about how Library loads has changed yet.

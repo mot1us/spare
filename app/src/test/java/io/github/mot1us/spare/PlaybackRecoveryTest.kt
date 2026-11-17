@@ -79,6 +79,24 @@ class PlaybackRecoveryTest {
         assertFalse(progress.stalled(3, 31000, 1000, 2, false, true))
         assertFalse(progress.stalled(3, 34000, 4000, 3, false, true))
     }
+    @Test fun shortReadyPositionPauseIsReportedOnceWithoutTriggeringRecovery() {
+        val progress = PlaybackProgress()
+        fun sample(now: Long, position: Long = 0, buffering: Boolean = false, active: Boolean = true): Long? {
+            assertFalse(progress.stalled(1, now, position, null, buffering, active, bufferedMs = 10000))
+            return progress.takeReadyPositionPause(now)
+        }
+        assertNull(sample(0))
+        assertNull(sample(1999))
+        assertEquals(2000L, sample(2000))
+        assertNull(sample(3000))
+        assertNull(sample(4000, position = 600))
+        assertEquals(2000L, sample(6000, position = 600))
+        assertNull(sample(7000, position = 600, buffering = true))
+        assertNull(sample(10000, position = 600))
+        assertEquals(2000L, sample(12000, position = 600))
+        assertNull(sample(13000, position = 600, active = false))
+        assertNull(sample(18000, position = 600))
+    }
     @Test fun pausesSuppressionAndNewPlaybackTokensCannotInheritAStall() {
         val progress = PlaybackProgress()
         progress.stalled(1, 0, 0, 1, false, true)

@@ -132,19 +132,19 @@ internal object Diagnostics {
         val runtime = Runtime.getRuntime()
         lines += "Running ${clock()} · ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} · memory ${(runtime.totalMemory() - runtime.freeMemory()) / 1048576}/${runtime.maxMemory() / 1048576} MB"
         runCatching { playback?.invoke() }.getOrNull()?.takeIf { it.isNotBlank() }?.let { text -> lines += "Playing now: " + text.lines().filter { it.isNotBlank() }.joinToString(" | ") }
+        val playback = synchronized(hiccups) { hiccups.toList() }
+        lines += if (playback.isEmpty()) "Playback hiccups: none" else "Playback hiccups:"
+        lines += playback.map { "  $it" }
+        libraryLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Library opening (seconds after it was chosen):"; lines += it }
         LibraryFrames.summary()?.let { lines += "Library frames: $it" }
         LibraryFrames.phases()?.let { lines += "Slow frames spent: $it" }
         posterLine()?.let { lines += it }
         val worst = synchronized(stalls) { stalls.entries.sortedByDescending { it.value.total }.take(8).map { (where, s) -> "  ${s.count}× ${s.total} ms (worst ${s.worst}, last ${clock(s.last)}) $where" } }
         lines += if (worst.isEmpty()) "Screen stalls: none over 0.2 s" else "Screen stalls (what blocked the screen):"
         lines += worst
-        val playback = synchronized(hiccups) { hiccups.toList() }
-        lines += if (playback.isEmpty()) "Playback hiccups: none" else "Playback hiccups:"
-        lines += playback.map { "  $it" }
         val background = synchronized(jobs) { jobs.toList() }
         if (background.isNotEmpty()) { lines += "Background jobs:"; lines += background.map { "  $it" } }
         sportsLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Sports opening (seconds after it was chosen):"; lines += it }
-        libraryLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Library opening (seconds after it was chosen):"; lines += it }
         actionLines().takeIf { it.isNotEmpty() }?.let { lines += "Recent actions (oldest first; keys say which remote sent them):"; lines += it }
         return lines.joinToString("\n")
     }

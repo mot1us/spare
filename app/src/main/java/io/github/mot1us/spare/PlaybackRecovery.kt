@@ -42,19 +42,32 @@ class PlaybackProgress {
     private var buffered = 0L
     private var bufferAt = 0L
     private var wasBuffering = false
+    private var reportedPositionPause = false
+
+    /** Short ready-state pauses are diagnostic only. A tunneled video may still freeze while its audio clock moves. */
+    fun takeReadyPositionPause(now: Long): Long? {
+        if (owner == null || wasBuffering || reportedPositionPause) return null
+        val idle = now - maxOf(positionAt, readyAt)
+        if (idle < 2000) return null
+        reportedPositionPause = true
+        return idle
+    }
+
     fun reset() { owner = null }
     fun stalled(token: Int, now: Long, positionMs: Long, frameUs: Long?, buffering: Boolean, active: Boolean, bufferedMs: Long = 0): Boolean {
         if (!active) { reset(); return false }
         if (owner != token) {
             owner = token; position = positionMs; positionAt = now; frame = frameUs; frameAt = now; readyAt = now; wasBuffering = buffering
-            buffered = bufferedMs; bufferAt = now
+            buffered = bufferedMs; bufferAt = now; reportedPositionPause = false
             return false
         }
-        if (kotlin.math.abs(positionMs - position) >= 250) { position = positionMs; positionAt = now }
+        if (kotlin.math.abs(positionMs - position) >= 250) {
+            position = positionMs; positionAt = now; reportedPositionPause = false
+        }
         if (frameUs == null || frameUs != frame) { frame = frameUs; frameAt = now }
         if (bufferedMs < buffered) buffered = bufferedMs
         if (bufferedMs - buffered >= 250) { buffered = bufferedMs; bufferAt = now }
-        if (buffering || wasBuffering) readyAt = now
+        if (buffering || wasBuffering) { readyAt = now; reportedPositionPause = false }
         wasBuffering = buffering
         // Keep an absolute no-position deadline even if READY and BUFFERING flap.
         // An actively filling rebuffer is recovering. Do not replace its connection

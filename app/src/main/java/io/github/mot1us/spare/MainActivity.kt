@@ -681,9 +681,20 @@ class MainActivity : Activity() {
             if (monotonic - journalSampleAt >= 5000) { journalSampleAt = monotonic; journal(PlaybackJournal.Event.SAMPLE) }
             observeTunneledRate()
             // Tunneled frames never reach the app, so only the playback position can show progress.
-            val frame = if (!tunneled() && !multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
+            val tunnel = tunneled()
+            val frame = if (!tunnel && !multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
             if (recoverBufferedSports(monotonic, state == Player.STATE_BUFFERING)) return
-            if (playbackProgress.stalled(playbackToken, android.os.SystemClock.elapsedRealtime(), player.currentPosition, frame, state == Player.STATE_BUFFERING, active, bufferedMs = player.totalBufferedDuration)) {
+            val buffer = player.totalBufferedDuration
+            val stalled = playbackProgress.stalled(playbackToken, monotonic, player.currentPosition, frame, state == Player.STATE_BUFFERING, active, bufferedMs = buffer)
+            if (tunnel && !multiview.active) playbackProgress.takeReadyPositionPause(monotonic)?.let { duration ->
+                val screen = when {
+                    library.opened -> " in Library"
+                    sportsVisible && guideVisible -> " in Sports"
+                    else -> ""
+                }
+                Diagnostics.hiccup("Tunneled playback position stopped for ${duration} ms$screen", buffer)
+            }
+            if (stalled) {
                 reconnectOrFail(if (onDemand != null) "Playback stopped advancing. Retry resumes this title from your saved position. (STREAM_STALLED)" else "Playback stopped advancing. Choose Retry to reconnect this channel. (STREAM_STALLED)")
                 return
             }
@@ -1355,7 +1366,12 @@ class MainActivity : Activity() {
         clearGuideSearch(); sportsVisible = sports
         // Leagues are chosen during first-run setup; anyone who skipped it starts with the pro leagues.
         if (sports && !store.sportsLeaguesChosen) store.sportsLeagues = OnboardingPanel.DEFAULT_LEAGUES
-        if (sports) { Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}"); ensureSportsLeague(); sportsPanel.loading("Finding live games…") }
+        if (sports) {
+            sportsCoverageNotBefore = android.os.SystemClock.uptimeMillis() + 3500
+            Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}")
+            ensureSportsLeague()
+            sportsPanel.loading("Finding live games…")
+        }
         applyFilter(); showGuide(true)
     }
     private fun moveTime(channel: Channel?, amount: Int) {
@@ -2161,7 +2177,11 @@ class MainActivity : Activity() {
             handler.removeCallbacks(settledGuideHeader)
             lastGuideRepeat = -1L
             guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
-        if (!show || !sportsVisible) stopSportsPrefetch()
+        if (!show || !sportsVisible) {
+            stopSportsPrefetch()
+            handler.removeCallbacks(resumeSportsCoverage)
+            sportsCoverageTask?.cancel(true)
+        }
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
@@ -2445,9 +2465,26 @@ class MainActivity : Activity() {
         if (!sportsVisible || !guideVisible || closed) return
         if (!sportsRenderPending) { sportsRenderPending = true; handler.postDelayed(renderSports, 120) }
     }
+    private var sportsCoverageNotBefore = 0L
+    private val resumeSportsCoverage = Runnable { scheduleSports() }
     private var sportsCoverageFound: Triple<Guide, Long, List<SportsCoverage>>? = null
     private var sportsCoverageTask: java.util.concurrent.Future<*>? = null
     private val sportsCoverageWorker = workers.pool("sports-coverage")
+    private fun startSportsCoverage(snapshot: Guide, hidden: Map<String, Long>, now: Long) {
+        sportsCoverageTask = sportsCoverageWorker.submit {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            val began = android.os.SystemClock.elapsedRealtime()
+            val found = runCatching { SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now } }.getOrNull() ?: return@submit
+            if (Thread.currentThread().isInterrupted) return@submit
+            handler.post {
+                if (closed || !started || !sportsVisible || !guideVisible || guide !== snapshot) return@post
+                Diagnostics.sports("Guide read for other live sports in ${android.os.SystemClock.elapsedRealtime() - began} ms · ${found.size} found")
+                val changed = sportsCoverageFound?.takeIf { it.first === snapshot }?.third != found
+                sportsCoverageFound = Triple(snapshot, now, found)
+                if (changed) scheduleSports()
+            }
+        }
+    }
     private fun refreshSports() {
         if (!sportsVisible || !guideVisible || !started || closed || !store.sportsLeaguesChosen) return
         ensureSportsLeague()
@@ -2467,18 +2504,11 @@ class MainActivity : Activity() {
         val wantCoverage = selectedTeam == "live" && selectedLeague == null
         val knownCoverage = sportsCoverageFound?.takeIf { it.first === snapshot }
         if (wantCoverage && (knownCoverage == null || now - knownCoverage.second !in 0..SPORTS_COVERAGE_MS) && sportsCoverageTask?.isDone != false) {
-            sportsCoverageTask = sportsCoverageWorker.submit {
-                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-                val began = android.os.SystemClock.elapsedRealtime()
-                val found = runCatching { SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now } }.getOrNull() ?: return@submit
-                handler.post {
-                    if (closed || guide !== snapshot) return@post
-                    Diagnostics.sports("Guide read for other live sports in ${android.os.SystemClock.elapsedRealtime() - began} ms · ${found.size} found")
-                    val changed = sportsCoverageFound?.takeIf { it.first === snapshot }?.third != found
-                    sportsCoverageFound = Triple(snapshot, now, found)
-                    if (changed) scheduleSports()
-                }
-            }
+            val delay = sportsCoverageNotBefore - android.os.SystemClock.uptimeMillis()
+            if (delay > 0) {
+                handler.removeCallbacks(resumeSportsCoverage)
+                handler.postDelayed(resumeSportsCoverage, delay)
+            } else startSportsCoverage(snapshot, hidden, now)
         }
         val coverageFound = if (wantCoverage) knownCoverage?.third.orEmpty() else emptyList()
         sportsTask = sportsWorker.submit {
@@ -3501,7 +3531,7 @@ class MainActivity : Activity() {
                     setSleepTimer(SleepTimer.next(sleepAt, System.currentTimeMillis())); refresh("Sleep timer")
                 }
                 panel.action("Tunneled playback", when {
-                    store.tunneledPlayback -> "On · the TV's video hardware times frames, so a busy app cannot stutter the picture"
+                    store.tunneledPlayback -> "On · the TV’s video hardware times frames"
                     store.tunnelingFailed -> "Off · switched off after a stream did not start with it"
                     else -> "Off"
                 }, store.tunneledPlayback) {
@@ -3622,7 +3652,7 @@ class MainActivity : Activity() {
             "Refresh playlist & guide" -> { source?.let { renderRefreshSettings(it) } ?: panel.page(page, "Add a playlist first.") }
             "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage.\n\nSpare is free. To support it, visit ko-fi.com/mot1us"); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
             "Performance report" -> {
-                panel.page(page, "What Spare was doing when it felt slow. Use the app until it stutters or drags, then open this page and send a photo of it. Nothing here leaves this TV.")
+                panel.page(page, "What Spare was doing when it felt slow. Reproduce the slowdown, then open this page. Press Down to scroll through the report. Nothing here leaves this TV.")
                 panel.action("Start over") { Diagnostics.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
                 panel.scrollingNote(Diagnostics.report() + "\n\nDown scrolls this report.", "performance-report")
             }
@@ -4004,6 +4034,8 @@ class MainActivity : Activity() {
         super.onPause()
     }
     override fun onStop() {
+        handler.removeCallbacks(resumeSportsCoverage)
+        sportsCoverageTask?.cancel(true)
         Diagnostics.action("Spare left the screen"); Diagnostics.stop(); Diagnostics.playback = null
         performanceOverlay?.close()
         performanceOverlay = null

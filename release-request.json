@@ -1,6 +1,14 @@
 {
-  "versionName": "0.51.16",
-  "versionCode": 181,
+  "versionName": "0.51.17",
+  "versionCode": 182,
   "attempt": 1,
-  "tvSuite": "full"
+  "tvSuite": "focused",
+  "tvTests": [
+    "libraryHomeShowsRowsFromTheImportedCatalogAndReturnsFromGridsAndSearch",
+    "liveNowListsGuideGolfAndOkPlaysItsChannel",
+    "visibleFailedLogoRetriesWithoutRebindingAndPauseCancelsRetry",
+    "queueRejectedLogoWaitsUntilVisibleThenRetriesWithoutRebinding",
+    "heldKeyScrollingDefersPostersUntilItStops",
+    "performanceReportRecordsStallsHiccupsAndPosterTimes"
+  ]
 }

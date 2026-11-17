@@ -45,7 +45,6 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     private val cache = object : LruCache<String, Bitmap>(cacheBytes) { override fun sizeOf(key: String, value: Bitmap) = value.byteCount }
     private val pending = mutableMapOf<String, MutableList<(Bitmap?) -> Unit>>()
     private class Binding(val url: String, val http: Boolean, val dimension: Int, var loaded: ((Bitmap?) -> Unit)?) {
-        var deferred = false
         var waiting = false
         var complete = false
         var attempts = 0
@@ -55,6 +54,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         var laidOut: View.OnLayoutChangeListener? = null
     }
     private val bindings = WeakHashMap<ImageView, Binding>()
+    private val retries = WeakHashMap<ImageView, Binding>()
     private class Failure(val until: Long, val attempts: Int)
     private val failed = ConcurrentHashMap<String, Failure>()
     private val workers = pool(threads)
@@ -79,16 +79,20 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         if (!closed && !paused) {
             val now = SystemClock.uptimeMillis()
             var checked = 0
-            bindings.entries.toList().forEach { (view, binding) ->
-                if (!binding.waiting && !binding.complete && bindings[view] === binding) {
-                    if (now > binding.deadline) forget(view, binding)
-                    else if (now >= binding.retryAt && visible(view) && (binding.deferred || checked < 4)) {
-                        if (!binding.deferred) checked++
+            // Taking one snapshot allows load() and forget() to change the retry set safely.
+            for ((view, binding) in retries.map { it.key to it.value }) {
+                if (retries[view] !== binding) continue
+                when {
+                    now >= binding.deadline -> forget(view, binding)
+                    !visible(view) -> scheduleRetryAt(binding.deadline)
+                    now < binding.retryAt -> scheduleRetryAt(minOf(binding.retryAt, binding.deadline))
+                    checked >= 4 -> scheduleRetryAt(now)
+                    else -> {
+                        checked++
                         load(view, binding)
                     }
                 }
             }
-            scheduleRetries()
         }
     }
     fun get(url: String, http: Boolean, dimension: Int = 0, redraw: () -> Unit): Bitmap? = request(url, http, size(dimension), { redraw() })
@@ -108,18 +112,19 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         binding.attached = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) {
                 binding.deadline = SystemClock.uptimeMillis() + 30000
-                scheduleRetries()
+                scheduleRetry(v as ImageView, binding)
             }
             override fun onViewDetachedFromWindow(v: View) = Unit
         }.also(view::addOnAttachStateChangeListener)
         // Attachment precedes the first layout: it can still have an empty visible
         // rectangle then. Wake again once layout makes the image eligible to retry.
-        binding.laidOut = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> scheduleRetries() }
+        binding.laidOut = View.OnLayoutChangeListener { image, _, _, _, _, _, _, _, _ -> scheduleRetry(image as ImageView, binding) }
             .also(view::addOnLayoutChangeListener)
         load(view, binding, initial = true)
     }
 
     private fun load(view: ImageView, binding: Binding, initial: Boolean = false) {
+        retries.remove(view)
         val target = WeakReference(view)
         fun apply(bitmap: Bitmap?, arrived: Boolean = false) {
             val image = target.get() ?: return
@@ -143,15 +148,14 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             } else if (binding.attempts >= 3 || SystemClock.uptimeMillis() >= binding.deadline) forget(image, binding)
             else {
                 binding.retryAt = maxOf(SystemClock.uptimeMillis() + 1000, failed[binding.url]?.until ?: 0)
-                scheduleRetries()
+                scheduleRetry(image, binding)
             }
         }
         // While a remote key is held the list is flying past: show placeholders and load what is on screen once it stops.
         if (SystemClock.uptimeMillis() < quietUntil && cache.get(key(binding.url, binding.dimension)) == null) {
             if (initial) { if (view.drawable != null) view.setImageDrawable(null); binding.loaded?.invoke(null) }
-            binding.deferred = true; binding.retryAt = quietUntil; scheduleRetries(); return
+            binding.retryAt = quietUntil; scheduleRetry(view, binding); return
         }
-        binding.deferred = false
         val bitmap = request(binding.url, binding.http, binding.dimension, { apply(it, arrived = true) }) { binding.waiting = true; binding.attempts++ }
         if (bitmap != null) apply(bitmap)
         else if (initial) {
@@ -162,26 +166,25 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         // visible binding alive so it can join the bounded worker queue later.
         if (bitmap == null && !binding.waiting && bindings[view] === binding) {
             binding.retryAt = maxOf(SystemClock.uptimeMillis() + 1000, failed[binding.url]?.until ?: 0)
-            scheduleRetries()
+            scheduleRetry(view, binding)
         }
     }
 
     private fun visible(view: ImageView) = view.isAttachedToWindow && view.isShown && view.getGlobalVisibleRect(visibleBounds)
     private fun forget(view: ImageView, binding: Binding) {
-        if (bindings[view] === binding) bindings.remove(view)
+        if (bindings[view] === binding) { bindings.remove(view); retries.remove(view) }
         binding.loaded = null
         binding.attached?.let(view::removeOnAttachStateChangeListener); binding.attached = null
         binding.laidOut?.let(view::removeOnLayoutChangeListener); binding.laidOut = null
     }
-    private fun scheduleRetries() {
-        if (closed || paused) return
+    private fun scheduleRetry(view: ImageView, binding: Binding) {
+        if (closed || paused || binding.waiting || binding.complete || bindings[view] !== binding) return
+        retries[view] = binding
+        scheduleRetryAt(minOf(binding.retryAt, binding.deadline))
+    }
+    /** Scheduling a single image never walks the other views or calculates their visibility. */
+    private fun scheduleRetryAt(next: Long) {
         val now = SystemClock.uptimeMillis()
-        // A check is already due as soon as one may run: looking at every image again cannot bring it forward.
-        if (retryPosted && retryWhen <= now + 60) return
-        val next = bindings.entries.asSequence().filter { !it.value.waiting && !it.value.complete }.minOfOrNull { (view, binding) ->
-            // Hidden/detached views only get cleanup, never another network attempt.
-            if (visible(view)) minOf(binding.retryAt, binding.deadline + 1) else binding.deadline + 1
-        } ?: return
         val whenReady = maxOf(now + 60, next)
         if (retryPosted && retryWhen <= whenReady) return
         handler.removeCallbacks(retryImages)
