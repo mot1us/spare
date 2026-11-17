@@ -5384,6 +5384,43 @@ class SpareDeviceTest {
         root.findViewWithTag<View>(option).apply { requestFocus(); performClick() }
     }
 
+    @Test fun videoOutputDiagnosticSeparatesScreensWithoutRetuning() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Output fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channel = Channel("output", "Fixture video", "Fixture", "${server.base}/channel1.ts")
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(channel), emptyMap())); store.markPlaylistRefreshed(source)
+            val output = MainActivity::class.java.getDeclaredField("debugVideoOutput").apply { isAccessible = true }
+            fun samples(activity: MainActivity) = (output.get(activity) as VideoOutputTrace).lines()
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) {
+                        find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true
+                    }
+                    waitFor(scenario) { samples(it).any { line -> line.startsWith("Full screen:") } }
+                    var mediaId = ""
+                    scenario.onActivity { activity ->
+                        mediaId = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                        activity.window.decorView.findViewWithTag<View>("library").performClick()
+                    }
+                    waitFor(scenario) { samples(it).any { line -> line.startsWith("Library:") } }
+                    scenario.onActivity { activity ->
+                        activity.liveSportsLoader = { LiveSportsSnapshot.EMPTY }
+                        activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                    }
+                    waitFor(scenario) { samples(it).any { line -> line.startsWith("Sports:") } }
+                    scenario.onActivity { activity ->
+                        assertEquals(mediaId, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                        assertEquals(3, samples(activity).count { it.startsWith("Full screen:") || it.startsWith("Library:") || it.startsWith("Sports:") })
+                    }
+                }
+            } finally {
+                store.saveSources(emptyList())
+                store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun performanceReportRecordsStallsHiccupsAndPosterTimes() {
         Diagnostics.reset(); Diagnostics.start()
         try {

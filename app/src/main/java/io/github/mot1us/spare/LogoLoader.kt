@@ -134,9 +134,12 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             if (bitmap == null) { if (image.drawable != null) image.setImageDrawable(null) }
             else if ((image.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap !== bitmap) {
                 image.setImageBitmap(bitmap)
-                // Artwork that arrives after its tile was drawn fades in rather than popping in.
-                // A soft ease-out fade (not a pop) for artwork that arrives after its tile was drawn.
-                if (arrived && opaque && image.isShown) { image.animate().cancel(); image.alpha = 0f; image.animate().alpha(1f).setDuration(280).setInterpolator(android.view.animation.DecelerateInterpolator(1.5f)).start() } else image.alpha = 1f
+                image.animate().cancel()
+                val duration = Motion.panel
+                if (arrived && opaque && image.isShown && duration > 0L) {
+                    image.alpha = 0f
+                    image.animate().alpha(1f).setDuration(duration).start()
+                } else image.alpha = 1f
             }
             val loaded = binding.loaded
             if (bitmap != null) binding.loaded = null

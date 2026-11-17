@@ -687,10 +687,29 @@ class MainActivity : Activity() {
     @Volatile private var progressFrameToken = -1
     @Volatile private var progressFrameUs = Long.MIN_VALUE
     private var monitoringPlayback = false
+    private val debugVideoOutput = if (BuildConfig.DEBUG) VideoOutputTrace() else null
+
+    private fun sampleDebugVideoOutput(now: Long, position: Long, ready: Boolean) {
+        val trace = debugVideoOutput ?: return
+        val counters = player.videoDecoderCounters
+        if (!ready || onDemand != null || multiview.active || settingsPanel?.opened == true || searchPanel.isVisible || counters == null) {
+            trace.pause()
+            return
+        }
+        val screen = when {
+            library.opened -> VideoOutputTrace.Screen.LIBRARY
+            sportsVisible && guideVisible -> VideoOutputTrace.Screen.SPORTS
+            guideVisible -> VideoOutputTrace.Screen.GUIDE
+            else -> VideoOutputTrace.Screen.FULLSCREEN
+        }
+        counters.ensureUpdated()
+        trace.sample(playbackToken, screen, now, position, counters.renderedOutputBufferCount)
+    }
+
     private val monitorPlayback = object : Runnable {
         override fun run() {
             monitoringPlayback = false
-            if (!ownsPlayback()) { playbackProgress.reset(); return }
+            if (!ownsPlayback()) { playbackProgress.reset(); debugVideoOutput?.pause(); return }
             val state = player.playbackState
             val active = firstFrame && player.playWhenReady && player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE &&
                 player.playerError == null && !retryPanel.isVisible && (state == Player.STATE_READY || state == Player.STATE_BUFFERING)
@@ -703,7 +722,9 @@ class MainActivity : Activity() {
             val frame = if (!tunnel && !multiview.active && player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) progressFrameUs.takeIf { progressFrameToken == playbackToken } ?: Long.MIN_VALUE else null
             if (recoverBufferedSports(monotonic, state == Player.STATE_BUFFERING)) return
             val buffer = player.totalBufferedDuration
-            val stalled = playbackProgress.stalled(playbackToken, monotonic, player.currentPosition, frame, state == Player.STATE_BUFFERING, active, bufferedMs = buffer)
+            val position = player.currentPosition
+            sampleDebugVideoOutput(monotonic, position, active && state == Player.STATE_READY)
+            val stalled = playbackProgress.stalled(playbackToken, monotonic, position, frame, state == Player.STATE_BUFFERING, active, bufferedMs = buffer)
             if (tunnel && !multiview.active) playbackProgress.takeReadyPositionPause(monotonic)?.let { duration ->
                 val screen = when {
                     library.opened -> " in Library"
@@ -1849,7 +1870,7 @@ class MainActivity : Activity() {
     }
     private fun cancelPlaybackCallbacks() {
         handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); handler.removeCallbacks(revealBuffering)
-        handler.removeCallbacks(monitorPlayback); monitoringPlayback = false; playbackProgress.reset()
+        handler.removeCallbacks(monitorPlayback); monitoringPlayback = false; playbackProgress.reset(); debugVideoOutput?.pause()
     }
     private fun ownsPlayback() = !closed && started && pausedPlayback == null && (current != null || onDemand != null) &&
         player.currentMediaItem?.mediaId == expectedMediaId
@@ -3697,8 +3718,10 @@ class MainActivity : Activity() {
             "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage.\n\nSpare is free. To support it, visit ko-fi.com/mot1us"); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
             "Performance report" -> {
                 panel.page(page, "What Spare was doing when it felt slow. Reproduce the slowdown, then open this page. Press Down to scroll through the report. Nothing here leaves this TV.")
-                panel.action("Start over") { Diagnostics.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
-                panel.scrollingNote(Diagnostics.report() + "\n\nDown scrolls this report.", "performance-report")
+                panel.action("Start over") { Diagnostics.reset(); debugVideoOutput?.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
+                val videoOutput = debugVideoOutput?.lines().orEmpty()
+                val videoSummary = if (videoOutput.isEmpty()) "" else videoOutput.joinToString("\n", prefix = "Video output by screen (decoder counters)\n", postfix = "\n\n")
+                panel.scrollingNote(videoSummary + Diagnostics.report() + "\n\nDown scrolls this report.", "performance-report")
             }
             "Open-source licenses" -> { panel.page(page, ""); panel.note(listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { assets.open("licenses/$it").bufferedReader().use { reader -> reader.readText() } }) }
             "Exit Spare" -> { panel.page(page, "Close the player."); panel.action("Exit Spare") { finish() } }

@@ -247,8 +247,6 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var enabledLeagues = SportsLeagues.byId.keys
     private val loadHeroArt = Runnable { featured?.takeUnless(::artworkHidden)?.let { game ->
         artwork.request(game)
-        val at = gamePositions[game.key] ?: -1
-        if (at >= 0) artwork.prefetch(games.asSequence().drop(at + 1).filterNot(::artworkHidden).take(2).toList())
     } }
     fun setLeagues(leagues: Set<String>) { enabledLeagues = leagues }
     fun setAvailableLeagues(leagues: Set<String>) {
@@ -722,13 +720,19 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         Diagnostics.sports("Cards shown · ${games.size} games")
         skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
-        heroContent.alpha = 0f; heroContent.animate().alpha(1f).setDuration(260).start()
-        // Cards settle in one after another with a short rise, instead of the whole grid appearing at once.
+        val duration = Motion.panel
+        heroContent.animate().cancel()
         gridArea.alpha = 1f
+        if (duration == 0L) {
+            heroContent.alpha = 1f
+            return
+        }
+        heroContent.alpha = 0f
+        heroContent.animate().alpha(1f).setDuration(duration).start()
         rows.post {
             for (i in 0 until rows.childCount) rows.getChildAt(i).apply {
                 alpha = 0f; translationY = dp(10).toFloat()
-                animate().alpha(1f).translationY(0f).setStartDelay(minOf(i, 8) * 45L).setDuration(240)
+                animate().alpha(1f).translationY(0f).setStartDelay(minOf(i, 8) * duration / 6).setDuration(duration)
                     .setInterpolator(android.view.animation.DecelerateInterpolator(1.5f)).start()
             }
         }
@@ -973,7 +977,15 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         channelLogos.trim()
     }
     fun closeImages() { cardsClosed = true; ++cardsRequest; cardDiffWorker.shutdownNow(); removeCallbacks(settleGameFocus); gridFocus.cancel(); channelLogos.close(); removeCallbacks(loadHeroArt); artwork.close(); logos.close(); pictures.close(); cardLogos.close() }
-    private fun fadeArtwork(view: ImageView, opacity: Float = 1f) { view.animate().cancel(); view.alpha = 0f; view.animate().alpha(opacity).setDuration(160).start() }
+    private fun fadeArtwork(view: ImageView, opacity: Float = 1f) {
+        view.animate().cancel()
+        val duration = Motion.panel
+        if (duration == 0L) view.alpha = opacity
+        else {
+            view.alpha = 0f
+            view.animate().alpha(opacity).setDuration(duration).start()
+        }
+    }
     private fun bindCrest(loader: LogoLoader, view: ImageView, url: String, opacity: Float = 1f) {
         val before = (view.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
         loader.bind(view, url) { bitmap -> if (bitmap != null) {

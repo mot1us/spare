@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.20 — 2026-11-16
+
+- Sports and Library skip extra artwork requests for upcoming cards and rows. With Instant navigation, cards and artwork appear without reveal animations and Library focus moves without an animated lift.
+- Debug builds report decoder video output by screen to help distinguish picture freezes from playback-clock stalls.
+
 ## 0.51.19 — 2026-11-16
 
 - Sports shows scoreboard cards while scores arrive. RedZone and other guide scans, event channel names, and automatic stream discovery wait for the scoreboard and remote input to settle. Playlist scans use one worker, and Sports can reuse the existing guide index without rebuilding it on entry.

@@ -152,7 +152,16 @@ internal class LibraryPosterTile(context: Context) : LinearLayout(context) {
         // Lift the focused poster so it stands out from its neighbours at TV viewing distance.
         val lift = gainFocus && layout != Layout.LIST
         animate().cancel()
-        animate().scaleX(if (lift) 1.07f else 1f).scaleY(if (lift) 1.07f else 1f).translationZ(if (lift) dp(8).toFloat() else 0f).setDuration(120).start()
+        val scale = if (lift) 1.07f else 1f
+        val elevation = if (lift) dp(8).toFloat() else 0f
+        val duration = Motion.enter
+        if (duration == 0) {
+            scaleX = scale
+            scaleY = scale
+            translationZ = elevation
+        } else {
+            animate().scaleX(scale).scaleY(scale).translationZ(elevation).setDuration(duration.toLong()).start()
+        }
     }
 
     private fun tint() {

@@ -13,6 +13,7 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -117,6 +118,36 @@ class LogoLoaderDeviceTest {
             Thread.sleep(1800)
             assertEquals("Pausing drops scheduled retries until a new bind", 1, failures.get())
         } finally { instrumentation.runOnMainSync { paused.close() } }
+    }
+
+    @Test fun instantMotionShowsNewPosterAtFullOpacity() = withActivity { scenario ->
+        val bytes = png()
+        val alpha = AtomicReference<Float>()
+        val loader = LogoLoader(opaque = true, files = object : ImageFiles {
+            override fun bytes(url: String, fetch: () -> ByteArray) = bytes
+        })
+        val store = SecureStore(context)
+        try {
+            scenario.onActivity { activity ->
+                Motion.use("Instant", "Normal")
+                val image = ImageView(activity).also {
+                    activity.addContentView(it, FrameLayout.LayoutParams(64, 64))
+                }
+                loader.bind(image, "https://images.example/instant.png") { bitmap ->
+                    if (bitmap != null) {
+                        assertTrue(image.isShown)
+                        alpha.set(image.alpha)
+                    }
+                }
+            }
+            await("Poster arrived") { alpha.get() != null }
+            assertEquals(1f, alpha.get(), 0f)
+        } finally {
+            instrumentation.runOnMainSync {
+                loader.close()
+                Motion.use(store.navigationAnimation, store.navigationSpeed)
+            }
+        }
     }
 
     @Test fun warmedPosterIsDecodedWhilePausedAndShownWithoutAnotherFetch() = withActivity { scenario ->

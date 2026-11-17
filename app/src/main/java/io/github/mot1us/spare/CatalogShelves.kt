@@ -119,8 +119,6 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             holder.bind(shelf, data[shelf.id])
             // Unloaded, interrupted (still marked busy) or failed-empty rows ask again; a running download is not restarted.
             data[shelf.id].let { if (it == null || it.busy || it.failed && it.rows.isEmpty()) load?.invoke(shelf.id) }
-            // Down is the next key press: have the row after this one decoded before it scrolls in.
-            shelves.getOrNull(position + 1)?.let { next -> data[next.id]?.rows?.take(COLUMNS)?.forEach { row -> if (row.poster.isNotBlank()) images.prefetch(row.poster, http, decode) } }
         }
         override fun onViewRecycled(holder: ShelfHolder) { holder.id?.let { id -> if (data[id]?.busy != false) release?.invoke(id) } }
     }
@@ -215,8 +213,6 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
                     holder.box.tag = "library-item:${item.key}"
                     holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
                     holder.box.bind(item.key, LibraryPosterTile.Content((if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster), images, http, item.requestPoster, decode)
-                    // Right is the next key press: keep the tile just past the screen edge decoded.
-                    items.getOrNull(position + COLUMNS)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, http, decode) }
                     view.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() }
                     view.setOnLongClickListener { items.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                     view.setOnFocusChangeListener { _, active -> if (active) { val at = holder.bindingAdapterPosition; id?.let { positions[it] = at; current = it }; items.getOrNull(at)?.let { focused?.invoke(it) } } }

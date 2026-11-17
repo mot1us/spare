@@ -271,8 +271,6 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.bind(item.key, LibraryPosterTile.Content(
                     (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster,
                 ), images, artworkHttp, item.requestPoster, tileDecode)
-                // Decode the rows the remote is about to reach before they scroll into view.
-                if (grid) shownRows.getOrNull(position + columns * 2)?.poster?.takeIf { it.isNotBlank() }?.let { images.prefetch(it, artworkHttp, tileDecode) }
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; shownRows.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) } }

@@ -52,7 +52,6 @@ class SportsArtwork(context: Context, private val ready: (String, String, String
     private fun cancelQueued() {
         tasks.entries.toList().forEach { (key, task) -> if (worker.remove(task)) { tasks.remove(key); pending.remove(key) } }
     }
-    fun prefetch(games: List<SportsGame>) { games.take(2).forEach(::enqueue) }
     fun resume() { paused = false }
     fun pause() { paused = true; cancelQueued() }
     fun close() { closed = true; worker.shutdownNow(); tasks.clear(); pending.clear(); handler.removeCallbacksAndMessages(null) }
