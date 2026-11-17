@@ -55,9 +55,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         windowAlignment = WINDOW_ALIGN_LOW_EDGE; windowAlignmentOffset = 0; windowAlignmentOffsetPercent = WINDOW_ALIGN_OFFSET_PERCENT_DISABLED
         itemAlignmentOffset = 0; itemAlignmentOffsetPercent = ITEM_ALIGN_OFFSET_PERCENT_DISABLED
         setWindowAlignmentPreferKeyLineOverHighEdge(true)
-        // Keep the row below the screen laid out so Down does not have to build it. Leanback marks this setter as
-        // library-internal in this version although it is public and stable; the version is pinned in the lockfile.
-        extraLayoutSpace = dp(140); verticalSpacing = dp(4)
+        verticalSpacing = dp(4)
         clipChildren = false; clipToPadding = false
         setOnKeyInterceptListener { event ->
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyInterceptListener false
@@ -162,7 +160,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             items = value?.rows.orEmpty(); more = value; total = value?.total ?: 0
             // A fixed height keeps a row's own updates from re-measuring every other row.
             val tile = posterHeight(tileWidth()); val height = tile + dp(16)
-            list.setRowHeight(tile); list.extraLayoutSpace = tileWidth() * 2
+            list.setRowHeight(tile)
             if (list.layoutParams.height != height) list.layoutParams = list.layoutParams.apply { this.height = height }
             list.adapter?.notifyDataSetChanged()
             list.selectedPosition = (positions[shelf.id] ?: 0).coerceIn(0, maxOf(0, count() - 1))
@@ -196,14 +194,13 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
             override fun getItemCount() = count()
             override fun getItemViewType(position: Int) = if (position < items.size) 0 else 1
             override fun onCreateViewHolder(parent: ViewGroup, type: Int): ViewHolder =
-                if (type == 0) PosterHolder(LibraryPosterTile(context)) else object : ViewHolder(TextView(context).apply {
+                if (type == 0) PosterHolder(LibraryPosterTile(context, artworkOnly = true)) else object : ViewHolder(TextView(context).apply {
                     gravity = Gravity.CENTER; isFocusableInTouchMode = true; isClickable = true; maxLines = 3
                     setPadding(dp(8), dp(8), dp(8), dp(8))
                 }) {}
             override fun onBindViewHolder(holder: ViewHolder, position: Int) {
                 val width = tileWidth(); val height = posterHeight(width)
                 val view = holder.itemView
-                if (holder is PosterHolder) holder.box.configure(LibraryPosterTile.Layout.ROW)
                 val params = view.layoutParams
                 if (params !is RecyclerView.LayoutParams || params.width != width || params.height != height || params.marginEnd != 0 || params.bottomMargin != 0)
                     view.layoutParams = RecyclerView.LayoutParams(width, height)

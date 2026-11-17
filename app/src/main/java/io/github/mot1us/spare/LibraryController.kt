@@ -75,6 +75,12 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var detailItem: OnDemand? = null
     val panel = MediaBrowserPanel(activity, button, { open(it) }, { refresh() })
     init {
+        panel.cachedSpotlight = { row ->
+            selectedSource()?.let { selected ->
+                val key = "${selected.id}:${row.key}"
+                details[key]?.let(::spotlight) ?: seriesSpots[key]
+            }
+        }
         panel.favoriteAction = { (detailItem ?: parentSeries)?.let(::toggleLibraryFavorite) }
         panel.sortLabel(store.librarySort)
         panel.sortAction = {
@@ -205,7 +211,6 @@ class LibraryController(private val activity: Activity, private val store: Secur
         episodeList = entries; playSelected(item); return true
     }
     fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
-        spotTask?.cancel(true)
         if (!keepCategory || mode != kind) { shelfCategory = null; gridFromHome = false; homeSearch = false }
         // A hidden tab cannot keep a category download ahead of the selected tab.
         if (mode != kind) {
@@ -519,39 +524,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun browserRow(item: OnDemand) = BrowserRow(item.id, item.title,
         if (item.kind == "episode") listOf("Episode ${item.episode}", item.runtime).filter { it.isNotBlank() }.joinToString(" · ") else listOf(item.year, item.category).filter { it.isNotBlank() }.joinToString(" · "),
         poster = item.poster, description = item.description, longPress = if (item.kind in setOf("movie", "series")) ({ toggleLibraryFavorite(item) }) else null,
-        backdrop = item.backdrop, spotlight = if (item.kind in setOf("movie", "series")) ({ done -> spotlightDetails(item, done) }) else null) { select(item) }
-    private val spotWorker = Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-library-spotlight") }
-    private var spotTask: java.util.concurrent.Future<*>? = null
+        backdrop = item.backdrop) { select(item) }
     private val seriesSpots = linkedMapOf<String, Spotlight>()
     private fun spotlight(value: OnDemand) = Spotlight(LibraryFacts.meta(value), value.description, value.backdrop)
-    /** One request at a time for the poster under the cursor; results are shared with the details page. */
-    private fun spotlightDetails(item: OnDemand, done: (Spotlight) -> Unit) {
-        val selected = selectedSource() ?: return
-        if (selected.kind != "xtream") return
-        val key = "${selected.id}:${item.id}"
-        details[key]?.let { done(spotlight(it.copy(category = item.category))); return }
-        seriesSpots[key]?.let { done(it); return }
-        if (destroyed) return
-        spotTask?.cancel(true)
-        // A request already posted when Spare closes must not reach the stopped worker (it crashed the app).
-        spotTask = runCatching { spotWorker.submit {
-            val began = Timings.now()
-            val (loaded, entries) = runCatching { if (item.kind == "movie") VodCatalog.details(selected, item) to emptyList() else VodCatalog.seriesInfo(selected, item) }.getOrNull() ?: return@submit
-            Timings.since(if (item.kind == "movie") "Movie details" else "Series info", began)
-            handler.post {
-                if (destroyed) return@post
-                val spot = spotlight(loaded.copy(category = item.category))
-                if (item.kind == "movie") { details[key] = loaded; while (details.size > 200) details.remove(details.keys.first()) }
-                else { rememberSeries(key, spot, entries) }
-                done(spot)
-            }
-        } }.getOrNull()
-    }
-    /** The spotlight's series fetch already holds the episode list, so opening that series is instant. */
-    private fun rememberSeries(key: String, spot: Spotlight, entries: List<OnDemand>) {
-        seriesSpots[key] = spot; while (seriesSpots.size > 200) seriesSpots.remove(seriesSpots.keys.first())
-        if (entries.isNotEmpty() && entries.size <= 2000 && episodeCache[key] == null) { episodeCache[key] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) }
-    }
     private fun loadCatalogPage(group: String?, query: String, more: Boolean) {
         val snapshot = activeSnapshot ?: return
         // A category still downloading cannot be sorted yet; show it in provider order at once and sort when it finishes.
@@ -654,16 +629,16 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val cached = episodeCache[cacheKey]
         if (cached != null) {
             if (startRequestedEpisode(cached)) return
-            episodeList = cached; showItems(cached, "Series", "${counted(cached.size, "episode")} · Back returns to Series", force); panel.seriesArtwork(series); presentFavorites()
+            episodeList = cached; showItems(cached, "Series", "${counted(cached.size, "episode")} · Back returns to Series", force); panel.seriesArtwork(series, seriesSpots[cacheKey]); presentFavorites()
             if (!force) { panel.focusRows(); return }
         } else { panel.submit(emptyList()); panel.page(series.title, "Loading seasons and episodes…", true) }
         val began = Timings.now()
         request { token -> runCatching { VodCatalog.seriesInfo(selected, series).also { Timings.since("Series info", began) } }.onSuccess { (info, entries) -> ui(token) {
-            if (seriesSpots[cacheKey] == null) seriesSpots[cacheKey] = spotlight(info.copy(category = series.category))
+            seriesSpots[cacheKey] = spotlight(info.copy(category = series.category))
+            while (seriesSpots.size > 200) seriesSpots.remove(seriesSpots.keys.first())
             if (entries.size <= 2000) { episodeCache[cacheKey] = entries; while (episodeCache.size > 5) episodeCache.remove(episodeCache.keys.first()) } else episodeCache.remove(cacheKey)
             if (startRequestedEpisode(entries)) return@ui
-            episodeList = entries; showItems(entries, "Series", "${counted(entries.size, "episode")} · Back returns to Series", false); panel.seriesArtwork(series); presentFavorites(); if (!force) panel.focusRows()
-            spotlightDetails(series) { spot -> if (parentSeries?.id == series.id) panel.seriesSpotlight(series, spot) }
+            episodeList = entries; showItems(entries, "Series", "${counted(entries.size, "episode")} · Back returns to Series", false); panel.seriesArtwork(series, seriesSpots[cacheKey]); presentFavorites(); if (!force) panel.focusRows()
             if (favoriteState.contains(series.id)) editFavorites(selected) { it.update(series, entries, System.currentTimeMillis()) }
         } }.onFailure { ui(token) { panel.page(series.title, "${if (cached != null) "Using saved episodes · " else "Episodes unavailable · "}${SourceErrors.message(it)} · Refresh to retry.", false); if (!force) panel.focusRows() } } }
     }
@@ -810,10 +785,10 @@ class LibraryController(private val activity: Activity, private val store: Secur
         cancelStart(); ++epoch; task?.cancel(true); favoriteTask?.cancel(true); ++favoriteEpoch
         catalogImports.values.forEach { it.cancel(true) }; catalogImports.clear(); catalogGenerations.clear()
         pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null; activeCatalog = ""
-        catalogs.clear(); browsePages.clear(); categoryNames.clear(); selectedCategories.clear(); episodeCache.clear(); details.clear()
+        catalogs.clear(); browsePages.clear(); categoryNames.clear(); selectedCategories.clear(); episodeCache.clear(); details.clear(); seriesSpots.clear()
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
-    fun destroy() { spotTask?.cancel(true); spotWorker.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

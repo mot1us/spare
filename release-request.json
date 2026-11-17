@@ -1,12 +1,10 @@
 {
-  "versionName": "0.51.20",
-  "versionCode": 185,
+  "versionName": "0.51.21",
+  "versionCode": 186,
   "attempt": 1,
   "tvSuite": "focused",
   "tvTests": [
-    "instantMotionShowsNewPosterAtFullOpacity",
-    "videoOutputDiagnosticSeparatesScreensWithoutRetuning",
     "libraryHomeShowsRowsFromTheImportedCatalogAndReturnsFromGridsAndSearch",
-    "sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable"
+    "libraryMoviesSeriesArchiveAndFontUseSamePlayerAndReturnToLive"
   ]
 }

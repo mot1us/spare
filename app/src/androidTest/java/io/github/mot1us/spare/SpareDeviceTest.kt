@@ -5539,9 +5539,16 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
                 // Each row remembers its place: back up to the newest title.
                 device.pressDPadUp(); device.pressDPadUp(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }
-                // Opening a title from a row and pressing Back lands on that tile again.
+                // Browsing shelves and category grids uses the stored catalog even after the cursor settles.
+                assertEquals("Focus must not fetch movie details", 0, server.movieDetailRequests.get())
+                // OK fetches the full details. Back lands on the same tile again.
                 device.pressDPadCenter()
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-details")?.isShown == true }
+                waitFor(scenario) {
+                    val details = it.window.decorView.findViewWithTag<View>("library-details")
+                    details?.isShown == true &&
+                        details.findViewWithTag<TextView>("library-detail-plot")?.text?.toString() == "A provider-supplied film description."
+                }
+                assertEquals("Selecting a movie fetches details once", 1, server.movieDetailRequests.get())
                 device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:5240" }
                 // Typing searches the whole catalog in a grid; clearing the text returns to the rows.
                 scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText("Home title 77") }
@@ -5883,6 +5890,7 @@ class SpareDeviceTest {
         val actionCatalogStarted = java.util.concurrent.CountDownLatch(1)
         val finishActionCatalog = java.util.concurrent.CountDownLatch(1)
         private val actionMovies = (1..400).joinToString(",", "[", "]") { """{"stream_id":${2000+it},"name":"Action title $it","category_id":"2","container_extension":"mp4"}""" }.toByteArray()
+        val movieDetailRequests = java.util.concurrent.atomic.AtomicInteger()
         val archiveRequests = java.util.concurrent.atomic.AtomicInteger()
         val epgTargets = java.util.concurrent.CopyOnWriteArrayList<String>()
         val requestedEpgTargets = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -5913,6 +5921,7 @@ class SpareDeviceTest {
                             catalogTargets.add(target); vodImportTargets.add("movie")
                         }
                         if (target.contains("action=get_series&") || target.endsWith("action=get_series")) vodImportTargets.add("series")
+                        if (target.contains("get_vod_info")) movieDetailRequests.incrementAndGet()
                         if (target.contains("get_simple_data_table")) archiveRequests.incrementAndGet()
                         if (slowEpisodes && target.contains("get_series_info")) { episodesRequested.countDown(); finishEpisodes.await(12, java.util.concurrent.TimeUnit.SECONDS) }
                         if (path == "/redirect.mp4" || path == "/redirect-relative.mp4") {

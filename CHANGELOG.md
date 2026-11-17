@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.21 — 2026-11-16
+
+- Library shows catalog and cached details while browsing. Press OK to load full movie or series details.
+- Library shelves build lighter poster tiles and lay out only the tiles needed by the grid, reducing work as shelves appear over live TV.
+
 ## 0.51.20 — 2026-11-16
 
 - Sports and Library skip extra artwork requests for upcoming cards and rows. With Instant navigation, cards and artwork appear without reveal animations and Library focus moves without an animated lift.

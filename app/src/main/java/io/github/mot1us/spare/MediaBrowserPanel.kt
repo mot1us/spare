@@ -23,10 +23,10 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-/** Richer text for the spotlight, fetched once when a poster settles under the cursor. */
+/** Details already available for a Library title. */
 data class Spotlight(val meta: String, val plot: String, val backdrop: String)
 data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null,
-    val backdrop: String = "", val spotlight: (((Spotlight) -> Unit) -> Unit)? = null,
+    val backdrop: String = "",
     /** [detail] is the viewer's own (a resume point, a Watchlist note): the banner keeps it ahead of the provider's facts. */
     val personal: Boolean = false, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
@@ -59,11 +59,10 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private val spotPlot = label(13f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextColor(0xFFE3E8EE.toInt()); setLineSpacing(0f, 1.1f); tag = "library-spot-plot" }
     private val spotlight = LinearLayout(context).apply { orientation = VERTICAL; tag = "library-spotlight"; visibility = GONE }
     private var spotKey: String? = null
-    private val spotLater = Runnable { requestSpotDetails() }
+    var cachedSpotlight: ((BrowserRow) -> Spotlight?)? = null
     private var spotWaiting: BrowserRow? = null
     private var shelfFocus: BrowserRow? = null
     private val spotApply = Runnable { spotWaiting?.let { spotWaiting = null; showSpot(it) } }
-    private var spotRow: BrowserRow? = null
     // Fixed heights: a wrap-content FrameLayout would stretch its full-bleed artwork to the whole screen.
     private val hero = FrameLayout(context)
     /** The page's name and state ("Fixture cinema · 80 titles") between the banner and the titles. */
@@ -443,8 +442,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         favoriteIds = ids; favoriteLabels = labels; rows.adapter?.notifyItemRangeChanged(0, shownRows.size)
         shelves.favoriteIds = ids; shelves.favoriteLabels = labels; shelves.refreshTiles()
     }
-    fun seriesArtwork(item: OnDemand?) {
-        seriesSpotlight(item)
+    fun seriesArtwork(item: OnDemand?, spot: Spotlight? = null) {
+        seriesSpotlight(item, spot)
         bannerUrl = item?.poster.orEmpty(); banner.isVisible = bannerUrl.isNotBlank()
         val url = bannerUrl
         fun draw() { if (bannerUrl == url) banner.setImageBitmap(images.get(url, artworkHttp, tileDecode) {}) }
@@ -538,18 +537,18 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
     }
     private fun clearSpot() {
-        searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); spotKey = null; spotRow = null
+        searchHandler.removeCallbacks(spotApply); spotKey = null
         spotTitle.text = ""; spotMeta.text = ""; spotPlot.text = ""; backdrops.bind(spotArt, ""); spotArt.visibility = GONE; spotScrim.visibility = GONE
     }
     private var seriesSpot: Pair<OnDemand, Spotlight?>? = null
     /** An episode list keeps its series in the spotlight: backdrop, facts and plot. */
-    fun seriesSpotlight(series: OnDemand?, spot: Spotlight? = null) {
+    private fun seriesSpotlight(series: OnDemand?, spot: Spotlight? = null) {
         seriesSpot = series?.let { it to (spot ?: seriesSpot?.takeIf { old -> old.first.id == it.id }?.second) }
         spotKey = null; spotMode()
     }
     private fun showSeriesSpot() {
         val (series, spot) = seriesSpot ?: return
-        spotKey = series.id; spotRow = null; searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
+        spotKey = series.id; searchHandler.removeCallbacks(spotApply)
         spotTitle.text = series.title
         spotMeta.text = spot?.meta?.takeIf { it.isNotBlank() } ?: listOf(series.year, series.category).filter { it.isNotBlank() }.joinToString("  ·  ")
         spotPlot.text = spot?.plot.orEmpty().ifBlank { series.description }
@@ -562,28 +561,22 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (held > 0) { spotWaiting = row; searchHandler.removeCallbacks(spotApply); searchHandler.postDelayed(spotApply, held + 20); return }
         spotWaiting = null
         if (spotKey == row.key) return
-        spotKey = row.key; spotRow = row
-        spotTitle.text = row.title; spotMeta.text = row.detail; spotPlot.text = row.description
+        spotKey = row.key
+        val cached = cachedSpotlight?.invoke(row)
+        spotTitle.text = row.title
+        spotMeta.text = cached?.meta?.takeIf { it.isNotBlank() }?.let {
+            if (row.personal && row.detail.isNotBlank()) "${row.detail}  ·  $it" else it
+        } ?: row.detail
+        spotPlot.text = cached?.plot.orEmpty().ifBlank { row.description }
         // The new title's words fade in rather than snapping, as the cursor moves along a row.
         spotlight.animate().cancel(); if (Motion.enter == 0) spotlight.alpha = 1f else { spotlight.alpha = .55f; spotlight.animate().alpha(1f).setDuration(150).start() }
-        spotArtwork(row.backdrop.ifBlank { row.poster })
-        // Wait for the cursor to settle so fast scrolling never queues provider requests.
-        searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
-        if (row.spotlight != null) searchHandler.postDelayed(spotLater, 350)
+        spotArtwork(cached?.backdrop.orEmpty().ifBlank { row.backdrop.ifBlank { row.poster } })
+        searchHandler.removeCallbacks(spotApply)
     }
     private fun spotArtwork(url: String) {
         if (url.isBlank()) { backdrops.bind(spotArt, ""); spotArt.visibility = GONE; spotScrim.visibility = GONE; return }
         spotArt.visibility = VISIBLE; spotScrim.visibility = VISIBLE
         backdrops.bind(spotArt, url, artworkHttp) { bitmap -> if (bitmap == null && spotArt.drawable == null) { spotArt.visibility = GONE; spotScrim.visibility = GONE } }
-    }
-    private fun requestSpotDetails() {
-        val row = spotRow ?: return; val key = row.key
-        row.spotlight?.invoke { spot ->
-            if (spotKey != key || detailPane.isVisible) return@invoke
-            if (spot.meta.isNotBlank()) spotMeta.text = if (row.personal && row.detail.isNotBlank()) "${row.detail}  ·  ${spot.meta}" else spot.meta
-            if (spot.plot.isNotBlank()) spotPlot.text = spot.plot
-            if (spot.backdrop.isNotBlank()) spotArtwork(spot.backdrop)
-        }
     }
     fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, busy: Boolean) {
         val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
@@ -596,7 +589,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         detailPane.removeAllViews(); detailPane.background = null
         page(tabs.firstOrNull { it.second == selectedTab }?.first ?: "Library", if (busy) "Loading details…" else "", busy)
         // The details page uses the spotlight for its backdrop, title and facts; the pane holds poster, plot and actions.
-        spotKey = item.id; spotRow = null; searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply)
+        spotKey = item.id; searchHandler.removeCallbacks(spotApply)
         spotTitle.text = item.title
         spotMeta.text = LibraryFacts.meta(item)
         spotArtwork(item.backdrop.ifBlank { item.poster })
@@ -606,7 +599,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         // The tile's copy fills the cover at once; the sharper one replaces it a moment later.
         cover.setImageBitmap(images.get(item.poster, artworkHttp, redraw = ::redraw) ?: images.peek(item.poster, tileDecode)); hero.addView(cover, LayoutParams(dp(150), dp(225)).apply { marginEnd = dp(24) })
         val copy = LinearLayout(context).apply { orientation = VERTICAL }
-        copy.addView(label(14f).apply { text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 8; setLineSpacing(0f, 1.15f) }, LayoutParams(-1, -2))
+        copy.addView(label(14f).apply { tag = "library-detail-plot"; text = item.description.ifBlank { "No description supplied by the provider." }; maxLines = 8; setLineSpacing(0f, 1.15f) }, LayoutParams(-1, -2))
         LibraryFacts.cast(item.cast).takeIf { it.isNotBlank() }?.let { starring ->
             copy.addView(label(12f).apply { tag = "library-cast"; text = starring; maxLines = 2; setTextColor(Color.LTGRAY); setPadding(0, dp(14), 0, 0) })
         }
@@ -621,7 +614,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }
-    fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotLater); searchHandler.removeCallbacks(spotApply); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
+    fun pauseImages() { rememberAnchor(); searchHandler.removeCallbacks(searchLater); searchHandler.removeCallbacks(spotApply); ++focusEpoch; pending = null; spotKey = null; images.pause(); backdrops.pause() }
     /** Frame times are counted only while Library is actually on screen (see [LibraryFrames]). */
     override fun onVisibilityAggregated(isVisible: Boolean) {
         super.onVisibilityAggregated(isVisible)
