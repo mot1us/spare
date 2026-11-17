@@ -348,11 +348,14 @@ class MainActivity : Activity() {
         scheduleScoreDelay()
     }
     private val reminderWorker = workers.pool("reminder")
+    /** One more scoreboard reply for the load in progress (tests feed these directly). */
+    internal fun publishSportsPartial(snapshot: LiveSportsSnapshot) = publishSportsSchedule(snapshot, liveSportsDay, liveSportsRequest)
     private fun publishSportsSchedule(snapshot: LiveSportsSnapshot, day: java.time.LocalDate?, request: Int, cached: Boolean = false) {
         if (snapshot.events.isEmpty() && snapshot.leagues.isEmpty()) return
         handler.post {
             if (!closed && request == liveSportsRequest && liveSportsDay == day && (!cached || liveSports.leagues.isEmpty())) {
                 liveSports = liveSports.mergeRefresh(snapshot); rememberScores(liveSports); scheduleSports(); updateScoreStrip(); reorderEpgForGames()
+                Diagnostics.sports("${if (cached) "Saved schedule" else "Scoreboard reply"} · ${snapshot.events.size} games · ${snapshot.leagues.size} leagues done")
             }
         }
     }
@@ -923,7 +926,7 @@ class MainActivity : Activity() {
         minWidth = 0; minimumWidth = 0; minHeight = dp(34); minimumHeight = dp(34); typeface = AppFont.face(true)
         setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(GuideTheme.focusText, Color.WHITE)))
         fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(4).toFloat() }
-        background = StateListDrawable().apply { setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit); addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
+        background = FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(30, 30, 30))) }
         background = GuideTheme.background(resources.displayMetrics.density, Color.rgb(30, 30, 30))
         stateListAnimator = null
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)).apply { marginEnd = dp(8) }
@@ -1352,7 +1355,7 @@ class MainActivity : Activity() {
         clearGuideSearch(); sportsVisible = sports
         // Leagues are chosen during first-run setup; anyone who skipped it starts with the pro leagues.
         if (sports && !store.sportsLeaguesChosen) store.sportsLeagues = OnboardingPanel.DEFAULT_LEAGUES
-        if (sports) { ensureSportsLeague(); sportsPanel.loading("Finding live games…") }
+        if (sports) { Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}"); ensureSportsLeague(); sportsPanel.loading("Finding live games…") }
         applyFilter(); showGuide(true)
     }
     private fun moveTime(channel: Channel?, amount: Int) {
@@ -2417,6 +2420,7 @@ class MainActivity : Activity() {
         liveSportsTask = liveSportsWorker.submit {
             val result = runCatching { liveSportsLoader() }.getOrDefault(LiveSportsSnapshot.EMPTY)
             handler.post { if (!closed) {
+                Diagnostics.sports("Scoreboard finished · ${result.events.size} games · ${result.leagues.size} leagues")
                 liveSportsChecking = false; if (liveSportsDay == requestedDay) { liveSports = liveSports.mergeRefresh(result, complete = true); rememberScores(liveSports); reorderEpgForGames() }
                 if (liveSportsAgain) { liveSportsAgain = false; checkLiveSports(force = true) }
                 else retrySportsSoonIfMissing()
@@ -2473,7 +2477,11 @@ class MainActivity : Activity() {
             handler.post {
                 if (epoch == sportsEpoch) sportsComputing = false
                 if (closed || sourceEpoch != generation || epoch != sportsEpoch || !sportsVisible) return@post
-                if (liveSnapshot !== liveSports || selectedTeam != sportsTeam || selectedLeague != sportsBrowseLeague) { sportsDirty = false; scheduleSports(); return@post }
+                if (selectedTeam != sportsTeam || selectedLeague != sportsBrowseLeague) { sportsDirty = false; scheduleSports(); return@post }
+                // More scores arrived while these cards were prepared. Show these anyway and prepare again: waiting for a result
+                // nothing has overtaken shows nothing at all until the last league answers, then everything at once.
+                val newer = liveSnapshot !== liveSports
+                Diagnostics.sports("Prepared ${games.size} games in ${System.currentTimeMillis() - now} ms${if (newer) " · newer scores already in" else ""}")
                 val browsing = sportsPanel.browsingGames
                 if (browsing) selectedGame = games.firstOrNull { it.key == selectedGame?.key } ?: games.firstOrNull()
                 val scanning = checkingSnapshot && (selectedLeague?.let { it !in liveSnapshot.leagues } ?: liveSnapshot.leagues.isEmpty())
@@ -2486,10 +2494,12 @@ class MainActivity : Activity() {
                 if (browsing) selectedGame?.let(::showGameInfo) ?: run {
                     channelInfo.text = "Sports"; programmeInfo.text = "Today shows games across every supported league, whether or not you follow the teams. Select a poster to find playlist coverage. Live, upcoming and final status come from the scoreboard."
                 }
-                queueSportsPrefetch(games)
-                refreshSportsDestinations(snapshot, games, redZoneProfile, qualitySnapshot, favoriteSnapshot, hidden, replaySnapshot, selectedSourceId, sourceEpoch, epoch, now)
-                scheduleEpg()
-                if (sportsDirty) { sportsDirty = false; scheduleSports() }
+                if (!newer) {
+                    queueSportsPrefetch(games)
+                    refreshSportsDestinations(snapshot, games, redZoneProfile, qualitySnapshot, favoriteSnapshot, hidden, replaySnapshot, selectedSourceId, sourceEpoch, epoch, now)
+                    scheduleEpg()
+                }
+                if (sportsDirty || newer) { sportsDirty = false; scheduleSports() }
             }
         }
     }

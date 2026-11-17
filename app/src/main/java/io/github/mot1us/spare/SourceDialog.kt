@@ -46,9 +46,7 @@ object SourceDialog {
             isFocusableInTouchMode = true; stateListAnimator = null; textSize = 15f
             // Same clear focus as the rest of Spare: white when highlighted, dark otherwise.
             fun shape(color: Int) = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = 6 * density }
-            background = android.graphics.drawable.StateListDrawable().apply {
-                setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit)
-                addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(40, 44, 52)))
+            background = FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(), shape(Color.rgb(40, 44, 52)))
             }
             setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(Color.BLACK, Color.WHITE)))
             form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(12) })

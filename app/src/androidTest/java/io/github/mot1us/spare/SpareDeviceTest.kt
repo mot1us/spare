@@ -1884,6 +1884,59 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun navigationAnimationsLeaveNoHighlightBehindOnRowsTheCursorLeft() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Ghost check", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val channels = (1..40).map { Channel("ghost:$it", "Channel $it", "Category ${(it - 1) / 5 + 1}", "${server.base}/channel1.mp4") }
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            for (style in listOf("Fade in", "Cross-fade")) for (speed in listOf("Slow", "Fast")) {
+                store.navigationAnimation = style; store.navigationSpeed = speed
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                    device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                    // Presses arrive faster than a fade lasts, as when a remote button is held or tapped quickly.
+                    fun keys(vararg codes: Int) = codes.forEach { code ->
+                        val at = android.os.SystemClock.uptimeMillis()
+                        listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP).forEach { action ->
+                            instrumentation.uiAutomation.injectInputEvent(KeyEvent(at, at, action, code, 0).apply { setSource(android.view.InputDevice.SOURCE_DPAD) }, false)
+                        }
+                        Thread.sleep(25)
+                    }
+                    val d = KeyEvent.KEYCODE_DPAD_DOWN; val u = KeyEvent.KEYCODE_DPAD_UP; val l = KeyEvent.KEYCODE_DPAD_LEFT; val r = KeyEvent.KEYCODE_DPAD_RIGHT
+                    keys(d, d, d, d, d, d, d, d, d, d, d, d, d, d, u, u, u, u, u, u, l, d, d, r, d)
+                    Thread.sleep(1500); instrumentation.waitForIdleSync()
+                    device.takeScreenshot(File(context.getExternalFilesDir(null), "ghost-${style.replace(' ', '-')}-$speed.png"))
+                    scenario.onActivity { activity ->
+                        fun pixels(drawable: android.graphics.drawable.Drawable, view: View): IntArray {
+                            val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+                            drawable.draw(android.graphics.Canvas(bitmap))
+                            return IntArray(view.width * view.height).also { bitmap.getPixels(it, 0, view.width, 0, 0, view.width, view.height); bitmap.recycle() }
+                        }
+                        val stuck = mutableListOf<String>()
+                        fun check(view: View) {
+                            listOfNotNull(view.background, view.foreground).filterIsInstance<android.graphics.drawable.StateListDrawable>().forEach { drawable ->
+                                if (view.width > 0 && view.height > 0) {
+                                    val shown = pixels(drawable, view); drawable.jumpToCurrentState(); val settled = pixels(drawable, view)
+                                    if (!shown.contentEquals(settled) || drawable.current.alpha != 255) stuck += "${(view as? TextView)?.text ?: view.contentDescription ?: view.tag} focused=${view.isFocused} alpha=${drawable.current.alpha}"
+                                }
+                            }
+                            (view as? ViewGroup)?.let { group -> (0 until group.childCount).forEach { check(group.getChildAt(it)) } }
+                        }
+                        check(activity.window.decorView)
+                        assertTrue("$style $speed left a highlight on: $stuck", stuck.isEmpty())
+                        // A row refreshed or re-attached in the middle of its fade (Android then jumps its drawables to the end) must end fully drawn, not frozen part-way.
+                        val list = channelList(activity)!!
+                        val from = list.focusedChild; val to = (0 until list.childCount).map(list::getChildAt).first { it !== from && it.isFocusable }
+                        assertTrue(to.requestFocus())
+                        listOf(from, to).forEach { it.jumpDrawablesToCurrentState() }
+                        check(activity.window.decorView)
+                        assertTrue("$style $speed froze a fade part-way on: $stuck", stuck.isEmpty())
+                    }
+                }
+            }
+        }
+    }
+
     @Test fun deepCategoriesReachToolbarAndReturnWithoutScrollingOrRetuning() {
         FixtureServer().use { server ->
             val source = Source(name = "Deep sidebar", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -2313,6 +2366,52 @@ class SpareDeviceTest {
                 }
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)
+            }
+        }
+    }
+
+    @Test fun sportsShowsGamesWhileScoreboardRepliesAreStillArriving() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports arriving fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            // A lineup the size of a real provider's, so preparing the cards takes real time.
+            val start = System.currentTimeMillis() - 1800000L
+            val channels = (1..15800).map { Channel("arriving:$it", if (it % 40 == 0) "US| NFL Game Pass $it HD" else "US| Channel $it HD", "Category ${it / 200}", "${server.base}/channel1.mp4") }
+            val programmes = channels.filter { it.id.substringAfter(':').toInt() % 4 == 0 }.associate { channel ->
+                channel.id to (0 until 8).map { slot -> Programme(channel.id, if (slot % 3 == 0) "NFL Football: Buffalo Bills at Kansas City Chiefs" else "Programme $slot", start + slot * 3600000L, start + (slot + 1) * 3600000L) }
+            }
+            store.cache(source, Guide(channels, programmes)); store.markPlaylistRefreshed(source)
+            store.sportsLeagues = setOf("NFL")
+            val finished = java.util.concurrent.atomic.AtomicBoolean()
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = {
+                        // Many leagues answer one after another for several seconds, each reply publishing what is known so far.
+                        val now = System.currentTimeMillis()
+                        fun known() = LiveSportsSnapshot(listOf(LiveEvent("arriving-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL"))
+                        val until = android.os.SystemClock.elapsedRealtime() + 15000
+                        while (android.os.SystemClock.elapsedRealtime() < until && !Thread.currentThread().isInterrupted) { activity.publishSportsPartial(known()); Thread.sleep(2) }
+                        finished.set(true); known()
+                    }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    val opened = android.os.SystemClock.elapsedRealtime()
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 2 }
+                    val waited = android.os.SystemClock.elapsedRealtime() - opened
+                    assertTrue("The game shows while later replies are still arriving, not after the last one (took $waited ms)", !finished.get() && waited < 4000)
+                    // The performance report says what arrived when, so a slow open on a real box can be traced.
+                    val report = Diagnostics.report()
+                    assertTrue("Sports opening is traced: $report", "Last Sports opening" in report && "Sports chosen" in report && "Scoreboard reply" in report && Regex("Prepared 1 games in \\d+ ms").containsMatchIn(report))
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
             }
         }
     }

@@ -104,6 +104,16 @@ internal object Diagnostics {
         val from = event.device?.name?.takeIf { it.isNotBlank() } ?: "no device"
         action("Key ${android.view.KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · from $from")
     }
+    // Sports opening: what arrived when after Sports was chosen, so a slow first open can be traced on the box itself.
+    private val sportsSteps = ArrayList<Action>()
+    private var sportsAt = 0L
+    fun sportsOpened(text: String) { synchronized(sportsSteps) { sportsSteps.clear(); sportsAt = SystemClock.elapsedRealtime() }; sports(text) }
+    fun sports(text: String) = synchronized(sportsSteps) {
+        if (sportsAt == 0L) return@synchronized
+        val last = sportsSteps.lastOrNull()
+        if (last != null && last.text == text.take(110)) last.times++ else if (sportsSteps.size < 60) sportsSteps += Action(SystemClock.elapsedRealtime(), text.take(110))
+    }
+    internal fun sportsLines() = synchronized(sportsSteps) { sportsSteps.map { String.format(Locale.ROOT, "  +%.1f s %s%s", (it.at - sportsAt) / 1000.0, it.text, if (it.times > 1) " ×${it.times}" else "") } }
     internal fun actionLines() = synchronized(actions) { actions.map { "  ${clock(it.at)} ${it.text}${if (it.times > 1) " ×${it.times}" else ""}" } }
 
     /** What is playing right now (format, buffer, dropped frames, display rate); set by the activity, read on the UI thread. */
@@ -124,8 +134,9 @@ internal object Diagnostics {
         lines += playback.map { "  $it" }
         val background = synchronized(jobs) { jobs.toList() }
         if (background.isNotEmpty()) { lines += "Background jobs:"; lines += background.map { "  $it" } }
+        sportsLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Sports opening (seconds after it was chosen):"; lines += it }
         actionLines().takeIf { it.isNotEmpty() }?.let { lines += "Recent actions (oldest first; keys say which remote sent them):"; lines += it }
         return lines.joinToString("\n")
     }
-    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(actions) { actions.clear() }; synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
+    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(actions) { actions.clear() }; synchronized(sportsSteps) { sportsSteps.clear(); sportsAt = 0L }; synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
 }

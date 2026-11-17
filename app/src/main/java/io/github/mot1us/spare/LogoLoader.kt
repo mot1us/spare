@@ -34,6 +34,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
             return true
         }
     }
+    /** Names this loader's images in the Sports opening trace of the performance report. */
+    var trace: String? = null
     private val asked = java.util.concurrent.atomic.AtomicLong()
     private fun pool(threads: Int) = java.util.concurrent.ThreadPoolExecutor(threads, threads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
         if (newestFirst) NewestFirst(32) else java.util.concurrent.LinkedBlockingQueue())
@@ -203,6 +205,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
         fun finish(bitmap: Bitmap?, startedAt: Long) {
             if (bitmap != null && !closed) cache.put(key, bitmap)
             if (opaque) Diagnostics.poster(startedAt - queuedAt, SystemClock.uptimeMillis() - startedAt, bitmap != null)
+            trace?.let { Diagnostics.sports("$it ${if (bitmap != null) "loaded" else "failed"} · waited ${startedAt - queuedAt} ms · took ${SystemClock.uptimeMillis() - startedAt} ms") }
             if (token != generation) return
             if (bitmap == null) {
                 val attempts = ((failed[url]?.attempts ?: 0) + 1).coerceAtMost(3)

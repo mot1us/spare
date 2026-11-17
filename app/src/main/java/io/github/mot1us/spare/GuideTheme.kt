@@ -11,6 +11,34 @@ import android.graphics.drawable.StateListDrawable
  * "Instant" is the default: fades made fast scrolling feel slower and left a trail of half-lit rows behind the cursor.
  * "Fade in" lights the new item gradually and clears the old one at once, so nothing trails; "Cross-fade" fades both.
  */
+/**
+ * A focus highlight that fades by the clock each time it is drawn. Android's own state-list fade runs on a posted callback,
+ * and when that callback is dropped (fast scrolling, a row refreshed mid-fade) the highlight stays frozen part-way: a grey
+ * ghost on a row the cursor left, or a row with no background. Here a missed frame only means the next draw shows the end.
+ */
+class FocusFade : StateListDrawable() {
+    private var from: android.graphics.drawable.Drawable? = null
+    private var started = 0L
+    override fun onStateChange(stateSet: IntArray): Boolean {
+        // Android calls this from the constructor, before any state has a drawable.
+        val before: android.graphics.drawable.Drawable? = current
+        val changed = super.onStateChange(stateSet)
+        val now: android.graphics.drawable.Drawable? = current
+        if (changed && before != null && now != null && now !== before && (Motion.enter > 0 || Motion.exit > 0)) { from = before.takeIf { Motion.exit > 0 }; started = android.os.SystemClock.uptimeMillis() }
+        return changed
+    }
+    override fun draw(canvas: android.graphics.Canvas) {
+        val elapsed = android.os.SystemClock.uptimeMillis() - started
+        val enter = Motion.enter; val exit = Motion.exit
+        if (started == 0L || elapsed < 0 || (elapsed >= enter && elapsed >= exit)) { from = null; started = 0L; super.draw(canvas); return }
+        from?.takeIf { elapsed < exit }?.let { it.bounds = bounds; it.alpha = (255 - 255 * elapsed / exit).toInt(); it.draw(canvas); it.alpha = 255 }
+        val shown: android.graphics.drawable.Drawable? = current
+        shown?.let { it.alpha = if (elapsed < enter) (255 * elapsed / enter).toInt() else 255; it.draw(canvas); it.alpha = 255 }
+        invalidateSelf()
+    }
+    override fun jumpToCurrentState() { super.jumpToCurrentState(); from = null; started = 0L; invalidateSelf() }
+}
+
 object Motion {
     val styles = listOf("Instant", "Fade in", "Cross-fade")
     val speeds = listOf("Fast", "Normal", "Slow")
@@ -117,8 +145,7 @@ object GuideTheme {
                 else -> 0x22FFFFFF
             })
         }
-        return StateListDrawable().apply { setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit);
-            addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
+        return FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), shape(GuideTheme.current.accent))
             addState(intArrayOf(android.R.attr.state_selected), shape(selected))
             addState(intArrayOf(), shape(idle))
         }

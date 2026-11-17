@@ -61,7 +61,7 @@ class SidebarAdapter(private val context: Context, private val select: (GuideSec
             setPadding((10*d).toInt(), 0, (8*d).toInt(), 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
             setTextColor(android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf()), intArrayOf(GuideTheme.focusText, Color.WHITE)))
             fun shape(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = 4*d }
-            background = StateListDrawable().apply { setEnterFadeDuration(Motion.enter); setExitFadeDuration(Motion.exit); addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(android.R.attr.state_selected), shape(0x553F4754)); addState(intArrayOf(), shape(Color.TRANSPARENT)) }
+            background = FocusFade().apply { addState(intArrayOf(android.R.attr.state_focused), shape(Color.WHITE)); addState(intArrayOf(android.R.attr.state_selected), shape(0x553F4754)); addState(intArrayOf(), shape(Color.TRANSPARENT)) }
             layoutParams = RecyclerView.LayoutParams(-1, (34*d).toInt()).apply { bottomMargin = (4*d).toInt() }
         }
         return Holder(text)

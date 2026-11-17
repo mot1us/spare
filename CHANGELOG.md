@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.51.14 — 2026-11-16
+
+- Navigation animations (Settings › Theme › Advanced › Guide) no longer leave a ghost behind. With Fade in or Cross-fade, moving quickly through channels or categories could leave a row frozen part-way through its fade: a grey highlight on a row the cursor had left, or a row missing its background. The fade is now drawn by the clock, so a skipped frame shows the finished state instead of sticking.
+- A change to the animation style or speed applies to what is already on screen, without reopening the guide.
+- Sports shows games as scores arrive. Cards prepared while another league's reply came in were thrown away and prepared again, so on a busy box nothing showed until the last league answered and then everything appeared at once. Each prepared set is now shown, and refreshed as more arrives.
+- The performance report (Settings › About Spare) has a Last Sports opening section: when the scoreboard replies came in, how long the cards took to prepare, when they showed, and how long each team crest waited and took to load. This is to find the remaining wait for crests on the first open, which is not fixed yet.
+
 ## 0.51.13 — 2026-11-16
 
 - First-run setup keeps the remote on its own buttons. Pressing Right or Down past Continue (or past any button at the edge of a step) used to move the cursor to a guide button hidden behind setup, and the next press threw it back to the first choice, so Continue could be impossible to stay on. The cursor now stays put at the edge.

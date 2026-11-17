@@ -185,7 +185,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     // 65%): every new picture is copied to the video chip, and oversized ones made Sports browsing miss most frames
     // on an onn 4K Pro.
     private val logos = LogoLoader(256, 6 * 1024 * 1024, artworkFiles)
-    private val cardLogos = LogoLoader(160, 6 * 1024 * 1024, artworkFiles)
+    private val cardLogos = LogoLoader(160, 6 * 1024 * 1024, artworkFiles).apply { trace = "Crest" }
     private val pictures = LogoLoader(960, 8 * 1024 * 1024, artworkFiles)
     private val artwork = SportsArtwork(context) { key, url, attribution -> showArtwork(key, url, attribution) }
     var archiveWindowDays = 0
@@ -711,7 +711,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         removeCallbacks(revealSkeleton); postDelayed(revealSkeleton, SKELETON_DELAY_MS)
     }
     private fun showSkeletonNow() {
-        scrollHint.visibility = INVISIBLE
+        scrollHint.visibility = INVISIBLE; Diagnostics.sports("Placeholders shown")
         skeleton.isVisible = true; heroSkeleton.isVisible = true; rows.visibility = INVISIBLE; gridArea.isVisible = true
         heroContent.visibility = INVISIBLE; crests.visibility = INVISIBLE; backdrop.visibility = INVISIBLE; credit.visibility = INVISIBLE
         empty.text = "Loading Sports…"; empty.isVisible = true
@@ -719,6 +719,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun revealContent() {
         removeCallbacks(revealSkeleton)
         if (skeleton.visibility != VISIBLE) return
+        Diagnostics.sports("Cards shown · ${games.size} games")
         skeleton.visibility = GONE; heroSkeleton.visibility = GONE; rows.isVisible = !watchMode; heroContent.isVisible = true; backdrop.isVisible = true; credit.isVisible = true
         crests.isVisible = !preview && backdrop.drawable == null
         heroContent.alpha = 0f; heroContent.animate().alpha(1f).setDuration(260).start()
