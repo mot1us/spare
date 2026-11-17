@@ -55,6 +55,27 @@ class LibraryCatalog(private val store: SecureStore) {
         val counts: Map<String, Int> = HashMap<String, Int>().also { counts -> cats.forEach { counts[it] = (counts[it] ?: 0) + 1 } }
         /** Positions whose matching key (see [Title.canonical]) has this hash; the caller checks the titles themselves. */
         fun canonical(key: String): List<Int> { val hash = key.hashCode(); return (0 until size).filter { canonical[it] == hash }.takeLast(64) }
+        /** Keep just enough positions for each shelf, in the same order as the full stable sort. */
+        internal fun homeRanks(limit: Int): Pair<List<Int>, List<Int>> {
+            if (limit <= 0) return emptyList<Int>() to emptyList()
+            val newest = compareByDescending<Int> { added[it] }.thenBy { it }
+            val topRated = compareByDescending<Int> { rating[it] }.then(newest)
+            val recent = java.util.PriorityQueue(limit, newest.reversed())
+            val top = java.util.PriorityQueue(limit, topRated.reversed())
+            fun keep(queue: java.util.PriorityQueue<Int>, order: Comparator<Int>, position: Int) {
+                if (queue.size < limit) queue.add(position)
+                else if (order.compare(position, queue.peek()) < 0) {
+                    queue.remove()
+                    queue.add(position)
+                }
+            }
+            for (position in 0 until size) {
+                if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Library rows cancelled")
+                if (added[position] > 0) keep(recent, newest, position)
+                if (rating[position] > 0f) keep(top, topRated, position)
+            }
+            return recent.sortedWith(newest) to top.sortedWith(topRated)
+        }
         fun bytes(gen: String): ByteArray {
             val out = java.io.ByteArrayOutputStream(size * 64)
             java.io.DataOutputStream(out).use { data ->
@@ -147,10 +168,16 @@ class LibraryCatalog(private val store: SecureStore) {
         val counts = index.counts.mapKeys { it.key.removePrefix("Category ") }
         val first = names.keys.filter { (counts[it] ?: 0) > 0 }.take(eager)
         val wanted = first.associateWith { ArrayList<Int>(perRow) }
-        for (pos in 0 until index.size) { val list = wanted[index.cats[pos].removePrefix("Category ")] ?: continue; if (list.size < perRow) list.add(pos) }
-        val recent = (0 until index.size).filter { index.added[it] > 0 }.sortedByDescending { index.added[it] }.take(special)
-        // A rating alone ranks obscure titles first on many providers; newer titles break ties.
-        val top = (0 until index.size).filter { index.rating[it] > 0f }.sortedWith(compareByDescending<Int> { index.rating[it] }.thenByDescending { index.added[it] }).take(special)
+        var remaining = wanted.size * perRow
+        for (pos in 0 until index.size) {
+            if (remaining == 0) break
+            val list = wanted[index.cats[pos].removePrefix("Category ")] ?: continue
+            if (list.size < perRow) {
+                list.add(pos)
+                remaining--
+            }
+        }
+        val (recent, top) = index.homeRanks(special)
         val positions = (recent + top + wanted.values.flatten()).distinct()
         val pickedAt = Timings.now()
         val byId = store.catalogDb.titlesAt(scope, gen, positions)

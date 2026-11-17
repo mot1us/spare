@@ -260,7 +260,8 @@ class MainActivity : Activity() {
     private var replayGames = emptyList<SportsGame>()
     private fun syncReplayDiscovery() {
         if (!::sportsPanel.isInitialized || !::player.isInitialized) return
-        val active = !closed && started && sportsVisible && guideVisible && !sportsPanel.watching && !multiview.active && player.playWhenReady && player.playbackState != Player.STATE_BUFFERING
+        val active = !closed && started && sportsVisible && guideVisible && !sportsPanel.watching && !multiview.active && player.playWhenReady && player.playbackState != Player.STATE_BUFFERING &&
+            !liveSportsChecking && sportsExtrasDelay() == 0L
         if (!active) { replayDiscovery?.pause(); return }
         val discovery = replayDiscovery ?: SportsReplayDiscovery({ sourceId, epoch, game, choices, _ ->
             if (!closed && source?.id == sourceId && generation == epoch) {
@@ -562,7 +563,7 @@ class MainActivity : Activity() {
 
     private fun scheduleProgrammeIndex() {
         handler.removeCallbacks(prepareProgrammeIndex)
-        if (!started || !guideVisible || closed || guide.programmes.isEmpty() || programmeIndex?.isFor(guide) == true) return
+        if (!started || !guideVisible || sportsVisible || closed || guide.programmes.isEmpty() || programmeIndex?.isFor(guide) == true) return
         val now = android.os.SystemClock.elapsedRealtime()
         // A short EPG batch can arrive every fraction of a second. Do not rebuild the lineup for each one.
         val next = programmeIndexStartedAt?.let { it + 30000 - now } ?: 0L
@@ -570,7 +571,7 @@ class MainActivity : Activity() {
     }
 
     private fun buildProgrammeIndex() {
-        if (!started || !guideVisible || closed || programmeIndex?.isFor(guide) == true) return
+        if (!started || !guideVisible || sportsVisible || closed || programmeIndex?.isFor(guide) == true) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastInputAt < 1200 || programmeIndexTask?.isDone == false) {
             scheduleProgrammeIndex()
@@ -582,7 +583,7 @@ class MainActivity : Activity() {
             val ready = programmeIndexBuilder.prepare(snapshot, System.currentTimeMillis())
             if (Thread.currentThread().isInterrupted) return@submit
             handler.post {
-                if (started && guideVisible && !closed && ready.isFor(guide)) {
+                if (started && guideVisible && !sportsVisible && !closed && ready.isFor(guide)) {
                     programmeIndex = ready
                     if (::searchPanel.isInitialized && searchPanel.isVisible && query.isNotBlank()) searchLivePlaylist()
                 }
@@ -902,7 +903,7 @@ class MainActivity : Activity() {
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
                     playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
-                    if (droppedFrames >= 5) Diagnostics.hiccup("Dropped $droppedFrames frames", player.totalBufferedDuration)
+                    if (droppedFrames >= 5) Diagnostics.hiccup("Dropped $droppedFrames video buffers ($elapsedMs ms since last drop report)", player.totalBufferedDuration)
                     journal(PlaybackJournal.Event.DROPPED_FRAMES, droppedFrames)
                 }
             }
@@ -1383,7 +1384,7 @@ class MainActivity : Activity() {
         // Leagues are chosen during first-run setup; anyone who skipped it starts with the pro leagues.
         if (sports && !store.sportsLeaguesChosen) store.sportsLeagues = OnboardingPanel.DEFAULT_LEAGUES
         if (sports) {
-            sportsCoverageNotBefore = android.os.SystemClock.uptimeMillis() + 3500
+            sportsExtrasNotBefore = android.os.SystemClock.uptimeMillis() + 3500
             Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}")
             ensureSportsLeague()
             sportsPanel.loading("Finding live games…")
@@ -2207,11 +2208,10 @@ class MainActivity : Activity() {
             guideSearch.hideKeyboard(); if (::voiceInput.isInitialized) voiceInput.stop(); voiceSearchPending = false }
         if (!show || !sportsVisible) {
             stopSportsPrefetch()
-            handler.removeCallbacks(resumeSportsCoverage)
-            sportsCoverageTask?.cancel(true)
+            cancelSportsExtras()
         }
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
-        if (show) scheduleProgrammeIndex() else pauseProgrammeIndex()
+        if (show && !sportsVisible) scheduleProgrammeIndex() else pauseProgrammeIndex()
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
         layoutGuideSurface()
@@ -2494,13 +2494,27 @@ class MainActivity : Activity() {
         if (!sportsVisible || !guideVisible || closed) return
         if (!sportsRenderPending) { sportsRenderPending = true; handler.postDelayed(renderSports, 120) }
     }
-    private var sportsCoverageNotBefore = 0L
-    private val resumeSportsCoverage = Runnable { scheduleSports() }
+    private var sportsExtrasNotBefore = 0L
+    private val resumeSportsExtras = Runnable { scheduleSports() }
+    private fun sportsExtrasDelay(): Long {
+        val now = android.os.SystemClock.uptimeMillis()
+        return maxOf(0L, sportsExtrasNotBefore - now, lastInputAt + 800 - android.os.SystemClock.elapsedRealtime())
+    }
+    private fun scheduleSportsExtrasWhenReady() {
+        if (liveSportsChecking) return // The scoreboard's completion schedules a fresh render.
+        handler.removeCallbacks(resumeSportsExtras)
+        handler.postDelayed(resumeSportsExtras, sportsExtrasDelay())
+    }
+    private fun cancelSportsExtras() {
+        handler.removeCallbacks(resumeSportsExtras)
+        sportsCoverageTask?.cancel(true)
+        sportsDestinationTask?.cancel(true)
+        if (eventNamesTask?.cancel(true) == true) eventNamesAt = 0L
+    }
     private var sportsCoverageFound: Triple<Guide, Long, List<SportsCoverage>>? = null
     private var sportsCoverageTask: java.util.concurrent.Future<*>? = null
-    private val sportsCoverageWorker = workers.pool("sports-coverage")
     private fun startSportsCoverage(snapshot: Guide, hidden: Map<String, Long>, now: Long) {
-        sportsCoverageTask = sportsCoverageWorker.submit {
+        sportsCoverageTask = sportsDestinationWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val began = android.os.SystemClock.elapsedRealtime()
             val found = runCatching { SportsGuideCoverage.find(snapshot, now) { SportsStreams.video(it) && (hidden[it.id] ?: 0) <= now } }.getOrNull() ?: return@submit
@@ -2519,7 +2533,6 @@ class MainActivity : Activity() {
         ensureSportsLeague()
         rememberScores(liveSports)
         if (sportsComputing) { sportsDirty = true; return }
-        refreshEventNames()
         checkLiveSports(); handler.removeCallbacks(pollLiveSports); handler.postDelayed(pollLiveSports, 60000)
         sportsComputing = true
         val liveSnapshot = liveSports; val checkingSnapshot = liveSportsChecking
@@ -2532,13 +2545,6 @@ class MainActivity : Activity() {
         // The games never wait for that: they use the last result for this guide, and a fresh one joins when it is ready.
         val wantCoverage = selectedTeam == "live" && selectedLeague == null
         val knownCoverage = sportsCoverageFound?.takeIf { it.first === snapshot }
-        if (wantCoverage && (knownCoverage == null || now - knownCoverage.second !in 0..SPORTS_COVERAGE_MS) && sportsCoverageTask?.isDone != false) {
-            val delay = sportsCoverageNotBefore - android.os.SystemClock.uptimeMillis()
-            if (delay > 0) {
-                handler.removeCallbacks(resumeSportsCoverage)
-                handler.postDelayed(resumeSportsCoverage, delay)
-            } else startSportsCoverage(snapshot, hidden, now)
-        }
         val coverageFound = if (wantCoverage) knownCoverage?.third.orEmpty() else emptyList()
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
@@ -2574,7 +2580,13 @@ class MainActivity : Activity() {
                 }
                 if (!newer) {
                     queueSportsPrefetch(games)
-                    refreshSportsDestinations(snapshot, games, redZoneProfile, qualitySnapshot, favoriteSnapshot, hidden, replaySnapshot, selectedSourceId, sourceEpoch, epoch, now)
+                    if (!liveSportsChecking && sportsExtrasDelay() == 0L) {
+                        refreshSportsDestinations(snapshot, games, redZoneProfile, qualitySnapshot, favoriteSnapshot, hidden, replaySnapshot, selectedSourceId, sourceEpoch, epoch, now)
+                        if (wantCoverage && (knownCoverage == null || now - knownCoverage.second !in 0..SPORTS_COVERAGE_MS) && sportsCoverageTask?.isDone != false) {
+                            startSportsCoverage(snapshot, hidden, now)
+                        }
+                        refreshEventNames()
+                    } else scheduleSportsExtrasWhenReady()
                     scheduleEpg()
                 }
                 if (sportsDirty || newer) { sportsDirty = false; scheduleSports() }
@@ -2611,7 +2623,6 @@ class MainActivity : Activity() {
      * Live now browses every chosen league at once (no league selected). Today and Calendar show one league,
      * the last one chosen, so its upcoming games and results stay readable.
      */
-    private val eventNameWorker = workers.pool("event-names", background = true)
     private var eventNamesAt = 0L
     private var eventNamesTask: java.util.concurrent.Future<*>? = null
     /**
@@ -2625,7 +2636,7 @@ class MainActivity : Activity() {
         val legacy = if (::playlists.isInitialized) playlists.legacySource else source?.id.orEmpty()
         eventNamesAt = now
         if (owners.isEmpty()) return
-        eventNamesTask = eventNameWorker.submit {
+        eventNamesTask = sportsDestinationWorker.submit {
             // Scanning every channel name (tens of thousands) froze the screen for 0.7 s when it ran on the screen thread.
             val wanted = owners.associateWith { owner ->
                 EventChannelNames.eventGroups(snapshot.channels.filter { it.playlistId.ifBlank { legacy } == owner.id })
@@ -2634,7 +2645,7 @@ class MainActivity : Activity() {
             val fresh = wanted.mapNotNull { (owner, groups) -> runCatching { owner.id to EventChannelNames.fetch(owner, groups) }.getOrNull() }.toMap()
             if (fresh.isEmpty() || Thread.currentThread().isInterrupted) return@submit
             handler.post {
-                if (!closed && EventChannelNames.update(guide.channels, ::playlistId, fresh)) { sportsStreamCache.clear(); scheduleSports() }
+                if (!closed && started && sportsVisible && guideVisible && EventChannelNames.update(guide.channels, ::playlistId, fresh)) { sportsStreamCache.clear(); scheduleSports() }
             }
         }
     }
@@ -3013,6 +3024,10 @@ class MainActivity : Activity() {
     }
     private fun prefetchSportsStream() {
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive.isNotEmpty()) return
+        if (liveSportsChecking || sportsExtrasDelay() > 0 || sportsDestinationTask?.isDone == false || sportsCoverageTask?.isDone == false || eventNamesTask?.isDone == false) {
+            handler.postDelayed(warmSportsStreams, 800)
+            return
+        }
         if (player.playbackState == Player.STATE_BUFFERING || current != null && (!firstFrame || player.playbackState != Player.STATE_READY)) { handler.postDelayed(warmSportsStreams, 1000); return }
         val selected = source ?: return
         val now = System.currentTimeMillis(); val snapshot = guide; val sourceEpoch = generation
@@ -4064,8 +4079,7 @@ class MainActivity : Activity() {
     }
     override fun onStop() {
         pauseProgrammeIndex()
-        handler.removeCallbacks(resumeSportsCoverage)
-        sportsCoverageTask?.cancel(true)
+        cancelSportsExtras()
         Diagnostics.action("Spare left the screen"); Diagnostics.stop(); Diagnostics.playback = null
         performanceOverlay?.close()
         performanceOverlay = null

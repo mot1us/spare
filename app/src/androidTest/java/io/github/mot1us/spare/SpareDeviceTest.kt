@@ -3765,7 +3765,6 @@ class SpareDeviceTest {
                         SportsDestinations.redZone(snapshot, profile, quality, at)
                     }
                     activity.liveSportsLoader = {
-                        assertTrue(destinationStarted.await(3, java.util.concurrent.TimeUnit.SECONDS))
                         val request = MainActivity::class.java.getDeclaredField("liveSportsRequest").apply { isAccessible = true }.getInt(activity)
                         val publish = MainActivity::class.java.getDeclaredMethod("publishSportsSchedule", LiveSportsSnapshot::class.java, java.time.LocalDate::class.java, Int::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
                         publish.invoke(activity, scoreboard.copy(events = scoreboard.events.takeLast(1)), null, request, false)
@@ -3793,7 +3792,10 @@ class SpareDeviceTest {
                     val scores = MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.get(activity) as LiveSportsSnapshot
                     "NBA" in scores.leagues && activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount == 3
                 }
-                finishScoreboard.countDown(); finishDestination.countDown()
+                assertEquals("Auxiliary guide scans wait until the scoreboard finishes", 1L, destinationStarted.count)
+                finishScoreboard.countDown()
+                assertTrue("RedZone discovery resumes once Sports settles", destinationStarted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                finishDestination.countDown()
                 waitFor(scenario) { activity ->
                     @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
                     summaries["live"]?.startsWith("Finding stream") == false

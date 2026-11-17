@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.19 — 2026-11-16
+
+- Sports shows scoreboard cards while scores arrive. RedZone and other guide scans, event channel names, and automatic stream discovery wait for the scoreboard and remote input to settle. Playlist scans use one worker, and Sports can reuse the existing guide index without rebuilding it on entry.
+- Library picks its Recently added and Top rated shelves in one pass, keeping only the titles that can make those rows. The same titles and tie order are preserved.
+- The performance report labels video buffers discarded by Media3 and shows the time covered by each drop report.
+
 ## 0.51.18 — 2026-11-16
 
 - Browse saved Movies and Series without refreshing either catalog in the background. On a first visit, only the selected tab imports. Search reuses saved catalogs, starts missing catalogs one at a time per playlist, and stops their downloads when closed.

@@ -1,13 +1,12 @@
 {
-  "versionName": "0.51.18",
-  "versionCode": 183,
+  "versionName": "0.51.19",
+  "versionCode": 184,
   "attempt": 1,
   "tvSuite": "focused",
   "tvTests": [
-    "importedCatalogOpensCategoriesWithoutAskingTheProvider",
     "libraryHomeShowsRowsFromTheImportedCatalogAndReturnsFromGridsAndSearch",
-    "guideAndLibraryShareSearchAcrossChannelsMoviesSeriesAndKnownEpisodes",
-    "backgroundGuideFillCoversUnvisitedChannelsOnceAndSavesThem",
-    "liveNowListsGuideGolfAndOkPlaysItsChannel"
+    "sportsSchedulesShowLiveAndUpcomingWithoutScanningPlaylistAndLibraryIsReachable",
+    "liveNowListsGuideGolfAndOkPlaysItsChannel",
+    "redZonePublishesNamesBeforeGuideAndPromotesFhdFiftyWithoutMovingFocus"
   ]
 }
