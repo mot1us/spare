@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.28 — 2026-11-17
+
+- The performance report's Sports and Library opening traces keep their first 40 steps and the latest 20, so steps that come after a burst of scoreboard replies, such as the guide read for other live sports, are no longer dropped.
+- Five device tests were updated to match changes made in 0.51.19–0.51.22: Search opens listening, Sports reads the guide after the scoreboard replies finish, and Library lays out only the rows on screen.
+
 ## 0.51.27 — 2026-11-17
 
 - Removed the VLC handoff added in 0.51.26. Live TV always plays in Spare's own player again: the Live TV player setting, Play in VLC in channel details and on playback errors, and the automatic VLC choice on Google TV Streamer are gone. TiviMate plays the same streams on that box, so the Streamer fix belongs in Spare's own playback.

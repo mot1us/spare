@@ -2516,7 +2516,12 @@ class SpareDeviceTest {
                     assertTrue("The game shows while later replies are still arriving, not after the last one (took $waited ms)", !finished.get() && waited < 4000)
                     // The performance report says what arrived when, so a slow open on a real box can be traced.
                     val report = Diagnostics.report()
-                    assertTrue("Sports opening is traced: $report", "Last Sports opening" in report && "Sports chosen" in report && "Scoreboard reply" in report && "Guide read for other live sports" in report && Regex("Prepared 1 games in \\d+ ms").containsMatchIn(report))
+                    assertTrue("Sports opening is traced: $report", "Last Sports opening" in report && "Sports chosen" in report && "Scoreboard reply" in report && Regex("Prepared 1 games in \\d+ ms").containsMatchIn(report))
+                    // The slower guide read for other live sports waits until the scoreboard replies finish, then is traced too.
+                    val deadline = android.os.SystemClock.elapsedRealtime() + 40000
+                    while ("Guide read for other live sports" !in Diagnostics.report() && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(200)
+                    assertTrue("The guide read waited for the scoreboard", finished.get())
+                    assertTrue("The guide read is traced: ${Diagnostics.report()}", "Guide read for other live sports" in Diagnostics.report())
                 }
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)
@@ -4192,9 +4197,8 @@ class SpareDeviceTest {
             val release = java.util.concurrent.CountDownLatch(1)
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                openTypedSearch(scenario, "")
                 scenario.onActivity { activity ->
-                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType)
-                        .apply { isAccessible = true }.invoke(activity, "", false)
                     MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.set(activity, guide)
                     MainActivity::class.java.getDeclaredField("programmeIndex").apply { isAccessible = true }.set(activity, prepared)
                     val worker = MainActivity::class.java.getDeclaredField("liveSearchWorker").apply { isAccessible = true }
@@ -4882,7 +4886,7 @@ class SpareDeviceTest {
 
     private fun importVodForProgramme(scenario: ActivityScenario<MainActivity>, source: Source, title: String, count: Int = 1) {
         val target = VodStart.request(Programme("fixture", title, 1, 2))!!
-        scenario.onActivity { MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, target.query, false) }
+        openTypedSearch(scenario, target.query)
         waitFor(scenario) { activity ->
             val library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
             library.repository.matches(source, target).size >= count
@@ -5054,6 +5058,7 @@ class SpareDeviceTest {
                     MainActivity::class.java.getDeclaredMethod("selectGame", SportsGame::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, game, true)
                 }
                 waitFor(scenario) { playing!!.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') && playing!!.isPlaying }
+                device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
                 scenario.onActivity { activity ->
                     assertSame(playing, find<PlayerView>(activity.window.decorView)!!.player)
                     assertFalse("Watch best starts the other provider full screen", channelList(activity)?.isShown == true)
@@ -5065,13 +5070,13 @@ class SpareDeviceTest {
                     MainActivity::class.java.getDeclaredMethod("startMultiview", Channel::class.java).apply { isAccessible = true }.invoke(activity, ca)
                     assertEquals("Another provider can supply the second view", 2, views.count)
                     views.close()
-                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, "KING 5", false)
+                    openTypedSearch(activity, "KING 5")
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:1") != null && it.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}") != null }
                 scenario.onActivity { activity ->
                     assertTrue(activity.window.decorView.findViewWithTag<View>("search-result:live:xc:1").contentDescription.contains(a.name))
                     assertTrue(activity.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}").contentDescription.contains(b.name))
-                    MainActivity::class.java.getDeclaredMethod("openPlaylistSearch", String::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, "Orbit", false)
+                    openTypedSearch(activity, "Orbit")
                 }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:42") != null && it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42") != null }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42").performClick() }
@@ -5711,9 +5716,10 @@ class SpareDeviceTest {
                     assertTrue(root.findViewWithTag<View>("library-item:movie:5005").contentDescription.toString().endsWith("Resume at 1:00"))
                     assertNull("Episodes resume from the Series rows", root.findViewWithTag<View>("library-item:episode:9001"))
                     assertNull("A short row has no See all tile", root.findViewWithTag<View>("library-shelf-more:continue"))
+                    // Only rows on screen are laid out (0.51.21); Recently added follows below and Down reaches it next.
                     val rows = root.findViewWithTag<RecyclerView>("library-shelves")
-                    assertEquals(listOf("library-shelf:continue", "library-shelf:watchlist", "library-shelf:recent"),
-                        (0 until rows.childCount).map { rows.getChildAt(it) }.sortedBy { it.top }.take(3).map { it.tag })
+                    assertEquals(listOf("library-shelf:continue", "library-shelf:watchlist"),
+                        (0 until rows.childCount).map { rows.getChildAt(it) }.sortedBy { it.top }.take(2).map { it.tag })
                 }
                 // Once the provider's details arrive the banner still leads with the resume point, and its fade has finished.
                 Thread.sleep(900)
@@ -5861,6 +5867,16 @@ class SpareDeviceTest {
         scenario.onActivity { result = find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path }
         return result
     }
+    /** Search opens listening since 0.51.22; these tests type their query, so the microphone stops at once. */
+    private fun openTypedSearch(scenario: ActivityScenario<MainActivity>, text: String) {
+        device.executeShellCommand("pm grant ${context.packageName} android.permission.RECORD_AUDIO")
+        scenario.onActivity { openTypedSearch(it, text) }
+    }
+    private fun openTypedSearch(activity: MainActivity, text: String) {
+        MainActivity::class.java.getDeclaredMethod("searchWithQuery", String::class.java).apply { isAccessible = true }.invoke(activity, text)
+        (MainActivity::class.java.getDeclaredField("voiceInput").apply { isAccessible = true }.get(activity) as NativeVoiceInput).stop()
+    }
+
     private fun waitFor(scenario: ActivityScenario<MainActivity>, predicate: (MainActivity) -> Boolean) {
         val deadline = System.currentTimeMillis() + 20000
         val ready = AtomicBoolean()

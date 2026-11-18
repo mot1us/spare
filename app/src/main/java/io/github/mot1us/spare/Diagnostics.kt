@@ -105,16 +105,23 @@ internal object Diagnostics {
         action("Key ${android.view.KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · from $from")
     }
     // Sports and Library openings: what arrived when after the section was chosen, so a slow first open can be traced on the box itself.
+    /** The first [HEAD] steps of an opening and its latest [TAIL], so late milestones still show after a burst of replies. */
     private class Opening {
-        private val steps = ArrayList<Action>(); private var began = 0L
-        fun start(text: String) { synchronized(steps) { steps.clear(); began = SystemClock.elapsedRealtime() }; add(text) }
+        private val steps = ArrayList<Action>(); private var began = 0L; private var skipped = 0
+        fun start(text: String) { synchronized(steps) { steps.clear(); skipped = 0; began = SystemClock.elapsedRealtime() }; add(text) }
         fun add(text: String) = synchronized(steps) {
             if (began == 0L) return@synchronized
             val last = steps.lastOrNull()
-            if (last != null && last.text == text.take(110)) last.times++ else if (steps.size < 60) steps += Action(SystemClock.elapsedRealtime(), text.take(110))
+            if (last != null && last.text == text.take(110)) { last.times++; return@synchronized }
+            if (steps.size >= HEAD + TAIL) { steps.removeAt(HEAD); skipped++ }
+            steps += Action(SystemClock.elapsedRealtime(), text.take(110))
         }
-        fun lines() = synchronized(steps) { steps.map { String.format(Locale.ROOT, "  +%.1f s %s%s", (it.at - began) / 1000.0, it.text, if (it.times > 1) " ×${it.times}" else "") } }
-        fun clear() = synchronized(steps) { steps.clear(); began = 0L }
+        fun lines() = synchronized(steps) {
+            val lines = steps.map { String.format(Locale.ROOT, "  +%.1f s %s%s", (it.at - began) / 1000.0, it.text, if (it.times > 1) " ×${it.times}" else "") }
+            if (skipped == 0) lines else lines.take(HEAD) + "  … $skipped more steps …" + lines.drop(HEAD)
+        }
+        fun clear() = synchronized(steps) { steps.clear(); skipped = 0; began = 0L }
+        private companion object { const val HEAD = 40; const val TAIL = 20 }
     }
     private val sportsOpening = Opening(); private val libraryOpening = Opening()
     fun sportsOpened(text: String) = sportsOpening.start(text)
