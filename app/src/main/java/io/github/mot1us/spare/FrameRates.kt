@@ -10,7 +10,8 @@ import android.view.SurfaceView
 import kotlin.math.abs
 import kotlin.math.round
 
-class FrameRates(private val activity: Activity, private val view: SurfaceView) : SurfaceHolder.Callback {
+@androidx.media3.common.util.UnstableApi
+class FrameRates(private val activity: Activity, private val view: SurfaceView, private val streamer: Boolean = StreamerQuirks.active) : SurfaceHolder.Callback {
     private val handler = Handler(Looper.getMainLooper())
     private val target = FrameRateTarget()
     @Volatile private var rate = 0f
@@ -34,10 +35,12 @@ class FrameRates(private val activity: Activity, private val view: SurfaceView) 
         target.reset(normalized); rate = normalized
         handler.post { apply() }
     }
-    val requestedRate: Float get() = if (enabled) rate else 0f
+    /** The rate asked of Android, which on Google TV Streamer can differ from the video's own rate. */
+    val requestedRate: Float get() = if (enabled && rate > 0f) StreamerQuirks.displayRate(rate, streamer) else 0f
     val displayRefreshRate: Float get() = view.display?.refreshRate ?: 0f
     private fun apply() {
         if (!enabled || rate <= 0f) return
+        val rate = requestedRate
         runCatching {
             val surface = view.holder.surface
             if (!surface.isValid) return

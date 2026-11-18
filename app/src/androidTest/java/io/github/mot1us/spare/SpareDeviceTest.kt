@@ -382,40 +382,34 @@ class SpareDeviceTest {
 
     }
 
-    @Test fun vlcHandoffAndGuideReturn() {
-        val installed = LiveTvPlayer.installed(context.packageManager)
-        val previousChoice = store.guidePlayer
+    @Test fun googleTvStreamerStartsOnARestartFrameAndRequestsFullDisplayModes() {
+        StreamerQuirks.override = true
         try {
-            store.guidePlayer = LiveTvPlayer.VLC
-            FixtureServer(longVideo = true, parallelClients = true).use { server ->
-                val source = Source(name = "VLC fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            FixtureServer(longVideo = true).use { server ->
+                val source = Source(name = "Streamer fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
                 store.saveSources(listOf(source)); store.active = source.id
                 ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_READY }
-                    device.pressBack()
-                    waitFor(scenario) { channelList(it)?.let { list -> list.isShown && list.hasFocus() } == true }
-                    device.pressDPadDown(); device.pressDPadCenter()
-                    if (installed) {
-                        val consent = device.wait(Until.findObject(By.text("ALLOW AND PLAY")), 5000)
-                            ?: device.findObject(By.text("Allow and play"))
-                        assertNotNull("Ask before sharing a stream with VLC", consent)
-                        assertEquals(0, server.requests["/channel2.ts"] ?: 0)
-                        consent.click()
-                        val deadline = android.os.SystemClock.elapsedRealtime() + 15000
-                        while ((server.requests["/channel2.ts"] ?: 0) == 0 && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(100)
-                        assertTrue("VLC opened the selected feed", (server.requests["/channel2.ts"] ?: 0) > 0)
-                        assertTrue("Spare yields playback to VLC", device.currentPackageName == "org.videolan.vlc")
-                        assertTrue(store.allowsVlc(source))
-                        device.pressBack()
-                        assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName).depth(0)), 8000))
-                        waitFor(scenario) { channelList(it)?.isShown == true && find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_READY }
-                    } else {
-                        waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.ts" }
-                        assertFalse(store.allowsVlc(source))
+                    waitFor(scenario) { activity ->
+                        val player = find<PlayerView>(activity.window.decorView)?.player
+                        player?.isPlaying == true && player.currentMediaItem?.localConfiguration?.uri?.path == "/channel1.ts" &&
+                            MainActivity::class.java.getDeclaredField("firstFrame").apply { isAccessible = true }.getBoolean(activity)
+                    }
+                    scenario.onActivity { activity ->
+                        assertEquals("The Streamer uses Media3's own TS join policy", 0,
+                            MainActivity::class.java.getDeclaredField("tsFlags").apply { isAccessible = true }.getInt(activity))
+                        val matching = MainActivity::class.java.getDeclaredField("frameRates").apply { isAccessible = true }.get(activity) as FrameRates
+                        val attempt = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                        matching.request(30f); assertEquals(60f, matching.requestedRate, .001f)
+                        matching.request(29.97f); assertEquals(59.94f, matching.requestedRate, .001f)
+                        matching.request(25f); assertEquals(50f, matching.requestedRate, .001f)
+                        matching.request(23.976f); assertEquals(23.976f, matching.requestedRate, .001f)
+                        val diagnostic = MainActivity::class.java.getDeclaredMethod("playbackDiagnostics").apply { isAccessible = true }.invoke(activity) as String
+                        assertTrue("The report says the Streamer settings are in use: $diagnostic", diagnostic.contains("Google TV Streamer · video starts on a full restart frame"))
+                        assertEquals("Frame-rate requests keep the playing connection", attempt, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                     }
                 }
             }
-        } finally { store.guidePlayer = previousChoice }
+        } finally { StreamerQuirks.override = null }
     }
 
     @Test fun networkImportPreviewRemoteFavoritesAndResume() {

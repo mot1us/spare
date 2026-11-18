@@ -1,7 +1,6 @@
 {
-  "versionName": "0.51.26",
-  "versionCode": 191,
-  "attempt": 2,
-  "tvSuite": "focused",
-  "tvTests": ["vlcHandoffAndGuideReturn"]
+  "versionName": "0.51.27",
+  "versionCode": 192,
+  "attempt": 1,
+  "tvSuite": "full"
 }

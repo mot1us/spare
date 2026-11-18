@@ -671,7 +671,8 @@ class MainActivity : Activity() {
     @Volatile private var playbackToken = 0
     private lateinit var providerFactory: DataSource.Factory
     private lateinit var mediaFactory: DefaultMediaSourceFactory
-    private val tsFlags = DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS or DefaultTsPayloadReaderFactory.FLAG_ALLOW_NON_IDR_KEYFRAMES
+    private val streamer = StreamerQuirks.active
+    private val tsFlags = StreamerQuirks.tsFlags(streamer)
     private var group: String? = null
     private var query = ""
     @Volatile private var generation = 0
@@ -830,7 +831,7 @@ class MainActivity : Activity() {
             views.addChannel = { closeDetails(); switchMode(false) }
         }
         applySubtitleAppearance()
-        frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView).apply { enabled = store.frameRateMatching }
+        frameRates = FrameRates(this, video.videoSurfaceView as SurfaceView, streamer).apply { enabled = store.frameRateMatching }
         voiceInput = NativeVoiceInput(this, { guideSearch.message(it) }, { words ->
             if (guideSearch.isVisible && started) { guideSearch.setQuery(words); finishSearch(false) }
         }, { listening ->
@@ -1125,7 +1126,9 @@ class MainActivity : Activity() {
         list = RecyclerView(this).apply { layoutManager = TvFocus.Layout(this@MainActivity); preserveFocusAfterLayout = false; itemAnimator = null; clipToPadding = false; overScrollMode = View.OVER_SCROLL_NEVER; tag = "channel-guide" }
         adapter = GuideAdapter(this, logos, { owner(it) }, { guide }, { favorites }, { guideTimeline.start(it.id) },
             { guideSearch.hideKeyboard(); if (::multiview.isInitialized && multiview.browsing) startMultiview(it) else {
-                selectGuideChannel(it)
+                val playing = it.id == current?.id && hasPlayedChannel && player.playerError == null
+                if (!playing) tune(it)
+                if (store.guideOpenFullscreen || playing) showGuide(false)
             } }, { channel ->
                 toggleFavorite(channel)
             }, ::focusGuideRow, { channel, direction -> moveTime(channel, direction) }, { focusSidebar() }, { id, direction, repeating ->
@@ -1207,12 +1210,11 @@ class MainActivity : Activity() {
         val retryActions = LinearLayout(this)
         retryActions.addView(button("Retry") { if (onDemand != null) playAttempt() else current?.let { tune(it) } })
         retryActions.addView(button("Other game streams") { showSportsAlternatives("Choose another stream for this game") }.apply { tag = "sports-other-streams"; visibility = View.GONE })
-        retryActions.addView(button("Play in VLC", ::currentInVlc).apply { tag = "retry-vlc"; visibility = View.GONE })
         retryActions.addView(button("Guide") { retryPanel.visibility = View.GONE; returnToLive() }); retryPanel.addView(retryActions)
         root.addView(retryPanel, FrameLayout.LayoutParams(dp(560), -2, Gravity.CENTER))
         details = PlaybackDetails(this, ::button, { closeDetails(); showGuide(true) }, ::recallPrevious, {
             current?.let { channel -> toggleFavorite(channel); refreshDetails() }
-        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openCatchup(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, ::showOtherGameStreams, ::watchVodFromBeginning, ::openScoreStrip, ::currentInVlc)
+        }, { tracks(C.TRACK_TYPE_TEXT) }, { current?.let { openCatchup(it) } }, { closeDetails(); current?.let(::startMultiview) }, { channel -> closeDetails(); tune(channel); showGuide(false) }, { channel -> closeDetails(); startMultiview(channel) }, ::showOtherGameStreams, ::watchVodFromBeginning, ::openScoreStrip)
         root.addView(details, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
         scoreStrip = SportsScoreStrip(this, ::button, ::selectOverlayGame,
             { cancelScoreTune(); scoreStripOpen = false; root.isFocusableInTouchMode = true; root.requestFocus(); syncScoreStrip() },
@@ -1820,66 +1822,6 @@ class MainActivity : Activity() {
         result.guide?.let { receivePlaylist(selected, it, applied = applied) }
     }
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
-    private fun selectGuideChannel(channel: Channel) {
-        val playing = channel.id == current?.id && hasPlayedChannel && player.playerError == null
-        val fullscreen = store.guideOpenFullscreen || playing
-        fun playHere() {
-            if (!playing || player.playbackState == Player.STATE_IDLE) tune(channel)
-            if (fullscreen) showGuide(false)
-        }
-        if (fullscreen && !multiview.active && store.guidePlayer.prefersVlc(Build.DEVICE, Build.MODEL)) {
-            openInVlc(channel, ::playHere)
-        } else playHere()
-    }
-
-    private fun currentInVlc() {
-        val channel = current
-        if (channel == null || onDemand != null || multiview.active) { toast("Choose a single live TV channel first"); return }
-        openInVlc(channel)
-    }
-
-    private fun liveUrl(channel: Channel, selected: Source): String {
-        if (selected.kind != "xtream") return channel.url
-        return when (store.streamFormat(selected)) {
-            "ts" -> StreamUrls.format(channel.url, "ts")
-            "hls" -> StreamUrls.format(channel.url, "m3u8")
-            else -> workingUrls[channel.id]
-        } ?: channel.url
-    }
-
-    private fun openInVlc(channel: Channel, builtIn: (() -> Unit)? = null) {
-        val selected = owner(channel) ?: return
-        val url = if (channel.id == current?.id && onDemand == null && playbackUrl.isNotBlank()) playbackUrl else liveUrl(channel, selected)
-        fun fallback(message: String) { if (builtIn == null || store.guidePlayer == LiveTvPlayer.VLC) toast(message); builtIn?.invoke() }
-        if (!LiveTvPlayer.canOpen(selected, url)) {
-            fallback("This playlist needs Spare’s built-in player for its connection settings")
-            return
-        }
-        if (!LiveTvPlayer.installed(packageManager)) { fallback("Install VLC for Android on this TV to use this player"); return }
-        fun launch() {
-            if (!started || owner(channel) != selected) return
-            val wasActive = player.playbackState != Player.STATE_IDLE
-            cancelPlaybackCallbacks(); expectedMediaId = ""; player.stop()
-            try {
-                startActivity(LiveTvPlayer.intent(url, channel.name))
-                store.allowVlc(selected)
-            } catch (_: android.content.ActivityNotFoundException) {
-                if (wasActive && builtIn == null) playAttempt()
-                fallback("VLC could not open on this TV")
-            } catch (_: SecurityException) {
-                if (wasActive && builtIn == null) playAttempt()
-                fallback("Android could not open VLC on this TV")
-            }
-        }
-        if (store.allowsVlc(selected)) { launch(); return }
-        AlertDialog.Builder(this).setTitle("Play in VLC?")
-            .setMessage("VLC will receive stream addresses from ${selected.name}. These can contain your playlist login. Press Back in VLC to return to Spare.")
-            .setPositiveButton("Allow and play") { _, _ -> launch() }
-            .setNegativeButton(if (builtIn == null) "Cancel" else "Use built-in") { _, _ ->
-                if (builtIn != null) { store.guidePlayer = LiveTvPlayer.BUILT_IN; builtIn() }
-            }.create().also(::themed).show()
-    }
-
     private fun tune(channel: Channel) = tune(channel, null)
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
         // A playlist added during first-run setup loads in the background; its first channel waits until setup ends.
@@ -1902,7 +1844,8 @@ class MainActivity : Activity() {
         hasPlayedChannel = false; playbackRebuffers = 0; playbackReconnects = 0; playbackLoadErrors = 0
         startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
         current = channel; previewCaption.text = "Full screen · ${channel.name}"; showInfo(channel)
-        playbackUrl = liveUrl(channel, selected)
+        playbackUrl = if (selected.kind == "xtream") when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts") ?: channel.url; "hls" -> StreamUrls.format(channel.url, "m3u8") ?: channel.url; else -> channel.url } else channel.url
+        if (selected.kind == "xtream" && store.streamFormat(selected) == "auto") playbackUrl = workingUrls[channel.id] ?: playbackUrl
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverrides().build()
         applyCaptionPreference()
         if (started) { saveDemandProgress(); playAttempt() }
@@ -1954,7 +1897,6 @@ class MainActivity : Activity() {
         cancelPlaybackCallbacks()
         saveDemandProgress(); player.stop(); playbackLoading.visibility = View.GONE; playbackError.text = detail; retryPanel.visibility = View.VISIBLE
         retryPanel.findViewWithTag<View>("sports-other-streams")?.isVisible = playbackGame() != null || plan != null
-        retryPanel.findViewWithTag<View>("retry-vlc")?.isVisible = onDemand == null && !multiview.active
         if (!library.opened) (retryPanel.getChildAt(1) as ViewGroup).getChildAt(0).requestFocus()
     }
     private fun cancelPlaybackCallbacks() {
@@ -3516,7 +3458,7 @@ class MainActivity : Activity() {
         val evidence = if (format == null) "" else "\n${format.sampleMimeType?.removePrefix("video/").orEmpty()} · Input ${rate(sourceVideoFrames.rate(playbackToken))} · Declared ${rate(format.frameRate)} · Decoder ${rate(decoderFrameRate)} · Display samples ${rate(measuredFrameRate)} fps · $scanEvidence · ${current?.let { videoInfo[it.id]?.evidence }.orEmpty()}"
         val transport = if (player.currentManifest is androidx.media3.exoplayer.hls.HlsManifest) "HLS" else if (playbackUrl.substringBefore('?').endsWith(".ts", true)) "TS" else "Stream"
         val health = "\n$transport · Buffer ${"%.1f".format(java.util.Locale.US, player.totalBufferedDuration.coerceAtLeast(0) / 1000.0)} s · $playbackRebuffers stalls · $playbackLoadErrors load errors · $playbackReconnects reconnects"
-        val presentation = "Video · ${decoderLabel()} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}"
+        val presentation = "Video · ${decoderLabel()} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}${if (streamer) "\nGoogle TV Streamer · video starts on a full restart frame · 25 and 30 fps request 50 and 60 Hz" else ""}"
         val audio = player.audioFormat
         return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(), presentation,
             audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())
@@ -3645,7 +3587,7 @@ class MainActivity : Activity() {
         if (page != "Theme") themeEditor = null
         if (page != "Local channels") localEditor = null
         val parent = when (page) {
-            "Live TV player", "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
+            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Developer tools" -> "Playback diagnostics"
             "Performance report" -> "About Spare"
             "Navigation dock", "Time format" -> "Guide"
@@ -3684,7 +3626,6 @@ class MainActivity : Activity() {
                 panel.action("Sleep timer", SleepTimer.label(sleepAt, System.currentTimeMillis()), sleepAt > 0) {
                     setSleepTimer(SleepTimer.next(sleepAt, System.currentTimeMillis())); refresh("Sleep timer")
                 }
-                panel.action("Live TV player", store.guidePlayer.label) { renderSettingsPage("Live TV player"); panel.focusContent() }
                 panel.action("Tunneled playback", when {
                     store.tunneledPlayback -> "On · the TV’s video hardware times frames"
                     store.tunnelingFailed -> "Off · switched off after a stream did not start with it"
@@ -3698,18 +3639,6 @@ class MainActivity : Activity() {
                     panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else if (store.frameRateMatchingStalled) "Off · switched off after the picture kept stalling with it on" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }
                 }
                 panel.note("Live buffering adapts to available data. Sustained stalls reconnect automatically; OK offers other streams for recognized games.")
-            }
-            "Live TV player" -> {
-                panel.page(page, "Choose the player for full-screen channel selections in the Guide. Previews use the built-in player.")
-                val preferVlc = LiveTvPlayer.AUTO.prefersVlc(Build.DEVICE, Build.MODEL)
-                LiveTvPlayer.entries.forEach { choice ->
-                    val hint = if (choice == LiveTvPlayer.AUTO) {
-                        if (preferVlc) "Google TV Streamer · VLC when installed" else "This device · built-in ExoPlayer"
-                    } else ""
-                    panel.action(choice.label, hint, store.guidePlayer == choice) { store.guidePlayer = choice; refresh(choice.label) }
-                }
-                panel.action("Play current channel in VLC", "Requires VLC for Android on this TV", execute = ::currentInVlc)
-                panel.note("Playlists with HTTPS-only connections or a custom User-Agent use Spare’s built-in player.")
             }
             "Playback diagnostics" -> {
                 panel.page(page, "Current stream information · Provider addresses and credentials are never shown.")

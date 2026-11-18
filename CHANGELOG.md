@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.27 — 2026-11-17
+
+- Removed the VLC handoff added in 0.51.26. Live TV always plays in Spare's own player again: the Live TV player setting, Play in VLC in channel details and on playback errors, and the automatic VLC choice on Google TV Streamer are gone. TiviMate plays the same streams on that box, so the Streamer fix belongs in Spare's own playback.
+- Google TV Streamer only, following other open-source IPTV players' fixes for its MediaTek decoder: live channels start video on a full restart frame, because the Streamer can take a stream joined mid-picture-group and never show video while audio plays. Frame-rate matching asks for 50 or 60 Hz instead of 25 or 30 fps, which broke frame pacing on the Streamer. Other TVs, including the onn, are unchanged.
+- Settings › Playback › Playback diagnostics shows when the Streamer settings are in use.
+
 ## 0.51.26 — 2026-11-17
 
 - Settings → Playback → Live TV player can open full-screen Guide selections in VLC for Android. Automatic offers installed VLC on Google TV Streamer and uses ExoPlayer on onn and other TVs. Channel details and live playback errors also offer a one-time VLC handoff.
