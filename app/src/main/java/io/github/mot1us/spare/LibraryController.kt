@@ -313,7 +313,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun show(home: Home, personal: Map<String, Pair<String, CatalogShelves.Data>>) {
             homeToken = -1; pageTask?.cancel(true); ++pageEpoch
             if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan); Diagnostics.library("Rows shown") }
-            panel.page(title, "${counted(full.count, "title")} · Saved on this TV", false)
+            panel.page(title, "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis())}", false)
             panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, { id -> loadShelf(root, names, full, id) }, {}, { id -> when {
                     id == HOME_CONTINUE -> open("continue"); id == HOME_WATCHLIST -> open("favorites")
                     id in names -> { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) }
@@ -790,5 +790,16 @@ class LibraryController(private val activity: Activity, private val store: Secur
         favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
     }
     fun destroy() { repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
-    companion object { const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
+    companion object {
+        /** Catalogs refresh only when asked (Refresh), so the rows say how old the saved copy is. */
+        fun savedAge(updated: Long, now: Long): String {
+            val days = (now - updated) / 86400000L
+            return when {
+                updated <= 0L || now < updated -> "Saved on this TV"
+                days < 1 -> "Saved today"
+                days < 2 -> "Saved yesterday"
+                else -> "Saved $days days ago · Refresh for new titles"
+            }
+        }
+        const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.30 — 2026-11-17
+
+- Library's Movies and Series rows say how old the saved catalog is ("Saved today", "Saved yesterday", "Saved 3 days ago · Refresh for new titles"). Since 0.51.18 catalogs refresh only when you choose Refresh, so this shows when new provider titles may be missing.
+- docs/LOADING-PLAN.md records the Sports and Library loading work so far and what still needs measuring on the onn.
+
 ## 0.51.29 — 2026-11-17
 
 - Each playback hiccup in the performance report now shows how fast the live stream was arriving over the last 10 seconds against its average for that channel, how long ago its last data came, and what else Spare was downloading (guide, artwork, scoreboards, catalogs) or still waiting on. A "Network now" line shows the same while you watch. Counts only; no addresses.
