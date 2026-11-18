@@ -63,9 +63,11 @@ internal object Diagnostics {
         val now = SystemClock.elapsedRealtime()
         if (now - hiccupAt < 1500) return
         hiccupAt = now
-        recorder.execute { record(kind, bufferedMs, now) }
+        // Read the network counts at the moment of the hiccup; the stack sampling below can run later.
+        val traffic = runCatching { Traffic.summary(Traffic.now(), Network.openWorkers()) }.getOrDefault("")
+        recorder.execute { record(kind, bufferedMs, now, traffic) }
     }
-    private fun record(kind: String, bufferedMs: Long, now: Long) {
+    private fun record(kind: String, bufferedMs: Long, now: Long, traffic: String) {
         val busy = runCatching {
             Thread.getAllStackTraces().entries.filter { (thread, stack) ->
                 thread !== Looper.getMainLooper().thread && thread.state == Thread.State.RUNNABLE && !thread.name.startsWith("spare-diagnostics") &&
@@ -73,7 +75,7 @@ internal object Diagnostics {
             }.map { (thread, stack) -> thread.name.take(24) + "@" + place(stack) }.sorted().take(4)
         }.getOrDefault(emptyList())
         val runtime = Runtime.getRuntime(); val used = (runtime.totalMemory() - runtime.freeMemory()) / 1048576; val max = runtime.maxMemory() / 1048576
-        val line = "${clock(now)} $kind · buffer ${String.format(Locale.ROOT, "%.1f", bufferedMs / 1000.0)} s · memory $used/$max MB · busy: ${busy.joinToString("; ").ifEmpty { "nothing of ours" }}"
+        val line = "${clock(now)} $kind · buffer ${String.format(Locale.ROOT, "%.1f", bufferedMs / 1000.0)} s · memory $used/$max MB · busy: ${busy.joinToString("; ").ifEmpty { "nothing of ours" }}${if (traffic.isEmpty()) "" else " · $traffic"}"
         synchronized(hiccups) { hiccups.addLast(line); while (hiccups.size > 8) hiccups.removeFirst() }
     }
 
@@ -140,6 +142,7 @@ internal object Diagnostics {
         lines += "Running ${clock()} · ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} · memory ${(runtime.totalMemory() - runtime.freeMemory()) / 1048576}/${runtime.maxMemory() / 1048576} MB"
         runCatching { playback?.invoke() }.getOrNull()?.takeIf { it.isNotBlank() }?.let { text -> lines += "Playing now: " + text.lines().filter { it.isNotBlank() }.joinToString(" | ") }
         val playback = synchronized(hiccups) { hiccups.toList() }
+        runCatching { Traffic.summary(Traffic.now(), Network.openWorkers()) }.getOrNull()?.let { lines += "Network now: $it" }
         lines += if (playback.isEmpty()) "Playback hiccups: none" else "Playback hiccups:"
         lines += playback.map { "  $it" }
         libraryLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Library opening (seconds after it was chosen):"; lines += it }

@@ -21,7 +21,7 @@ class Updater(private val activity: Activity, private val store: SecureStore,
     private val enabled: Boolean = !BuildConfig.DEBUG,
     private val currentCode: Long = BuildConfig.VERSION_CODE.toLong(),
     private val badge: (Release?) -> Unit) {
-    private val worker = Executors.newSingleThreadExecutor()
+    private val worker = Executors.newSingleThreadExecutor(namedThreads("updater"))
     private val handler = Handler(Looper.getMainLooper())
     private var release: Release? = null
     private var pending: File? = null

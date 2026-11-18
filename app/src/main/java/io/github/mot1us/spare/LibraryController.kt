@@ -17,7 +17,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun selectedSource(): Source? = playlist?.let(resolveSource) ?: if (playlist == null) source() else null
     fun selectPlaylist(selected: Source?) { if (playlist != selected?.id) { task?.cancel(true); ++epoch; playlist = selected?.id; detailItem = null; parentSeries = null; favoriteSource = ""; shelfCategory = null } }
     private val handler = Handler(Looper.getMainLooper())
-    private val worker = Executors.newFixedThreadPool(2)
+    private val worker = Executors.newFixedThreadPool(2, namedThreads("library"))
     private var task: java.util.concurrent.Future<*>? = null
     private var epoch = 0
     private var kind = "movie"
@@ -35,7 +35,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private var destroyed = false
     @Volatile private var favoriteState = LibraryFavorites()
     private var favoriteSource = ""
-    private val favoriteWorker = Executors.newSingleThreadExecutor()
+    private val favoriteWorker = Executors.newSingleThreadExecutor(namedThreads("library-watchlist"))
     private var favoriteTask: java.util.concurrent.Future<*>? = null
     private var favoriteEpoch = 0
     private var checkingFavorites = false

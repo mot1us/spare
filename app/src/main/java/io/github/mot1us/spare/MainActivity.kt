@@ -672,6 +672,15 @@ class MainActivity : Activity() {
     private lateinit var providerFactory: DataSource.Factory
     private lateinit var mediaFactory: DefaultMediaSourceFactory
     private val streamer = StreamerQuirks.active
+    /** Counts the playing live stream's bytes for the performance report (see [Traffic]). */
+    private val streamTraffic = object : androidx.media3.datasource.TransferListener {
+        override fun onTransferInitializing(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onTransferStart(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+        override fun onBytesTransferred(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+            if (isNetwork) Traffic.stream(Traffic.now(), bytesTransferred.toLong())
+        }
+        override fun onTransferEnd(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
+    }
     private val tsFlags = StreamerQuirks.tsFlags(streamer)
     private var group: String? = null
     private var query = ""
@@ -814,7 +823,7 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true } else ProviderDataSource { playbackSource()?.allowHttp == true } }
+        providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } else ProviderDataSource { playbackSource()?.allowHttp == true } }
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
         val loadControl = PlaybackLoadControl()
         sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
@@ -1857,6 +1866,7 @@ class MainActivity : Activity() {
         cancelPlaybackCallbacks()
         performanceOverlay?.attempt()
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
+        if (onDemand == null) Traffic.streamStarted(Traffic.now()) else Traffic.streamStopped()
         performanceOverlay?.sports?.playing?.attempt(expectedMediaId)
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)

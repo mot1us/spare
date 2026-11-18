@@ -32,6 +32,8 @@ object Network {
     private val reaper = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "spare-network-cancel").apply { isDaemon = true } }
         .apply { scheduleWithFixedDelay({ open.forEach { (connection, thread) -> if (thread.isInterrupted && open.remove(connection) != null) runCatching { connection.disconnect() } } }, 200, 200, java.util.concurrent.TimeUnit.MILLISECONDS) }
     internal val openConnections get() = open.size
+    /** Thread names of requests still open, for the performance report. */
+    internal fun openWorkers(): List<String> = open.values.map { it.name }
     fun allowed(value: String, http: Boolean): Boolean = value.isNotEmpty() && runCatching {
         val uri = URI(value)
         uri.host != null && uri.rawUserInfo == null && (uri.scheme.equals("https", true) || (http && uri.scheme.equals("http", true)))
@@ -90,7 +92,7 @@ object Network {
                         var consumed = 0L
                         var lastProgress = 0L
                         fun count(amount: Int) {
-                            if (amount > 0) { consumed += amount; deadline.received(amount) }
+                            if (amount > 0) { consumed += amount; deadline.received(amount); Traffic.other(Traffic.now(), amount) }
                             if (consumed > limit) throw SourceFailure(SourceProblem.LIMIT)
                             deadline.check(arrived = amount > 0)
                             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Download cancelled")

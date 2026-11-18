@@ -9,7 +9,7 @@ import java.util.concurrent.Executors
 /** Stable requests: score/layout updates do not restart a pending artwork fetch. */
 class SportsArtwork(context: Context, private val ready: (String, String, String) -> Unit) {
     private val handler = Handler(Looper.getMainLooper())
-    private val worker = Executors.newFixedThreadPool(2) as java.util.concurrent.ThreadPoolExecutor
+    private val worker = Executors.newFixedThreadPool(2, namedThreads("sports-artwork")) as java.util.concurrent.ThreadPoolExecutor
     private val store = SecureStore(context.applicationContext)
     private val cache = linkedMapOf<String, Triple<Long, String, String>>()
     private val pending = mutableSetOf<String>()

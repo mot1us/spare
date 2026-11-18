@@ -1613,11 +1613,17 @@ class SpareDeviceTest {
 
     @Test fun actualStreamStallUsesBufferingAndResumesWithoutReconnect() {
         FixtureServer(stalled = true).use { server ->
+            Diagnostics.reset()
             val source = Source(name = "Stall Test", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.playbackState == Player.STATE_BUFFERING }
+                // The stall says how fast the stream was arriving, when its last data came, and what else was downloading.
+                val stallDeadline = android.os.SystemClock.elapsedRealtime() + 5000
+                while ("Stream stalled" !in Diagnostics.report() && android.os.SystemClock.elapsedRealtime() < stallDeadline) Thread.sleep(100)
+                val stall = Diagnostics.report().lines().firstOrNull { "Stream stalled" in it }.orEmpty()
+                assertTrue(stall, Regex("Stream stalled · buffer .* · stream \\d+\\.\\d Mbit/s last \\d+ s \\(avg \\d+\\.\\d Mbit/s\\) · last data \\d+\\.\\d s ago · other downloads: ").containsMatchIn(stall))
                 scenario.onActivity { activity ->
                     val field = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                     val guide = field.get(activity) as Guide; val channel = guide.channels.first(); val now = System.currentTimeMillis()
@@ -5545,6 +5551,8 @@ class SpareDeviceTest {
             val report = Diagnostics.report()
             assertTrue(report, report.contains("blockTheScreenBriefly") && report.contains("Screen stalls (what blocked the screen)"))
             assertTrue(report, report.contains("Dropped 9 frames · buffer 4.2 s") && report.contains("Posters: 1 loaded") && report.contains("Parse lineup"))
+            // Every hiccup and the report itself say what else was downloading at the time.
+            assertTrue(report, Regex("Dropped 9 frames · buffer 4.2 s · .*other downloads: ").containsMatchIn(report) && report.contains("Network now: "))
             // What changed the screen, and which remote sent each key; repeats share a line.
             Diagnostics.action("Category: Fixture")
             repeat(3) { Diagnostics.key(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN)) }

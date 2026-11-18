@@ -36,7 +36,7 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     /** Names this loader's images in the Sports opening trace of the performance report. */
     var trace: String? = null
     private fun pool(threads: Int) = java.util.concurrent.ThreadPoolExecutor(threads, threads, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-        if (dropOldest) RecentQueue(32) else java.util.concurrent.LinkedBlockingQueue())
+        if (dropOldest) RecentQueue(32) else java.util.concurrent.LinkedBlockingQueue(), namedThreads("artwork"))
     private val waitingLimit = if (dropOldest) 80 else 48
     private fun size(dimension: Int) = if (dimension <= 0) maxDimension else dimension.coerceAtMost(maxDimension)
     private fun key(url: String, dimension: Int) = if (dimension == maxDimension) url else "$url\n$dimension"

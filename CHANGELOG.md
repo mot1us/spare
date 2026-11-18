@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.29 — 2026-11-17
+
+- Each playback hiccup in the performance report now shows how fast the live stream was arriving over the last 10 seconds against its average for that channel, how long ago its last data came, and what else Spare was downloading (guide, artwork, scoreboards, catalogs) or still waiting on. A "Network now" line shows the same while you watch. Counts only; no addresses.
+- Background workers that download artwork, Library details, updates and scheduled refreshes are named, so the report can say which one was busy.
+
 ## 0.51.28 — 2026-11-17
 
 - The performance report's Sports and Library opening traces keep their first 40 steps and the latest 20, so steps that come after a burst of scoreboard replies, such as the guide read for other live sports, are no longer dropped.

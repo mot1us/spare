@@ -49,5 +49,5 @@ class RefreshJobService : JobService() {
         return true
     }
     override fun onStopJob(params: JobParameters): Boolean { stopped.add(params.jobId); return true }
-    companion object { private val loader = Executors.newSingleThreadExecutor() }
+    companion object { private val loader = Executors.newSingleThreadExecutor(namedThreads("scheduled-refresh")) }
 }
