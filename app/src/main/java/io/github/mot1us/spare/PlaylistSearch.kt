@@ -85,7 +85,11 @@ private class ProviderPlaylistSearch(private val store: SecureStore, private val
         readTask?.cancel(true)
         val readToken = ++readEpoch; reading = true
         val token = context; val term = query; val wanted = modes.toSet()
-        val snapshots = catalogs.filterKeys { it in wanted }; val known = extras; val selected = source
+        val selected = source; val known = extras
+        // A refresh in Library replaces the saved copy and, once Library closes, deletes the old one: read the current copy.
+        val snapshots = catalogs.filterKeys { it in wanted }.mapValues { (mode, saved) ->
+            selected?.let { repository.memory(it, mode) }?.takeIf { it !== saved && it.complete && it.whole && it.count > 0 }?.also { catalogs[mode] = it } ?: saved
+        }
         readTask = reader.submit {
             fun accept(found: Map<String, List<OnDemand>>) = synchronized(lock) {
                 if (!active || closed || token != context || readToken != readEpoch || term != query || Thread.currentThread().isInterrupted) return@synchronized

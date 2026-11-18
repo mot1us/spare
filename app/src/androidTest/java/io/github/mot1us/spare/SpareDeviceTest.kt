@@ -5594,8 +5594,9 @@ class SpareDeviceTest {
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
             // The whole catalog as a background import leaves it: three categories, with provider "added" times and ratings.
+            // Saved 5 hours ago, so it is not yet due for the background refresh (anOldLibraryCatalogRefreshes… covers that).
             val seeded = LibraryCatalog(store)
-            seeded.Writer(source, "movie", stamp = System.currentTimeMillis() - 48 * 3600000L).apply {
+            seeded.Writer(source, "movie", stamp = System.currentTimeMillis() - 5 * 3600000L).apply {
                 (1..240).map { n -> OnDemand("movie:${5000 + n}", "Home title $n", "Category ${1 + n % 3}", "${server.base}/movie/test/test-secret/${5000 + n}.mp4", "movie", poster = "${server.base}/logo.png", year = "2024", added = 1_700_000_000L + n, rating = (n % 10).toFloat()) }
                     .chunked(64).forEach(::append)
                 finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy"))
@@ -5616,7 +5617,7 @@ class SpareDeviceTest {
                     assertFalse("Rows use the full width; the category list belongs to the grid", root.findViewWithTag<View>("library-categories").isShown)
                     assertNull("Special rows have no See all tile", root.findViewWithTag<View>("library-shelf-more:recent"))
                 }
-                assertTrue("Even an older saved catalog opens from disk without a provider import", server.vodImportTargets.isEmpty())
+                assertTrue("A saved catalog under 6 hours old opens from disk without a provider import", server.vodImportTargets.isEmpty())
                 Thread.sleep(1200); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-home.png"))
                 // The main menu rests as icons and widens with labels over the screen when the cursor enters it.
                 scenario.onActivity { activity ->
@@ -5696,6 +5697,50 @@ class SpareDeviceTest {
                 device.pressBack(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-shelf-more:1" }
                 assertTrue("Browsing rows, a category and search asks the provider for no titles", server.catalogTargets.none { it.contains("get_vod_streams") })
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun anOldLibraryCatalogRefreshesWhenOpenedWithoutBreakingTheTitlesOnScreen() {
+        FixtureServer(libraryCategories = true, slowVod = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            val titles = (1..240).map { n -> OnDemand("movie:${5000 + n}", "Home title $n", "Category ${1 + n % 3}", "${server.base}/movie/test/test-secret/${5000 + n}.mp4", "movie", poster = "${server.base}/logo.png", year = "2024", added = 1_700_000_000L + n, rating = (n % 10).toFloat()) }
+            val seeded = LibraryCatalog(store)
+            val old = seeded.Writer(source, "movie", System.currentTimeMillis() - 3 * 86400000L).run { titles.chunked(64).forEach(::append); finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy")) }
+            seeded.close()
+            val database = CatalogDb.get(context); val scope = database.scopeKey(source, "movie", "")
+            fun status(activity: MainActivity) = activity.window.decorView.findViewWithTag<TextView>("library-status").text.toString()
+            fun search(scenario: ActivityScenario<MainActivity>, text: String) = scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText(text) }
+            fun grid(activity: MainActivity) = activity.window.decorView.findViewWithTag<RecyclerView>("library-items")
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                // The rows open at once on the saved copy and say a refresh is under way; the provider sends half the new catalog and waits.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && status(it) == "240 titles · Saved 3 days ago · Checking for new titles…" }
+                waitFor(scenario) { server.catalogTargets.any { "get_vod_streams" in it } }
+                // Search on the rows opens a grid over the copy on screen.
+                search(scenario, "Home title 77")
+                waitFor(scenario) { a -> grid(a).let { it.isShown && it.adapter?.itemCount == 1 } && a.window.decorView.findViewWithTag<View>("library-item:movie:5077")?.isShown == true }
+                server.finishVodCatalog.countDown()
+                waitFor(scenario) { database.meta(scope)?.let { it.gen != old.dbGen && it.count == 16 } == true }
+                // The refresh replaced the saved copy while the grid was open: the grid keeps reading the copy it shows.
+                Thread.sleep(600)
+                search(scenario, "Home title 78")
+                waitFor(scenario) { a -> grid(a).let { it.isShown && it.adapter?.itemCount == 1 } && a.window.decorView.findViewWithTag<View>("library-item:movie:5078")?.isShown == true }
+                assertTrue("The copy on screen keeps its titles while Library is open", database.titles(scope, old.dbGen!!, 0, 1).isNotEmpty())
+                // Back on the rows, they are built from the new copy.
+                search(scenario, "")
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && status(it) == "16 titles · Saved today" }
+                // Leaving Library deletes the replaced copy.
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("guide-mode").performClick() }
+                waitFor(scenario) { !it.window.decorView.findViewWithTag<View>("library-panel").isShown && database.titles(scope, old.dbGen!!, 0, 1).isEmpty() }
+                // A fresh copy is not downloaded again when Library reopens.
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && status(it) == "16 titles · Saved today" }
+                Thread.sleep(1000)
+                assertEquals("One refresh for one old catalog", 1, server.catalogTargets.count { "get_vod_streams" in it })
+            } } finally { server.finishVodCatalog.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
 

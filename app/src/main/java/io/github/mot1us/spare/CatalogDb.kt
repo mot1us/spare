@@ -51,16 +51,23 @@ class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context
         }
     }
 
-    /** Make [gen] the saved copy of [scope] and drop every older generation of it. */
-    fun publish(scope: String, gen: String, updated: Long, complete: Boolean, count: Int, provider: String, labels: Map<String, String>) {
+    /** Make [gen] the saved copy of [scope] and drop every older generation of it except [keep] (copies still on screen). */
+    fun publish(scope: String, gen: String, updated: Long, complete: Boolean, count: Int, provider: String, labels: Map<String, String>, keep: List<String> = emptyList()) {
         writableDatabase.transaction {
             val values = ContentValues().apply {
                 put("scope", scope); put("gen", gen); put("updated", updated); put("complete", if (complete) 1 else 0); put("count", count); put("provider", provider)
                 put("labels", crypto.seal(JSONObject(labels).toString().toByteArray()))
             }
             insertWithOnConflict("meta", null, values, SQLiteDatabase.CONFLICT_REPLACE)
-            delete("title", "scope = ? AND gen <> ?", arrayOf(scope, gen))
+            val kept = keep.filter { it != gen }.distinct()
+            delete("title", "scope = ? AND gen <> ?" + " AND gen <> ?".repeat(kept.size), arrayOf(scope, gen, *kept.toTypedArray()))
         }
+    }
+
+    /** Delete one older copy of [scope] that was kept while on screen. False (nothing deleted) when it is still the saved copy. */
+    fun dropSuperseded(scope: String, gen: String): Boolean = writableDatabase.transaction {
+        val current = rawQuery("SELECT gen FROM meta WHERE scope = ?", arrayOf(scope)).use { if (it.moveToFirst()) it.getString(0) else null }
+        if (current == gen) false else { delete("title", "scope = ? AND gen = ?", arrayOf(scope, gen)); true }
     }
 
     fun meta(scope: String): Meta? = readableDatabase.rawQuery("SELECT gen, updated, complete, count, provider, labels FROM meta WHERE scope = ?", arrayOf(scope)).use { cursor ->

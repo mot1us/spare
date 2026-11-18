@@ -51,12 +51,20 @@ class LibraryController(private val activity: Activity, private val store: Secur
             val selected = selectedSource()
             if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null &&
                 // The rows home is a finished view of the catalog; a background refresh must not swap it for the grid.
-                !homeActive()) {
+                !homeActive() &&
+                // Nor replace a finished grid: a refresh that completes keeps the copy on screen until Library reopens.
+                activeSnapshot?.let { it.complete && it.whole } != true) {
                 repository.memory(selected, kind)?.let { activateCatalog(activeCatalog, it.copy(labels = categoryNames[activeCatalog] ?: it.labels), !it.complete) }
             }
         }
     }
     init { repository.changed = { handler.removeCallbacks(indexChanged); handler.postDelayed(indexChanged, 250) } }
+    /** Old saved catalogs refresh here, one at a time, apart from [worker] so Library's own requests never cancel them. */
+    private val refresher = Executors.newSingleThreadExecutor(namedThreads("library-refresh"))
+    private val refreshing = mutableMapOf<String, java.util.concurrent.Future<*>>()
+    private val refreshTried = mutableMapOf<String, Long>()
+    /** Counts Library visits: copies held for rows on screen are released when the visit that held them ends. */
+    @Volatile private var visit = 1
     private val catalogImports = mutableMapOf<String, java.util.concurrent.Future<*>>()
     private val catalogGenerations = mutableMapOf<String, Int>()
     private var catalogGeneration = 0
@@ -313,7 +321,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun show(home: Home, personal: Map<String, Pair<String, CatalogShelves.Data>>) {
             homeToken = -1; pageTask?.cancel(true); ++pageEpoch
             if (!firstTitlesRecorded) { firstTitlesRecorded = true; Timings.since("First titles", openBegan); Diagnostics.library("Rows shown") }
-            panel.page(title, "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis())}", false)
+            panel.page(title, homeNote(root, full), false)
             panel.showShelves(root, personal.mapValues { it.value.first } + home.shelves, { id -> loadShelf(root, names, full, id) }, {}, { id -> when {
                     id == HOME_CONTINUE -> open("continue"); id == HOME_WATCHLIST -> open("favorites")
                     id in names -> { gridFromHome = true; openCategory(selected, mode, root, names, id, focus = true) }
@@ -323,7 +331,15 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
         val ready = homes[root]?.takeIf { it.stamp == full.updated }
         if (ready == null) panel.page(title, "Getting your library ready…", true)
+        refreshIfDue(selected, mode, root, names, full)
+        val visit = visit
         request { token ->
+            // Keep this copy's titles while its rows are on screen, even if a refresh replaces it. If one already has,
+            // show the new copy instead.
+            if (!repository.hold(full, visit)) {
+                val current = wholeCatalog(selected, mode)
+                if (current != null && current !== full) { ui(token) { home(selected, mode, root, names, current, focus) }; return@request }
+            }
             // Continue watching and Watchlist change with every visit: two small saved files, read each time the rows are shown.
             val personal = personalShelves(selected, mode)
             Diagnostics.library("Continue watching and Watchlist read")
@@ -339,6 +355,33 @@ class LibraryController(private val activity: Activity, private val store: Secur
             ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built, personal) }
         }
         homeToken = epoch
+    }
+    private fun homeNote(root: String, full: LibraryCatalog.Snapshot) =
+        "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis(), checking = refreshing[root]?.isDone == false)}"
+    /**
+     * A saved catalog older than [LibraryCatalog.REFRESH_AFTER] downloads again quietly once its rows are open. The rows and
+     * grids on screen keep reading the copy they show; the new one appears the next time the rows are opened. Main thread.
+     */
+    private fun refreshIfDue(selected: Source, mode: String, root: String, names: Map<String, String>, full: LibraryCatalog.Snapshot) {
+        val now = System.currentTimeMillis()
+        if (!LibraryCatalog.due(full, now) || refreshing[root]?.isDone == false || now - (refreshTried[root] ?: 0L) in 0 until REFRESH_RETRY) return
+        refreshTried[root] = now
+        val began = Timings.now(); val title = if (mode == "movie") "Movies" else "Series"
+        Diagnostics.library("Saved catalog is ${(now - full.updated) / 3600000L} h old · refreshing in the background")
+        var job: java.util.concurrent.Future<*>? = null
+        job = refresher.submit {
+            val result = runCatching { repository.load(selected, mode, "", false, names) }
+            handler.post {
+                if (refreshing[root] === job) refreshing.remove(root)
+                if (destroyed) return@post
+                val replaced = result.getOrNull()?.takeIf { it.dbGen != full.dbGen }
+                if (replaced != null) { Timings.since("Catalog refresh", began); Diagnostics.library("Catalog refreshed in ${(Timings.now() - began) / 1000} s · ${replaced.count} titles") }
+                else Diagnostics.library("Catalog refresh ${result.exceptionOrNull()?.let { "failed · ${SourceErrors.message(it)}" } ?: "found nothing newer"}")
+                if (opened && panel.shelfCatalog == root && homes[root]?.stamp == full.updated)
+                    panel.page(title, if (replaced != null) "${counted(replaced.count, "title")} · Updated just now · New titles show when you reopen Library" else homeNote(root, full), false)
+            }
+        }
+        refreshing[root] = job
     }
     /** Rows that lead the home: titles of this kind with a saved position, then this kind's Watchlist. Off the UI thread. */
     private fun personalShelves(selected: Source, mode: String): Map<String, Pair<String, CatalogShelves.Data>> {
@@ -780,6 +823,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
         catalogImports.forEach { (key, import) -> if (!import.isDone) { catalogGenerations.remove(key); import.cancel(true) } }
+        val ended = visit++
+        disk.execute { repository.release(ended) }
     }
     fun invalidateProvider(id: String) {
         cancelStart(); ++epoch; task?.cancel(true); favoriteTask?.cancel(true); ++favoriteEpoch
@@ -787,18 +832,26 @@ class LibraryController(private val activity: Activity, private val store: Secur
         pageTask?.cancel(true); ++pageEpoch; activeSnapshot = null; activeCatalog = ""
         catalogs.clear(); browsePages.clear(); categoryNames.clear(); selectedCategories.clear(); episodeCache.clear(); details.clear(); seriesSpots.clear()
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
-        favoriteSource = ""; favoriteState = LibraryFavorites(); repository.invalidate(id)
+        favoriteSource = ""; favoriteState = LibraryFavorites(); refreshTried.keys.removeAll { it.startsWith("$id:") }; repository.invalidate(id)
     }
-    fun destroy() { repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { refresher.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object {
-        /** Catalogs refresh only when asked (Refresh), so the rows say how old the saved copy is. */
-        fun savedAge(updated: Long, now: Long): String {
-            val days = (now - updated) / 86400000L
-            return when {
-                updated <= 0L || now < updated -> "Saved on this TV"
+        /** A failed background refresh is tried again after this long, at the next visit to the rows. */
+        const val REFRESH_RETRY = 30 * 60000L
+        /** How old the saved copy on the rows is, and whether a background refresh is checking for new titles. */
+        fun savedAge(updated: Long, now: Long, checking: Boolean = false): String {
+            val known = updated > 0L && now >= updated
+            val days = if (known) (now - updated) / 86400000L else 0L
+            val age = when {
+                !known -> "Saved on this TV"
                 days < 1 -> "Saved today"
                 days < 2 -> "Saved yesterday"
-                else -> "Saved $days days ago · Refresh for new titles"
+                else -> "Saved $days days ago"
+            }
+            return age + when {
+                checking -> " · Checking for new titles…"
+                days >= 2 -> " · Refresh for new titles"
+                else -> ""
             }
         }
         const val HOME_RECENT = "recent"; const val HOME_TOP = "top"; const val HOME_CONTINUE = "continue"; const val HOME_WATCHLIST = "watchlist"; const val HOME_PERSONAL = 20; fun duration(ms: Long): String { val seconds = (ms / 1000).coerceAtLeast(0); return if (seconds >= 3600) "%d:%02d:%02d".format(seconds / 3600, seconds / 60 % 60, seconds % 60) else "%d:%02d".format(seconds / 60, seconds % 60) } }

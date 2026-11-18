@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.31 — 2026-11-18
+
+- Library refreshes a Movies or Series catalog older than 6 hours in the background when you open its rows ("Checking for new titles…"). The rows and grids on screen keep the copy they show until you leave Library; the new titles appear the next time the rows open. A failed refresh tries again after 30 minutes.
+- Search reads the current saved catalog after a refresh instead of the copy it loaded first.
+- docs/LOADING-PLAN.md has the first measurements from the second onn on 0.51.30.
+
 ## 0.51.30 — 2026-11-17
 
 - Library's Movies and Series rows say how old the saved catalog is ("Saved today", "Saved yesterday", "Saved 3 days ago · Refresh for new titles"). Since 0.51.18 catalogs refresh only when you choose Refresh, so this shows when new provider titles may be missing.

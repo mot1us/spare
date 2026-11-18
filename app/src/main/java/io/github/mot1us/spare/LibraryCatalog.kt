@@ -135,10 +135,36 @@ class LibraryCatalog(private val store: SecureStore) {
         synchronized(snapshots) { snapshots.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         synchronized(memory) { memory.keys.removeAll { it.startsWith("catalog-$sourceId-") } }
         indexes.keys.removeAll { it.startsWith("$sourceId:") }; missing.keys.removeAll { it.startsWith("$sourceId:") }
+        synchronized(publishLock) { held.keys.removeAll { it.startsWith("$sourceId:") } }
     }
     fun close() { jobs.close(); categoryJobs.close() }
     private val publishLock = Any()
     private val writers = mutableMapOf<String, String>()
+    /**
+     * Saved copies ("scope\ngen") that Library rows and grids on screen still read, with the Library visit that last held
+     * each. A refresh that finishes keeps their titles.
+     */
+    private val held = HashMap<String, Int>()
+    private fun heldGens(scope: String) = held.keys.filter { it.startsWith("$scope\n") }.map { it.substringAfter('\n') }
+    /**
+     * Keep this whole catalog's titles readable until [release], even if a refresh replaces it meanwhile. False when it
+     * has already been replaced: its titles may be gone, so the caller should read the current copy instead. Off the UI thread.
+     */
+    fun hold(snapshot: Snapshot, visit: Int): Boolean {
+        val scope = snapshot.dbScope; val gen = snapshot.dbGen
+        if (!snapshot.whole || !snapshot.complete || scope == null || gen == null) return true
+        return synchronized(publishLock) {
+            val saved = runCatching { store.catalogDb.meta(scope)?.gen }.getOrElse { return@synchronized true }
+            (saved == gen).also { current -> if (current) { val key = indexKey(scope, gen); held[key] = maxOf(held[key] ?: 0, visit) } }
+        }
+    }
+    /** Library visit [visit] (and every earlier one) closed: delete the copies they held that a refresh has replaced since. Off the UI thread. */
+    fun release(visit: Int) {
+        val released = synchronized(publishLock) { held.filterValues { it <= visit }.keys.toList().onEach { held.remove(it) } }
+        released.forEach { key ->
+            runCatching { if (store.catalogDb.dropSuperseded(key.substringBefore('\n'), key.substringAfter('\n'))) indexes.remove(key) }
+        }
+    }
     private val snapshots = object : LinkedHashMap<String, Snapshot>(8, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Snapshot>?) = size > 8
     }
@@ -311,7 +337,7 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     /** Shared by background warming, explicit search and Library; consumers receive useful partial pages. */
     fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), progress: (Snapshot) -> Unit = {}): Snapshot {
-        fun fresh(value: Snapshot?) = value?.complete == true && value.schema >= SCHEMA && value.chunks.all { it.titles.size == it.count } && System.currentTimeMillis() - value.updated in 0 until 6 * 3600000L
+        fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && !due(value, System.currentTimeMillis())
         val saved = cached(source, mode, scope)
         if (saved != null) progress(saved)
         if (!force && fresh(saved)) return saved!!
@@ -382,10 +408,12 @@ class LibraryCatalog(private val store: SecureStore) {
         private fun save(labels: Map<String, String>, complete: Boolean): Snapshot = synchronized(publishLock) {
             requireCurrent(); flush()
             val value = register().copy(labels = labels, complete = complete)
-            store.catalogDb.publish(dbKey, generation, stamp, complete, count, source.providerKey(), labels)
+            val keep = heldGens(dbKey)
+            store.catalogDb.publish(dbKey, generation, stamp, complete, count, source.providerKey(), labels, keep)
             if (whole) indexes[indexKey(dbKey, generation)]?.let { built -> runCatching { store.write("${prefix}keys.enc", built.bytes(generation)) } }
-            // Saving made this copy current and removed older copies' titles from the database: drop their indexes too.
-            if (whole) indexes.keys.removeAll { it.startsWith(dbKey + "\n") && it != indexKey(dbKey, generation) }
+            // Saving made this copy current and removed older copies' titles from the database: drop their indexes too,
+            // except copies Library still has on screen (see [hold]).
+            if (whole) indexes.keys.removeAll { it.startsWith(dbKey + "\n") && it != indexKey(dbKey, generation) && it.substringAfter('\n') !in keep }
             remember(prefix, value)
             value
         }
@@ -466,6 +494,10 @@ class LibraryCatalog(private val store: SecureStore) {
         private val indexes = java.util.concurrent.ConcurrentHashMap<String, Index>()
         /** 4 adds each title's provider "added" time and rating; older saved catalogs are refreshed once. */
         const val SCHEMA = 4
+        /** A saved catalog this old is refreshed in the background when Library opens it. */
+        const val REFRESH_AFTER = 6 * 3600000L
+        /** Whether a saved copy is old enough (or from an older format) to refresh. */
+        fun due(snapshot: Snapshot, now: Long) = snapshot.schema < SCHEMA || now - snapshot.updated !in 0 until REFRESH_AFTER
         const val SORT_PROVIDER = "Provider order"
         const val SORT_TITLE = "A–Z"
         const val SORT_NEWEST = "Newest"
