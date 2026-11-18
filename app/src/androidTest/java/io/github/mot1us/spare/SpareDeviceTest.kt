@@ -5948,7 +5948,14 @@ class SpareDeviceTest {
             assertNotNull("The minified app must request the fixture video; requests: ${server.requests.keys.sorted()}", server.requests["/channel1.mp4"])
             device.pressMenu()
             button("Playback").click()
-            val diagnostics = device.wait(Until.findObject(By.pkg(releasePackage).desc("Playback diagnostics")), 8000)
+            val diagnosticsSelector = By.pkg(releasePackage).desc("Playback diagnostics")
+            if (!device.hasObject(diagnosticsSelector)) {
+                val content = By.pkg(releasePackage).scrollable(true)
+                    .hasDescendant(By.pkg(releasePackage).descStartsWith("Sleep timer"))
+                device.wait(Until.findObject(content), 5000)?.scrollUntil(
+                    androidx.test.uiautomator.Direction.DOWN, Until.hasObject(diagnosticsSelector))
+            }
+            val diagnostics = device.wait(Until.findObject(diagnosticsSelector), 8000)
                 ?: error("Could not find Playback diagnostics in release app")
             diagnostics.click()
             val refresh = By.pkg(releasePackage).desc("Refresh diagnostics")
