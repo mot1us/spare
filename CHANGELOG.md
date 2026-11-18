@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.26 — 2026-11-17
+
+- Settings → Playback → Live TV player can open full-screen Guide selections in VLC for Android. Automatic offers installed VLC on Google TV Streamer and uses ExoPlayer on onn and other TVs. Channel details and live playback errors also offer a one-time VLC handoff.
+- Spare asks before sharing a playlist’s stream addresses with VLC. HTTPS-only playlists and playlists requiring a custom User-Agent use the built-in player.
+
 ## 0.51.25 — 2026-11-17
 
 - Playback on boxes other than the onn 4K Pro now follows what other open-source Android players (Just Player, IPVIO) do. A Google TV Streamer stalled on channels that TiviMate played smoothly on the same box; its report showed the stream running out of data while the hardware decoder was fine.

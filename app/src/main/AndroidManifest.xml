@@ -3,7 +3,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
-    <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
+    <queries><package android:name="org.videolan.vlc" /><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-feature android:name="android.software.leanback" android:required="true" />

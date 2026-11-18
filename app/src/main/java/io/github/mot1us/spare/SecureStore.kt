@@ -17,6 +17,15 @@ import javax.crypto.spec.SecretKeySpec
 
 class SecureStore(private val context: Context) {
     private val preferences = context.getSharedPreferences("view-state", Context.MODE_PRIVATE)
+    internal var guidePlayer: LiveTvPlayer
+        get() {
+            val saved = preferences.getString("guide-player", null)
+            return LiveTvPlayer.entries.firstOrNull { it.name == saved } ?: LiveTvPlayer.AUTO
+        }
+        set(value) { preferences.edit { putString("guide-player", value.name) } }
+    fun allowsVlc(source: Source) = preferences.getBoolean("allow-vlc-${source.id}", false)
+    fun allowVlc(source: Source) { preferences.edit { putBoolean("allow-vlc-${source.id}", true) } }
+
     var localLocation: String
         get() = preferences.getString("local-location", "").orEmpty()
         set(value) { preferences.edit { putString("local-location", LocalRegions.saved(value)) } }

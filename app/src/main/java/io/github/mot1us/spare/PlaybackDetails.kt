@@ -29,7 +29,8 @@ class PlaybackDetails(
     onAddView: (Channel) -> Unit,
     onGameStreams: () -> Unit,
     onVodStart: () -> Unit,
-    onSportsOverlay: () -> Unit = {},
+    onSportsOverlay: () -> Unit,
+    onVlc: () -> Unit,
 ) : LinearLayout(context) {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun label(size: Float, color: Int = Color.WHITE) = TextView(context).apply { textSize = size; typeface = AppFont.face(); setTextColor(color) }
@@ -52,9 +53,10 @@ class PlaybackDetails(
     private val catchup = action("Catch-up", "channel-catchup", onCatchup)
     private val multiview = action("Multiview", "channel-multiview", onMultiview)
     private val vodStart = action("Start VOD", "channel-vod-start", onVodStart).apply { visibility = GONE }
-    private val controls = listOf(overlayButton, guideButton, gameStreamsButton, previous, favorite, subtitles, catchup, multiview, vodStart)
+    private val vlc = action("Play in VLC", "channel-vlc", onVlc)
+    private val controls = listOf(overlayButton, guideButton, gameStreamsButton, previous, favorite, subtitles, catchup, multiview, vodStart, vlc)
     private val icons = listOf(R.drawable.ic_action_overlay, R.drawable.ic_guide, R.drawable.ic_action_streams, R.drawable.ic_action_previous,
-        R.drawable.ic_action_favorite, R.drawable.ic_action_subtitles, R.drawable.ic_action_catchup, R.drawable.ic_action_multiview, R.drawable.ic_action_vod)
+        R.drawable.ic_action_favorite, R.drawable.ic_action_subtitles, R.drawable.ic_action_catchup, R.drawable.ic_action_multiview, R.drawable.ic_action_vod, R.drawable.ic_action_vod)
     private val actions = LinearLayout(context).apply { tag = "playback-actions"; gravity = Gravity.CENTER_VERTICAL }
     private val actionScroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; overScrollMode = OVER_SCROLL_NEVER; addView(actions) }
     private val vodStatus = label(11f, Color.LTGRAY).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
