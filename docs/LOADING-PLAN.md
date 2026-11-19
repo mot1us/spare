@@ -34,6 +34,14 @@ same run was already instant.
    - 0.51.30: 110 ms.
 4. 0.51.28 keeps the first 40 and the latest 20 steps of the Sports trace, so the guide read still shows after a
    long burst of scoreboard replies.
+5. **Live cards opened the stream list instead of playing** (owner saw it on 0.51.31, 2026-11-18). A card plays at
+   once only when the saved guide shows a channel carrying the game now. Those listings came from the quiet guide
+   fill, which 0.51.18 limited to the Guide screen; on a TV that mostly sits in full-screen playback and Sports they
+   ran out within a day. A click then asked the provider about up to 12 likely channels and, when none of them was
+   the right one, showed the list. The onn's log matched this: about a dozen guide requests right after each card click.
+   - 0.51.32: after 30 s of steady full-screen playback with no remote input for 5 s, Spare fills favourites and the
+     channels likely to carry today's games, at most one request a second. The rest of the lineup still fills only on the
+     Guide screen, and nothing is filled while Sports, Library or Search is open.
 
 ## Library: first open before the app has warmed it
 
@@ -89,3 +97,5 @@ downloads) causes playback hiccups during the first open after updating.
 2. After updating the onn to 0.51.31, open Library once and check the report for hiccups while the catalog
    downloads again.
 3. Measure Library frames on the onn with SurfaceFlinger timestats.
+4. After updating the onn to 0.51.32, watch a channel full screen for a few minutes, then open Sports: a live card
+   should play at once. Check the report's hiccups for "guide" as another download running at the time.

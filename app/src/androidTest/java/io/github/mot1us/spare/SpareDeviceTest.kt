@@ -693,6 +693,55 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun steadyFullScreenPlaybackFillsGameChannelListingsButNotTheWholeLineup() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Game listings", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val playing = Channel("xc:1", "Xtream Test 1", "News", "${server.base}/channel1.mp4")
+            val network = Channel("xc:2", "US: ESPN FHD", "US | Sports", "${server.base}/channel2.mp4")
+            val others = (3..12).map { Channel("xc:$it", "Xtream Test $it", "News", "${server.base}/channel$it.mp4") }
+            val scores = LiveSportsSnapshot(listOf(LiveEvent("listings", setOf("nfl:SEA", "nfl:SF"), now - 1200000, networks = listOf("ESPN"))), now, setOf("NFL"))
+            store.recentFeeds = emptyList(); store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(playing, network) + others, emptyMap()))
+            store.markPlaylistRefreshed(source); store.markEpgRefreshed(source); store.markFullEpgAttempted(source); store.setRefreshPolicy(source, RefreshPolicy())
+            fun requested(id: Int) = server.requestedEpgTargets.any { it.contains("stream_id=$id&") || it.endsWith("stream_id=$id") }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var media = ""
+                scenario.onActivity { activity ->
+                    media = find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId
+                    activity.liveSportsLoader = { scores.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    // Skip the 45 s startup grace period instead of sleeping through it.
+                    MainActivity::class.java.getDeclaredField("epgBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
+                }
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:1"]?.isNotEmpty() == true
+                }
+                Thread.sleep(3000)
+                assertFalse("Until playback has run smoothly for a while, full screen reads only the playing channel", (2..12).any(::requested))
+                scenario.onActivity { activity ->
+                    // Playback has been steady for more than a minute (instead of waiting 30-60 s in the test).
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
+                    PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
+                    PlaybackWarmup::class.java.getDeclaredField("readySince").apply { isAccessible = true }.setLong(warmup, 1L)
+                }
+                waitFor(scenario) { activity ->
+                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                    guide.programmes["xc:2"]?.isNotEmpty() == true
+                }
+                Thread.sleep(4000)
+                assertEquals("The channel carrying the live game is read once", 1, server.requestedEpgTargets.count { it.contains("stream_id=2&") || it.endsWith("stream_id=2") })
+                assertFalse("Full-screen playback does not fill the rest of the lineup", (3..12).any(::requested))
+                scenario.onActivity { activity ->
+                    assertEquals("The fill keeps the playing connection", media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    assertTrue("Playback continues during the fill", find<PlayerView>(activity.window.decorView)!!.player!!.isPlaying)
+                }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun fullProviderEpgWarmsUnvisitedChannelsAndSurvivesRestart() {
         FixtureServer(channelCount = 96, fullGuide = true).use { server ->
             val source = Source(name = "Full guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

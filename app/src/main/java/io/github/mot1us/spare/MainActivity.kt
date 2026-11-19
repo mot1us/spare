@@ -56,6 +56,8 @@ import androidx.recyclerview.widget.RecyclerView
 private const val EPG_READ_AHEAD_LIMIT = 200
 private const val EPG_BACKGROUND_LIMIT = 4000
 private const val EPG_BACKGROUND_GAP_MS = 120L
+/** Full-screen playback fills game channels one request at a time with a pause between them. */
+private const val EPG_PLAYBACK_GAP_MS = 1000L
 
 @UnstableApi
 @SuppressLint("SetTextI18n")
@@ -95,6 +97,9 @@ class MainActivity : Activity() {
     private var epgBackgroundOrder = emptyList<Channel>()
     private var epgBackgroundOrdering: List<Channel>? = null
     private var epgBackgroundCursor = 0
+    /** Favourites and likely game channels at the front of [epgBackgroundOrder]: the part filled during full-screen playback. */
+    private var epgBackgroundPriority = 0
+    private var epgBackgroundDoneAt = 0L
     private var epgBackgroundRequests = 0
     private var epgBackgroundFailures = 0
     private var epgBackgroundNotBefore = 0L
@@ -174,11 +179,12 @@ class MainActivity : Activity() {
         if (now - lastInputAt < 3000) return false
         return current == null || playbackWarmup.ready(playbackToken, now, started && firstFrame && player.isPlaying, player.totalBufferedDuration, 30000, 15000, 60000)
     }
+    /** Full-screen live playback that has run smoothly for a while, with no screen or menu open and no recent remote input. */
+    private fun watchingSteadily() = started && current != null && firstFrame && player.isPlaying && player.totalBufferedDuration >= 5000 &&
+        !guideVisible && !details.isVisible && !demandControls.isVisible && settingsPanel?.opened != true &&
+        !playbackLoading.isVisible && !loadingPanel.isVisible && bulkRefreshReady()
     private fun warmBrowseWhileIdle() {
-        if (!started || current == null || !firstFrame || !player.isPlaying || player.totalBufferedDuration < 5000 ||
-            guideVisible || details.isVisible || demandControls.isVisible || scoreStrip.isVisible || settingsPanel?.opened == true ||
-            playbackLoading.isVisible || loadingPanel.isVisible || enabledSources().any { PlaylistRefresh.running(it.id) } ||
-            !bulkRefreshReady()) {
+        if (!watchingSteadily() || scoreStrip.isVisible || enabledSources().any { PlaylistRefresh.running(it.id) }) {
             idleBrowse.pause()
             return
         }
@@ -207,6 +213,7 @@ class MainActivity : Activity() {
                 if (!busy && started && System.currentTimeMillis() >= refreshRetryAt) autoRefresh(selected, false)
             }
             warmBrowseWhileIdle()
+            fillGameListingsWhileWatching()
             handler.postDelayed(this, 1000)
         }
     }
@@ -2032,6 +2039,7 @@ class MainActivity : Activity() {
             val index = candidates.indexOfFirst { "$epoch:${it.id}" !in epgInFlight && needs(it) }
             if (index < 0) {
                 if (readingGuide) warmGuideInBackground(epoch, now)
+                else if (watchingSteadily()) warmGuideInBackground(epoch, now, gamesOnly = true)
                 return
             }
             // Keep one worker free for rows the viewer can see right now.
@@ -2042,12 +2050,27 @@ class MainActivity : Activity() {
         }
     }
     /**
-     * Fill the whole guide quietly, one request at a time and only when nothing visible is
-     * waiting, so a category opened later already has programmes (and they are saved for the
-     * next launch). Providers whose XMLTV download works never need this: their channels are
-     * already filled, so these checks skip them.
+     * Full-screen playback fills favourites and the channels likely to carry today's games, so a live Sports card is
+     * confirmed from the saved guide and plays at once instead of asking the provider. 0.51.18 kept all quiet filling
+     * on the Guide screen; the saved game listings then ran out and Sports cards opened the stream list instead.
      */
-    private fun warmGuideInBackground(epoch: Int, now: Long) {
+    private fun fillGameListingsWhileWatching() {
+        if (epgActive > 0 || epgBackgroundRequests >= EPG_BACKGROUND_LIMIT || library.opened || onDemand != null || multiview.active) return
+        if (epgBackgroundFor === guide.channels && epgBackgroundCursor >= epgBackgroundPriority) return
+        val clock = android.os.SystemClock.elapsedRealtime()
+        if (clock < epgBackgroundNotBefore || clock < lastInputAt + 5000 || clock < epgBackgroundDoneAt + EPG_PLAYBACK_GAP_MS || !watchingSteadily()) return
+        val sources = enabledSources()
+        if (sources.none { it.kind == "xtream" && it.epgUrl.isBlank() } || sources.any { PlaylistRefresh.running(it.id) }) return
+        handler.removeCallbacks(fetchBackgroundEpg); handler.post(fetchBackgroundEpg)
+    }
+    /**
+     * Fill the guide quietly, one request at a time and only when nothing visible is waiting, so a
+     * category opened later already has programmes (and they are saved for the next launch). The Guide
+     * screen fills the whole lineup; full-screen playback ([gamesOnly]) fills only favourites and likely
+     * game channels. Providers whose XMLTV download works never need this: their channels are already
+     * filled, so these checks skip them.
+     */
+    private fun warmGuideInBackground(epoch: Int, now: Long, gamesOnly: Boolean = false) {
         if (epgActive > 0 || now < epgAheadPausedUntil || epgBackgroundRequests >= EPG_BACKGROUND_LIMIT) return
         // A game being matched to channels gets the provider to itself.
         if (sportsMatchTask?.isDone == false || sportsWarmActive.isNotEmpty()) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, 5000); return }
@@ -2066,18 +2089,20 @@ class MainActivity : Activity() {
                 // asking the provider per game), then everything else in guide order.
                 val all = channels.filter { !it.media }
                 val sports = runCatching { SportsGuide.warmChannels(all, favoriteIds, followed, networks) }.getOrDefault(emptyList())
-                val order = (all.filter { it.id in favoriteIds } + sports + all).distinctBy { it.id }
+                val first = (all.filter { it.id in favoriteIds } + sports).distinctBy { it.id }
+                val order = (first + all).distinctBy { it.id }
                 handler.post {
                     if (!closed && epgBackgroundOrdering === channels) {
                         epgBackgroundOrdering = null
-                        if (guide.channels === channels) { epgBackgroundFor = channels; epgBackgroundOrder = order; epgBackgroundCursor = 0; pumpEpg() }
+                        if (guide.channels === channels) { epgBackgroundFor = channels; epgBackgroundOrder = order; epgBackgroundPriority = first.size; epgBackgroundCursor = 0; pumpEpg() }
                     }
                 }
             }
             return
         }
         val order = epgBackgroundOrder
-        while (epgBackgroundCursor < order.size) {
+        val end = if (gamesOnly) minOf(epgBackgroundPriority, order.size) else order.size
+        while (epgBackgroundCursor < end) {
             val channel = order[epgBackgroundCursor++]
             val selected = owner(channel) ?: continue
             if (!selected.enabled || selected.kind != "xtream" || selected.epgUrl.isNotBlank() || selected.id in restoringProgrammes) continue
@@ -2126,7 +2151,8 @@ class MainActivity : Activity() {
                         (if (guideVisible) focused ?: current else current)?.let(::showInfo)
                     }
                 }
-                if (!closed) { if (background) handler.postDelayed(fetchBackgroundEpg, EPG_BACKGROUND_GAP_MS) else pumpEpg() }
+                if (background) epgBackgroundDoneAt = android.os.SystemClock.elapsedRealtime()
+                if (!closed) { if (background) handler.postDelayed(fetchBackgroundEpg, if (guideVisible) EPG_BACKGROUND_GAP_MS else EPG_PLAYBACK_GAP_MS) else pumpEpg() }
             }
         }
     }

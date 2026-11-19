@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.32 — 2026-11-18
+
+- OK on a live Sports card plays the best stream at once again instead of opening the stream list. A card plays at once when the saved guide shows a channel carrying the game now. Those listings came from the quiet guide fill that 0.51.18 limited to the Guide screen, so on a TV that mostly plays full screen they ran out within a day. After 30 s of steady full-screen playback with no remote input, Spare again fills listings for favourites and the channels likely to carry today's games, at most one request a second. The rest of the lineup still fills only on the Guide screen, and nothing is filled while Sports, Library or Search is open.
+
 ## 0.51.31 — 2026-11-18
 
 - Library refreshes a Movies or Series catalog older than 6 hours in the background when you open its rows ("Checking for new titles…"). The rows and grids on screen keep the copy they show until you leave Library; the new titles appear the next time the rows open. A failed refresh tries again after 30 minutes.
