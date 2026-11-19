@@ -8,7 +8,13 @@ object SportsDestinations {
     private val sky = Regex("sky[\\W_]*sports", RegexOption.IGNORE_CASE)
     private val gamePass = Regex("game[\\W_]*pass", RegexOption.IGNORE_CASE)
     private fun context(channel: Channel) = "${channel.name} ${channel.group}"
-    private fun possible(value: String) = redZone.containsMatchIn(value) || abbreviated.containsMatchIn(value)
+    /**
+     * Both patterns need "zone" or "rz", so a plain search rules out almost every channel and listing before a pattern
+     * runs. The full-lineup RedZone search reruns whenever the guide changes while Sports is open, and the patterns
+     * on every channel name made the video behind Sports drop frames on an onn 4K Pro.
+     */
+    private fun possible(value: String) = (value.contains("zone", ignoreCase = true) || value.contains("rz", ignoreCase = true)) &&
+        (redZone.containsMatchIn(value) || abbreviated.containsMatchIn(value))
     private fun nameMatches(value: String, context: String): Boolean = possible(value) &&
         !SportsGuide.excludedTitle(SportsCatalog.normalize(value)) && (redZone.containsMatchIn(value) || nfl.containsMatchIn(context))
     private fun named(channel: Channel) = !channel.media && nameMatches(channel.name, context(channel))

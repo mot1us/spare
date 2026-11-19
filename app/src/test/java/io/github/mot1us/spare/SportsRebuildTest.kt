@@ -25,6 +25,9 @@ class SportsRebuildTest {
         assertEquals(listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()).map { it.id })
         assertEquals("Unknown quality remains watchable", listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(1080, FrameRateFilter.sixtyOrBetter), emptyMap()).map { it.id })
         assertEquals(listOf("two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()) { it.id != "one" }.map { it.id })
+        // The quick "zone"/"rz" check before the patterns ignores letter case like the patterns do.
+        val cased = listOf(Channel("upper", "US: NFL REDZONE", "Sports", "https://example.test/u"), Channel("rz", "NFL Rz HD", "Sports", "https://example.test/r"), Channel("ozone", "Ozone TV", "NFL", "https://example.test/o"))
+        assertEquals(listOf("upper", "rz"), SportsDestinations.redZone(cased, GuideFilters(), emptyMap()).map { it.id })
     }
     @Test fun redZoneFindsCurrentGamePassCoverageOutsideMatchupCategoriesAndExpiresItsCache() {
         val pass = Channel("pass", "Game Pass 12 FHD", "NFL Game Pass", "https://example.test/pass", reportedQuality = VideoInfo(1920, 1080, 0f))

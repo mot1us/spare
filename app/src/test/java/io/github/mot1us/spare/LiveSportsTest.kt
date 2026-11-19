@@ -13,6 +13,25 @@ class LiveSportsTest {
         val teams = JSONArray(listOf("SEA", "SF").map { JSONObject().put("team", JSONObject().put("abbreviation", it)) })
         return JSONObject().put("events", JSONArray().put(JSONObject().put("id", "1").put("date", Instant.ofEpochMilli(start).toString()).put("status", JSONObject().put("type", type)).put("competitions", JSONArray().put(JSONObject().put("competitors", teams))))).toString()
     }
+    @Test fun teamLookupIndexFindsExactlyWhatTheFullCatalogScanFound() {
+        // The scan this replaces: the first catalog team in the competition with that provider id, then with that cleaned-up name.
+        fun scanned(league: String, name: String, apiId: String): String? =
+            SportsCatalog.teams.firstOrNull { league in it.competitions && apiId.isNotBlank() && it.apiId == apiId }?.id
+                ?: SportsCatalog.teams.firstOrNull { league in it.competitions && SportsCatalog.normalize(it.name) == SportsCatalog.normalize(name) }?.id
+        val leagues = SportsCatalog.teams.flatMap { it.competitions }.distinct()
+        var checked = 0
+        SportsCatalog.teams.forEach { team ->
+            team.competitions.forEach { league ->
+                // An unknown code forces the name path; spelling and accents differ the way scoreboards differ.
+                listOf(team.name, team.name.uppercase(), " ${team.name}. ").forEach { name ->
+                    assertEquals("$league $name", scanned(league, name, ""), LiveSports.resolve(league, "?", name)); checked++
+                }
+                if (team.apiId.isNotBlank()) { assertEquals("$league ${team.apiId}", scanned(league, "", team.apiId), LiveSports.resolve(league, "?", "", team.apiId)); checked++ }
+            }
+        }
+        leagues.forEach { league -> assertNull(LiveSports.resolve(league, "?", "Nowhere Unknowns", "no-such-id")) }
+        assertTrue("The whole catalog is compared", checked > 1000)
+    }
     @Test fun onlyConfirmedInProgressGamesAreLive() {
         assertEquals(setOf("nfl:SEA", "nfl:SF"), LiveSports.parse(event(), "NFL", now).single().teams)
         listOf("STATUS_HALFTIME", "STATUS_END_PERIOD", "STATUS_OVERTIME").forEach { assertEquals(1, LiveSports.parse(event(name = it), "NFL", now).size) }

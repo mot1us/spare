@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.34 — 2026-11-18
+
+- Adding leagues no longer makes the video behind Sports choppy. With ten leagues, an onn 4K Pro dropped about 50 frames every 1–2 seconds for 13 seconds while Sports read the new scoreboards: each team a scoreboard named without a known code (mostly college and soccer teams) was compared with every catalog team's cleaned-up name. Those names are now looked up once per league; 514 unknown college baseball teams took 162 ms that way on a Mac and now take under 1 ms, with the same results.
+- The NFL RedZone search over the whole channel list, which runs again whenever the guide changes while Sports is open, checks each name and listing for "zone" or "rz" before running its patterns. It finds the same channels.
+
 ## 0.51.33 — 2026-11-18
 
 - Playback is smooth again. 0.51.32 downloaded guide listings for game channels during full-screen playback, and on an onn 4K Pro the video skipped frames while it ran: 15 frames in the 10 s it spent ranking a 15,800-channel lineup, and about twice the normal rate during its requests. Full-screen playback again downloads only the playing channel's listings, as in 0.51.31.

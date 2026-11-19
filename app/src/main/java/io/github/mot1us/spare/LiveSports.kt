@@ -107,9 +107,25 @@ object LiveSports {
         }
         return result.distinctBy { it.id }
     }
+    /** (competition, provider team id) → the first catalog team with it, as a scan of the catalog would find. */
+    private val teamsByApiId: Map<Pair<String, String>, String> by lazy {
+        HashMap<Pair<String, String>, String>().apply {
+            SportsCatalog.teams.forEach { team -> if (team.apiId.isNotBlank()) team.competitions.forEach { putIfAbsent(it to team.apiId, team.id) } }
+        }
+    }
+    /**
+     * (competition, cleaned-up team name) → the first catalog team with it. Built once: comparing every unrecognized
+     * competitor with every catalog team's cleaned-up name was most of a scoreboard load, and with ten leagues on an
+     * onn 4K Pro the video behind Sports dropped frames for about 13 seconds while it ran.
+     */
+    private val teamsByName: Map<Pair<String, String>, String> by lazy {
+        HashMap<Pair<String, String>, String>().apply {
+            SportsCatalog.teams.forEach { team -> val key = SportsCatalog.normalize(team.name); team.competitions.forEach { putIfAbsent(it to key, team.id) } }
+        }
+    }
     internal fun resolve(league: String, code: String, name: String, apiId: String = ""): String? {
-        SportsCatalog.teams.firstOrNull { league in it.competitions && apiId.isNotBlank() && it.apiId == apiId }?.let { return it.id }
+        if (apiId.isNotBlank()) teamsByApiId[league to apiId]?.let { return it }
         val aliases = when (league to code.uppercase(java.util.Locale.ROOT)) { "NFL" to "WSH", "NFL" to "WAS" -> "WSH"; "NFL" to "JAC" -> "JAX"; "MLB" to "OAK" -> "ATH"; else -> code.uppercase(java.util.Locale.ROOT) }
-        return SportsCatalog.byId["${league.lowercase(java.util.Locale.ROOT)}:$aliases"]?.id ?: SportsCatalog.teams.firstOrNull { league in it.competitions && SportsCatalog.normalize(it.name) == SportsCatalog.normalize(name) }?.id
+        return SportsCatalog.byId["${league.lowercase(java.util.Locale.ROOT)}:$aliases"]?.id ?: teamsByName[league to SportsCatalog.normalize(name)]
     }
 }

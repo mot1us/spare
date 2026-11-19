@@ -46,6 +46,13 @@ same run was already instant.
    - 0.51.33 removed it again. A click on a live card now asks the game's own broadcasters from the scoreboard first
      (up to 6 of the 12 provider requests), then team-named channels, then 4K and league channels. Before, the 12
      requests could all go to Atlanta locals, 4K and League Pass channels.
+6. **Video behind Sports was choppy after adding leagues** (owner, 2026-11-18, 5 → 10 leagues, tunneled playback off).
+   The report showed 50 dropped frames every 1–2 s for about 13 s, with the scoreboard threads cleaning up team names
+   and the RedZone search matching all 15,800 channel names. Scoreboard threads already ran at background priority, so
+   the cost was the amount of work and memory churn. Measured afterwards with the leagues loaded, opening Sports cost
+   17 skipped frames in its first 10 s and nothing after.
+   - 0.51.34 looks scoreboard team names up in a per-league index built once (514 unknown college teams: 162 ms → under
+     1 ms on a Mac, same results for every catalog team) and checks for "zone"/"rz" before the RedZone patterns.
 
 ## Library: first open before the app has warmed it
 
@@ -101,5 +108,7 @@ downloads) causes playback hiccups during the first open after updating.
 2. After updating the onn to 0.51.31, open Library once and check the report for hiccups while the catalog
    downloads again.
 3. Measure Library frames on the onn with SurfaceFlinger timestats.
-4. After updating the onn to 0.51.33, press OK on a live card whose game has no saved listing: it should say
+4. After updating the onn to 0.51.34, press OK on a live card whose game has no saved listing: it should say
    "Confirming…" for a second or two and then play.
+5. On 0.51.34, switch a college league off and on in Sports settings and measure the video behind Sports with
+   SurfaceFlinger (no uiautomator reads during the measurement: each read costs the onn enough CPU to skip frames).
