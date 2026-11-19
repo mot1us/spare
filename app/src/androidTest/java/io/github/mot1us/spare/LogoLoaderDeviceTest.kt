@@ -120,6 +120,7 @@ class LogoLoaderDeviceTest {
                 assertEquals(title, label.text.toString())
                 assertEquals(android.view.View.VISIBLE, label.visibility)
                 assertTrue(label.background is android.graphics.drawable.GradientDrawable)
+                assertNull("The artwork area draws no fill of its own under the placeholder and poster", (image.parent as android.view.View).background)
             }
             loading.countDown()
             await("Artwork fades in over the title") {

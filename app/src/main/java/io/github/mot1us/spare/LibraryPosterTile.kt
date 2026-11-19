@@ -52,8 +52,9 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         setPadding(dp(5), dp(3), dp(5), dp(3)); setTextColor(Color.WHITE); typeface = AppFont.face(true)
         setBackgroundColor(0xDB151C25.toInt())
     }
+    // No background: the opaque placeholder covers this area until the poster does, so a fill here was drawn every
+    // frame and never seen. On an onn 4K Pro each Library frame spent about 5 ms on fills like it.
     private val art = FrameLayout(context).apply {
-        setBackgroundColor(0xFF202835.toInt())
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         addView(placeholder, FrameLayout.LayoutParams(-1, -1))
         addView(image, FrameLayout.LayoutParams(-1, -1))

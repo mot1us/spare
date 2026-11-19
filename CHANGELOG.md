@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.35 — 2026-11-18
+
+- Library poster tiles no longer paint a solid block behind each poster. The placeholder and then the poster always cover it, so on an onn 4K Pro it was one of about 16 fills drawn every Library frame without ever being seen.
+- Settings › Playback says "Off · Spare switched it off after a playback problem with it" when Spare turned tunneled playback off. It used to say a stream did not start, even when the reason was the picture stalling.
+- docs/LOADING-PLAN.md has overnight measurements from the onn: video smoothness with Sports, Library and the guide, what makes a channel change take 2.5 s, and where the menus' frame time goes.
+
 ## 0.51.34 — 2026-11-18
 
 - Adding leagues no longer makes the video behind Sports choppy. With ten leagues, an onn 4K Pro dropped about 50 frames every 1–2 seconds for 13 seconds while Sports read the new scoreboards: each team a scoreboard named without a known code (mostly college and soccer teams) was compared with every catalog team's cleaned-up name. Those names are now looked up once per league; 514 unknown college baseball teams took 162 ms that way on a Mac and now take under 1 ms, with the same results.

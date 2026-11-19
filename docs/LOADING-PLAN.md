@@ -101,6 +101,42 @@ after Refresh in Library. The owner chose to refresh when Library opens. Since 0
 Still to measure on the onn: whether the background download (it shows as "catalog-import" in the report's other
 downloads) causes playback hiccups during the first open after updating.
 
+## Overnight measurements on 0.51.34 (2026-11-18)
+
+All on the second onn, read from SurfaceFlinger (video layer: `dumpsys SurfaceFlinger --latency`) and the app's
+own frame times (`dumpsys gfxinfo … framestats`), with key presses sent blind. A uiautomator read during a
+measurement costs the onn enough CPU to skip video frames, so screens were reached before measuring.
+
+| What | Video behind (skipped frames) | Spare's own frames (SurfaceFlinger timestats) |
+|---|---|---|
+| Full-screen playback, after the first 15 s | 0–1 per 10 s | — |
+| Opening Sports with 10 leagues, cold or warm | 5 in the first 10 s | — |
+| Re-adding NCAA Men's Basketball (257 games reloaded) | 0–1 per 10 s | — |
+| Scrolling the guide 25 channels each way | 0 (all 1,120 frames on time) | 0 dropped; 72% on time, 8% one refresh late, 3% two late |
+| Moving through Library rows | 1 | 0 dropped; 75% on time, 11% one refresh late, 3% two late |
+| Opening Library (catalog already read this session) | 0 (all 413 frames on time) | 0 dropped; the screen changed in 3 frames |
+| Moving through 12 NBA cards in Sports | 0 (all 772 frames on time) | 0 dropped; 77% on time, 13% one refresh late, 6% two late |
+
+- **Channel changes** take 2.3–2.7 s to a picture. The provider's first answer (a redirect to its stream server)
+  takes 0.6–1.5 s, and the stream needs another 1.1–1.4 s before the decoder starts (live streams send a full frame
+  only every 1–2 s). The picture then holds about 0.4 s while the player waits for its 1.5 s start buffer, and
+  plays smoothly after that. Most of the time is the provider and the stream; the start buffer is the one setting
+  Spare controls, and lowering it would trade stalls for speed (owner decision).
+- **The menus are mostly smooth.** gfxinfo put guide and Library frames at a median of 17–22 ms, but SurfaceFlinger
+  showed no dropped frames and about 1 frame in 10 shown one refresh late (gaps of 70 ms and more were idle time
+  between key presses). In the late frames, gfxinfo puts the time in the render thread (about 9–10 ms issuing draw
+  commands) and GPU and swap (about 7 ms), not app code (1–3 ms each for layout and drawing). A guide frame draws
+  about 22 rectangles, 17 text runs and 6 images; nothing single dominates. Each Library poster tile also painted a
+  solid block that was always covered (removed in 0.51.35).
+- **ExoPlayer's playback loop** used about 42% of one core during playback (`doSomeWork`, about 180 times a second).
+  Media3 1.11.1 already schedules it dynamically by default.
+- Spare's dropped-frame counter showed 73,567 for one NBA TV playback during the evening (about 130 a second), while
+  SurfaceFlinger showed steady 60 fps. Not reproduced: the same channel later counted 0 over 40 s of full-screen
+  playback and 0 over 44 s with Settings covering the video. The counter adds up Media3's drop reports for the
+  current stream only.
+- Tracing note: `atrace` with a large buffer (`-b 32768`) left about 128 MB of kernel trace buffer allocated after it
+  finished. `atrace -b 8 -t 1 gfx` followed by a 1 s `perfetto` trace restores it to 7 KB.
+
 ## Next steps
 
 1. Check that the Sports playback freeze is gone on a tunneled channel. It shows as "Tunneled playback position

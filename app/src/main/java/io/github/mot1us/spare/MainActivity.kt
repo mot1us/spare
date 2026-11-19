@@ -3638,7 +3638,7 @@ class MainActivity : Activity() {
                 }
                 panel.action("Tunneled playback", when {
                     store.tunneledPlayback -> "On · the TV’s video hardware times frames"
-                    store.tunnelingFailed -> "Off · switched off after a stream did not start with it"
+                    store.tunnelingFailed -> "Off · Spare switched it off after a playback problem with it"
                     else -> "Off"
                 }, store.tunneledPlayback) {
                     store.tunneledPlayback = !store.tunneledPlayback
