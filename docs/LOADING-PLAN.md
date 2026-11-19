@@ -39,9 +39,13 @@ same run was already instant.
    fill, which 0.51.18 limited to the Guide screen; on a TV that mostly sits in full-screen playback and Sports they
    ran out within a day. A click then asked the provider about up to 12 likely channels and, when none of them was
    the right one, showed the list. The onn's log matched this: about a dozen guide requests right after each card click.
-   - 0.51.32: after 30 s of steady full-screen playback with no remote input for 5 s, Spare fills favourites and the
-     channels likely to carry today's games, at most one request a second. The rest of the lineup still fills only on the
-     Guide screen, and nothing is filled while Sports, Library or Search is open.
+   - 0.51.32 filled favourites and likely game channels during steady full-screen playback. On the onn that made
+     playback skip frames: SurfaceFlinger showed 15 skipped frames in the 10 s while it ranked the 15,800 channels
+     (2 in a normal 10 s) and about twice the normal rate during its 90 s of requests. It ran again after every restart
+     and whenever the scoreboard's games changed.
+   - 0.51.33 removed it again. A click on a live card now asks the game's own broadcasters from the scoreboard first
+     (up to 6 of the 12 provider requests), then team-named channels, then 4K and league channels. Before, the 12
+     requests could all go to Atlanta locals, 4K and League Pass channels.
 
 ## Library: first open before the app has warmed it
 
@@ -97,5 +101,5 @@ downloads) causes playback hiccups during the first open after updating.
 2. After updating the onn to 0.51.31, open Library once and check the report for hiccups while the catalog
    downloads again.
 3. Measure Library frames on the onn with SurfaceFlinger timestats.
-4. After updating the onn to 0.51.32, watch a channel full screen for a few minutes, then open Sports: a live card
-   should play at once. Check the report's hiccups for "guide" as another download running at the time.
+4. After updating the onn to 0.51.33, press OK on a live card whose game has no saved listing: it should say
+   "Confirming…" for a second or two and then play.

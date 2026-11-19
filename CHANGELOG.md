@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.33 — 2026-11-18
+
+- Playback is smooth again. 0.51.32 downloaded guide listings for game channels during full-screen playback, and on an onn 4K Pro the video skipped frames while it ran: 15 frames in the 10 s it spent ranking a 15,800-channel lineup, and about twice the normal rate during its requests. Full-screen playback again downloads only the playing channel's listings, as in 0.51.31.
+- OK on a live Sports card with no saved listing for the game asks the provider about the game's own broadcasters from the scoreboard first, then team-named channels, then 4K and league channels. The 12 requests used to go mostly to local, 4K and League Pass channels and could miss the channel showing the game, so the stream list opened instead of the game.
+
 ## 0.51.32 — 2026-11-18
 
 - OK on a live Sports card plays the best stream at once again instead of opening the stream list. A card plays at once when the saved guide shows a channel carrying the game now. Those listings came from the quiet guide fill that 0.51.18 limited to the Guide screen, so on a TV that mostly plays full screen they ran out within a day. After 30 s of steady full-screen playback with no remote input, Spare again fills listings for favourites and the channels likely to carry today's games, at most one request a second. The rest of the lineup still fills only on the Guide screen, and nothing is filled while Sports, Library or Search is open.

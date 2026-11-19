@@ -59,6 +59,22 @@ class SportsCoverageTest {
         val targets = SportsStreams.confirmationTargets(basketball, Guide(generic + a + b + radio, emptyMap()), generic, emptySet(), emptyMap(), now)
         assertEquals(setOf(a, b), targets.take(2).toSet()); assertFalse(radio in targets); assertTrue(targets.size <= 12)
     }
+    @Test fun aClickAsksTheGamesOwnBroadcasterBeforeTeamNamedFourKAndLeagueGuesses() {
+        // A live card without saved listings: the twelve provider requests went to Atlanta locals, 4K and League Pass
+        // channels, the regional network carrying the game was left out, and OK opened the stream list.
+        val basketball = game.copy(teams = listOf("nba:ATL", "nba:OKC").map { SportsCatalog.byId.getValue(it) }, competition = "NBA", networks = listOf("FanDuel SN Southeast"))
+        val carrying = channel("rsn", "US: FanDuel SN Southeast HD").copy(group = "US | Sports", reportedQuality = VideoInfo(1280, 720, 0f))
+        val locals = (1..8).map { channel("local$it", "GA | Atlanta | Local $it").copy(group = "US | Locals", reportedQuality = VideoInfo(1920, 1080, 0f)) }
+        val uhd = (1..10).map { channel("uhd$it", "4K Event $it").copy(group = "4K", reportedQuality = VideoInfo(3840, 2160, 0f)) }
+        val league = (1..20).map { channel("lp$it", "NBA LP %02d".format(it)).copy(group = "NBA", reportedQuality = VideoInfo(1920, 1080, 0f)) }
+        val guide = Guide(locals + uhd + league + carrying, emptyMap())
+        val found = SportsSchedule.match(basketball, guide, emptySet(), now)
+        assertTrue("The scoreboard network is found by name", carrying in found.candidates)
+        val targets = SportsStreams.confirmationTargets(found, guide, SportsStreams.rank(found, GuideFilters(), emptyMap()), emptySet(), emptyMap(), now)
+        assertEquals("The channel carrying the game is asked first", carrying, targets.first())
+        assertTrue(targets.size <= 12)
+        assertTrue("Team-named channels are still asked", targets.any { it.id.startsWith("local") })
+    }
     @Test fun krakenGuideMatchBeatsUnconfirmedFourKAndKeepsHdThirtyAndUnknownFpsPlayable() {
         val hockey = game.copy(teams = listOf("nhl:TOR", "nhl:SEA").map { SportsCatalog.byId.getValue(it) }, competition = "NHL")
         val correct = channel("nhl7", "NHL 07 HD").copy(group = "NHL", reportedQuality = VideoInfo(1280, 720, 30f))

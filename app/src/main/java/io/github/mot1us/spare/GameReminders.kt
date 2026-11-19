@@ -176,7 +176,11 @@ object SportsStreams {
         return SportsGuide.teams(programme, "${game.teams.first().league} ${channel.group}")?.map { it.id }?.toSet()
             ?.let { it != game.teams.map { team -> team.id }.toSet() } == true
     }
-    /** A small, varied guide-only lookup; generic broadcaster names never prove a game match. */
+    /**
+     * A small, varied guide-only lookup; generic broadcaster names never prove a game match. The game's own broadcasters
+     * from the scoreboard are asked first: the twelve requests were spent on team-named, 4K and league channels, and the
+     * channel actually carrying the game often missed the cut, so a live card opened the stream list instead of playing.
+     */
     fun confirmationTargets(game: SportsGame, guide: Guide, candidates: List<Channel>, favorites: Set<String>, quality: Map<String, VideoInfo>, now: Long, betterThanHeight: Int = -1): List<Channel> {
         val at = if (game.state == "pre") game.start else now
         val target = game.teams.map { it.id }.toSet()
@@ -212,11 +216,18 @@ object SportsStreams {
         }.sortedWith(order)
         val groups = listOf(varied(highResolution), varied(leagueChannels), varied(candidates.sortedWith(order)))
         val picked = linkedMapOf<String, Channel>()
-        val teamTargets = varied(teamChannels).filter { game.state == "pre" || guide.at(it, at) == null }.take(6)
+        fun unlisted(channel: Channel) = game.state == "pre" || guide.at(channel, at) == null
+        // Only channels already found by name (candidates), so the click never normalizes the whole lineup.
+        val networkKeys = game.networks.map(::broadcasterKey).filter { it.trim().length >= 3 }.distinct()
+        val networkNames = game.networks.flatMap(::networkNames).map { " $it " }.filter { it.length >= 5 }.distinct()
+        val carrying = candidates.filter { channel -> networkKeys.any { broadcasterMatchesKey(it, channel) } || networkNames.any { it in channel.sportsKey } }
+        val networkTargets = varied(carrying.sortedWith(order)).filter(::unlisted).take(6)
+        networkTargets.forEach { picked[it.id] = it }
+        val teamTargets = varied(teamChannels).filter { it.id !in picked && unlisted(it) }.take(minOf(6, 12 - picked.size))
         teamTargets.forEach { picked[it.id] = it }
-        for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && (game.state == "pre" || guide.at(it, at) == null)) picked[it.id] = it }
-        val teamIds = teamTargets.map { it.id }.toSet()
-        return lookupOrder(picked.values.toList(), compareByDescending<Channel> { it.id in teamIds }.then(order))
+        for (index in 0 until 12) for (group in groups) group.getOrNull(index)?.let { if (picked.size < 12 && unlisted(it)) picked[it.id] = it }
+        val networkIds = networkTargets.map { it.id }.toSet(); val teamIds = teamTargets.map { it.id }.toSet()
+        return lookupOrder(picked.values.toList(), compareByDescending<Channel> { it.id in networkIds }.thenByDescending { it.id in teamIds }.then(order))
     }
     internal fun lookupOrder(channels: List<Channel>, order: Comparator<Channel>): List<Channel> {
         val sorted = channels.sortedWith(order)

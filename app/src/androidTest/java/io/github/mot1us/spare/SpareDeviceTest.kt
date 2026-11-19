@@ -693,7 +693,8 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun steadyFullScreenPlaybackFillsGameChannelListingsButNotTheWholeLineup() {
+    /** 0.51.32 filled game channels here and the onn skipped frames while it ran: full screen reads only the playing channel. */
+    @Test fun steadyFullScreenPlaybackReadsOnlyThePlayingChannelEvenWithLiveGames() {
         FixtureServer(longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Game listings", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             val now = System.currentTimeMillis()
@@ -727,16 +728,13 @@ class SpareDeviceTest {
                     PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
                     PlaybackWarmup::class.java.getDeclaredField("readySince").apply { isAccessible = true }.setLong(warmup, 1L)
                 }
-                waitFor(scenario) { activity ->
-                    val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
-                    guide.programmes["xc:2"]?.isNotEmpty() == true
-                }
-                Thread.sleep(4000)
-                assertEquals("The channel carrying the live game is read once", 1, server.requestedEpgTargets.count { it.contains("stream_id=2&") || it.endsWith("stream_id=2") })
-                assertFalse("Full-screen playback does not fill the rest of the lineup", (3..12).any(::requested))
+                // The refresh tick runs every second; give a playback-time fill several chances to start.
+                Thread.sleep(8000)
+                assertFalse("Steady full-screen playback does not read the live game's channel", requested(2))
+                assertFalse("Steady full-screen playback does not fill the lineup", (3..12).any(::requested))
                 scenario.onActivity { activity ->
-                    assertEquals("The fill keeps the playing connection", media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
-                    assertTrue("Playback continues during the fill", find<PlayerView>(activity.window.decorView)!!.player!!.isPlaying)
+                    assertEquals("Playback keeps its connection", media, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    assertTrue(find<PlayerView>(activity.window.decorView)!!.player!!.isPlaying)
                 }
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
@@ -5482,6 +5480,43 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aLiveCardWithoutSavedListingsAsksItsBroadcasterAndPlaysIt() {
+        // 0.51.31 on an onn: no saved listing confirmed the game, the provider was asked about Atlanta locals, 4K and
+        // League Pass channels instead of the network on the scoreboard, and OK opened the stream list.
+        FixtureServer(longVideo = true, parallelClients = true, liveListing = 40 to "NBA Basketball: Atlanta Hawks at Oklahoma City Thunder").use { server ->
+            val source = Source(name = "Broadcaster first", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val now = System.currentTimeMillis()
+            val news = Channel("xc:1", "News", "News", "${server.base}/channel1.mp4")
+            val locals = (2..9).map { Channel("xc:$it", "GA | Atlanta | Local $it", "US | Locals", "${server.base}/unused$it.mp4", reportedQuality = VideoInfo(1920, 1080, 0f)) }
+            val uhd = (10..19).map { Channel("xc:$it", "4K Event $it", "4K", "${server.base}/unused$it.mp4", reportedQuality = VideoInfo(3840, 2160, 0f)) }
+            val league = (20..39).map { Channel("xc:$it", "NBA LP %02d".format(it), "NBA", "${server.base}/unused$it.mp4", reportedQuality = VideoInfo(1920, 1080, 0f)) }
+            val carrying = Channel("xc:40", "US: FanDuel SN Southeast HD", "US | Sports", "${server.base}/channel2.mp4", reportedQuality = VideoInfo(1280, 720, 0f))
+            val scores = LiveSportsSnapshot(listOf(LiveEvent("hawks", setOf("nba:ATL", "nba:OKC"), now - 1200000, league = "NBA", networks = listOf("FanDuel SN Southeast"))), now, setOf("NBA"))
+            store.recentFeeds = emptyList(); store.sportsLastLeague = "NBA"; store.saveSources(listOf(source)); store.active = source.id; store.sportsAutoPlay = true
+            store.cache(source, Guide(listOf(news) + locals + uhd + league + carrying, emptyMap())); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                var player: Player? = null
+                waitFor(scenario) { activity -> player = find<PlayerView>(activity.window.decorView)?.player; player?.repeatMode = Player.REPEAT_MODE_ONE; player?.isPlaying == true }
+                val game = SportsSchedule.games(scores, Guide.EMPTY, "today", emptySet(), now, matchChannels = false).single()
+                scenario.onActivity { activity ->
+                    activity.liveSportsLoader = { scores.copy(checked = System.currentTimeMillis()) }
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, scores)
+                    MainActivity::class.java.getDeclaredMethod("switchMode", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>(game.key)?.isShown == true }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("stopSportsPrefetch", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
+                    (MainActivity::class.java.getDeclaredField("sportsStreamCache").apply { isAccessible = true }.get(activity) as SportsStreamCache).clear()
+                    server.requestedEpgTargets.clear()
+                    activity.window.decorView.findViewWithTag<View>(game.key).performClick()
+                }
+                waitFor(scenario) { player?.let { it.isPlaying && it.currentMediaItem?.localConfiguration?.uri?.path == "/channel2.mp4" } == true }
+                assertTrue("The scoreboard's network was asked", server.requestedEpgTargets.any { it.contains("stream_id=40&") || it.endsWith("stream_id=40") })
+                scenario.onActivity { activity -> assertFalse("OK played the game instead of opening the stream list", activity.window.decorView.findViewWithTag<View>("sports-panel").isShown) }
+            } } finally { store.sportsAutoPlay = false; store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun basketballSearchFindsTheTeamFeedInTheSecondPlaylistInsteadOfRadio() {
         FixtureServer(parallelClients = true).use { first -> FixtureServer(programmeTitle = "NBA: Bucks at Celtics", parallelClients = true).use { second ->
             val a = Source(name = "Basketball primary", kind = "xtream", url = first.base, username = "test", password = "test-secret", allowHttp = true)
@@ -6085,7 +6120,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -6172,6 +6207,12 @@ class SpareDeviceTest {
                             if (id == 1) liveSportsSent.set(true)
                             val time = System.currentTimeMillis(); val title = if (id == 1) "Yankees vs Red Sox" else if (id == 2) "Bills vs Chiefs" else "World News"
                             val start = if (id == 2) time + 3600000 else time - 300000
+                            sportsPayload = """{"epg_listings":[{"title":"$title","start_timestamp":${start / 1000},"stop_timestamp":${(start + 3600000) / 1000}}]}""".toByteArray()
+                        }
+                        if (liveListing != null && target.contains("get_short_epg")) {
+                            val id = Regex("stream_id=([0-9]+)").find(target)?.groupValues?.get(1)?.toInt() ?: 0
+                            val start = System.currentTimeMillis() - 300000
+                            val title = if (id == liveListing.first) liveListing.second else "World News"
                             sportsPayload = """{"epg_listings":[{"title":"$title","start_timestamp":${start / 1000},"stop_timestamp":${(start + 3600000) / 1000}}]}""".toByteArray()
                         }
                         val (body, mime) = when (path) {
