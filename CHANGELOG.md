@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.41 — 2026-11-20
+
+- Library grids (all titles, a category, Search from the rows) look like the rows: posters only, with the big title above naming the poster under the cursor. The title and genre under each poster are gone; a two-line title used to push the genre off the bottom of its card. A title without artwork still shows its name, and a Watchlist title has a small ✓ in its corner. Catch-up lists keep their text.
+- Retry on a playback error puts the remote back where it was. With the guide open and the menu hidden, it used to land on the menu handle at the left edge; it now returns to the channel's row.
+
 ## 0.51.40 — 2026-11-20
 
 - The switch away from a reopened channel that has ended comes after 10 s instead of 29 s. On an onn 4K Pro the ended slot never answered, so Spare waited its full 15 s start time and then tried the slot again in the provider's other stream format for 14 s more. A channel Spare reopens by itself played before in its usual format, so it now gets 10 s and no second format before the most recent working channel plays. Channels you choose still get the full wait and both formats.

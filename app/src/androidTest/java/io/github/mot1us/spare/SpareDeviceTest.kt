@@ -1477,6 +1477,36 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun retryReturnsTheRemoteToTheGuideRowItWasOn() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Retry fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            val working = Channel("retry:1", "Harbour Sports HD", "Sports", "${server.base}/channel1.mp4")
+            val ended = Channel("retry:2", "Event slot 04", "Sports", "${server.base}/ended.m3u8")
+            val other = Channel("retry:3", "Harbour Sports 2", "Sports", "${server.base}/channel2.mp4")
+            store.saveSources(listOf(source)); store.active = source.id; store.hiddenDock = true
+            store.cache(source, Guide(listOf(working, ended, other), emptyMap())); store.markPlaylistRefreshed(source)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                // The guide is open on the event slot while it plays behind, as when Spare opens on it; it has no stream, so Retry takes the remote.
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                device.pressDPadDown()
+                waitFor(scenario) { activity -> channelList(activity)?.let { list -> activity.currentFocus?.let(list::findContainingItemView)?.let(list::getChildAdapterPosition) } == 1 }
+                scenario.onActivity { activity -> MainActivity::class.java.getDeclaredMethod("tune", Channel::class.java).apply { isAccessible = true }.invoke(activity, ended) }
+                waitFor(scenario) { activity ->
+                    val retry = MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View
+                    retry.isShown && retry.hasFocus()
+                }
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
+                scenario.onActivity { activity ->
+                    val focus = activity.currentFocus
+                    assertNotEquals("Retry never leaves the remote on the menu handle", "navigation-handle", focus?.tag)
+                    val list = channelList(activity)!!
+                    assertEquals("Retry returns the remote to the row it was on", 1, focus?.let(list::findContainingItemView)?.let(list::getChildAdapterPosition))
+                }
+            } } finally { store.hiddenDock = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aReopenedXtreamSlotThatNeverAnswersFallsBackWithoutTryingTheOtherFormat() {
         FixtureServer(longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Silent slot fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -5863,6 +5893,17 @@ class SpareDeviceTest {
                 waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 80 } && a.window.decorView.findViewWithTag<View>("library-categories").isShown }
                 scenario.onActivity { assertEquals("Fixture cinema", it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString()) }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("library-items").hasFocus() }
+                // Grid posters look like the rows: artwork only at 2:3, with the spotlight above naming the title under the cursor.
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<TextView>("library-spot-title").text.isNotBlank() }
+                scenario.onActivity { a ->
+                    val tile = a.window.decorView.findViewWithTag<RecyclerView>("library-items").getChildAt(0) as ViewGroup
+                    val shown = mutableListOf<String>()
+                    fun texts(view: View) { if (view is TextView && view.isShown && view.text.isNotBlank() && view.tag != "poster-placeholder") shown += view.text.toString(); (view as? ViewGroup)?.let { g -> (0 until g.childCount).forEach { texts(g.getChildAt(it)) } } }
+                    texts(tile)
+                    assertTrue("A grid poster carries no text under it: $shown", shown.isEmpty())
+                    val art = tile.getChildAt(0)
+                    assertEquals("The artwork keeps its 2:3 shape", art.width * 3 / 2.0, art.height.toDouble(), 3.0)
+                }
                 // Picking another category from the list puts the cursor on its first title, and it stays there:
                 // it must not end up on the Movies/Series buttons when the new titles replace the old ones.
                 fun heading(): String { var text = ""; scenario.onActivity { text = it.window.decorView.findViewWithTag<TextView>("library-heading").text.toString() }; return text }

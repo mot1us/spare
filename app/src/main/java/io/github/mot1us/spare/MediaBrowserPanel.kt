@@ -263,12 +263,14 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
             override fun onBindViewHolder(holder: PosterHolder, position: Int) {
                 val item = shownRows[position]
                 val favorite = item.key in favoriteIds
-                holder.box.configure(if (grid) LibraryPosterTile.Layout.GRID else LibraryPosterTile.Layout.LIST)
+                // A poster grid has the spotlight above it naming the title under the cursor, so its posters carry no text.
+                val postersOnly = grid && !archive
+                holder.box.configure(if (grid) LibraryPosterTile.Layout.GRID else LibraryPosterTile.Layout.LIST, captioned = !postersOnly)
                 holder.box.appearance()
                 holder.box.tag = "library-item:${item.key}"
                 holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
                 holder.box.bind(item.key, LibraryPosterTile.Content(
-                    (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster,
+                    (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster, if (favorite && postersOnly) "✓" else "",
                 ), images, artworkHttp, item.requestPoster, tileDecode)
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }

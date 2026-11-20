@@ -548,6 +548,8 @@ class MainActivity : Activity() {
         override fun run() { if (!closed && started && details.isVisible) refreshDetails() }
     }
     private lateinit var retryPanel: LinearLayout
+    // Where the remote was when a playback error took it to Retry; it goes back there when Retry closes the error.
+    private var retryReturnFocus: View? = null
     private var sources = emptyList<Source>()
     private var source: Source? = null
     private lateinit var playlists: PlaylistCatalog
@@ -980,7 +982,7 @@ class MainActivity : Activity() {
                 if (pendingSportsTune == current?.id && pendingSportsTune != null) { pendingSportsTune = null; sportsPanel.finishTuning(); if (sportsVisible && guideVisible && sportsPlaybackPlan?.backgroundRecovery != true) showGuide(false) }
                 if (onDemand == null) lastWorkingChannel = current
                 if (onDemand == null) current?.let { channel -> owner(channel)?.let { store.setLast(it, channel) }; store.recentFeeds = listOf(channel.id) + store.recentFeeds; workingUrls[channel.id] = playbackUrl; if (unavailable.restore(channel.id)) { saveUnavailable(); applyFilter() } }
-                cancelPlaybackCallbacks(); reconcileCaptions(); retryPanel.visibility = View.GONE; playbackLoading.visibility = View.GONE
+                cancelPlaybackCallbacks(); reconcileCaptions(); hideRetryPanel(); playbackLoading.visibility = View.GONE
                 syncPlaybackMonitoring()
                 player.videoFormat?.let { format ->
                     if (format.width > 0 && format.height > 0) recordVideo(VideoInfo(format.width, format.height, VideoRate.resolve(format.frameRate, 0f, interlaced = VideoRate.interlaced(format)), VideoRate.interlaced(format)))
@@ -1892,7 +1894,7 @@ class MainActivity : Activity() {
         saveDemandProgress(); onDemand = null; demandSubtitleMode = null; demandControls.visibility = View.GONE; handler.removeCallbacks(demandTick); handler.removeCallbacks(hideDemandControls)
         closeDetails(); cancelPlaybackCallbacks(); playbackToken++
         hasPlayedChannel = false; playbackRebuffers = 0; playbackReconnects = 0; playbackLoadErrors = 0
-        startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; retryPanel.visibility = View.GONE
+        startupFailures = StartupFailures(); reconnects = ReconnectBudget(); firstFrame = false; alternateUsed = false; lastVideoInfo = null; hideRetryPanel()
         current = channel; previewCaption.text = "Full screen · ${channel.name}"; showInfo(channel)
         playbackUrl = if (selected.kind == "xtream") when (store.streamFormat(selected)) { "ts" -> StreamUrls.format(channel.url, "ts") ?: channel.url; "hls" -> StreamUrls.format(channel.url, "m3u8") ?: channel.url; else -> channel.url } else channel.url
         if (selected.kind == "xtream" && store.streamFormat(selected) == "auto") playbackUrl = workingUrls[channel.id] ?: playbackUrl
@@ -1947,9 +1949,29 @@ class MainActivity : Activity() {
         trace?.finish("playback failed")
         pendingSportsTune = null; if (::sportsPanel.isInitialized) sportsPanel.finishTuning()
         cancelPlaybackCallbacks()
+        val repeated = retryPanel.isVisible
         saveDemandProgress(); player.stop(); playbackLoading.visibility = View.GONE; playbackError.text = detail; retryPanel.visibility = View.VISIBLE
         retryPanel.findViewWithTag<View>("sports-other-streams")?.isVisible = playbackGame() != null || plan != null
-        if (!library.opened) (retryPanel.getChildAt(1) as ViewGroup).getChildAt(0).requestFocus()
+        if (!library.opened) {
+            if (!repeated) retryReturnFocus = currentFocus?.takeUnless { it.within(retryPanel) }
+            (retryPanel.getChildAt(1) as ViewGroup).getChildAt(0).requestFocus()
+        }
+    }
+    /** Closes the error panel. If the remote was on it, the remote goes back to where it was before the error, never to the menu handle. */
+    private fun hideRetryPanel() {
+        val held = retryPanel.isVisible && retryPanel.hasFocus()
+        retryPanel.visibility = View.GONE
+        val back = retryReturnFocus; retryReturnFocus = null
+        if (!held) return
+        // Guide rows and Sports cards are rebuilt while the error shows, so those return to the viewer's channel or card instead of an old row.
+        val row = back != null && (back.within(list) || ::sportsPanel.isInitialized && back.within(sportsPanel))
+        if (back != null && !row && back.isAttachedToWindow && back.isShown && back.requestFocus()) return
+        if (guideVisible) focusChannel() else { root.isFocusableInTouchMode = true; root.requestFocus() }
+    }
+    private fun View.within(parent: View): Boolean {
+        var view: View? = this
+        while (view != null) { if (view === parent) return true; view = view.parent as? View }
+        return false
     }
     private fun cancelPlaybackCallbacks() {
         handler.removeCallbacks(retry); handler.removeCallbacks(startupTimeout); handler.removeCallbacks(revealBuffering)

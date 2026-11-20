@@ -68,6 +68,8 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         addView(detail, LayoutParams(-1, -2).apply { topMargin = dp(3) })
     }
     private var layout: Layout? = null
+    /** Grid tiles under a spotlight drop their text: the spotlight above names the title under the cursor, as on the rows. */
+    private var captioned = true
     private var generation = 0
     private var identity = ""
     private var bound: Content? = null
@@ -85,9 +87,17 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         appearance()
     }
 
-    fun configure(next: Layout) {
-        if (next == layout) return
+    fun configure(next: Layout, captioned: Boolean = true) {
+        val labelled = captioned || next != Layout.GRID
+        if (next == layout && labelled == this.captioned) return
         layout = next
+        if (labelled != this.captioned) {
+            this.captioned = labelled
+            // Without captions a title that has no artwork names itself on the placeholder.
+            if (!artworkOnly) placeholder.text = if (labelled) "" else bound?.title.orEmpty()
+            requestLayout()
+        }
+        captions?.visibility = if (labelled) VISIBLE else GONE
         orientation = if (next == Layout.LIST) HORIZONTAL else VERTICAL
         val height = when (next) { Layout.GRID -> -2; Layout.SHELF -> dp(158); Layout.LIST -> dp(55); Layout.ROW -> -2 }
         layoutParams = RecyclerView.LayoutParams(if (next == Layout.SHELF) dp(120) else -1, height).apply {
@@ -102,7 +112,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         // Grid tiles take their height from the column width so posters keep their 2:3 shape.
         if (layout == Layout.GRID && MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.EXACTLY) {
-            val height = gridHeight(MeasureSpec.getSize(widthMeasureSpec), resources.displayMetrics.density)
+            val height = gridHeight(MeasureSpec.getSize(widthMeasureSpec), resources.displayMetrics.density, captioned)
             super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
         } else super.onMeasure(widthMeasureSpec, heightMeasureSpec)
     }
@@ -137,7 +147,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         if (key == identity && content == previous && http == boundHttp && decode == boundDecode) return
         if (content.title != previous?.title) {
             title?.text = content.title
-            if (artworkOnly) placeholder.text = content.title
+            if (artworkOnly || !captioned) placeholder.text = content.title
         }
         if (content.subtitle != previous?.subtitle) detail?.apply {
             text = content.subtitle
@@ -204,11 +214,11 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     }
 }
 
-/** Height of a grid tile whose poster area is [width] wide: 2:3 artwork plus the caption block. */
-internal fun gridHeight(width: Int, density: Float): Int {
+/** Height of a grid tile whose poster area is [width] wide: 2:3 artwork, plus the caption block when it has one. */
+internal fun gridHeight(width: Int, density: Float, captioned: Boolean = true): Int {
     val padding = (7 * density).toInt() * 2
     val art = ((width - padding).coerceAtLeast(0) * 3) / 2
-    return art + (43 * density).toInt() + padding
+    return art + (if (captioned) (43 * density).toInt() else 0) + padding
 }
 
 /**
