@@ -349,15 +349,25 @@ class LibraryCatalog(private val store: SecureStore) {
             val quiet = scope.isEmpty() && latest?.complete == true && latest.schema >= SCHEMA && latest.count > 0
             val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
             var published = 0L; var checkpoint = 0L
-            VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
-                writer.append(batch)
-                // A refresh nobody is waiting for goes slowly, so a playing channel keeps the processor (64 titles per pause).
-                if (quiet) Thread.sleep(40)
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
-                if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
+            val capped = try {
+                VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
+                    writer.append(batch)
+                    // A refresh nobody is waiting for goes slowly, so a playing channel keeps the processor (64 titles per pause).
+                    if (quiet) Thread.sleep(40)
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
+                    if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
+                }
+                false
+            } catch (limit: SourceFailure) {
+                // A catalog past Spare's limits keeps the titles that fit. Failing left an unfinished copy, so every Library
+                // visit downloaded the same titles again (85 s on an onn 4K Pro) and still ended without the rows.
+                if (limit.problem != SourceProblem.LIMIT || writer.size == 0) throw limit
+                true
             }
-            writer.finish(labels).also(publish)
+            writer.finish(labels).also { saved ->
+                if (capped) "${if (mode == "movie") "Movies" else "Series"} list is larger than Spare keeps · first ${saved.count} titles saved".let { Diagnostics.library(it); Diagnostics.action(it) }
+            }.also(publish)
         }
     }
     inner class Writer(private val source: Source, private val mode: String, private val stamp: Long = System.currentTimeMillis(), private val scope: String = "", @Suppress("unused") private val indexOnly: Boolean = false, private val quiet: Boolean = false) {

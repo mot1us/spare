@@ -282,6 +282,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             // Even an older complete catalog is usable until the viewer asks to refresh it.
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
+                .onFailure { if (it !is InterruptedException && it !is java.io.InterruptedIOException) Diagnostics.library("Catalog download failed · ${SourceErrors.message(it)}") }
             Diagnostics.library("Saved catalog ready")
             ui(token) { proceed(names) }
         }

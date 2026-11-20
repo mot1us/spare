@@ -592,6 +592,25 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aCatalogPastTheTitleLimitKeepsTheTitlesThatFitAndIsNotDownloadedAgain() {
+        FixtureServer(libraryCategories = true, slowVod = true, parallelClients = true).use { server ->
+            val source = Source(name = "Large catalog", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.bindProvider(source)
+            val catalog = LibraryCatalog(store)
+            // The fixture lists 16 movies (sent without its usual pause); with a limit of 10 it stands in for a provider larger than Spare keeps.
+            server.finishVodCatalog.countDown()
+            VodCatalog.maxTitles = 10
+            try {
+                val saved = catalog.load(source, "movie")
+                assertTrue("The titles that fit are saved as a finished catalog", saved.complete && saved.whole)
+                assertEquals("Every title read before the limit is kept", 10, saved.count)
+                catalog.load(source, "movie")
+                assertEquals("A saved catalog that reached the limit is not downloaded again", 1, server.catalogTargets.count { "get_vod_streams" in it })
+                assertTrue(Diagnostics.report(), "Movies list is larger than Spare keeps · first 10 titles saved" in Diagnostics.report())
+            } finally { VodCatalog.maxTitles = Importers.MAX_CHANNELS; catalog.close(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun idleBrowsingWarmsOnlyArtworkFromSavedCatalogs() {
         FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
             val source = Source(name = "Idle Library", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.42 — 2026-11-20
+
+- Library opens on the rows for a playlist with a very large movie list. Spare read at most 64 MB of the list, so on a playlist with more than about 80,000 movies the download never finished: every Library visit spent about 85 s downloading the same titles again and then showed the plain all-titles grid. The limit is now 128 MB. A list past Spare's limits (also 100,000 titles) keeps the titles that fit instead of starting over, and the performance report says so. The first Library visit after updating downloads the list once.
+
 ## 0.51.41 — 2026-11-20
 
 - Library grids (all titles, a category, Search from the rows) look like the rows: posters only, with the big title above naming the poster under the cursor. The title and genre under each poster are gone; a two-line title used to push the genre off the bottom of its card. A title without artwork still shows its name, and a Watchlist title has a small ✓ in its corner. Catch-up lists keep their text.

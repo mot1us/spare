@@ -22,6 +22,11 @@ data class WatchProgress(val item: OnDemand, val position: Long, val duration: L
 }
 
 object VodCatalog {
+    /**
+     * A whole Movies or Series list is read as it arrives and only a few fields of each title are kept, so this bounds the
+     * download, not memory. At 64 MB a provider with about 80,000 movies (some 830 bytes of JSON each) never finished.
+     */
+    internal const val LEAN_BYTES = 128 * 1024 * 1024
     private val numeric = Regex("[0-9]{1,20}")
     private val yearPattern = Regex("(?:19|20)[0-9]{2}")
     private val imdbPattern = Regex("tt[0-9]{5,12}")
@@ -35,6 +40,8 @@ object VodCatalog {
         streamBase?.let { if (it.url == source.url && it.user == source.username && it.password == source.password) return it }
         return StreamBase(source.url, source.username, source.password, Importers.serverBase(source.url), "/${Importers.encoded(source.username)}/${Importers.encoded(source.password)}/").also { streamBase = it }
     }
+    /** The most titles one catalog download reads; tests lower it. */
+    @Volatile internal var maxTitles = Importers.MAX_CHANNELS
     /** Publish bounded batches while the response is arriving, rather than buffering the whole JSON document. */
     fun stream(source: Source, kind: String, category: String? = null, lean: Boolean = false, batch: (List<OnDemand>) -> Unit) {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
@@ -42,7 +49,7 @@ object VodCatalog {
         require(category == null || numeric.matches(category))
         val fields = setOf("stream_id", "series_id", "name", "category_id", "container_extension", "direct_source", "stream_icon", "cover", "cover_big", "poster", "movie_image", "year", "releaseDate", "release_date", "added", "last_modified", "rating", "rating_5based", "tmdb_id", "tmdb", "tvdb_id", "imdb_id") +
             if (lean) emptySet() else setOf("plot", "backdrop_path", "genre", "cast")
-        Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp, limit = if (lean) 64 * 1024 * 1024 else 24 * 1024 * 1024, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) { input ->
+        Network.consume(Importers.endpoint(source, "player_api.php", action) + (category?.let { "&category_id=$it" } ?: ""), source.allowHttp, limit = if (lean) LEAN_BYTES else 24 * 1024 * 1024, networkTimeOnly = true, deadlineMs = Network.LARGE_DEADLINE_MS, stallBytes = Network.STALL_BYTES) { input ->
             android.util.JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 if (reader.peek() != android.util.JsonToken.BEGIN_ARRAY) throw SourceFailure(SourceProblem.RESPONSE)
                 reader.beginArray(); val entries = mutableListOf<JSONObject>(); val seen = hashSetOf<String>(); var count = 0
@@ -51,20 +58,26 @@ object VodCatalog {
                     if (parsed.isNotEmpty()) batch(parsed)
                     entries.clear()
                 }
-                while (reader.hasNext()) {
-                    if (++count > Importers.MAX_CHANNELS) throw SourceFailure(SourceProblem.LIMIT)
-                    if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog import cancelled")
-                    if (reader.peek() != android.util.JsonToken.BEGIN_OBJECT) { reader.skipValue(); continue }
-                    val item = JSONObject(); reader.beginObject()
+                try {
                     while (reader.hasNext()) {
-                        val name = reader.nextName()
-                        if (name in fields && reader.peek() in setOf(android.util.JsonToken.STRING, android.util.JsonToken.NUMBER, android.util.JsonToken.BOOLEAN)) {
-                            val value = if (reader.peek() == android.util.JsonToken.BOOLEAN) reader.nextBoolean().toString() else reader.nextString()
-                            item.put(name, value.take(4096))
-                        } else reader.skipValue()
+                        if (++count > maxTitles) throw SourceFailure(SourceProblem.LIMIT)
+                        if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog import cancelled")
+                        if (reader.peek() != android.util.JsonToken.BEGIN_OBJECT) { reader.skipValue(); continue }
+                        val item = JSONObject(); reader.beginObject()
+                        while (reader.hasNext()) {
+                            val name = reader.nextName()
+                            if (name in fields && reader.peek() in setOf(android.util.JsonToken.STRING, android.util.JsonToken.NUMBER, android.util.JsonToken.BOOLEAN)) {
+                                val value = if (reader.peek() == android.util.JsonToken.BOOLEAN) reader.nextBoolean().toString() else reader.nextString()
+                                item.put(name, value.take(4096))
+                            } else reader.skipValue()
+                        }
+                        reader.endObject(); entries.add(item)
+                        if (entries.size == if (seen.isEmpty()) 8 else 64) publish()
                     }
-                    reader.endObject(); entries.add(item)
-                    if (entries.size == if (seen.isEmpty()) 8 else 64) publish()
+                } catch (limit: SourceFailure) {
+                    // At a title or size limit the whole titles read so far still reach the caller, which may keep them.
+                    if (limit.problem == SourceProblem.LIMIT) publish()
+                    throw limit
                 }
                 reader.endArray(); publish()
                 if (reader.peek() != android.util.JsonToken.END_DOCUMENT) throw SourceFailure(SourceProblem.RESPONSE)
