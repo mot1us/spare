@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.45 — 2026-11-20
+
+- Library gets a catalog ready calmly. While it saves a Movies or Series list for the first time (or opens a saved one that takes a moment), it shows three steps that tick off in turn (Categories, Titles, Rows) above placeholder rows with a soft shimmer, and says that later visits open at once. The rows fade in when ready, and posters fade in as they arrive. Before, a grid of the titles so far grew every second: the count kept changing and the title under the cursor flickered with it. "Loading more" messages no longer show a count while titles are still arriving.
+- A Movies or Series list keeps up to 200,000 titles (was 100,000). A playlist on the owner's onn stopped at exactly 100,000, and a provider that lists by category would lose whole categories at the end.
+
 ## 0.51.44 — 2026-11-20
 
 - The background check for new movies and series pauses for half the processor time it uses instead of all of it. On the second onn, 0.51.43's check finished in 59 s, just inside the provider's one-minute cut-off; this leaves room. If a provider still cuts the check off, Spare tries once more straight away without pauses, instead of waiting 30 minutes.

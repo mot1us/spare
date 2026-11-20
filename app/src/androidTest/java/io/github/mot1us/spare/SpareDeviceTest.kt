@@ -633,6 +633,39 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aFirstLibraryVisitShowsCalmStepsUntilTheRowsAreReady() {
+        // The provider sends 8 of its 16 movies and waits, like a large list arriving over a minute.
+        FixtureServer(libraryCategories = true, slowVod = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            fun loadingView(activity: MainActivity) = activity.window.decorView.findViewWithTag<View>("library-loading-view")
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { a -> loadingView(a)?.isShown == true && a.window.decorView.findViewWithTag<TextView>("library-loading-headline").text.toString() == "Saving your movies to this TV" }
+                Thread.sleep(1600); device.takeScreenshot(File(context.getExternalFilesDir(null), "library-loading.png"))
+                // Titles keep arriving, but nothing grows or redraws: no partial grid, no count, no title under a cursor.
+                repeat(6) {
+                    scenario.onActivity { a -> val root = a.window.decorView
+                        assertTrue("The steps stay up while the list is saved", loadingView(a).isShown)
+                        assertFalse("No partial grid while loading", root.findViewWithTag<View>("library-items").isShown)
+                        assertFalse("No count while loading: ${root.findViewWithTag<TextView>("library-status").text}", root.findViewWithTag<TextView>("library-status").text.any(Char::isDigit))
+                        assertTrue("No title under a cursor while loading", root.findViewWithTag<TextView>("library-spot-title").text.isBlank())
+                        assertTrue("The remote rests on the steps, not the menu: ${a.currentFocus?.tag}", loadingView(a).hasFocus())
+                        assertFalse("The menu stays closed over the steps", root.findViewWithTag<NavigationRail>("app-navigation").wide)
+                    }
+                    Thread.sleep(400)
+                }
+                server.finishVodCatalog.countDown()
+                // The whole list is saved: the rows replace the steps, and the count shows once.
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<View>("library-shelves").isShown && loadingView(a)?.isShown == false &&
+                    a.window.decorView.findViewWithTag<TextView>("library-status").text.toString() == "16 titles · Saved today" }
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<View>("library-shelves").hasFocus() && (a.currentFocus?.tag as? String)?.startsWith("library-item:") == true }
+            } } finally { server.finishVodCatalog.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun idleBrowsingWarmsOnlyArtworkFromSavedCatalogs() {
         FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
             val source = Source(name = "Idle Library", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)

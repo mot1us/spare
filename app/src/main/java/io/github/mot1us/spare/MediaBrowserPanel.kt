@@ -130,6 +130,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     private var shelfSearch: (() -> Unit)? = null
     private var submittedList = ""
     private val shelvesShown get() = shelves.isVisible && body.isVisible
+    private val loadingView = LibraryLoading(context)
     private val detailPane = LinearLayout(context).apply { orientation = VERTICAL; visibility = GONE; tag = "library-details" }
     private var detailGeneration = 0
     private val body = LinearLayout(context)
@@ -213,6 +214,11 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         lists.addView(empty)
         lists.addView(rows, LayoutParams(-1, 0, 1f))
         lists.addView(shelves, LayoutParams(-1, 0, 1f))
+        lists.addView(loadingView, LayoutParams(-1, 0, 1f))
+        loadingView.setOnKeyListener { _, code, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) false
+            else when (code) { KeyEvent.KEYCODE_DPAD_UP -> { focusToolbar(); true }; KeyEvent.KEYCODE_DPAD_LEFT -> { navigation?.invoke(); true }; else -> false }
+        }
         body.addView(lists, LayoutParams(0, -1, 1f))
         shelves.exitUp = { if (search.isVisible) search.requestFocus() else focusToolbar() }
         shelves.exitLeft = { navigation?.invoke() }
@@ -373,7 +379,33 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (initialGroup != null && group != initialGroup) { rememberAnchor(); group = initialGroup; rememberedKey = anchors[anchorKey()]; categories.adapter?.notifyItemRangeChanged(0, categoryNames.size + 1) }
         catalogQuery = query; catalogMore = more; catalogLabels(groups); filter()
     }
-    private fun showGrid() { if (shelves.isVisible) { shelves.visibility = GONE; rows.visibility = VISIBLE } }
+    private fun showGrid() {
+        if (shelves.isVisible) { shelves.visibility = GONE; rows.visibility = VISIBLE }
+        if (loadingView.showing) { rows.visibility = VISIBLE; endLoading(rows) }
+    }
+    /** Library is getting a catalog ready: calm steps and placeholder rows instead of a grid that grows and redraws. */
+    fun showLoading(kind: String, downloading: Boolean) {
+        val first = !loadingView.showing
+        if (first) { rows.visibility = GONE; shelves.visibility = GONE; empty.visibility = GONE; clearSpot() }
+        loadingView.show(kind, downloading)
+        // Nothing else in the content can hold the remote now; left alone it fell to the menu, which opened over the steps.
+        if (first) { catalogFocusRequested = true; loadingView.requestFocus() }
+    }
+    internal fun loadingStep(step: LibraryLoading.Step) { if (loadingView.showing) loadingView.step(step) }
+    val loadingShown get() = loadingView.showing
+    /** Leaves the loading view for an empty grid, as when the catalog could not be read. */
+    fun hideLoading() {
+        if (!loadingView.showing) return
+        val held = loadingView.hasFocus()
+        loadingView.hide(); rows.visibility = VISIBLE
+        if (held) focusRows()
+    }
+    private fun endLoading(content: View) {
+        // The remote waited on the steps: the rows or grid take it as they arrive.
+        if (loadingView.hasFocus()) catalogFocusRequested = true
+        loadingView.hide()
+        if (Motion.panel > 0) { content.alpha = 0f; content.animate().alpha(1f).setDuration(Motion.panel).start() }
+    }
     /** Category rows for Movies or Series; rows keep their titles and positions when shown again for the same catalog. */
     @SuppressLint("NotifyDataSetChanged")
     internal fun showShelves(key: String, groups: Map<String, String>, load: (String) -> Unit, release: (String) -> Unit, open: (String) -> Unit, picked: (String?) -> Unit, focus: Boolean,
@@ -388,6 +420,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         shelves.load = load; shelves.release = release; shelves.open = open; shelves.http = artworkHttp
         shelves.favoriteIds = favoriteIds; shelves.favoriteLabels = favoriteLabels
         shelves.show(key, groups.map { (id, title) -> CatalogShelves.Shelf(id, title) }, initial)
+        if (loadingView.showing) endLoading(shelves)
         catalogLabels(rail); spotMode()
         if (focus || catalogFocusRequested) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() } }
     }
@@ -484,8 +517,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         focusAt(categories, if (group == null) 0 else categoryNames.indexOf(group).plus(1).coerceAtLeast(0))
     }
     /** Entering Library from the main menu lands on the first poster as soon as one is shown, not on a menu or filter. */
-    fun requestContentFocus() { wantContent(); if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
-    fun focusRows() { wantContent(); if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
+    fun requestContentFocus() { wantContent(); if (loadingView.showing) { catalogFocusRequested = true; loadingView.requestFocus(); return }; if (shelvesShown) { catalogFocusRequested = false; shelves.post { if (shelvesShown) shelves.focusCurrent() }; return }; catalogFocusRequested = true; if (contentsAvailable && shownRows.isNotEmpty()) { catalogFocusRequested = false; focusRows() } }
+    fun focusRows() { wantContent(); if (loadingView.showing) { catalogFocusRequested = true; loadingView.requestFocus(); return }; if (shelvesShown) { shelves.focusCurrent(); return }; if (catalogQuery != null && (!contentsAvailable || shownRows.isEmpty())) { catalogFocusRequested = true; return }; if (shownRows.isEmpty()) search.requestFocus() else focusAt(rows, shownRows.indexOfFirst { it.key == rememberedKey }.coerceAtLeast(0)) }
     /** Seven posters across (or one list row): each column gets an equal share of the grid's width. */
     private fun sizeColumns() {
         rows.setNumColumns(columns)

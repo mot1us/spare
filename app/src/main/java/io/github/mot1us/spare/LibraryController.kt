@@ -52,6 +52,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (selected != null && opened && kind in setOf("movie", "series") && activeCatalog == "${selected.id}:$kind" && detailItem == null && parentSeries == null &&
                 // The rows home is a finished view of the catalog; a background refresh must not swap it for the grid.
                 !homeActive() &&
+                // While Library gets the catalog ready it shows calm steps; a partial copy that grows and redraws made the
+                // count tick and the title under the cursor flicker.
+                !panel.loadingShown &&
                 // Nor replace a finished grid: a refresh that completes keeps the copy on screen until Library reopens.
                 activeSnapshot?.let { it.complete && it.whole } != true) {
                 repository.memory(selected, kind)?.let { activateCatalog(activeCatalog, it.copy(labels = categoryNames[activeCatalog] ?: it.labels), !it.complete) }
@@ -275,16 +278,24 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val memory = categoryNames[root]
         if (!force && !memory.isNullOrEmpty() && wholeCatalog(selected, mode) != null) { proceed(memory); return }
         panel.page(title, "Getting your library ready…", true)
+        // No finished catalog in memory: the loading steps show, after a moment so a quick open from this TV never flashes them.
+        val calm = wholeCatalog(selected, mode) == null
+        val loading = Runnable { if (!destroyed && opened && activeCatalog == root) panel.showLoading(mode, downloading = false) }
+        if (calm) handler.postDelayed(loading, LOADING_DELAY_MS)
         request { token ->
             val names = categoriesFor(selected, mode, force)
             Timings.since("Category list", openBegan); Diagnostics.library("Category list read · ${names.size} categories")
+            if (calm) ui(token) { panel.loadingStep(LibraryLoading.Step.TITLES) }
             // Restore the selected tab before deciding whether it needs a download.
             // Even an older complete catalog is usable until the viewer asks to refresh it.
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
-            if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) runCatching { repository.load(selected, mode, "", force, names) }
-                .onFailure { if (it !is InterruptedException && it !is java.io.InterruptedIOException) Diagnostics.library("Catalog download failed · ${SourceErrors.message(it)}") }
+            if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) {
+                if (calm) ui(token) { handler.removeCallbacks(loading); panel.showLoading(mode, downloading = true); panel.loadingStep(LibraryLoading.Step.TITLES) }
+                runCatching { repository.load(selected, mode, "", force, names) }
+                    .onFailure { if (it !is InterruptedException && it !is java.io.InterruptedIOException) Diagnostics.library("Catalog download failed · ${SourceErrors.message(it)}") }
+            }
             Diagnostics.library("Saved catalog ready")
-            ui(token) { proceed(names) }
+            ui(token) { handler.removeCallbacks(loading); panel.loadingStep(LibraryLoading.Step.ROWS); proceed(names) }
         }
     }
     private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.whole && it.count > 0 }
@@ -454,7 +465,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun display(snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
             if (!firstTitlesRecorded && snapshot.count > 0) { firstTitlesRecorded = true; Timings.since("First titles", openBegan) }
             activeSnapshot = snapshot; catalogImporting = busy
-            panel.page(title, "${counted(snapshot.shown, "title")}${if (busy) " · Loading more…" else " · Saved on this TV"}", busy)
+            panel.page(title, if (busy) "Loading more titles…" else "${counted(snapshot.shown, "title")} · Saved on this TV", busy)
             loadCatalogPage(null, activeQuery, false)
         }
         // With the whole catalog in memory a category is shown right here; it never waits for a worker or the provider.
@@ -518,13 +529,15 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!force && memory?.complete == true && System.currentTimeMillis() - memory.updated in 0 until 6 * 3600000L) {
             activateCatalog(key, memory, false); return
         }
-        if (memory == null) { panel.submit(emptyList()); panel.page(title, "Loading saved library…", true); panel.focusRows() }
+        if (memory == null) { panel.submit(emptyList()); panel.page(title, "Getting your library ready…", true); panel.showLoading(mode, downloading = true); panel.loadingStep(LibraryLoading.Step.TITLES) }
         else activateCatalog(key, memory, true)
         catalogImports[key]?.cancel(true)
         val generation = ++catalogGeneration; catalogGenerations[key] = generation
         fun deliver(snapshot: LibraryCatalog.Snapshot, busy: Boolean) { handler.post {
             if (!destroyed && catalogGenerations[key] == generation) {
                 catalogs[key] = snapshot
+                // The loading steps stay until the whole list is saved, rather than a grid that grows and redraws.
+                if (busy && panel.loadingShown) return@post
                 if (opened && activeCatalog == key && kind == mode && detailItem == null && parentSeries == null && !homeActive()) activateCatalog(key, snapshot, busy)
             }
         } }
@@ -542,7 +555,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 deliver(snapshot, false)
             }.onFailure { failure -> handler.post {
                 if (!destroyed && catalogGenerations[key] == generation && opened && activeCatalog == key && detailItem == null && parentSeries == null) {
-                    catalogImporting = false
+                    catalogImporting = false; panel.hideLoading()
                     panel.page(title, (if (cached != null) "Using saved library · " else "Library unavailable · ") + SourceErrors.message(failure) + " · Refresh to retry.", false)
                 }
             } }
@@ -551,7 +564,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun activateCatalog(key: String, snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
         activeCatalog = key; activeSnapshot = snapshot; catalogImporting = busy
         activeCatalogTitle = if (kind == "movie") "Movies" else "Series"
-        panel.page(if (kind == "movie") "Movies" else "Series", counted(snapshot.count, "title") + if (busy) " · Loading more in the background…" else "", busy)
+        panel.page(if (kind == "movie") "Movies" else "Series", if (busy) "Loading more titles in the background…" else counted(snapshot.count, "title"), busy)
+        panel.hideLoading()
         val groups = snapshot.categories + snapshot.labels.mapKeys { "Category ${it.key}" }
         panel.bindCatalog(key, groups, { group, query ->
             // Clearing a search started on the rows home returns to the rows.
@@ -590,7 +604,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (previous != null && (sort == LibraryCatalog.SORT_PROVIDER || !snapshot.complete)) {
             val kept = previous.copy(version = version, more = if (sort == LibraryCatalog.SORT_PROVIDER) previous.cursor < snapshot.count else previous.more, available = snapshot.count)
             browsePages[stateKey] = kept; panel.catalogPage(kept.rows, false, kept.more)
-            panel.page(activeCatalogTitle, "${counted(kept.rows.size, "title")} shown · ${snapshot.shown} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+            panel.page(activeCatalogTitle, if (catalogImporting) "Loading more titles…" else "${counted(kept.rows.size, "title")} shown · ${snapshot.shown} in library", catalogImporting)
             return
         }
         // Cancel an in-flight page only when a new one replaces it; a download's progress updates must not starve "load more".
@@ -610,7 +624,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                     browsePages[stateKey] = page
                     while (browsePages.size > 8) browsePages.remove(browsePages.keys.first())
                     panel.catalogPage(page.rows, more, page.more)
-                    panel.page(activeCatalogTitle, "${counted(page.rows.size, "title")} shown · ${snapshot.shown} in library" + if (catalogImporting) " · Loading more…" else "", catalogImporting)
+                    panel.page(activeCatalogTitle, if (catalogImporting) "Loading more titles…" else "${counted(page.rows.size, "title")} shown · ${snapshot.shown} in library", catalogImporting)
                 }
             } }.onFailure { handler.post { if (!destroyed && token == pageEpoch && opened && activeCatalog == catalogKey && kind in setOf("movie", "series") && detailItem == null) panel.page("Library", "Could not read this page · Refresh to retry.", false) } }
         }
@@ -839,6 +853,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     companion object {
         /** A failed background refresh is tried again after this long, at the next visit to the rows. */
         const val REFRESH_RETRY = 30 * 60000L
+        /** A catalog read from this TV usually opens faster than this; only a slower one shows the loading steps. */
+        const val LOADING_DELAY_MS = 300L
         /** How old the saved copy on the rows is, and whether a background refresh is checking for new titles. */
         fun savedAge(updated: Long, now: Long, checking: Boolean = false): String {
             val known = updated > 0L && now >= updated

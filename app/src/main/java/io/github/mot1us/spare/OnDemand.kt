@@ -26,7 +26,13 @@ object VodCatalog {
      * A whole Movies or Series list is read as it arrives and only a few fields of each title are kept, so this bounds the
      * download, not memory. At 64 MB a provider with about 80,000 movies (some 830 bytes of JSON each) never finished.
      */
-    internal const val LEAN_BYTES = 128 * 1024 * 1024
+    internal const val LEAN_BYTES = 192 * 1024 * 1024
+    /**
+     * The most titles one Movies or Series list keeps. A playlist on the owner's onn lists more than 100,000 movies, and a
+     * provider that lists by category would lose whole categories at the end of a shorter limit. About 100 bytes each in
+     * memory, so 200,000 titles cost about 20 MB.
+     */
+    internal const val MAX_TITLES = 200_000
     private val numeric = Regex("[0-9]{1,20}")
     private val yearPattern = Regex("(?:19|20)[0-9]{2}")
     private val imdbPattern = Regex("tt[0-9]{5,12}")
@@ -41,7 +47,7 @@ object VodCatalog {
         return StreamBase(source.url, source.username, source.password, Importers.serverBase(source.url), "/${Importers.encoded(source.username)}/${Importers.encoded(source.password)}/").also { streamBase = it }
     }
     /** The most titles one catalog download reads; tests lower it. */
-    @Volatile internal var maxTitles = Importers.MAX_CHANNELS
+    @Volatile internal var maxTitles = MAX_TITLES
     /** Publish bounded batches while the response is arriving, rather than buffering the whole JSON document. */
     fun stream(source: Source, kind: String, category: String? = null, lean: Boolean = false, batch: (List<OnDemand>) -> Unit) {
         require(source.kind == "xtream" && kind in setOf("movie", "series"))
