@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.43 — 2026-11-20
+
+- New movies and series show up again on playlists whose provider cuts off slow downloads. The background check for new titles paused after every 64 titles to leave the processor to the playing channel. On a 32,000-title list that pausing stretched the download past a minute, and the second onn's provider resets any response still running after about a minute, so every check failed ("The provider connection was interrupted") and the saved list stayed 41 hours old. The check now pauses only as long as it actually used the processor. Waiting on the provider adds no pause.
+
 ## 0.51.42 — 2026-11-20
 
 - Library opens on the rows for a playlist with a very large movie list. Spare read at most 64 MB of the list, so on a playlist with more than about 80,000 movies the download never finished: every Library visit spent about 85 s downloading the same titles again and then showed the plain all-titles grid. The limit is now 128 MB. A list past Spare's limits (also 100,000 titles) keeps the titles that fit instead of starting over, and the performance report says so. The first Library visit after updating downloads the list once.

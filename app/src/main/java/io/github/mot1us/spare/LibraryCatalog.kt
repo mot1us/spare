@@ -349,11 +349,19 @@ class LibraryCatalog(private val store: SecureStore) {
             val quiet = scope.isEmpty() && latest?.complete == true && latest.schema >= SCHEMA && latest.count > 0
             val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
             var published = 0L; var checkpoint = 0L
+            var worked = android.os.SystemClock.currentThreadTimeMillis()
             val capped = try {
                 VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
                     writer.append(batch)
-                    // A refresh nobody is waiting for goes slowly, so a playing channel keeps the processor (64 titles per pause).
-                    if (quiet) Thread.sleep(40)
+                    // A refresh nobody is waiting for gives the processor back to a playing channel: it pauses as long as it
+                    // just worked. Waiting on the provider costs no processor time, so it adds no pause. A fixed 40 ms per
+                    // 64 titles stretched a 32,000-title download past a minute, and that provider resets any response still
+                    // running after about a minute, so the refresh never finished.
+                    if (quiet) {
+                        val used = android.os.SystemClock.currentThreadTimeMillis() - worked
+                        if (used > 0) Thread.sleep(minOf(used, QUIET_PAUSE_MS))
+                        worked = android.os.SystemClock.currentThreadTimeMillis()
+                    }
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
                     if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
@@ -504,6 +512,8 @@ class LibraryCatalog(private val store: SecureStore) {
         private val indexes = java.util.concurrent.ConcurrentHashMap<String, Index>()
         /** 4 adds each title's provider "added" time and rating; older saved catalogs are refreshed once. */
         const val SCHEMA = 4
+        /** The longest pause a background refresh takes after one batch of titles. */
+        internal const val QUIET_PAUSE_MS = 40L
         /** A saved catalog this old is refreshed in the background when Library opens it. */
         const val REFRESH_AFTER = 6 * 3600000L
         /** Whether a saved copy is old enough (or from an older format) to refresh. */
