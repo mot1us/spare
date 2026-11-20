@@ -596,7 +596,8 @@ class SpareDeviceTest {
         FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
             val source = Source(name = "Idle Library", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
             store.saveSources(listOf(source)); store.bindProvider(source)
-            val poster = "${server.base}/logo.png"
+            // A unique address, so a poster another test left on disk never stands in for this one.
+            val poster = "${server.base}/logo.png?idle=${System.nanoTime()}"
             val reader = LibraryCatalog(store)
             val worker = Executors.newSingleThreadExecutor()
             var warmer: IdleBrowse? = null
@@ -1472,6 +1473,26 @@ class SpareDeviceTest {
                     MainActivity::class.java.getDeclaredMethod("tune", Channel::class.java).apply { isAccessible = true }.invoke(activity, ended)
                 }
                 waitFor(scenario) { activity -> (MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View).isShown }
+            } } finally { store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun aReopenedXtreamSlotThatNeverAnswersFallsBackWithoutTryingTheOtherFormat() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Silent slot fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val silent = Channel("xc:91", "LP 05 | Nets @ Bulls (2026-11-15 20:00:00)", "League Pass", "${server.base}/hang.ts")
+            val working = Channel("xc:92", "Harbour Sports HD", "Sports", "${server.base}/channel1.mp4")
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(silent, working), emptyMap()))
+            store.markPlaylistRefreshed(source); store.markEpgRefreshed(source); store.markFullEpgAttempted(source); store.setRefreshPolicy(source, RefreshPolicy())
+            store.catalogRoot = source.id; store.recentFeeds = listOf(silent.id, working.id)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                val opened = android.os.SystemClock.elapsedRealtime()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && playingPath(scenario) == "/channel1.mp4" }
+                val waited = android.os.SystemClock.elapsedRealtime() - opened
+                // 10 s for a channel that played before, then the fallback; trying the other format first took 29 s on an onn.
+                assertTrue("The fallback plays after the shorter wait (took $waited ms)", waited < 17000)
+                assertNull("The other stream format is not tried for a reopened channel", server.requests["/hang.m3u8"])
             } } finally { store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
@@ -6295,6 +6316,8 @@ class SpareDeviceTest {
                         for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
+                        // An event slot that never answers.
+                        if (path.startsWith("/hang")) { runCatching { Thread.sleep(30000) }; return@use }
                         if (target.contains("get_short_epg")) requestedEpgTargets.add(target)
                         if (target.contains("action=get_vod_streams")) {
                             catalogTargets.add(target); vodImportTargets.add("movie")

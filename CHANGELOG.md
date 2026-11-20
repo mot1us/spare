@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.40 — 2026-11-20
+
+- The switch away from a reopened channel that has ended comes after 10 s instead of 29 s. On an onn 4K Pro the ended slot never answered, so Spare waited its full 15 s start time and then tried the slot again in the provider's other stream format for 14 s more. A channel Spare reopens by itself played before in its usual format, so it now gets 10 s and no second format before the most recent working channel plays. Channels you choose still get the full wait and both formats.
+
 ## 0.51.39 — 2026-11-19
 
 - When Spare reopens on the last channel you watched and that channel has no stream any more (usually an event slot whose game has ended), it plays the most recent channel that showed a picture instead, regular channels before other event slots, and says so: "LP 07 … has no stream now · Playing Harbour Sports HD". It used to retry the dead slot for about 30 s and then show "Could not read the provider's response". A channel you choose yourself still shows the error with Retry.

@@ -794,7 +794,7 @@ class MainActivity : Activity() {
             if (tunnelingFailed()) return@Runnable
             performanceOverlay?.sports?.playing?.outcome("startup timeout")
             if (onDemand != null) { reconnectOrFail("This title did not resume. Retry continues from your saved position. (STREAM_TIMEOUT)"); return@Runnable }
-            if (!hasPlayedChannel && tryAlternate()) return@Runnable
+            if (!hasPlayedChannel && !resumeCanFallBack() && tryAlternate()) return@Runnable
             if (onDemand == null && hasPlayedChannel) { reconnectOrFail("The channel did not resume. Choose Retry to reconnect. (STREAM_TIMEOUT)"); return@Runnable }
             showPlaybackFailure("No video arrived within 15 seconds. Try another channel or choose a stream format in Settings. (STREAM_TIMEOUT)")
         }
@@ -926,7 +926,7 @@ class MainActivity : Activity() {
                 }
                 if (!hasPlayedChannel && onDemand == null) {
                     startupFailures.record(statusCode, http?.dataSpec?.uri?.toString(), playbackUrl)
-                    if (statusCode !in setOf(401, 403, 429) && tryAlternate()) return
+                    if (statusCode !in setOf(401, 403, 429) && !resumeCanFallBack() && tryAlternate()) return
                     if (startupFailures.allEndpointsMissing()) { hideUnavailable(); return }
                 }
                 if (statusCode in setOf(401, 403, 429)) sportsPlaybackPlan?.accepted = true
@@ -1644,11 +1644,24 @@ class MainActivity : Activity() {
             ?: providerViews[selected.id]?.channels?.firstOrNull { !it.media } ?: guide.channels.firstOrNull { !it.media } ?: return
         val enterFullscreen = lastInputAt == startupInputAt
         startupPlaybackPending = false
-        tune(channel); startupResumeId = channel.id
+        // Only a channel from the viewer's own history counts as reopened; the lineup's first channel on a first launch does not.
+        if (channel === recent || channel.id == saved) startupResumePending = channel.id
+        tune(channel)
         if (enterFullscreen) showGuide(false)
     }
     /** The channel Spare reopened by itself at startup, until it shows a picture or the viewer changes channel. */
     private var startupResumeId: String? = null
+    private var startupResumePending: String? = null
+    /**
+     * A reopened channel that has a working channel to fall back to gets 10 s rather than 15 and no second stream format:
+     * on an onn 4K Pro an ended event slot never answered, and waiting out both formats left the screen black for 29 s
+     * before the fallback. With nothing to fall back to, it gets the usual wait and both formats.
+     */
+    private fun resumeCanFallBack(): Boolean {
+        val channel = current ?: return false
+        return startupResumeId == channel.id && !hasPlayedChannel && onDemand == null && recentWorkingChannel(channel) != null
+    }
+    private fun startupTimeoutMs() = if (onDemand != null) 30000L else if (resumeCanFallBack()) 10000L else 15000L
     /**
      * The channel Spare reopened at startup failed before showing a picture. Usually it is an event slot whose game has
      * ended ("NBA LP 03" after the game): the provider answers with no stream, and every launch greeted the viewer with an
@@ -1860,7 +1873,7 @@ class MainActivity : Activity() {
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
     private fun tune(channel: Channel) = tune(channel, null)
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
-        startupResumeId = null
+        startupResumeId = startupResumePending?.takeIf { it == channel.id }; startupResumePending = null
         // A playlist added during first-run setup loads in the background; its first channel waits until setup ends.
         if (onboarding?.opened == true) { onboardingTune = channel; return }
         Diagnostics.action("Channel: ${channel.name}")
@@ -1909,7 +1922,7 @@ class MainActivity : Activity() {
         applyTunneling()
         journal(PlaybackJournal.Event.OPEN)
         player.prepare(); player.playWhenReady = onDemand == null || !demandPaused
-        handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000)
+        handler.postDelayed(startupTimeout, startupTimeoutMs())
     }
     private fun tryAlternate(): Boolean {
         val selected = playbackSource() ?: return false
@@ -4167,7 +4180,7 @@ class MainActivity : Activity() {
         val resume = pausedPlayback; pausedPlayback = null
         if (resume != null && ::player.isInitialized) {
             if (resume && player.playbackState == Player.STATE_IDLE) playAttempt(PlaybackPhase.RECONNECTING) else player.playWhenReady = resume
-            if (resume && !firstFrame && player.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY)) { handler.removeCallbacks(startupTimeout); handler.postDelayed(startupTimeout, if (onDemand != null) 30000 else 15000) }
+            if (resume && !firstFrame && player.playbackState in setOf(Player.STATE_BUFFERING, Player.STATE_READY)) { handler.removeCallbacks(startupTimeout); handler.postDelayed(startupTimeout, startupTimeoutMs()) }
         }
         syncPlaybackMonitoring()
         if (::sportsPanel.isInitialized && guideVisible && sportsVisible) sportsPanel.resumeImages()
