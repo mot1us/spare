@@ -930,6 +930,7 @@ class MainActivity : Activity() {
                     if (startupFailures.allEndpointsMissing()) { hideUnavailable(); return }
                 }
                 if (statusCode in setOf(401, 403, 429)) sportsPlaybackPlan?.accepted = true
+                if (!hasPlayedChannel && onDemand == null && fallBackFromResume()) return
                 if (!hasPlayedChannel && onDemand == null && sportsPlaybackPlan != null) { showPlaybackFailure(PlaybackErrors.message(error)); return }
                 if (StartupFailures.retryMissingLive(statusCode, hasPlayedChannel, onDemand == null)) reconnectOrFail(PlaybackErrors.message(error))
                 else if (statusCode != null && statusCode in 400..499 && statusCode !in setOf(408, 429)) showPlaybackFailure(PlaybackErrors.message(error))
@@ -971,7 +972,7 @@ class MainActivity : Activity() {
             override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
                 if (eventTime.timeline.isEmpty || eventTime.timeline.getWindow(eventTime.windowIndex, Timeline.Window()).mediaItem.mediaId != expectedMediaId) return
                 performanceOverlay?.sports?.playing?.firstFrame(expectedMediaId)
-                firstFrame = true; hasPlayedChannel = true; backgroundPlaybackReady(); journal(PlaybackJournal.Event.FIRST_FRAME)
+                firstFrame = true; hasPlayedChannel = true; startupResumeId = null; backgroundPlaybackReady(); journal(PlaybackJournal.Event.FIRST_FRAME)
                 sportsPlaybackPlan?.takeIf { it.channel?.id == current?.id }?.let { plan ->
                     // A working stream is accepted immediately; quality never triggers another connection.
                     plan.accepted = true
@@ -1643,8 +1644,34 @@ class MainActivity : Activity() {
             ?: providerViews[selected.id]?.channels?.firstOrNull { !it.media } ?: guide.channels.firstOrNull { !it.media } ?: return
         val enterFullscreen = lastInputAt == startupInputAt
         startupPlaybackPending = false
-        tune(channel)
+        tune(channel); startupResumeId = channel.id
         if (enterFullscreen) showGuide(false)
+    }
+    /** The channel Spare reopened by itself at startup, until it shows a picture or the viewer changes channel. */
+    private var startupResumeId: String? = null
+    /**
+     * The channel Spare reopened at startup failed before showing a picture. Usually it is an event slot whose game has
+     * ended ("NBA LP 03" after the game): the provider answers with no stream, and every launch greeted the viewer with an
+     * error after 30 s of retries. Play the most recent channel that showed a picture instead, regular channels before
+     * other event slots, and say so. Once only; a channel the viewer chose keeps the usual error and Retry.
+     */
+    private fun fallBackFromResume(): Boolean {
+        val failed = current ?: return false
+        if (startupResumeId != failed.id || hasPlayedChannel || onDemand != null || multiview.active || sportsPlaybackPlan != null) return false
+        startupResumeId = null
+        val next = recentWorkingChannel(failed) ?: return false
+        Diagnostics.action("Startup channel had no stream · playing ${next.name}")
+        toast("${channelLabel(failed)} has no stream now · Playing ${channelLabel(next)}")
+        tune(next)
+        return true
+    }
+    /** The most recent channel that showed a picture (saved across launches), regular channels before event slots. */
+    private fun recentWorkingChannel(failed: Channel): Channel? {
+        val now = System.currentTimeMillis()
+        val worked = store.recentFeeds.asSequence().filter { it != failed.id }
+            .mapNotNull { id -> guide.channels.firstOrNull { it.id == id && !it.media } }
+            .filter { allowed(it) && !unavailable.contains(it.id, now) }.toList()
+        return worked.firstOrNull { !EventChannelNames.looksLikeEvent(it.name) } ?: worked.firstOrNull()
     }
     private var additionalRestoreAsked = 0L
     private val restoreAdditionalLater = Runnable { restoreAdditionalPlaylists() }
@@ -1833,6 +1860,7 @@ class MainActivity : Activity() {
     private fun ui(epoch: Int, task: () -> Unit) { handler.post { if (!closed && epoch == generation) task() } }
     private fun tune(channel: Channel) = tune(channel, null)
     private fun tune(channel: Channel, trace: SportsClickTrace?) {
+        startupResumeId = null
         // A playlist added during first-run setup loads in the background; its first channel waits until setup ends.
         if (onboarding?.opened == true) { onboardingTune = channel; return }
         Diagnostics.action("Channel: ${channel.name}")
@@ -1892,6 +1920,7 @@ class MainActivity : Activity() {
         return true
     }
     private fun showPlaybackFailure(detail: String) {
+        if (fallBackFromResume()) return
         val trace = performanceOverlay?.sports?.playing
         trace?.outcome("failed")
         journal(PlaybackJournal.Event.FAILED)
@@ -1951,6 +1980,9 @@ class MainActivity : Activity() {
     }
     private fun hideUnavailable() {
         val failed = current ?: return
+        // Right after launch nothing has played yet this session: use the saved recent channels.
+        val fallback = lastWorkingChannel ?: if (startupResumeId == failed.id) recentWorkingChannel(failed) else null
+        startupResumeId = null
         val trace = performanceOverlay?.sports?.playing
         trace?.outcome("unavailable")
         unavailable.hide(failed.id, System.currentTimeMillis()); saveUnavailable()
@@ -1964,7 +1996,7 @@ class MainActivity : Activity() {
         current = null; applyFilter(); showGuide(true)
         status.text = "${failed.name} is unavailable · hidden for 15 minutes. Retry in Settings."
         toast("Channel unavailable · hidden temporarily")
-        lastWorkingChannel?.takeIf { it.id != failed.id && guide.channels.any { next -> next.id == it.id } && !unavailable.contains(it.id, System.currentTimeMillis()) }?.let { tune(it) }
+        fallback?.takeIf { it.id != failed.id && guide.channels.any { next -> next.id == it.id } && !unavailable.contains(it.id, System.currentTimeMillis()) }?.let { tune(it) }
     }
     private fun recordVideo(info: VideoInfo) {
         if (onDemand != null) { lastVideoInfo = info; return }

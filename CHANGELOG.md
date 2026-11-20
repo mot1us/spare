@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.39 — 2026-11-19
+
+- When Spare reopens on the last channel you watched and that channel has no stream any more (usually an event slot whose game has ended), it plays the most recent channel that showed a picture instead, regular channels before other event slots, and says so: "LP 07 … has no stream now · Playing Harbour Sports HD". It used to retry the dead slot for about 30 s and then show "Could not read the provider's response". A channel you choose yourself still shows the error with Retry.
+
 ## 0.51.38 — 2026-11-19
 
 - Sports opens on the first card. On an onn 4K Pro 0.51.37 put the cursor on the game the header had picked from the saved scores, which after the fresh scoreboard arrived was the second card. Until you press a key, the cursor now stays on the first card as games arrive and reorder; a card you move to yourself is still where Sports resumes.

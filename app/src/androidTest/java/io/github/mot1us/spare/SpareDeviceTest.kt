@@ -1445,6 +1445,37 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aStartupChannelWhoseEventEndedFallsBackToTheLastChannelThatPlayed() {
+        FixtureServer(longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Ended slot fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            // Spare reopens the last channel watched: an event slot whose game has ended. Before it, a regular channel played,
+            // and before that another slot.
+            val ended = Channel("ended:1", "LP 07 | Kings @ Jazz (2026-11-15 21:00:00)", "League Pass", "${server.base}/ended.m3u8")
+            val olderSlot = Channel("ended:2", "LP 08 | Hawks @ Heat (2026-11-15 19:00:00)", "League Pass", "${server.base}/channel2.mp4")
+            val working = Channel("ended:3", "Harbour Sports HD", "Sports", "${server.base}/channel1.mp4")
+            store.saveSources(listOf(source)); store.active = source.id
+            store.cache(source, Guide(listOf(ended, olderSlot, working), emptyMap())); store.markPlaylistRefreshed(source)
+            store.catalogRoot = source.id; store.recentFeeds = listOf(ended.id, olderSlot.id, working.id)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                val opened = android.os.SystemClock.elapsedRealtime()
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && playingPath(scenario) == "/channel1.mp4" }
+                val waited = android.os.SystemClock.elapsedRealtime() - opened
+                assertTrue("The regular channel plays without the 30 s of reconnects (took $waited ms)", waited < 15000)
+                scenario.onActivity { activity ->
+                    val retry = MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View
+                    assertFalse("No error greets the viewer", retry.isShown)
+                    assertTrue("The fallback is recorded", "Startup channel had no stream" in Diagnostics.report())
+                }
+                assertEquals("The channel that played is now the latest", working.id, store.recentFeeds.first())
+                // A channel the viewer picks that fails still shows the error and Retry.
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredMethod("tune", Channel::class.java).apply { isAccessible = true }.invoke(activity, ended)
+                }
+                waitFor(scenario) { activity -> (MainActivity::class.java.getDeclaredField("retryPanel").apply { isAccessible = true }.get(activity) as View).isShown }
+            } } finally { store.recentFeeds = emptyList(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun searchRemembersChosenQueriesAndReplaysThemFromAChip() {
         FixtureServer(longVideo = true, parallelClients = true).use { server ->
             val source = Source(name = "Recent search fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -6302,6 +6333,8 @@ class SpareDeviceTest {
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
+                            // An event slot after its game: the provider answers with a page, not a playlist.
+                            "/ended.m3u8" -> "<html><body>No event</body></html>".toByteArray() to "application/vnd.apple.mpegurl"
                             "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
                                 else if (target.contains("get_vod_streams")) when {
                                     slowVod -> slowMovies
