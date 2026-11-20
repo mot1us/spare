@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.44 — 2026-11-20
+
+- The background check for new movies and series pauses for half the processor time it uses instead of all of it. On the second onn, 0.51.43's check finished in 59 s, just inside the provider's one-minute cut-off; this leaves room. If a provider still cuts the check off, Spare tries once more straight away without pauses, instead of waiting 30 minutes.
+
 ## 0.51.43 — 2026-11-20
 
 - New movies and series show up again on playlists whose provider cuts off slow downloads. The background check for new titles paused after every 64 titles to leave the processor to the playing channel. On a 32,000-title list that pausing stretched the download past a minute, and the second onn's provider resets any response still running after about a minute, so every check failed ("The provider connection was interrupted") and the saved list stayed 41 hours old. The check now pauses only as long as it actually used the processor. Waiting on the provider adds no pause.

@@ -611,6 +611,28 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aBackgroundCatalogCheckCutOffByTheProviderTriesAgainAtOnce() {
+        FixtureServer(libraryCategories = true, slowVod = true, cutVodOnce = true, parallelClients = true).use { server ->
+            val source = Source(name = "Cut catalog", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.bindProvider(source)
+            // A saved copy three days old, so loading it is a background check for new titles.
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie", System.currentTimeMillis() - 3 * 86400000L).run {
+                (1..40).map { n -> OnDemand("movie:${7000 + n}", "Saved title $n", "Test", "${server.base}/movie/test/test-secret/${7000 + n}.mp4", "movie") }.chunked(20).forEach(::append)
+                finish(mapOf("1" to "Fixture cinema"))
+            }
+            seeded.close()
+            server.finishVodCatalog.countDown()
+            val catalog = LibraryCatalog(store)
+            try {
+                val saved = catalog.load(source, "movie")
+                assertEquals("The second try saves the provider's whole list", 16, saved.count)
+                assertTrue(saved.complete)
+                assertEquals("One cut-off download, then one more straight away", 2, server.catalogTargets.count { "get_vod_streams" in it })
+            } finally { catalog.close(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun idleBrowsingWarmsOnlyArtworkFromSavedCatalogs() {
         FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
             val source = Source(name = "Idle Library", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -6311,7 +6333,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -6344,6 +6366,7 @@ class SpareDeviceTest {
         val episodesRequested = java.util.concurrent.CountDownLatch(1)
         val finishEpisodes = java.util.concurrent.CountDownLatch(1)
         val finishVodCatalog = java.util.concurrent.CountDownLatch(1)
+        private val vodCuts = java.util.concurrent.atomic.AtomicInteger()
         val playlistStarted = java.util.concurrent.CountDownLatch(1)
         val finishPlaylist = java.util.concurrent.CountDownLatch(1)
         private val slowMovies by lazy { (1..16).joinToString(",", "[", "]") { id -> org.json.JSONObject().put("stream_id", 100 + id).put("name", if (id == 1) "EN | Fixture movie (2025) 4K DV" else if (ambiguousVod && id == 2) "Fixture movie (1990) FHD" else "Other movie $id").put("category_id", "1").put("container_extension", "mp4").put("plot", "x".repeat(1024)).toString() }.toByteArray() }
@@ -6446,6 +6469,12 @@ class SpareDeviceTest {
                             output.write(body, 0, split); output.flush()
                             resumeStream.await(stallSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, split, body.size - split); output.flush()
+                        } else if (cutVodOnce && target.contains("get_vod_streams") && vodCuts.getAndIncrement() == 0) {
+                            // Like a provider that resets a long response: part of the list, then a reset connection.
+                            val value = body.toString(Charsets.UTF_8); var cut = 0
+                            repeat(8) { cut = value.indexOf("},{", cut) + 2 }
+                            output.write(body, 0, cut); output.flush()
+                            runCatching { connection.setSoLinger(true, 0) }; connection.close(); return@use
                         } else if (slowVod && target.contains("get_vod_streams")) {
                             val value = body.toString(Charsets.UTF_8); var cut = 0
                             repeat(8) { cut = value.indexOf("},{", cut) + 2 }

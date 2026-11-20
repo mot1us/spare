@@ -347,34 +347,43 @@ class LibraryCatalog(private val store: SecureStore) {
             // Refreshing a complete catalog happens out of sight: Library keeps reading the complete copy in memory until
             // the new one is whole. Showing the half-downloaded copy pushed every screen onto its slow path for a minute.
             val quiet = scope.isEmpty() && latest?.complete == true && latest.schema >= SCHEMA && latest.count > 0
-            val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
-            var published = 0L; var checkpoint = 0L
-            var worked = android.os.SystemClock.currentThreadTimeMillis()
-            val capped = try {
-                VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
-                    writer.append(batch)
-                    // A refresh nobody is waiting for gives the processor back to a playing channel: it pauses as long as it
-                    // just worked. Waiting on the provider costs no processor time, so it adds no pause. A fixed 40 ms per
-                    // 64 titles stretched a 32,000-title download past a minute, and that provider resets any response still
-                    // running after about a minute, so the refresh never finished.
-                    if (quiet) {
-                        val used = android.os.SystemClock.currentThreadTimeMillis() - worked
-                        if (used > 0) Thread.sleep(minOf(used, QUIET_PAUSE_MS))
-                        worked = android.os.SystemClock.currentThreadTimeMillis()
+            fun download(paced: Boolean): Snapshot {
+                val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
+                var published = 0L; var checkpoint = 0L
+                var worked = android.os.SystemClock.currentThreadTimeMillis()
+                val capped = try {
+                    VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
+                        writer.append(batch)
+                        // A refresh nobody is waiting for gives the processor back to a playing channel: it pauses for half the
+                        // time it just worked. Waiting on the provider costs no processor time, so it adds no pause. A fixed
+                        // 40 ms per 64 titles stretched a 32,000-title download past a minute, and that provider resets any
+                        // response still running after about a minute, so the refresh never finished.
+                        if (paced) {
+                            val used = android.os.SystemClock.currentThreadTimeMillis() - worked
+                            if (used > 1) Thread.sleep(minOf(used / 2, QUIET_PAUSE_MS))
+                            worked = android.os.SystemClock.currentThreadTimeMillis()
+                        }
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
+                        if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
                     }
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (!quiet && (published == 0L || now - published >= 750)) { publish(writer.snapshot(labels)); published = now }
-                    if (latest?.complete != true && now - checkpoint >= 20000) { writer.checkpoint(labels); checkpoint = now }
+                    false
+                } catch (limit: SourceFailure) {
+                    // A catalog past Spare's limits keeps the titles that fit. Failing left an unfinished copy, so every Library
+                    // visit downloaded the same titles again (85 s on an onn 4K Pro) and still ended without the rows.
+                    if (limit.problem != SourceProblem.LIMIT || writer.size == 0) throw limit
+                    true
                 }
-                false
-            } catch (limit: SourceFailure) {
-                // A catalog past Spare's limits keeps the titles that fit. Failing left an unfinished copy, so every Library
-                // visit downloaded the same titles again (85 s on an onn 4K Pro) and still ended without the rows.
-                if (limit.problem != SourceProblem.LIMIT || writer.size == 0) throw limit
-                true
+                return writer.finish(labels).also { saved ->
+                    if (capped) "${if (mode == "movie") "Movies" else "Series"} list is larger than Spare keeps · first ${saved.count} titles saved".let { Diagnostics.library(it); Diagnostics.action(it) }
+                }
             }
-            writer.finish(labels).also { saved ->
-                if (capped) "${if (mode == "movie") "Movies" else "Series"} list is larger than Spare keeps · first ${saved.count} titles saved".let { Diagnostics.library(it); Diagnostics.action(it) }
+            val began = android.os.SystemClock.elapsedRealtime()
+            try { download(paced = quiet) } catch (cut: java.io.IOException) {
+                // A provider that cuts off a long response gets one more try straight away, without pauses.
+                if (!quiet || cut is java.io.InterruptedIOException || Thread.currentThread().isInterrupted) throw cut
+                Diagnostics.library("Background check cut off after ${(android.os.SystemClock.elapsedRealtime() - began) / 1000} s · trying again without pauses")
+                download(paced = false)
             }.also(publish)
         }
     }
