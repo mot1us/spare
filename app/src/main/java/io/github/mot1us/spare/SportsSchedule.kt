@@ -162,6 +162,8 @@ object SportsSchedule {
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }
+    /** Broadcaster channels kept as possible streams for one game; a provider's ESPN+ slots alone can number over a hundred. */
+    internal const val MAX_CANDIDATES = 96
     fun match(game: SportsGame, guide: Guide, favorites: Set<String>, now: Long, deadlineNanos: Long = Long.MAX_VALUE,
         quality: Map<String, VideoInfo> = emptyMap(), trace: SportsClickTrace? = null, index: GuideProgrammeIndex? = null,
         progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
@@ -188,16 +190,14 @@ object SportsSchedule {
             val key = p.title to (p.description + context)
             return parsed.getOrPut(key) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target }
         }
-        val names = game.networks.flatMap(SportsStreams::networkNames).distinct().map { " $it " }.filter { it.length >= 5 }
-        val mascots = game.teams.map { SportsCatalog.normalize(it.name.substringAfterLast(' ')) }.filter { it.length >= 4 }.map { " $it " }
-        val patterns = names + mascots
-        val candidateHints = patterns.flatMap { it.trim().split(' ') }.filter { it.length >= 3 }.distinct()
-        val dates = Regex("(?<!\\d)(\\d{1,2})/(\\d{1,2})(?!\\d)")
-        val gameDates = listOf(ZoneId.systemDefault(), ZoneId.of("America/New_York")).map { Instant.ofEpochMilli(game.start).atZone(it).toLocalDate() }
-        fun currentTitle(title: String): Boolean {
-            val declared = dates.findAll(title).map { it.groupValues[1].toInt() to it.groupValues[2].toInt() }.filter { it.first in 1..12 && it.second in 1..31 }.toList()
-            return declared.isEmpty() || declared.any { date -> gameDates.any { it.monthValue == date.first && it.dayOfMonth == date.second } }
-        }
+        // Possible streams are only the game's own broadcasters' channels. "ESPN+" once became "espn" and every ESPN channel
+        // counted, and team nicknames ("Bulls", "Tigers") matched hundreds of unrelated channels: a college card read
+        // "512 streams found" when no channel named the game.
+        val networkKeys = game.networks.map(SportsStreams::broadcasterKey).filter { it.trim().length >= 3 }.distinct()
+        // Words to look for first, including spelled-out names ("BTN" is "Big Ten Network" in most playlists).
+        val candidateHints = (networkKeys + game.networks.flatMap(SportsStreams::networkNames)).flatMap { it.trim().split(' ') }
+            .filter { it.length >= 3 && it != "plus" }.distinct()
+        val league = game.teams.first().league
         val candidates = mutableListOf<Channel>(); val titles = mutableListOf<Channel>()
         val indexed = prepared?.sportsChannels(hints, candidateHints) ?: PlaylistCatalog.interleave(guide.channels.filter(SportsStreams::video))
         // Event channels renamed since the channel list was saved ("Game Pass 11: NO EVENT" -> "...: SEA @ LV").
@@ -249,16 +249,21 @@ object SportsSchedule {
             val named = relevant(name)
             val possibleNetwork = candidateHints.any { name.contains(it, true) } && SportsStreams.speculative(channel)
             if (!named && !possibleNetwork) continue
-            val sportsKey = if (EventChannelNames.renamed(channel)) " ${SportsCatalog.normalize(name)} " else channel.sportsKey
-            if (SportsGuide.excludedTitle(sportsKey) || named && !currentTitle(name)) continue
-            if (game.live(now) && named && matchesTarget(Programme(channel.id, name, game.start, game.end), channel.group)) titles.add(channel)
-            else if (possibleNetwork && patterns.any { it in sportsKey }) candidates.add(channel)
+            val renamed = EventChannelNames.renamed(channel)
+            val sportsKey = if (renamed) " ${SportsCatalog.normalize(name)} " else channel.sportsKey
+            if (SportsGuide.excludedTitle(sportsKey) || named && EventChannelNames.declaresOtherTime(name, game.start)) continue
+            // The game's league is context for a bare "Basketball: Richmond vs. Towson": event categories often
+            // say only the sport, and the channel's category alone did not say college.
+            if (game.live(now) && named && matchesTarget(Programme(channel.id, name, game.start, game.end), "$league ${channel.group}")) titles.add(channel)
+            else if (possibleNetwork) {
+                val key = if (renamed) SportsStreams.broadcasterKey(name) else channel.broadcastKey
+                if (networkKeys.any { it in key && (it.trimEnd() + " plus ") !in key }) candidates.add(channel)
+            }
         }
         val confirmed = matches.map { it.channel.id }.toSet()
         if (measurement != null) measurement.channels = checkedChannels
         // A broadcaster's channel (CBS, FOX…) whose own guide names a different matchup at this time is carrying another
         // game: on a Sunday each local station shows its region's game, so the network name alone pointed at wrong feeds.
-        val league = game.teams.first().league
         val elsewhere = HashMap<String, Boolean>()
         fun otherGame(channel: Channel): Boolean = elsewhere.getOrPut(guide.key(channel)) {
             guide.programmes[guide.key(channel)].orEmpty().asSequence().filter { broadcastWindow(game, it, now) }.any { p ->
@@ -269,7 +274,7 @@ object SportsSchedule {
         val found = confirmed + titleOnly.map { it.id }
         progress(checkedChannels + checkedKeys, total)
         return game.copy(broadcasts = matches, titleMatches = titleOnly, candidates = candidates.filter { it.id !in found && !otherGame(it) }
-            .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(512), coverageComplete = complete)
+            .let { PlaylistCatalog.interleave(it.sortedWith(SportsStreams.preferenceComparator(GuideFilters(), quality).thenByDescending { it.id in favorites })) }.take(MAX_CANDIDATES), coverageComplete = complete)
     }
     /** Run after the timed match so this diagnostic pass cannot consume its deadline. */
     private fun countNearMisses(game: SportsGame, guide: Guide, now: Long, measurement: SportsMatchMeasurement,

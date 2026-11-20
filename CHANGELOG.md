@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.51.36 — 2026-11-19
+
+- Sports cards count only streams whose guide listing or channel name names the game. A college card used to say "512 streams found · Quality unverified" when nothing named it: "ESPN+" was read as "espn", so every ESPN channel counted, and team nicknames ("Bulls", "Tigers") matched hundreds of unrelated channels. Possible streams are now only the game's own broadcasters' channels (at most 96), and a card with no named stream says "No stream names this game yet · Select to look through ESPN+ channels".
+- Spare reads today's names of event channels from up to 24 event categories instead of the first 8 in list order, starting with categories that sound like your leagues and today's broadcasters (NCAAB, ESPN+, Game Pass…). In a large lineup the college categories were past the first 8, so their names stayed days old and today's games were not found.
+- Event channel names are read more like people write them: "(W)" and "(M)" mark women's and men's college games, a date written "12.05", "05.12" or "Dec 5" and a start time such as "1:00 PM ET" must fit the game (a name from another day, or more than three hours off, is ignored), and a bare "Basketball: Richmond vs. Towson" counts in the game's own league.
+
 ## 0.51.35 — 2026-11-18
 
 - Library poster tiles no longer paint a solid block behind each poster. The placeholder and then the poster always cover it, so on an onn 4K Pro it was one of about 16 fills drawn every Library frame without ever being seen.

@@ -151,7 +151,7 @@ class SportsStreamCacheTest {
         val observed = channel("observed", 0f)
         val guide = Guide(unknown + declared + observed, emptyMap())
         val match = SportsSchedule.match(game, guide, emptySet(), now, quality = mapOf(observed.id to VideoInfo(3840,2160,60f)))
-        assertEquals(512, match.candidates.size)
+        assertEquals(SportsSchedule.MAX_CANDIDATES, match.candidates.size)
         assertTrue(declared in match.candidates); assertTrue(observed in match.candidates)
     }
     @Test fun cardDiscoveryRemainsVisibleWithoutVerifiedAutomaticPlayQuality() {

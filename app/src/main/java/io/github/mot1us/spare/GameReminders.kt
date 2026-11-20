@@ -264,10 +264,14 @@ object SportsStreams {
         if (channel != null) {
             return EventChannelNames.name(channel) + cardQuality(channel, quality)
         }
+        // A card counts only streams whose guide listing or channel name names this game. Broadcaster channels that might
+        // carry it are guesses: the card says so instead of "512 streams found".
         val matches = rank(game, filters, quality, available)
-        if (matches.isEmpty()) return "No playlist match found"
-        val unverified = matches.any { it.quality(quality[it.id])?.let { info -> info.height <= 0 || info.fps <= 0f || !info.fps.isFinite() } != false }
-        return "${matches.size} ${if (matches.size == 1) "stream" else "streams"} found\n" + if (unverified) "Quality unverified · Select to compare" else "Game coverage unconfirmed · Select to compare"
+        val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
+        val named = matches.count { it.id in exact }
+        if (named > 0) return "$named ${if (named == 1) "stream names" else "streams name"} this game\nSelect to choose"
+        val network = game.networks.firstOrNull { network -> matches.any { broadcasterMatches(network, it) } }
+        return if (network != null) "No stream names this game yet\nSelect to look through $network channels" else "No stream names this game"
     }
     fun unavailableReason(game: SportsGame, ranked: List<Channel>, quality: Map<String, VideoInfo>, now: Long): String = when {
         !game.live(now) -> "This game is not live yet. Choose a stream to preview."

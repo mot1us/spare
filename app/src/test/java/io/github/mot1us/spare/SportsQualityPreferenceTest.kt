@@ -44,7 +44,7 @@ class SportsQualityPreferenceTest {
         val lower = (1..600).map { channel("FHD-$it", VideoInfo(1920, 1080, 60f)) }
         val uhd = channel("UHD", VideoInfo(3840, 2160, 0f))
         val matched = SportsSchedule.match(game, Guide(lower + uhd, emptyMap()), lower.map { it.id }.toSet(), now)
-        assertEquals(512, matched.candidates.size)
+        assertEquals(SportsSchedule.MAX_CANDIDATES, matched.candidates.size)
         assertEquals(uhd, matched.candidates.first())
     }
 

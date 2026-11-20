@@ -2696,10 +2696,12 @@ class MainActivity : Activity() {
         val legacy = if (::playlists.isInitialized) playlists.legacySource else source?.id.orEmpty()
         eventNamesAt = now
         if (owners.isEmpty()) return
+        // Categories for the chosen leagues and today's broadcasters (ESPN+, ACCNX…) are read first.
+        val preferred = store.sportsLeagues.flatMap(EventChannelNames::leagueWords) + sportsWarmGames.flatMap { it.networks }
         eventNamesTask = sportsDestinationWorker.submit {
             // Scanning every channel name (tens of thousands) froze the screen for 0.7 s when it ran on the screen thread.
             val wanted = owners.associateWith { owner ->
-                EventChannelNames.eventGroups(snapshot.channels.filter { it.playlistId.ifBlank { legacy } == owner.id })
+                EventChannelNames.eventGroups(snapshot.channels.filter { it.playlistId.ifBlank { legacy } == owner.id }, preferred)
             }.filterValues { it.isNotEmpty() }
             if (wanted.isEmpty() || Thread.currentThread().isInterrupted) return@submit
             val fresh = wanted.mapNotNull { (owner, groups) -> runCatching { owner.id to EventChannelNames.fetch(owner, groups) }.getOrNull() }.toMap()

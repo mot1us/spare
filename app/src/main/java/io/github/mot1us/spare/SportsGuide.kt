@@ -51,17 +51,24 @@ object SportsGuide {
     private val teamContexts by lazy { teamLeagues.associateWith(::leagueContext) }
     internal fun indexesLeague(league: String?) = league in teamLeagues
 
+    /**
+     * Event channels mark a women's or men's college game with a bracketed letter ("College 12: RICHMOND @ TOWSON (W)").
+     * Normalizing drops the brackets, so the raw title is read: without this a women's stream was read as the men's game.
+     */
+    private val genderMarker = Regex("[(\\[]\\s*(w|m)\\s*[)\\]]", RegexOption.IGNORE_CASE)
+    internal fun gender(rawTitle: String): Char? = genderMarker.findAll(rawTitle).map { it.groupValues[1].lowercase()[0] }.distinct().singleOrNull()
+
     fun teams(programme: Programme, channelContext: String = ""): List<SportsTeam>? {
         val title = SportsCatalog.normalize(programme.title)
         if (excludedTitle(title)) return null
-        return Listing(title, SportsCatalog.normalize(programme.description)).let { it.resolve(it.league(leagueContext(channelContext))) }
+        return Listing(title, SportsCatalog.normalize(programme.description), gender(programme.title)).let { it.resolve(it.league(leagueContext(channelContext))) }
     }
 
     /** Share text analysis across league contexts while retaining the parser's exact rules. */
     internal fun indexedTeams(programme: Programme): Map<String, Set<String>> {
         val title = SportsCatalog.normalize(programme.title)
         if (excludedTitle(title)) return emptyMap()
-        val listing = Listing(title, SportsCatalog.normalize(programme.description))
+        val listing = Listing(title, SportsCatalog.normalize(programme.description), gender(programme.title))
         val resolved = HashMap<String?, Set<String>>()
         return buildMap {
             for ((league, context) in teamContexts) {
@@ -72,7 +79,7 @@ object SportsGuide {
         }
     }
 
-    private class Listing(private val title: String, private val description: String) {
+    private class Listing(private val title: String, private val description: String, private val gender: Char? = null) {
         private val context = "$title $description"
         private val detected = leagues.filter { it.second.containsMatchIn(context) }.map { it.first }
         private val declared = declaredLeague(context)
@@ -89,7 +96,12 @@ object SportsGuide {
             val sport = when (college) { "NCAAF" -> "NFL"; "NCAAM", "NCAAW" -> "NBA"; "NCAABSB" -> "MLB"; else -> null }
                 !major && (detected.isEmpty() || sport in detected)
             }
-            val college = if (declared == "NCAAM" && fromChannel == "NCAAW" && !collegeMen.containsMatchIn(context)) "NCAAW" else declared ?: fromChannel
+            val chosen = if (declared == "NCAAM" && fromChannel == "NCAAW" && !collegeMen.containsMatchIn(context)) "NCAAW" else declared ?: fromChannel
+            val college = when {
+                gender == 'w' && chosen == "NCAAM" -> "NCAAW"
+                gender == 'm' && chosen == "NCAAW" -> "NCAAM"
+                else -> chosen
+            }
             return college ?: detected.singleOrNull() ?: channel.sport.takeIf { detected.isEmpty() }
         }
 

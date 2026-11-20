@@ -137,6 +137,28 @@ measurement costs the onn enough CPU to skip video frames, so screens were reach
 - Tracing note: `atrace` with a large buffer (`-b 32768`) left about 128 MB of kernel trace buffer allocated after it
   finished. `atrace -b 8 -t 1 gfx` followed by a 1 s `perfetto` trace restores it to 7 KB.
 
+## Opening Spare on 0.51.35 (2026-11-19)
+
+Eight restarts of Spare on the second onn, measured from SurfaceFlinger and each thread's CPU counters (read with one
+`cat` every half second; `top -H` over all 2,600 threads used up to 69% of a core itself and was dropped).
+
+- Five restarts were smooth from the first picture (4.5–6.6 s after launch). Three were not: once 5 s at a steady
+  7.5 frames a second (possibly a still advert in the stream itself), once 29–47 frames a second for 2 s while all four
+  cores were busy, and once the first picture held 5 s while the stream arrived at 2.8 Mbit/s.
+- Spare's own startup work (reading the saved lineup and guide) uses about two cores for the first 2 s, before the
+  first picture. Background work then waits for 8 s of steady playback, so in the choppy seconds Spare's busy threads
+  were the player's: the stream reader, the decoder and its system service. Those seconds line up with the provider
+  sending a backlog at up to 15 Mbit/s (the buffer reached 20 s), and the onn's VPN app used 35–50% of a core
+  decrypting it. One report showed 50 video frames dropped during such a burst, while uiautomator was also reading
+  the screen.
+- Android had not compiled Spare's code on the onn ("status=verify, reason=install"): the onn compiles apps only in
+  its idle window, so each update runs on the interpreter and just-in-time compiler until then, the player's
+  stream-reading code included. Shipping a profile with the update so Android compiles it at install is a possible
+  next step (untested).
+- With Spare running a while, opening Sports › Live now with 46 live games skipped 13 frames as it opened and then
+  none. Before 0.51.36 that screen's background stream search used about 70 s of CPU in its first 10 minutes, and
+  each college game carried up to 512 guessed channels to rank.
+
 ## Next steps
 
 1. Check that the Sports playback freeze is gone on a tunneled channel. It shows as "Tunneled playback position
@@ -148,3 +170,5 @@ measurement costs the onn enough CPU to skip video frames, so screens were reach
    "Confirming…" for a second or two and then play.
 5. On 0.51.34, switch a college league off and on in Sports settings and measure the video behind Sports with
    SurfaceFlinger (no uiautomator reads during the measurement: each read costs the onn enough CPU to skip frames).
+6. On 0.51.36, open Sports › Live now while college games are on: cards should name an event channel or say
+   "No stream names this game yet", and the background stream search should use far less CPU than before.
