@@ -50,7 +50,9 @@ class SpareDeviceTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val store = SecureStore(context)
 
-    @Before fun resetGuideStyle() { store.onboarded = true; store.navigationAnimation = "Instant"; store.navigationSpeed = "Normal"; Motion.use("Instant", "Normal"); store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER }
+    @Before fun resetGuideStyle() { store.onboarded = true; store.navigationAnimation = "Instant"; store.navigationSpeed = "Normal"; Motion.use("Instant", "Normal"); store.resetScoreDelays(); store.guideAutoCategories = true; store.guideOpenFullscreen = true; store.guideLoopChannels = true; store.scoreOverlayPinned = false; store.scoreOverlayPosition = "Bottom"; store.sportsAutoFailover = false; store.sportsFailoverSeconds = 15; store.localLocation = ""; store.guideOpacity = -1; store.hideCompletedScores = false; store.sportsFollowedOnly = false; store.sportsAutoPlay = false; store.sportsLeagues = SportsLeagues.byId.keys; store.sportsLastLeague = "NFL"; store.frameRateMatching = true; store.smallPreview = false; store.hiddenDock = false; store.theme = "Monochrome"; store.themeStyle = "Glass"; store.customAccent = 0; store.customBackground = -1; store.cornerRadius = -1; store.borderWidth = -1; store.guideTextScale = 100; store.guideRowHeight = 32; store.guideRowGap = 3; store.subtitleSize = "Small"; store.subtitleStyle = "Outline"; store.captions = false; store.followedTeams = emptySet(); store.sportsTeam = ""; store.clock24 = false; store.font = "Default"; store.librarySort = LibraryCatalog.SORT_PROVIDER; SportsDestinations.redZoneDay = { true } }
+    // RedZone is offered only on Sundays; these tests treat every day as one unless they say otherwise.
+    @org.junit.After fun restoreRedZoneDay() { SportsDestinations.redZoneDay = SportsDestinations::sunday }
 
     @Test fun encryptedStorageAuthenticatesDataAndNeverStoresPlaintext() {
         val secret = "spare-test-secret-credentials"
@@ -2575,6 +2577,83 @@ class SpareDeviceTest {
                     while ("Guide read for other live sports" !in Diagnostics.report() && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(200)
                     assertTrue("The guide read waited for the scoreboard", finished.get())
                     assertTrue("The guide read is traced: ${Diagnostics.report()}", "Guide read for other live sports" in Diagnostics.report())
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun sportsStartsAtTheTopWhenGamesArriveAfterRedZoneTookTheCursor() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports top fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL", "NBA")
+            val release = java.util.concurrent.CountDownLatch(1)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = {
+                        val now = System.currentTimeMillis()
+                        // The NFL answers first with no live game, so RedZone is the only card for a moment.
+                        activity.publishSportsPartial(LiveSportsSnapshot(emptyList(), now, setOf("NFL")))
+                        release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                        LiveSportsSnapshot(listOf(LiveEvent("top-1", setOf("nba:BOS", "nba:NY"), now - 300000, league = "NBA"),
+                            LiveEvent("top-2", setOf("nba:LAL", "nba:GS"), now - 200000, league = "NBA")), now, setOf("NFL", "NBA"))
+                    }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-redzone")?.hasFocus() == true }
+                    release.countDown()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 3 }
+                    waitFor(scenario) { activity ->
+                        val list = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                        list.findViewHolderForAdapterPosition(0)?.itemView?.hasFocus() == true
+                    }
+                    scenario.onActivity { activity ->
+                        assertFalse("The cursor left RedZone, now the last card", activity.window.decorView.findViewWithTag<View>("sports-redzone").hasFocus())
+                        assertNotEquals("The hero follows the focused game", "NFL COVERAGE", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-badge").text.toString())
+                    }
+                    // A card the viewer moves to is still where Sports resumes.
+                    device.pressDPadRight(); device.pressDPadRight()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-redzone")?.hasFocus() == true }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun sportsLeavesRedZoneOutOnOtherDays() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Sports weekday fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL")
+            SportsDestinations.redZoneDay = { false }
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = { val now = System.currentTimeMillis(); LiveSportsSnapshot(listOf(LiveEvent("weekday-fixture", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL")) }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == 1 }
+                    Thread.sleep(500)
+                    scenario.onActivity { activity ->
+                        assertEquals("Only the game: no RedZone card outside Sunday", 1, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter!!.itemCount)
+                        assertNull(activity.window.decorView.findViewWithTag<View>("sports-redzone"))
+                    }
                 }
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)

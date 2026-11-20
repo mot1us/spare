@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.37 — 2026-11-19
+
+- Sports no longer jumps to the bottom card when it opens. RedZone is the last card in Live now, and it took the cursor whenever it was the only card while games loaded or the header had last shown it; the cursor then stayed there as the games arrived. Sports now starts at the top game, or on the card you last moved to yourself.
+- The NFL RedZone card appears only on Sundays (in your time zone or New York's), when RedZone is on. On other days its channel only shows a holding screen, so the card and Spare's search of the channel list for RedZone channels are skipped.
+
 ## 0.51.36 — 2026-11-19
 
 - Sports cards count only streams whose guide listing or channel name names the game. A college card used to say "512 streams found · Quality unverified" when nothing named it: "ESPN+" was read as "espn", so every ESPN channel counted, and team nicknames ("Bulls", "Tigers") matched hundreds of unrelated channels. Possible streams are now only the game's own broadcasters' channels (at most 96), and a card with no named stream says "No stream names this game yet · Select to look through ESPN+ channels".

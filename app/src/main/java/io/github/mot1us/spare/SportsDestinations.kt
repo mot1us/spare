@@ -2,6 +2,13 @@ package io.github.mot1us.spare
 
 /** Playlist destinations are separate from scoreboard events: a channel does not prove a live game. */
 object SportsDestinations {
+    /**
+     * NFL RedZone airs only on Sundays; on other days its channel shows a holding slate. The card, and the search of the
+     * whole lineup for RedZone channels, are for Sundays in the viewer's time zone or New York's. Tests replace this.
+     */
+    @Volatile internal var redZoneDay: (Long) -> Boolean = ::sunday
+    internal fun sunday(now: Long): Boolean = listOf(java.time.ZoneId.systemDefault(), java.time.ZoneId.of("America/New_York"))
+        .any { java.time.Instant.ofEpochMilli(now).atZone(it).dayOfWeek == java.time.DayOfWeek.SUNDAY }
     private val redZone = Regex("(?<![\\p{L}\\p{N}])red[\\W_]*zone(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
     private val abbreviated = Regex("(?<![\\p{L}\\p{N}])(rz|rzn|nflrz)(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)
     private val nfl = Regex("(?<![\\p{L}\\p{N}])(nfl(?:rz)?|game[\\W_]*pass)(?![\\p{L}\\p{N}])", RegexOption.IGNORE_CASE)

@@ -20,6 +20,13 @@ class SportsRebuildTest {
         assertEquals("Successful empty leagues remove old games; failed leagues retain saved data", listOf(mlb.copy(state = "hold", status = "Saved score · checking live status")), complete.events)
         assertSame(complete, complete.mergeRefresh(LiveSportsSnapshot.EMPTY, complete = true))
     }
+    @Test fun redZoneIsOfferedOnlyOnSundays() {
+        // 2026-11-22 is a Sunday: 6 PM Eastern is Sunday everywhere in the US; 2026-11-19 (a Thursday) is not.
+        assertTrue(SportsDestinations.sunday(Instant.parse("2026-11-22T23:00:00Z").toEpochMilli()))
+        assertFalse(SportsDestinations.sunday(Instant.parse("2026-11-19T23:00:00Z").toEpochMilli()))
+        assertFalse(SportsDestinations.sunday(Instant.parse("2026-11-21T12:00:00Z").toEpochMilli()))
+    }
+
     @Test fun redZoneDestinationUsesPlaylistNamesHonorsFiltersAndDoesNotInventAnEvent() {
         val channels = listOf(Channel("one", "US: NFL RedZone FHD", "NFL", "https://example.test/one"), Channel("two", "NFL Red Zone 4K", "NFL", "https://example.test/two"), Channel("other", "NFL Network", "NFL", "https://example.test/three"))
         assertEquals(listOf("one", "two"), SportsDestinations.redZone(channels, GuideFilters(), emptyMap()).map { it.id })

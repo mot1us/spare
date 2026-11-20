@@ -2655,7 +2655,7 @@ class MainActivity : Activity() {
     }
     private fun refreshSportsDestinations(snapshot: Guide, games: List<SportsGame>, profile: GuideFilters, quality: Map<String, VideoInfo>, favorites: Set<String>, hidden: Map<String, Long>, replays: Map<String, Pair<Long, List<SportsReplay>>>, selectedId: String?, sourceEpoch: Int, epoch: Int, now: Long) {
         sportsDestinationTask?.cancel(true)
-        val nfl = "NFL" in store.sportsLeagues && sportsBrowseLeague in setOf(null, "NFL")
+        val nfl = "NFL" in store.sportsLeagues && sportsBrowseLeague in setOf(null, "NFL") && SportsDestinations.redZoneDay(now)
         sportsDestinationTask = sportsDestinationWorker.submit {
             val archiveChannels = Catchup.channels(snapshot).associateBy { it.id }
             val archiveDays = archiveChannels.values.maxOfOrNull { it.catchupDays } ?: 0
