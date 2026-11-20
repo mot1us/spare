@@ -314,8 +314,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             focusedGame = it; showHero(it); focused(it)
         }
     }
-    private fun focusGame(game: SportsGame) {
-        remembered = game.key; focusedGame = game
+    private fun focusGame(game: SportsGame, position: Int) {
+        // A card Spare put the cursor on is not the viewer's place; see [placeAt].
+        if (chosenByViewer(position)) remembered = game.key
+        focusedGame = game
         removeCallbacks(settleGameFocus); removeCallbacks(loadHeroArt)
         // Highlight immediately; only refresh hero/metadata once remote repeats settle.
         postDelayed(settleGameFocus, 90)
@@ -410,7 +412,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             drawCard(holder, game)
             holder.stream.tag = "sports-coverage:${game.key}"
             renderCardText(holder, game, holder.box.hasFocus())
-            holder.box.setOnFocusChangeListener { box, active -> lift(box, active); currentCardGame(holder)?.let { current -> renderCardText(holder, current, active); if (active) focusGame(current) } }
+            holder.box.setOnFocusChangeListener { box, active -> lift(box, active); currentCardGame(holder)?.let { current -> renderCardText(holder, current, active); if (active) focusGame(current, holder.bindingAdapterPosition) } }
             holder.box.setOnClickListener { currentCardGame(holder)?.let { openGame(it) } }; holder.box.setOnLongClickListener { currentCardGame(holder)?.let(::openGameActions); true }
             cardKeys(holder)
         }
@@ -574,7 +576,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         holder.logos.forEach { cardLogos.bind(it, "") }
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
         fun ink(active: Boolean) { holder.teamNames.forEach { it.setTextColor(if(active) GuideTheme.focusText else Color.WHITE) }; holder.date.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.stream.setTextColor(if(active) GuideTheme.focusText else Color.LTGRAY); holder.badge.setTextColor(if(active) GuideTheme.focusText else 0xFFF2D9D9.toInt()) }
-        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { box, active -> lift(box, active); ink(active); if (active) { if (chosenByViewer()) remembered = REDZONE; showRedZoneHero() } }
+        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { box, active -> lift(box, active); ink(active); if (active) { if (chosenByViewer(holder.bindingAdapterPosition)) remembered = REDZONE; showRedZoneHero() } }
         holder.box.setOnClickListener { remembered = REDZONE; watchRedZone() }
         holder.box.setOnLongClickListener { remembered = REDZONE; actionsOpen = true; showRedZoneHero(); heroActions(true); chooseStreams.requestFocus(); true }
         cardKeys(holder)
@@ -599,7 +601,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         holder.logos.forEach { cardLogos.bind(it, "") }
         holder.box.background = GuideTheme.background(resources.displayMetrics.density, 0x88303943.toInt())
         fun ink(active: Boolean) { holder.teamNames.forEach { it.setTextColor(if (active) GuideTheme.focusText else Color.WHITE) }; listOf(holder.date, holder.stream, holder.detail).forEach { it.setTextColor(if (active) GuideTheme.focusText else Color.LTGRAY) }; holder.badge.setTextColor(if (active) GuideTheme.focusText else Color.WHITE) }
-        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { box, active -> lift(box, active); ink(active); if (active) { if (chosenByViewer()) remembered = item.key; showCoverageHero(item) } }
+        ink(holder.box.hasFocus()); holder.box.setOnFocusChangeListener { box, active -> lift(box, active); ink(active); if (active) { if (chosenByViewer(holder.bindingAdapterPosition)) remembered = item.key; showCoverageHero(item) } }
         holder.box.setOnClickListener { remembered = item.key; watchCoverage(item) }
         holder.box.setOnLongClickListener { remembered = item.key; actionsOpen = true; showCoverageHero(item); heroActions(true); chooseStreams.requestFocus(); true }
         cardKeys(holder)
@@ -810,10 +812,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             else { featured = null; heroRecords.visibility = GONE; pictures.bind(backdrop, ""); crestViews.forEach { logos.bind(it, "") }; heroTitle.text = "Your sports"; heroScore.text = ""; heroBadge.text = "SCORES & SCHEDULES"; heroDetail.text = "Choose your leagues and teams in Sports settings."; findStreams.isEnabled = false }
         }
         if (update.hadFocus && cards.itemCount > 0) rows.postOnAnimation {
-            // A cursor Spare placed with no key pressed since (and no card of the viewer's own) follows the top as games arrive.
-            val untouched = !chosenByViewer() && remembered == null && rows.hasFocus()
+            // A cursor Spare placed, with no key pressed since and no card of the viewer's own, stays on the top card as
+            // games arrive and reorder (a saved copy shows first, then the fresh scoreboard).
+            val untouched = placedInput == inputEpoch && remembered == null && rows.hasFocus()
             if (isShown && update.input == inputEpoch && browsingGames && (untouched || update.focus == focusEpoch && !rows.hasFocus()))
-                placeAt((remembered ?: update.anchor ?: featured?.key)?.let(positions::get) ?: 0)
+                placeAt((remembered ?: update.anchor)?.let(positions::get) ?: 0)
         }
         finishCardUpdate(); cardsReady()
     }
@@ -919,9 +922,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             loadingGames && games.isEmpty() && !watchMode -> { pendingEnter = true; pendingInput = inputEpoch; if (!hasFocus() && !entering) return; focusLeagueFilter() }
             watchMode -> { pendingEnter = false; if (streamsList.isNotEmpty()) focusStream(0) else focusStreamsHeader() }
             actionsOpen -> findStreams.takeIf { it.isEnabled }?.requestFocus() ?: focusLeagueFilter()
-            // With no card of the viewer's own, start at the hero's game or the top. Falling back to RedZone, the last
-            // card, sent the cursor to the bottom of Live now whenever the hero had last shown RedZone.
-            cards.itemCount > 0 -> { pendingEnter = false; placeAt((remembered ?: featured?.key)?.let(gamePositions::get) ?: 0) }
+            // With no card of the viewer's own, start at the top. Falling back to RedZone, the last card, sent the cursor
+            // to the bottom of Live now whenever the hero had last shown RedZone.
+            cards.itemCount > 0 -> { pendingEnter = false; placeAt(remembered?.let(gamePositions::get) ?: 0) }
             else -> { pendingEnter = true; pendingInput = inputEpoch; focusLeagueFilter() }
         }
     }
@@ -959,14 +962,16 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         else if (hadFocus && anchor != null) post { if (input == inputEpoch && !streams.hasFocus()) channels.indexOfFirst { it.id == anchor }.takeIf { it >= 0 }?.let(::focusStream) }
     }
     /**
-     * [placeAt] is Spare choosing the card, [focusAt] the viewer moving. RedZone and coverage cards sit after every game,
-     * so a cursor Spare put there (RedZone is the only card while games load) is not remembered as the viewer's place,
-     * and moves to the top when the games arrive unless a key was pressed since.
+     * [placeAt] is Spare choosing the card, [focusAt] the viewer moving. A card Spare put the cursor on is not
+     * remembered as the viewer's place: RedZone, the last card, took the cursor while it was the only card and kept it
+     * as games loaded in front of it. Until a key is pressed, the cursor follows the top card instead.
      */
     private fun focusAt(position: Int) { ++focusEpoch; placedInput = -1; gridFocus.move(position) }
-    private fun placeAt(position: Int) { ++focusEpoch; placedInput = inputEpoch; gridFocus.move(position) }
+    private fun placeAt(position: Int) { ++focusEpoch; placedInput = inputEpoch; placedPosition = position; gridFocus.move(position) }
     private var placedInput = -1
-    private fun chosenByViewer() = placedInput != inputEpoch
+    private var placedPosition = -1
+    /** Any card but the one Spare just placed the cursor on, or any card after a key press, is the viewer's choice. */
+    private fun chosenByViewer(position: Int) = placedInput != inputEpoch || position != placedPosition
     private fun focusStream(position: Int) { focusRow(streams, position) }
     private fun focusRow(list: RecyclerView, position: Int) {
         val adapter = list.adapter ?: return

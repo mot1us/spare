@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.38 — 2026-11-19
+
+- Sports opens on the first card. On an onn 4K Pro 0.51.37 put the cursor on the game the header had picked from the saved scores, which after the fresh scoreboard arrived was the second card. Until you press a key, the cursor now stays on the first card as games arrive and reorder; a card you move to yourself is still where Sports resumes.
+
 ## 0.51.37 — 2026-11-19
 
 - Sports no longer jumps to the bottom card when it opens. RedZone is the last card in Live now, and it took the cursor whenever it was the only card while games loaded or the header had last shown it; the cursor then stayed there as the games arrived. Sports now starts at the top game, or on the card you last moved to yourself.
