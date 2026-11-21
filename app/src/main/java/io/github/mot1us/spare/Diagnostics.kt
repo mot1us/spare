@@ -136,11 +136,14 @@ internal object Diagnostics {
 
     /** What is playing right now (format, buffer, dropped frames, display rate); set by the activity, read on the UI thread. */
     var playback: (() -> String)? = null
+    /** The last stream's sound (its audio tracks and how the playing one left the box); kept after the stream stops. */
+    @Volatile var lastSound = ""
     fun report(): String {
         val lines = ArrayList<String>()
         val runtime = Runtime.getRuntime()
         lines += "Running ${clock()} · ${android.os.Build.MODEL} · Android ${android.os.Build.VERSION.RELEASE} · memory ${(runtime.totalMemory() - runtime.freeMemory()) / 1048576}/${runtime.maxMemory() / 1048576} MB"
         runCatching { playback?.invoke() }.getOrNull()?.takeIf { it.isNotBlank() }?.let { text -> lines += "Playing now: " + text.lines().filter { it.isNotBlank() }.joinToString(" | ") }
+        lastSound.takeIf { it.isNotBlank() }?.let { lines += "Last sound: $it" }
         val playback = synchronized(hiccups) { hiccups.toList() }
         runCatching { Traffic.summary(Traffic.now(), Network.openWorkers()) }.getOrNull()?.let { lines += "Network now: $it" }
         lines += if (playback.isEmpty()) "Playback hiccups: none" else "Playback hiccups:"

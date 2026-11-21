@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.52.4 — 2026-11-20
+
+- The performance report keeps a "Last sound" line after a stream stops: every audio track it carried (language, format, channels), which one played, which this box cannot play, and whether the sound was decoded on the box or sent on undecoded. A movie has to be stopped to open Settings, so the "Playing now" line could not show it. On the owner's onn, three copies of a movie from one playlist play without sound here and in another player app.
+- The Audio track page names each track in words (for example "English · Dolby Digital Plus · 6 ch"), lists tracks this box cannot play instead of leaving them out, and says how the playing track's sound leaves the box.
+
 ## 0.52.3 — 2026-11-20
 
 - Backing out of Search no longer leaves an empty guide. Closing Search keeps its words as a guide filter, so a search for a movie (which matches no channel) left the guide with no channels. After watching that movie nothing was playing, so the remote could reach only the All channels / Local / catch-up tabs, and Back did nothing. Now a search that matches no channel is dropped when Search closes and the whole guide shows, with the cursor on a channel. A search that does match channels still filters the guide as before. Back on an empty guide also clears a leftover search, or moves to the categories.

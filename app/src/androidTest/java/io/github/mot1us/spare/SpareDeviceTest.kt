@@ -5307,7 +5307,11 @@ class SpareDeviceTest {
                 waitFor(scenario) { a -> val player = find<PlayerView>(a.window.decorView)!!.player as androidx.media3.exoplayer.ExoPlayer
                     player.audioFormat == null || report(a).contains("decoded on this box") }
                 scenario.onActivity { a -> val player = find<PlayerView>(a.window.decorView)!!.player as androidx.media3.exoplayer.ExoPlayer
-                    if (player.audioFormat != null) assertTrue(report(a), Regex("Audio · \\S.* · \\d+ channels · decoded on this box").containsMatchIn(report(a))) }
+                    if (player.audioFormat != null) {
+                        assertTrue(report(a), Regex("Audio · \\S.* · \\d+ channels · decoded on this box").containsMatchIn(report(a)))
+                        // The report keeps the stream's sound, for reading after a movie has stopped.
+                        assertTrue(Diagnostics.report(), Regex("Last sound: .* \\(playing\\).* · decoded on this box").containsMatchIn(Diagnostics.report()))
+                    } }
                 activateSetting(scenario, "Surround sound")
                 assertFalse(SecureStore(context).decodeAudioOnBox); assertFalse(AudioOutput.decodeOnBox)
             } } finally { store.decodeAudioOnBox = false; AudioOutput.decodeOnBox = false; store.saveSources(emptyList()); store.removeCache(source) }

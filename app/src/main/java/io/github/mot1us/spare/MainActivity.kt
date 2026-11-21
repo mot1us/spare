@@ -421,7 +421,13 @@ class MainActivity : Activity() {
     private var unplayableAudio = ""
     private var unplayableNoted = -1
     /** A stream whose sound this box cannot play at all would otherwise play silently with no explanation. */
+    /** The report keeps the last stream's sound, so it can be read after the stream has stopped. */
+    private fun noteSound() {
+        val title = onDemand?.title ?: current?.name ?: return
+        Diagnostics.lastSound = "$title · ${AudioOutput.tracks(player.currentTracks)}" + audioRoute.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
+    }
     private fun noteUnplayableAudio(tracks: Tracks) {
+        noteSound()
         val name = AudioOutput.unplayable(tracks).orEmpty(); unplayableAudio = name
         if (name.isEmpty() || unplayableNoted == playbackToken || (current == null && onDemand == null)) return
         unplayableNoted = playbackToken
@@ -977,7 +983,7 @@ class MainActivity : Activity() {
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoderName = decoderName }
             override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { audioDecoderName = decoderName }
-            override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig) { audioRoute = AudioOutput.route(audioTrackConfig, audioDecoderName) }
+            override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig) { audioRoute = AudioOutput.route(audioTrackConfig, audioDecoderName); handler.post(::noteSound) }
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
                     playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
@@ -3869,9 +3875,12 @@ class MainActivity : Activity() {
             "Audio track" -> {
                 panel.page(page, onDemand?.title ?: current?.name ?: "Play a channel to choose its audio track.")
                 panel.action("Automatic") { player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build() }
-                player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.forEach { group -> for (index in 0 until group.length) if (group.isTrackSupported(index)) {
-                    val format = group.getTrackFormat(index); val label = listOfNotNull(format.label, format.language, format.codecs).joinToString(" · ").ifBlank { "Track ${index + 1}" }
-                    panel.action(label, selected = group.isTrackSelected(index)) { player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build(); refresh(label) }
+                // Every track in words. One this box cannot play says so rather than being left out; the playing one says how its sound leaves the box.
+                player.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.forEach { group -> for (index in 0 until group.length) {
+                    val format = group.getTrackFormat(index); val label = AudioOutput.describe(format).ifBlank { "Track ${index + 1}" }
+                    if (!group.isTrackSupported(index)) { panel.action(label, "This box can’t play it") {}; continue }
+                    val playing = group.isTrackSelected(index)
+                    panel.action(label, if (playing) audioRoute.replaceFirstChar { it.uppercase() } else "", playing) { player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index)).setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build(); refresh(label) }
                 } }
             }
             "Subtitles" -> renderCaptionSettings()

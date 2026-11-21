@@ -44,6 +44,18 @@ internal object AudioOutput {
         return audio.flatMap { it.second }.map(::name).distinct().joinToString(" / ")
     }
 
+    /** One audio track in words: "English · Dolby Digital Plus · 6 ch", for the Audio track page and the report. */
+    fun describe(format: Format): String = describe(format.label, format.language, format.sampleMimeType, format.channelCount)
+    internal fun describe(label: String?, language: String?, mime: String?, channels: Int): String {
+        val spoken = language?.takeIf { it.isNotBlank() && it != C.LANGUAGE_UNDETERMINED }?.let { java.util.Locale.forLanguageTag(it).displayLanguage.ifBlank { it } }
+        return listOfNotNull(label?.takeIf { it.isNotBlank() && it != spoken }, spoken, name(mime), channels.takeIf { it > 0 }?.let { "$it ch" }).joinToString(" · ")
+    }
+    /** Every audio track a stream carries, which one plays, and which this box cannot play. */
+    fun tracks(tracks: Tracks): String = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }.flatMap { group ->
+        (0 until group.length).map { index ->
+            describe(group.getTrackFormat(index)) + when { group.isTrackSelected(index) -> " (playing)"; !group.isTrackSupported(index) -> " (this box can’t play it)"; else -> "" }
+        }
+    }.ifEmpty { listOf("no audio tracks") }.joinToString(", ")
     /** How the playing sound left this box, for the performance report. */
     fun route(config: AudioSink.AudioTrackConfig, decoder: String): String = buildString {
         append(if (Util.isEncodingLinearPcm(config.encoding)) "decoded on this box" + decoder.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty() else "sent on undecoded (passthrough)")
