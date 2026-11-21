@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.53.1 — 2026-11-21
+
+- Every live Sports card finds its stream on its own. Cards looked only when the cursor reached them or when they sat in the top row: the list of cards to search was taken before the new cards were on screen, and games further down were never searched. With a Saturday of live college football, most cards said "Select to find stream" until the cursor passed them. Now the card under the cursor and the cards on screen go first, then followed teams, then every other live game in order. Games off screen are looked up a small batch at a time, about a second apart, and checked again every three minutes when nothing named them.
+- Sports no longer waits for the channel behind it. A channel that had stopped, ended or failed held every card's search back until another channel played.
+- Sports builds the guide index once its cards are up and live games are waiting, so each card's search no longer reads the whole lineup. Opening Sports still does not build it.
+- A card keeps its last result while it is checked again, instead of returning to "Select to find stream", and a card scrolled back into view shows what its game found while it was off screen.
+- The performance report notes when every live card has looked for streams and how many found one.
+
 ## 0.53.0 — 2026-11-20
 
 - DTS and Dolby TrueHD sound plays on every box. Spare no longer uses a box's own DTS or TrueHD decoder: whether a box is licensed for them varies, and an onn 4K Pro reports a DTS-HD decoder that plays silence (another player there is silent too). On the owner's onn, every 4K copy of a movie from one playlist (DTS-HD Master Audio 5.1) and the DTS track of another played without sound. A TV or receiver that takes DTS or TrueHD still gets it undecoded. Otherwise Spare decodes it itself with FFmpeg's decoders (the ffmpeg module: AndroidX Media3's decoder_ffmpeg over FFmpeg n6.0.1, built with only those decoders, LGPL). The performance report says "decoded by Spare". The app grows by about 2 MB.

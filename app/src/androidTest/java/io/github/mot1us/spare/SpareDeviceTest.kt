@@ -3356,6 +3356,53 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun everyLiveSportsCardFindsItsStreamWithoutTheCursorMoving() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Slate fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            // Twelve live games: four rows, so half the cards start below the screen.
+            val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(24).chunked(2)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
+                    LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) -> LiveEvent("slate-$i", setOf(home.id, away.id), now - 300000, league = "NBA") }, now, setOf("NBA")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val snapshot = guideField.get(activity) as Guide
+                    val feeds = pairs.mapIndexed { i, (home, away) -> Channel("slate-feed-$i", "NBA ${i + 1}: ${away.name} vs ${home.name}", "NBA", "${server.base}/channel2.mp4") }
+                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + feeds))
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games")?.adapter?.itemCount == pairs.size && it.window.decorView.findViewWithTag<View>("NBA:slate-0")?.isShown == true }
+                scenario.onActivity { assertNull("The last row starts below the screen", it.window.decorView.findViewWithTag<View>("NBA:slate-${pairs.size - 1}")?.takeIf { card -> card.isShown }) }
+                // No key is pressed: every card, on screen or not, looks for its stream on its own. The short fixture
+                // channel stops behind Sports meanwhile, which used to hold the search back for good.
+                val deadline = System.currentTimeMillis() + 90_000
+                var missing = pairs.indices.toList()
+                while (missing.isNotEmpty() && System.currentTimeMillis() < deadline) {
+                    scenario.onActivity { activity ->
+                        @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
+                        missing = pairs.indices.filterNot { summaries["NBA:slate-$it"]?.startsWith("NBA ${it + 1}:") == true }
+                    }
+                    if (missing.isNotEmpty()) Thread.sleep(250)
+                }
+                scenario.onActivity { activity ->
+                    @Suppress("UNCHECKED_CAST") val summaries = MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>
+                    assertTrue("Cards still without a stream: ${missing.map { summaries["NBA:slate-$it"] }}", missing.isEmpty())
+                    assertTrue(Diagnostics.sportsLines().joinToString("\n"), Diagnostics.sportsLines().any { it.contains("Every live card has looked for streams · ${pairs.size} games · ${pairs.size} found one") })
+                }
+                // A card scrolled into view shows the stream it found while it was off screen.
+                scenario.onActivity { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").scrollToPosition(pairs.size - 1) }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:slate-${pairs.size - 1}")?.takeIf { view -> view.isShown }?.text?.startsWith("NBA ${pairs.size}:") == true }
+                assertNull("Looking for streams never opens one", server.requests["/channel2.mp4"])
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

@@ -851,8 +851,16 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     fun showMatchNotice(message: String) { matchNotice.text = message; matchNotice.isVisible = true; progress.visibility = INVISIBLE; setSearching(false) }
     fun updateStreamSummaries(summaries: Map<String, String>) {
         if (streamSummaries == summaries) return
+        val before = streamSummaries
         streamSummaries = summaries.toMap()
         refreshCardStreams()
+        // Cards kept just off screen are not children of the grid: tell the grid, so one scrolled back in shows what its
+        // game found meanwhile instead of the text it had when it left the screen.
+        val shown = (0 until rows.childCount).mapTo(hashSetOf()) { rows.getChildAdapterPosition(rows.getChildAt(it)) }
+        val changed = streamSummaries.mapNotNull { (key, text) -> gamePositions[key]?.takeIf { before[key] != text && it !in shown } }
+        if (changed.isEmpty()) return
+        val notify = { val count = cards.itemCount; changed.forEach { if (it < count) cards.notifyItemChanged(it, STREAM_PAYLOAD) } }
+        if (rows.isComputingLayout) rows.post { notify() } else notify()
     }
     @SuppressLint("NotifyDataSetChanged")
     fun showStreams(game: SportsGame, channels: List<Channel>, message: String? = null, label: (Channel) -> String) {
@@ -1104,6 +1112,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         internal const val CARD_HEIGHT_DP = 140
         private const val REDZONE = "sports-redzone"
         private const val SCORE_PAYLOAD = "sports-card-score"
+        private const val STREAM_PAYLOAD = "sports-card-stream"
         fun time(epoch: Long): String = GuideClock.dayTime(epoch)
         fun ordered(games: List<SportsGame>, followed: Set<String>, now: Long): List<SportsGame> = games.sortedWith(priority(followed, now, false))
         private fun priority(followed: Set<String>, now: Long, todayFirst: Boolean) = compareBy<SportsGame> { game ->

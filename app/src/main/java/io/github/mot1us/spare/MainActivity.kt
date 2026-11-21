@@ -283,7 +283,7 @@ class MainActivity : Activity() {
                 if (choices.isNotEmpty()) scheduleSports()
             }
         }, { checking -> if (!closed) sportsPanel.updateReplayDiscovery(checking, replayDiscovery?.checkedKeys.orEmpty()) }, load = { fallback, channel, timeout -> Catchup.load(owner(channel) ?: fallback, channel, timeout) }, canLoad = { _, channel -> owner(channel)?.let { it.enabled && it.kind == "xtream" } == true }, knownFeeds = { game -> source?.let { sportsStreamCache.replayFeeds(it.id, generation, game) }.orEmpty() }).also { replayDiscovery = it }
-        discovery.update(source, generation, guide, SportsBrowseWork.targets(replayGames, sportsPanel.visibleGameKeys(), selectedGame, store.followedTeams), selectedGame, active)
+        discovery.update(source, generation, guide, SportsBrowseWork.plan(replayGames, sportsPanel.visibleGameKeys(), selectedGame, store.followedTeams).near, selectedGame, active)
     }
 
     private var sportsChannels = emptyList<Channel>()
@@ -607,9 +607,19 @@ class MainActivity : Activity() {
     private var programmeIndexStartedAt: Long? = null
     private val prepareProgrammeIndex = Runnable { buildProgrammeIndex() }
 
+    /**
+     * Sports does not build the guide index as it opens (that made opening it stutter). Once its cards are up and live games
+     * are waiting to look for streams, it asks for one: without it each card reads the whole lineup.
+     */
+    private var sportsIndexWanted = false
+    private fun programmeIndexAllowed() = started && guideVisible && !closed && (!sportsVisible || sportsIndexWanted)
+    private fun wantSportsIndex() {
+        if (sportsIndexWanted) return
+        sportsIndexWanted = true; scheduleProgrammeIndex()
+    }
     private fun scheduleProgrammeIndex() {
         handler.removeCallbacks(prepareProgrammeIndex)
-        if (!started || !guideVisible || sportsVisible || closed || guide.programmes.isEmpty() || programmeIndex?.isFor(guide) == true) return
+        if (!programmeIndexAllowed() || guide.programmes.isEmpty() || programmeIndex?.isFor(guide) == true) return
         val now = android.os.SystemClock.elapsedRealtime()
         // A short EPG batch can arrive every fraction of a second. Do not rebuild the lineup for each one.
         val next = programmeIndexStartedAt?.let { it + 30000 - now } ?: 0L
@@ -617,9 +627,9 @@ class MainActivity : Activity() {
     }
 
     private fun buildProgrammeIndex() {
-        if (!started || !guideVisible || sportsVisible || closed || programmeIndex?.isFor(guide) == true) return
+        if (!programmeIndexAllowed() || programmeIndex?.isFor(guide) == true) return
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastInputAt < 1200 || programmeIndexTask?.isDone == false) {
+        if (now - lastInputAt < 1200 || programmeIndexTask?.isDone == false || sportsVisible && (liveSportsChecking || sportsExtrasDelay() > 0)) {
             scheduleProgrammeIndex()
             return
         }
@@ -629,9 +639,10 @@ class MainActivity : Activity() {
             val ready = programmeIndexBuilder.prepare(snapshot, System.currentTimeMillis())
             if (Thread.currentThread().isInterrupted) return@submit
             handler.post {
-                if (started && guideVisible && !sportsVisible && !closed && ready.isFor(guide)) {
+                if (programmeIndexAllowed() && ready.isFor(guide)) {
                     programmeIndex = ready
                     if (::searchPanel.isInitialized && searchPanel.isVisible && query.isNotBlank()) searchLivePlaylist()
+                    if (sportsVisible && !sportsPanel.watching) queueSportsPrefetch()
                 }
             }
         }
@@ -2376,6 +2387,7 @@ class MainActivity : Activity() {
             cancelSportsExtras()
         }
         guideVisible = show; guidePanel.visibility = if (show) View.VISIBLE else View.GONE
+        sportsIndexWanted = false
         if (show && !sportsVisible) scheduleProgrammeIndex() else pauseProgrammeIndex()
         if (show && sportsVisible) sportsPanel.resumeImages() else sportsPanel.pauseImages()
         handler.removeCallbacks(hideNowPlaying); nowPlaying.hide(immediate = true)
@@ -3207,6 +3219,17 @@ class MainActivity : Activity() {
         sportsWarmPending = true
         handler.removeCallbacks(warmSportsStreams); handler.postDelayed(warmSportsStreams, 300)
     }
+    /** A card that has not shown a search result yet. */
+    private fun unsearchedSummary(summary: String?) = summary == null || summary == "Select to find stream" || summary.startsWith("Finding stream")
+    private var sportsWarmNoted = emptySet<String>()
+    /** Once per slate, the report says when every live card has looked for its streams. */
+    private fun noteSportsWarmDone() {
+        val live = sportsWarmGames.mapTo(hashSetOf()) { it.key }
+        if (live.isEmpty() || live == sportsWarmNoted || live.any { unsearchedSummary(sportsStreamSummaries[it]) }) return
+        sportsWarmNoted = live
+        val named = live.count { key -> sportsStreamSummaries[key]?.let { !it.startsWith("No stream") && !it.startsWith("Select to") } == true }
+        Diagnostics.sports("Every live card has looked for streams · ${live.size} games · $named found one")
+    }
     private fun sportsStreamSummary(match: SportsStreamCache.Match, snapshot: Guide, profile: GuideFilters,
         quality: Map<String, VideoInfo>, hidden: Map<String, Long>, now: Long): String {
         val evidence = if (match.warmed.isEmpty()) snapshot else snapshot.copy(programmes = object : AbstractMap<String, List<Programme>>() {
@@ -3226,13 +3249,24 @@ class MainActivity : Activity() {
             handler.postDelayed(warmSportsStreams, 800)
             return
         }
-        if (player.playbackState == Player.STATE_BUFFERING || current != null && (!firstFrame || player.playbackState != Player.STATE_READY)) { handler.postDelayed(warmSportsStreams, 1000); return }
+        // Wait while the picture behind Sports starts or rebuffers. A channel that stopped, ended or failed has nothing to
+        // protect, and waiting for it left every card on "Select to find stream".
+        if (player.playbackState == Player.STATE_BUFFERING || current != null && player.playbackState == Player.STATE_READY && !firstFrame) { handler.postDelayed(warmSportsStreams, 1000); return }
         val selected = source ?: return
         val now = System.currentTimeMillis(); val snapshot = guide; val sourceEpoch = generation
-        val games = SportsBrowseWork.targets(sportsWarmGames.filter { it.live(now) }, sportsUpgradeKeys, sportsWarmPriority, store.followedTeams)
+        // Read the cards on screen now. The list taken as the games arrived could describe the cards they replaced, and then
+        // only the top row was searched until the cursor moved.
+        sportsUpgradeKeys = sportsPanel.visibleGameKeys() + listOfNotNull(sportsWarmPriority?.key)
+        val plan = SportsBrowseWork.plan(sportsWarmGames.filter { it.live(now) }, sportsUpgradeKeys, sportsWarmPriority, store.followedTeams)
+        val games = plan.all
         if (games.isEmpty()) { sportsWarmPending = false; return }
+        val ready = programmeIndex?.takeIf { it.isFor(snapshot) }
+        // Without the guide index each card reads the whole lineup. One index makes the rest of the slate cheap.
+        if (ready == null && games.size > 1) wantSportsIndex()
         val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = sportsStreamFilters()
         val quality = videoInfo.toMap(); val hidden = unavailable.snapshot(); val attempted = sportsWarmAttempted.toMap(); val upgrades = sportsUpgradeKeys
+        val shown = sportsStreamSummaries.toMap(); val near = plan.near.mapTo(hashSetOf()) { it.key }
+        var nearRound = true
         sportsWarmPending = false; sportsWarmActive = setOf(games.first().key)
         sportsWarmTask = sportsWarmWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
@@ -3240,22 +3274,29 @@ class MainActivity : Activity() {
                 val token = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoriteSnapshot)
                 if (Thread.currentThread().isInterrupted) return@submit
                 val summaries = linkedMapOf<String, String>()
-                games.forEach { game ->
+                // Labels are refreshed for the cards on screen; a game further down gets its label when it is looked up.
+                plan.near.forEach { game ->
                     val cached = sportsStreamCache.get(token, game, now, forAuto = false, allowStale = true)
-                    summaries[game.key] = cached?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, now) } ?: "Select to find stream"
+                    // A card keeps what it last found while it is checked again (fresh event names empty the cache).
+                    summaries[game.key] = cached?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, now) }
+                        ?: shown[game.key]?.takeUnless(::unsearchedSummary) ?: "Select to find stream"
                 }
-                val game = games.firstOrNull {
-                    val saved = sportsStreamCache.get(token, it, now, forAuto = false)
-                    it.key in upgrades && saved?.needsUpgrade(profile, quality, now) == true || saved == null && now - (attempted[it.key] ?: 0L) >= 30000
+                fun due(target: SportsGame, retryMs: Long): Boolean {
+                    val saved = sportsStreamCache.get(token, target, now, forAuto = false)
+                    return target.key in upgrades && saved?.needsUpgrade(profile, quality, now) == true || saved == null && now - (attempted[target.key] ?: 0L) >= retryMs
                 }
+                // The cards on screen first; then, a small batch at a time, every other live game.
+                val game = plan.near.firstOrNull { due(it, SPORTS_WARM_RETRY_MS) } ?: plan.later.firstOrNull { due(it, SPORTS_WARM_LATER_RETRY_MS) }
                 val finished = mutableSetOf<String>()
-                val ready = programmeIndex?.takeIf { it.isFor(snapshot) }
                 if (game != null) {
-                    val batch = listOf(game) + if (ready == null) emptyList() else games.asSequence()
-                        .filter { it.key != game.key && now - (attempted[it.key] ?: 0L) >= 30_000 }
+                    nearRound = game.key in near
+                    val retry = if (nearRound) SPORTS_WARM_RETRY_MS else SPORTS_WARM_LATER_RETRY_MS
+                    val batch = listOf(game) + if (ready == null) emptyList() else (if (nearRound) plan.near else plan.later).asSequence()
+                        .filter { it.key != game.key && now - (attempted[it.key] ?: 0L) >= retry }
                         .filter { sportsStreamCache.get(token, it, now, forAuto = false) == null }
                         .take(2).toList()
-                    val pending = batch.filter { sportsStreamCache.get(token, it, now, forAuto = false, allowStale = true) == null }.mapTo(hashSetOf()) { it.key }
+                    // Only a card that has never shown a result says "Finding stream"; one being checked again keeps its result.
+                    val pending = batch.filter { sportsStreamCache.get(token, it, now, forAuto = false, allowStale = true) == null && unsearchedSummary(shown[it.key]) }.mapTo(hashSetOf()) { it.key }
                     handler.post {
                         if (!closed && epoch == sportsWarmEpoch) {
                             sportsWarmActive = batch.mapTo(hashSetOf()) { it.key }
@@ -3279,7 +3320,8 @@ class MainActivity : Activity() {
                         val at = System.currentTimeMillis()
                         val retained = result?.takeIf { sportsStreamCache.put(token, it, at) }
                             ?: sportsStreamCache.get(token, target, at, forAuto = false, allowStale = true)
-                        val summary = retained?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, at) } ?: "Select to finish stream search"
+                        val summary = retained?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, at) }
+                            ?: shown[target.key]?.takeUnless(::unsearchedSummary)?.takeUnless { it == "Select to finish stream search" } ?: "Select to finish stream search"
                         Triple(target.key, summary, result?.game?.coverageComplete == true)
                     } }
                     sportsLocalWarmWorkers.invokeAll(tasks).forEach { task ->
@@ -3297,7 +3339,9 @@ class MainActivity : Activity() {
                     if (sportsWarmAttempted.size > 64) sportsWarmAttempted.keys.retainAll(visible)
                     finished.forEach(sportsWarmAttempted::remove)
                     sportsPanel.updateStreamSummaries(sportsStreamSummaries)
-                    if (started && sportsVisible && guideVisible && !sportsPanel.watching && (sportsWarmPending || game != null)) handler.postDelayed(warmSportsStreams, 250)
+                    noteSportsWarmDone()
+                    // Games off screen are looked up more slowly, so a large slate never competes with the remote or the picture.
+                    if (started && sportsVisible && guideVisible && !sportsPanel.watching && (sportsWarmPending || game != null)) handler.postDelayed(warmSportsStreams, if (nearRound) 250 else SPORTS_WARM_LATER_PAUSE_MS)
                 }
             } catch (_: Exception) {
                 if (!Thread.currentThread().isInterrupted) handler.post {
@@ -4470,5 +4514,11 @@ private val SPORTS_SECTIONS = listOf("Preferences" to "Play on OK, my teams only
 private const val SPORTS_QUICK_RETRIES = 4
 private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L
+/** A card on screen whose search found nothing looks again after this long. */
+private const val SPORTS_WARM_RETRY_MS = 30_000L
+/** A live game off screen looks again less often; its card keeps the last result meanwhile. */
+private const val SPORTS_WARM_LATER_RETRY_MS = 180_000L
+/** The pause between lookups for games off screen. */
+private const val SPORTS_WARM_LATER_PAUSE_MS = 1000L
 /** How long one reading of the guide for other live sports is used before it is read again. */
 private const val SPORTS_COVERAGE_MS = 60000L
