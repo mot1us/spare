@@ -3421,7 +3421,8 @@ class SpareDeviceTest {
                 scenario.onActivity { activity ->
                     val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
                     val snapshot = guideField.get(activity) as Guide
-                    val feeds = pairs.mapIndexed { i, (home, away) -> Channel("ready-feed-$i", "NBA ${i + 1}: ${away.name} vs ${home.name}", "NBA", "${server.base}/channel2.mp4") }
+                    // The last game is on no channel: its card says so, and keeps saying so.
+                    val feeds = pairs.dropLast(1).mapIndexed { i, (home, away) -> Channel("ready-feed-$i", "NBA ${i + 1}: ${away.name} vs ${home.name}", "NBA", "${server.base}/channel2.mp4") }
                     guideField.set(activity, snapshot.copy(channels = snapshot.channels + feeds))
                     // Playback has been steady for more than a minute (instead of waiting for it in the test).
                     val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
@@ -3430,16 +3431,33 @@ class SpareDeviceTest {
                 }
                 // Live TV plays in full screen and Sports has never been opened: every live game looks for its stream anyway.
                 val deadline = System.currentTimeMillis() + 60_000
+                val unnamed = pairs.lastIndex
+                fun ready(text: String?, i: Int) = if (i == unnamed) text == "No stream names this game" else text?.startsWith("NBA ${i + 1}:") == true
                 var missing = pairs.indices.toList()
                 while (missing.isNotEmpty() && System.currentTimeMillis() < deadline) {
-                    scenario.onActivity { activity -> missing = pairs.indices.filterNot { summaries(activity)["NBA:ready-$it"]?.startsWith("NBA ${it + 1}:") == true } }
+                    scenario.onActivity { activity -> missing = pairs.indices.filterNot { ready(summaries(activity)["NBA:ready-$it"], it) } }
                     if (missing.isNotEmpty()) Thread.sleep(250)
                 }
                 scenario.onActivity { activity ->
-                    assertTrue("Cards still without a stream: ${missing.map { summaries(activity)["NBA:ready-$it"] }}", missing.isEmpty())
+                    assertTrue("Cards still without a result: ${missing.map { summaries(activity)["NBA:ready-$it"] }}", missing.isEmpty())
                     assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                 }
-                waitFor(scenario) { Diagnostics.sportsBackgroundLine().contains("${pairs.size} live games · ${pairs.size} found a stream") }
+                waitFor(scenario) { Diagnostics.sportsBackgroundLine().contains("${pairs.size} live games · ${pairs.size - 1} found a stream") }
+                // Scores two and a half minutes old count as saved; the background pass still sees the live games and every
+                // card keeps its result, including the game no channel names.
+                scenario.onActivity { activity ->
+                    val field = MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }
+                    field.set(activity, (field.get(activity) as LiveSportsSnapshot).let { it.copy(checked = System.currentTimeMillis() - 150_000) })
+                    MainActivity::class.java.getDeclaredField("sportsBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
+                }
+                Thread.sleep(4000)
+                scenario.onActivity { activity ->
+                    val lost = pairs.indices.filterNot { ready(summaries(activity)["NBA:ready-$it"], it) }
+                    assertTrue("Cards lost their result: ${lost.map { summaries(activity)["NBA:ready-$it"] }}", lost.isEmpty())
+                    // Sports opens with current scores (it would otherwise show saved scores until its next scoreboard check).
+                    val field = MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }
+                    field.set(activity, (field.get(activity) as LiveSportsSnapshot).let { it.copy(checked = System.currentTimeMillis()) })
+                }
                 assertEquals("Looking for streams never changes the channel", media, playingPath(scenario))
                 assertNull("Looking for streams never opens one", server.requests["/channel2.mp4"])
                 // Opening Sports shows the streams at once: before its own searches start (Sports settles for 3.5 s first).
@@ -3448,7 +3466,8 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-0")?.takeIf { view -> view.isShown }?.text?.startsWith("NBA 1:") == true }
                 assertTrue("The first card showed its stream ${android.os.SystemClock.elapsedRealtime() - opened} ms after Sports opened",
                     android.os.SystemClock.elapsedRealtime() - opened < 3000)
-                waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("${pairs.size} of ${pairs.size} live cards were ready from the background") } }
+                waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("live cards were ready from the background") } }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-$unnamed")?.let { view -> !view.isShown || view.text.toString() == "No stream names this game" } == true }
             } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
@@ -3539,10 +3558,14 @@ class SpareDeviceTest {
                     assertTrue(Diagnostics.sportsLines().joinToString("\n"), Diagnostics.sportsLines().any { it.contains("Cards started looking for streams") })
                     assertTrue(Diagnostics.sportsLines().none { it.contains("Event channel names read") })
                     assertEquals("Waiting cards are not counted as searched", 0, Diagnostics.sportsLines().count { it.contains("Every live card has looked") })
+                    // A card still looking shows its loading bar, not the words; a card with its stream shows the stream.
+                    assertTrue(activity.window.decorView.findViewWithTag<CardStreamLine>("sports-coverage:NBA:names-1").looking)
+                    assertFalse(activity.window.decorView.findViewWithTag<CardStreamLine>("sports-coverage:NBA:names-0").looking)
                 }
                 server.releaseEventNames.countDown()
                 // With the fresh names every card looks again: the renamed slot is found, and the third game says nothing names it.
                 waitFor(scenario) { activity -> found(summaries(activity)["NBA:names-1"], "NBA 02: ${renamed[1].name}") && summaries(activity)["NBA:names-2"] == "No stream names this game" }
+                waitFor(scenario) { activity -> (0..2).none { activity.window.decorView.findViewWithTag<CardStreamLine>("sports-coverage:NBA:names-$it").looking } }
                 scenario.onActivity { activity ->
                     assertTrue(found(summaries(activity)["NBA:names-0"], "NBA 01:"))
                     val lines = Diagnostics.sportsLines()

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.54.1 — 2026-11-21
+
+- Sports cards made ready in the background keep their results. Scores more than two minutes old count as saved, and their games as "checking live status", so for part of each three-minute score cycle the background pass saw no live games and dropped every card's result. A card whose stream was found got it back from the stream cache, but a game nothing named went back to "Select to find stream" until Sports looked again. On the owner's second onn, 16 of 20 cards were ready when Sports opened; the rest followed within six seconds.
+- A Sports card that is still looking for its stream shows a soft bar with a band of light sweeping across it, as Library does while it loads, instead of text that changed several times ("Select to find stream", "Finding stream · 3 / 10", "Checking event channels…"). The result fades in once. Ended games checking for a replay do the same.
+
 ## 0.54.0 — 2026-11-21
 
 - Sports cards are made ready in the background. While live TV plays or the guide rests and Sports is closed, Spare checks the scores every three minutes when a game in your leagues is live or about to start, and every live game looks for its stream, one game at a time, a second and a half apart, at background priority. Opening Sports then shows each card's stream at once. A found stream is kept until the game ends; a game nothing names is looked at again every five minutes. The pass waits like other idle work: never during a movie, multiview, a channel starting or rebuffering, or within three seconds of a key.

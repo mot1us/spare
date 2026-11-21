@@ -110,10 +110,14 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var replayChecked = emptySet<String>()
     private fun cardStream(game: SportsGame): String = if (scorePresentation(game).state != "post") streamSummaries[game.key].orEmpty()
         else if (hasReplay(game)) cardReplays.getValue(game.key).let { "▶ Play replay · ${it.channel.name}\nCatch-up confirmed" }
-        else if (replayChecking == game.key) "Checking catch-up…"
+        else if (replayChecking == game.key) CHECKING_CATCHUP
         else if (game.key in replayChecked) "Replay not found"
-        else if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) "Catch-up check pending"
+        else if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) CATCHUP_PENDING
         else "No catch-up available"
+    /** Text that only says a card's game is still being looked up: the card shows its loading bar instead. */
+    private fun streamLooking(game: SportsGame, text: String): Boolean =
+        if (scorePresentation(game).state == "post") text == CHECKING_CATCHUP || text == CATCHUP_PENDING
+        else game.live(System.currentTimeMillis()) && (text.isEmpty() || text == FIND_STREAM || text.startsWith("Finding stream") || text == CHECKING_NAMES)
     fun updateReplayDiscovery(checkingKey: String?, checked: Set<String>) {
         if (replayChecking == checkingKey && replayChecked == checked) return
         replayChecking = checkingKey; replayChecked = checked.toSet()
@@ -129,7 +133,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             val holder = rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard ?: continue
             val game = games.getOrNull(holder.bindingAdapterPosition) ?: continue
             val next = cardStream(game)
-            if (holder.stream.text.toString() != next) holder.stream.text = next
+            holder.stream.show(next, streamLooking(game, next))
             styleBadge(holder.badge, game, holder.box.hasFocus())
             describeCard(holder, game)
         }
@@ -334,7 +338,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val summary = channels.firstOrNull()?.let { it.name + it.qualityTag(quality[it.id]).takeIf { tag -> tag.isNotEmpty() }?.let { tag -> "  ·  $tag" }.orEmpty() } ?: "Select to check provider guide"
         if (summary == redZoneSummary) return
         redZoneSummary = summary
-        for (i in 0 until rows.childCount) (rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard)?.takeIf { it.box.tag == REDZONE }?.let { it.stream.text = summary }
+        for (i in 0 until rows.childCount) (rows.getChildViewHolder(rows.getChildAt(i)) as? GameCard)?.takeIf { it.box.tag == REDZONE }?.let { it.stream.show(summary, false) }
         if (remembered == REDZONE) heroDetail.text = summary
     }
     private var initialReveal = true
@@ -376,7 +380,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             }, LayoutParams(-1, dp(17))) }
             val detail = label(9f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END }
             val date = label(9f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END }
-            val stream = label(9f).apply { setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END }
+            val stream = CardStreamLine(context).apply { textSize = 9f; typeface = AppFont.face(); setTextColor(Color.WHITE); setSingleLine(); includeFontPadding = false; gravity = Gravity.CENTER_VERTICAL; ellipsize = android.text.TextUtils.TruncateAt.END }
             val poster = FrameLayout(context).apply { background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF172B40.toInt(), 0xFF344258.toInt())); clipChildren = true }
             val scoreLine = LinearLayout(context).apply { gravity = Gravity.CENTER }
             val scoreValues = List(2) { label(12f).apply { gravity = Gravity.CENTER; setSingleLine(); includeFontPadding = false; typeface = AppFont.face(true) } }
@@ -563,7 +567,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun bindRedZone(holder: GameCard) {
         holder.palette = 0; holder.posterPalette = 0
         holder.poster.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF472936.toInt(), 0xFF241C2B.toInt()))
-        holder.stream.text = redZoneSummary; holder.stream.tag = "sports-redzone-coverage"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
+        holder.stream.show(redZoneSummary, false); holder.stream.tag = "sports-redzone-coverage"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
         holder.poster.tag = "sports-card-banner:$REDZONE"; holder.detail.tag = null; holder.scoreMessage.tag = null; holder.date.tag = null
         holder.special.text = "REDZONE"; holder.special.isVisible = true; holder.box.contentDescription = "NFL RedZone. OK watches the best feed. Hold OK for stream options"; holder.box.tag = REDZONE; holder.badge.text = "NFL"; holder.detail.text = ""
         holder.scoreLine.visibility = INVISIBLE; holder.scoreMessage.visibility = GONE; holder.scoreMessage.text = ""
@@ -585,7 +589,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         holder.palette = 0; holder.posterPalette = 0
         holder.poster.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF1D3A2E.toInt(), 0xFF1A2430.toInt()))
         val count = counted(item.channels.size, "channel")
-        holder.stream.text = "$count · in your guide"; holder.stream.tag = "sports-coverage-channels:${item.key}"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
+        holder.stream.show("$count · in your guide", false); holder.stream.tag = "sports-coverage-channels:${item.key}"; holder.title.tag = null; holder.badge.tag = null; holder.badge.background = null; holder.badge.setPadding(0, 0, 0, 0)
         holder.poster.tag = "sports-card-banner:${item.key}"; holder.detail.tag = null; holder.scoreMessage.tag = null; holder.date.tag = null
         holder.special.isVisible = true; holder.special.text = item.sport.uppercase()
         holder.box.contentDescription = "${item.sport}. ${item.title}. Live, $count. OK watches the best channel. Hold OK for channel options"
@@ -1076,7 +1080,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val situation = SportsCardContent.situation(display, hidden)
         val status = if (display.state != "pre") SportsText.status(display, hidden, System.currentTimeMillis()).removePrefix("LIVE · ") else game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
         setTextChanged(holder.detail, listOf(status, situation).filter { it.isNotBlank() }.joinToString(" · "))
-        setTextChanged(holder.date, holder.dateText); setTextChanged(holder.stream, cardStream(game))
+        setTextChanged(holder.date, holder.dateText); cardStream(game).let { holder.stream.show(it, streamLooking(game, it)) }
         val scoreboard = SportsCardContent.scoreboard(display, hidden, if (display.state == "pre") GuideClock.time(game.start) else "")
         holder.scoreLine.visibility = if (scoreboard.message == null) VISIBLE else INVISIBLE
         holder.scoreMessage.isVisible = scoreboard.message != null; setTextChanged(holder.scoreMessage, scoreboard.message.orEmpty())
@@ -1099,7 +1103,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             games.getOrNull(holder.bindingAdapterPosition)?.let { drawCard(holder, it) }
         }
     }
-    private class GameCard(val box: LinearLayout, val badge: TextView, val title: LinearLayout, val teamNames: List<TextView>, val teamRecords: List<TextView>, val scoreValues: List<TextView>, val scoreLine: LinearLayout, val scoreMessage: TextView, val detail: TextView, val date: TextView, val stream: TextView, val logos: List<ImageView>, val special: TextView, val poster: FrameLayout) : RecyclerView.ViewHolder(box) {
+    private class GameCard(val box: LinearLayout, val badge: TextView, val title: LinearLayout, val teamNames: List<TextView>, val teamRecords: List<TextView>, val scoreValues: List<TextView>, val scoreLine: LinearLayout, val scoreMessage: TextView, val detail: TextView, val date: TextView, val stream: CardStreamLine, val logos: List<ImageView>, val special: TextView, val poster: FrameLayout) : RecyclerView.ViewHolder(box) {
         var game: SportsGame? = null
         var textState: Pair<List<SportsCardTeamLine>, Boolean>? = null
         var palette = 0; var posterPalette = 0
@@ -1114,6 +1118,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         const val CONFIRMING = "Confirming which channels are showing it…"
         const val CHECKING_SCHEDULES = "Checking channel schedules…"
         const val CHECKING_ARCHIVES = "Checking provider replays…"
+        /** Card stream lines that mean "still looking"; a card shows its loading bar for these. */
+        const val FIND_STREAM = "Select to find stream"
+        const val CHECKING_NAMES = "Checking event channels…"
+        private const val CHECKING_CATCHUP = "Checking catch-up…"
+        private const val CATCHUP_PENDING = "Catch-up check pending"
         internal const val CARD_HEIGHT_DP = 140
         private const val REDZONE = "sports-redzone"
         private const val SCORE_PAYLOAD = "sports-card-score"

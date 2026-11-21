@@ -3318,7 +3318,9 @@ class MainActivity : Activity() {
         sportsBackgroundTask = sportsWarmWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val at = System.currentTimeMillis()
-            val games = SportsPanel.ordered(SportsSchedule.games(scores, snapshot, "live", favoriteSnapshot, at, matchChannels = false)
+            // Scores here are at most a few minutes old. Read as saved scores (over two minutes old), their games are held as
+            // "checking live status" and none is live: the pass then saw no games and dropped every card's result.
+            val games = SportsPanel.ordered(SportsSchedule.games(scores.copy(checked = at), snapshot, "live", favoriteSnapshot, at, matchChannels = false)
                 .filter { it.leagueId in leagues && it.live(at) }, followed, at).take(SportsBrowseWork.MAX_GAMES)
             val token = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoriteSnapshot)
             val labels = linkedMapOf<String, String>()
@@ -3337,7 +3339,7 @@ class MainActivity : Activity() {
                 if (closed || epoch != sportsBackgroundEpoch || generation != sourceEpoch) return@post
                 sportsBackgroundTask = null
                 val keys = games.mapTo(hashSetOf()) { it.key }
-                if (!sportsVisible) { sportsStreamSummaries.keys.retainAll(keys); sportsStreamSummaries.putAll(labels) }
+                if (!sportsVisible) { if (keys.isNotEmpty()) sportsStreamSummaries.keys.retainAll(keys); sportsStreamSummaries.putAll(labels) }
                 val finished = android.os.SystemClock.elapsedRealtime()
                 if (game != null) {
                     sportsWarmAttempted[game.key] = at
@@ -3443,14 +3445,9 @@ class MainActivity : Activity() {
                     val tasks = batch.map { target -> java.util.concurrent.Callable {
                         val cachedMatch = sportsStreamCache.get(token, target, now, forAuto = false, allowStale = true)
                         val confirm = target == game && cachedMatch?.needsUpgrade(profile, quality, now) == true
-                        val result = runCatching { resolveSportsMatch(selected, target, snapshot, favoriteSnapshot, profile, quality, confirm, { _, checked, total ->
-                            if (target.key in pending) handler.post {
-                                if (!closed && epoch == sportsWarmEpoch && target.key in sportsWarmActive) {
-                                    sportsStreamSummaries[target.key] = "Finding stream · $checked / $total"
-                                    sportsPanel.updateStreamSummaries(sportsStreamSummaries)
-                                }
-                            }
-                        }, cached = cachedMatch, preparedIndex = ready) }.getOrNull()
+                        // The card shows a loading bar while it looks, so per-step counts are not sent to the screen.
+                        val result = runCatching { resolveSportsMatch(selected, target, snapshot, favoriteSnapshot, profile, quality, confirm, { _, _, _ -> },
+                            cached = cachedMatch, preparedIndex = ready) }.getOrNull()
                         val at = System.currentTimeMillis()
                         val retained = result?.takeIf { sportsStreamCache.put(token, it, at) }
                             ?: sportsStreamCache.get(token, target, at, forAuto = false, allowStale = true)
@@ -4651,7 +4648,7 @@ private const val SPORTS_QUICK_RETRIES = 4
 private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L
 /** A card whose game nothing names yet, while the provider's event channel names are still being read. */
-private const val SPORTS_CHECKING_NAMES = "Checking event channels…"
+private const val SPORTS_CHECKING_NAMES = SportsPanel.CHECKING_NAMES
 /** A card on screen whose search found nothing looks again after this long. */
 private const val SPORTS_WARM_RETRY_MS = 30_000L
 /** Sports cards made ready while Sports is closed: a pause between games, and how often a finished pass checks again. */
