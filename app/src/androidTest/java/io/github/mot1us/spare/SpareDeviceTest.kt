@@ -655,6 +655,32 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aListCutAtAnOlderLimitGetsTheRestWhileTheRowsStayOpen() {
+        // The provider sends 8 of its 16 movies and waits; the saved copy, made today, stopped at an older limit of 10 titles.
+        FixtureServer(libraryCategories = true, slowVod = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie").run {
+                (1..10).map { n -> OnDemand("movie:${7000 + n}", "Saved title $n", "Category 1", "${server.base}/movie/test/test-secret/${7000 + n}.mp4", "movie", added = 1_700_000_000L + n) }.forEach { append(listOf(it)) }
+                finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy"), capped = 10)
+            }
+            seeded.close()
+            fun status(activity: MainActivity) = activity.window.decorView.findViewWithTag<TextView>("library-status").text.toString()
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && status(it) == "10 titles · Getting the rest of your titles…" }
+                server.finishVodCatalog.countDown()
+                // When the rest arrives the rows just say how many titles there are now: no instructions.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && status(it) == "16 titles · Saved today" }
+                assertTrue(Diagnostics.report(), "Saved catalog stopped at the old limit of 10 titles" in Diagnostics.report())
+                assertEquals(1, server.catalogTargets.count { "get_vod_streams" in it })
+            } } finally { server.finishVodCatalog.countDown(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)

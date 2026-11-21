@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.51.47 — 2026-11-20
+
+- When a background update of a Movies or Series list finishes while its rows are open, the line under the heading now just gives the new count, for example "129136 titles · Saved today". It no longer says "Updated just now · New titles show when you reopen Library". On the owner's onn, 0.51.46 fetched the rest of the list in the background, from 100,000 titles to 129,136.
+
 ## 0.51.46 — 2026-11-20
 
 - A Movies or Series list saved by an older version at its lower title limit downloads again at once in the background, instead of waiting until the saved copy is 6 hours old. Spare now notes when a list stopped at the limit. Lists of exactly 100,000 titles saved by 0.51.45 and earlier count as stopped there. On the owner's onn, 0.51.45 kept showing "100000 titles · Saved today" because the copy saved earlier that day still counted as current. While the rest arrives, the rows say "Getting the rest of your titles…".

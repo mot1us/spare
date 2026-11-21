@@ -394,7 +394,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 if (replaced != null) { Timings.since("Catalog refresh", began); Diagnostics.library("Catalog refreshed in ${(Timings.now() - began) / 1000} s · ${replaced.count} titles") }
                 else Diagnostics.library("Catalog refresh ${result.exceptionOrNull()?.let { "failed · ${SourceErrors.message(it)}" } ?: "found nothing newer"}")
                 if (opened && panel.shelfCatalog == root && homes[root]?.stamp == full.updated)
-                    panel.page(title, if (replaced != null) "${counted(replaced.count, "title")} · Updated just now · New titles show when you reopen Library" else homeNote(root, full), false)
+                    panel.page(title, if (replaced != null) "${counted(replaced.count, "title")} · ${savedAge(replaced.updated, System.currentTimeMillis())}" else homeNote(root, full), false)
             }
         }
         refreshing[root] = job
