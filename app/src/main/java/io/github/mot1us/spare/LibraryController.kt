@@ -12,7 +12,9 @@ import java.util.concurrent.Executors
 class LibraryController(private val activity: Activity, private val store: SecureStore, private val button: (String, () -> Unit) -> Button,
     private val source: () -> Source?, private val guide: () -> Guide, private val play: (OnDemand, Long) -> Unit,
     private val closed: () -> Unit, private val resolveSource: (String) -> Source? = { id -> source()?.takeIf { it.id == id } },
-    private val sourceFor: (Channel) -> Source? = { channel -> if (channel.playlistId.isBlank()) source() else resolveSource(channel.playlistId) }) {
+    private val sourceFor: (Channel) -> Source? = { channel -> if (channel.playlistId.isBlank()) source() else resolveSource(channel.playlistId) },
+    /** Every enabled playlist: a movie's details page also lists its copies on the others. */
+    private val playlists: () -> List<Source> = { listOfNotNull(source()) }) {
     private var playlist: String? = null
     private fun selectedSource(): Source? = playlist?.let(resolveSource) ?: if (playlist == null) source() else null
     fun selectPlaylist(selected: Source?) { if (playlist != selected?.id) { task?.cancel(true); ++epoch; playlist = selected?.id; detailItem = null; parentSeries = null; favoriteSource = ""; shelfCategory = null } }
@@ -203,7 +205,15 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
     }
     fun cancelStart() { ++startEpoch; startTask?.cancel(true); startTask = null }
-    fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null) {
+    /** What Search opened here (a movie's details, a series' episodes or an episode); Back from that page returns to Search. */
+    var searchEntry: OnDemand? = null
+        private set
+    val atSearchEntry: Boolean get() = searchEntry?.let { entry -> opened && (detailItem?.id == entry.id || detailItem == null && parentSeries?.id == entry.id) } == true
+    fun leaveSearchEntry() { searchEntry = null }
+    /** Back from a title started on the page Search opened returns to that page. */
+    fun reopenSearchEntry() { searchEntry?.let { openSearchResult(it, fromSearch = true) } }
+    fun openSearchResult(item: OnDemand, restart: Boolean = false, season: Int? = null, episode: Int? = null, fromSearch: Boolean = false) {
+        searchEntry = if (fromSearch) item else null
         if (item.playlistId.isNotBlank()) selectPlaylist(resolveSource(item.playlistId))
         val selected = selectedSource() ?: return
         prepareFavorites(selected)
@@ -222,6 +232,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         episodeList = entries; playSelected(item); return true
     }
     fun open(mode: String = if (kind == "catchup") "movie" else kind, focusContent: Boolean = false, keepCategory: Boolean = false) {
+        searchEntry = null
         if (!keepCategory || mode != kind) { shelfCategory = null; gridFromHome = false; homeSearch = false }
         // A hidden tab cannot keep a category download ahead of the selected tab.
         if (mode != kind) {
@@ -657,9 +668,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (item.kind == "episode") (parentSeries?.takeIf { it.id == item.seriesId } ?: upNextSeries[item.seriesId])?.let { series ->
             disk.execute { runCatching { store.editFollowedSeries(selected) { it.follow(series) } } }; upNextChecked = 0L
         }
+        // A movie's copy on another playlist (see [openDetails]) plays from that playlist.
+        val owner = item.playlistId.takeIf { it.isNotBlank() && it != selected.id && item.kind == "movie" }?.let(resolveSource) ?: selected
         positions.execute {
-            val position = if (fromBeginning) 0L else runCatching { store.watchProgress(selected).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
-            ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId }.map { it.copy(playlistId = selected.id) } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item.copy(playlistId = selected.id), position) }
+            val position = if (fromBeginning) 0L else runCatching { store.watchProgress(owner).firstOrNull { it.item.id == item.id }?.position ?: 0L }.getOrDefault(0L)
+            ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId }.map { it.copy(playlistId = selected.id) } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item.copy(playlistId = owner.id), position) }
         }
     }
     /** Each opened movie's versions, best first for this TV, and the one Play starts (see [MovieVersions]). */
@@ -671,7 +684,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         fun render(value: OnDemand, busy: Boolean) {
             detailItem = value
             val (versions, preferred) = versionChoices[key] ?: (emptyList<OnDemand>() to null)
-            val names = MovieVersions.names(versions)
+            val names = MovieVersions.names(versions) { copy -> copy.playlistId.takeIf { it.isNotBlank() && it != selected.id }?.let { id -> resolveSource(id)?.name ?: "another playlist" } }
             panel.detail(value, button, { playSelected(preferred ?: detailItem ?: value) }, busy,
                 versions.mapIndexed { index, version -> names[index] to { playSelected(version) } }, preferred?.let { names.getOrNull(versions.indexOf(it)) }.orEmpty())
             presentFavorites()
@@ -679,7 +692,11 @@ class LibraryController(private val activity: Activity, private val store: Secur
         render(detailItem!!, details[key] == null)
         request { token ->
             run {
-                val found = runCatching { repository.versions(selected, item) }.getOrDefault(listOf(item))
+                val own = runCatching { repository.versions(selected, item) }.getOrDefault(listOf(item))
+                // The same movie on the other enabled playlists, after this playlist's own versions.
+                val elsewhere = if (item.kind != "movie") emptyList() else playlists().filter { it.enabled && it.kind == "xtream" && it.id != selected.id }
+                    .flatMap { other -> runCatching { repository.sameMovie(other, item) }.getOrDefault(emptyList()) }
+                val found = own + elsewhere
                 val choice = if (found.size < 2) emptyList<OnDemand>() to null else {
                     val ordered = MovieVersions.order(found, DolbyVision.supported(panel.context))
                     // A version already part-watched is the one Play resumes; otherwise the best one for this TV.

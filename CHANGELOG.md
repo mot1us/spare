@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.52.1 — 2026-11-20
+
+- Search shows a movie once. On the owner's onn, 0.52.0 showed two results for a moment and then four identical posters again: copies already part-watched came back from watch history ungrouped, and the same movie on a second playlist had its own card. Now every copy with the same cleaned-up title and year shares one card, led by the active playlist, under the title without version tags.
+- A movie's details page also lists its copy on other enabled playlists (for example "Standard · Second playlist"), and that copy plays from its own playlist.
+- Back from a search result returns to the search results, on that result. A live channel picked in Search returns there from full screen (it went to the guide's All channels on that channel). A movie returns to its details page and then the results, and a series to its episodes and then the results. An episode played straight from Search returns to the results. Voice does not start again.
+- When Spare groups an older saved Movies list into versions, the performance report's recent actions say so and how long it took.
+
 ## 0.52.0 — 2026-11-20
 
 - A movie that a provider lists more than once, once per version (for example "4KDV: A Film (2011)", "4K: A Film (2011)" and "A Film (2011)"), shows once in Library rows, grids and search, under its name without the version tags. Its details page lists each version (4K Dolby Vision, 4K, 1080p, HD, Standard). Play starts the best one for this TV: Dolby Vision only where the box and the TV both report it, otherwise the plain 4K copy. A version already part-watched is the one Play resumes. Every version stays one press away. Versions are grouped only when the cleaned-up title and year match, or the provider's movie ID and year match, so remakes and different films never merge. Title counts count each movie once. Series are not grouped.

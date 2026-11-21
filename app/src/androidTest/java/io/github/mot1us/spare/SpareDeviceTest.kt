@@ -720,6 +720,88 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun searchShowsAMovieOnceAcrossVersionsWatchHistoryAndPlaylists() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            // Two playlists. The main one lists the movie three times (4K Dolby Vision, 4K, plain) and its 4K copy was
+            // part-watched; the second lists it once, with the year after a dash.
+            val main = Source(name = "Main fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val second = Source(name = "Second fixture", kind = "xtream", url = server.base, username = "other", password = "other-secret", allowHttp = true)
+            store.saveSources(listOf(main, second)); store.active = main.id; store.bindProvider(main); store.bindProvider(second)
+            fun movie(source: Source, id: Int, name: String) = OnDemand("movie:$id", name, "Category 1", "${server.base}/movie/${source.username}/${source.password}/$id.mp4", "movie", poster = "${server.base}/logo.png", added = 1_700_000_000L + id)
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(main, "movie").run { append(listOf(movie(main, 9001, "4KDV: Fixture Heroes (2011)"), movie(main, 9002, "4K: Fixture Heroes (2011)"), movie(main, 9003, "Fixture Heroes (2011)"), movie(main, 9004, "Other fixture film (2020)"))); finish(mapOf("1" to "Fixture cinema")) }
+            seeded.Writer(second, "movie").run { append(listOf(movie(second, 7001, "Fixture Heroes - 2011"))); finish(mapOf("1" to "Fixture cinema")) }
+            seeded.close()
+            store.saveWatchProgress(main, movie(main, 9002, "4K: Fixture Heroes (2011)").copy(playlistId = main.id), 60_000, 600_000)
+            fun grid(activity: MainActivity) = activity.window.decorView.findViewWithTag<RecyclerView>("search-poster-grid")
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture Heroes")
+                }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:vod").performClick() }
+                // Five copies, one card, named without version tags; it stays one card once every source has answered.
+                waitFor(scenario) { a -> grid(a)?.let { it.isShown && it.adapter?.itemCount == 1 } == true && a.window.decorView.findViewWithTag<TextView>("search-spot-title").text.toString() == "Fixture Heroes (2011)" }
+                Thread.sleep(3000)
+                scenario.onActivity { a -> assertEquals("Still one card after every source answered", 1, grid(a).adapter?.itemCount) }
+                scenario.onActivity { a -> grid(a).getChildAt(0).performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-versions")?.isShown == true }
+                scenario.onActivity { a -> val view = a.window.decorView
+                    val names = (0..3).map { view.findViewWithTag<TextView>("library-version:$it")?.text?.toString() }
+                    // The part-watched 4K copy is the one Play resumes; the second playlist's copy is one more version.
+                    assertEquals(listOf("4K", "Standard", "Standard · Second fixture", "4K Dolby Vision"), names)
+                    assertEquals("▶  Play · 4K", view.findViewWithTag<TextView>("library-play").text.toString())
+                }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-version:2").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/other/other-secret/7001.mp4" }
+            } } finally { store.saveSources(emptyList()); store.removeCache(main); store.removeCache(second) }
+        }
+    }
+
+    @Test fun backFromASearchResultReturnsToTheResults() {
+        store.performanceOverlay = false
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channels = listOf(Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4"), Channel("xc:2", "Second live", "Other", "${server.base}/live/test/test-secret/2.mp4"))
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            fun search(activity: MainActivity) = activity.window.decorView.findViewWithTag<View>("playlist-search")
+            fun focusedTag(activity: MainActivity) = activity.currentFocus?.tag as? String
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Second")
+                }
+                // A live channel from the results plays full screen; Back returns to the results, on that channel.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:2")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:live:xc:2").performClick() }
+                waitFor(scenario) { a -> !search(a).isShown && find<PlayerView>(a.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/live/test/test-secret/2.mp4" && channelList(a)?.isShown != true }
+                device.pressBack()
+                waitFor(scenario) { a -> search(a).isShown && a.window.decorView.findViewWithTag<EditText>("guide-search-input").text.toString() == "Second" && focusedTag(a) == "search-result:live:xc:2" }
+                // A movie opens its details page; Back returns to the results on that movie, not to Library.
+                scenario.onActivity { it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture") }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:vod").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                device.pressBack()
+                waitFor(scenario) { a -> search(a).isShown && !a.window.decorView.findViewWithTag<View>("library-details").isShown && focusedTag(a) == "search-result:movie:101" }
+                // Picking it again and playing it: Back from the movie returns to its details, then to the results.
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/movie/test/test-secret/101.") == true }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                device.pressBack()
+                waitFor(scenario) { a -> search(a).isShown && focusedTag(a) == "search-result:movie:101" }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)
@@ -5496,10 +5578,16 @@ class SpareDeviceTest {
                     assertTrue(activity.window.decorView.findViewWithTag<View>("search-result:live:${ownedB!!.id}").contentDescription.contains(b.name))
                     openTypedSearch(activity, "Orbit")
                 }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:42") != null && it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42") != null }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
-                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
+                // The same movie on both playlists is one card, led by the active playlist; the other's copy is a version on its page.
+                waitFor(scenario) { activity ->
+                    val library = MainActivity::class.java.getDeclaredField("library").apply { isAccessible = true }.get(activity) as LibraryController
+                    activity.window.decorView.findViewWithTag<View>("search-result:movie:42") != null && library.repository.memory(b, "movie")?.complete == true
+                }
+                Thread.sleep(1000)
+                scenario.onActivity { assertNull("One card for the movie on both playlists", it.window.decorView.findViewWithTag<View>("search-result:${b.id}:movie:42")) }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:42").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("library-version:1")?.text?.toString()?.endsWith("· ${b.name}") == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-version:1").performClick() }
                 waitFor(scenario) { activity ->
                     val item = MainActivity::class.java.getDeclaredField("onDemand").apply { isAccessible = true }.get(activity) as? OnDemand
                     item?.playlistId == b.id && playing!!.currentMediaItem?.localConfiguration?.uri?.port.toString() == second.base.substringAfterLast(':') && playing!!.isPlaying

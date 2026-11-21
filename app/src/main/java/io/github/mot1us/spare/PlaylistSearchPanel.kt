@@ -207,6 +207,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
             holder.box.tag = item.tag; holder.box.contentDescription = item.description
             holder.box.bind(item.key, item.content, posters, item.http)
         }
+        fun indexOf(key: String) = items.indexOfFirst { it.key == key }
         fun submit(next: List<PlaylistSearchPoster>) {
             val before = items; items = next
             diff(before, next, this, { it.key }, PlaylistSearchPoster::same)
@@ -235,6 +236,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
             return holder
         }
         override fun onBindViewHolder(holder: LiveHolder, position: Int) = holder.bind(items[position])
+        fun indexOf(key: String) = items.indexOfFirst { "live:${it.channel.id}" == key }
         fun submit(next: List<PlaylistSearchChannel>) {
             val before = items; items = next
             diff(before, next, this, { it.channel.id }, PlaylistSearchChannel::same)
@@ -314,7 +316,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         FocusFinder.getInstance().findNextFocus(this, focused, direction) ?: focused
 
     fun show(query: String) {
-        text = query; kind = ""; section = "live"; sectionChosen = false; waitingForResults = false
+        text = query; kind = ""; section = "live"; sectionChosen = false; waitingForResults = false; restoreKey = null
         backgroundContent?.descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         visibility = VISIBLE; field.visibility = VISIBLE
         display()
@@ -322,7 +324,23 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     fun submit(query: String, channels: List<PlaylistSearchChannel>, titles: List<PlaylistSearchPoster>, loading: Boolean, notice: String = "") {
         text = query; allLive = channels; allPosters = titles; busy = loading; warning = notice
         display()
+        restoreKey?.let { key ->
+            // Back from a result: the cursor returns to that result once it is listed again, or to the first one.
+            val at = if (section == "live") liveAdapter.indexOf(key) else gridAdapter.indexOf(key)
+            val list = firstResults()
+            if (at >= 0 && list != null) { restoreKey = null; waitingForResults = false; focusAt(list, at) }
+            else if (!loading) { restoreKey = null; focusResults() }
+            return
+        }
         if (waitingForResults && firstResults() != null && hasFocus()) focusResults()
+    }
+    /** Search as it was left: the Live TV or Movies and series tab, its kind filter, and the result that was picked. */
+    val sectionShown get() = section
+    val kindShown get() = kind
+    private var restoreKey: String? = null
+    fun restore(section: String, kind: String, result: String) {
+        this.section = section; sectionChosen = true; this.kind = kind; restoreKey = result
+        display(); tabs.getValue(section).requestFocus()
     }
     private fun display() {
         val titles = if (text.isBlank()) emptyList() else if (kind.isEmpty()) allPosters else allPosters.filter { it.kind == kind }

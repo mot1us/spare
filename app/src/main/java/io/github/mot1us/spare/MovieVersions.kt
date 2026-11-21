@@ -44,10 +44,20 @@ internal object MovieVersions {
         compareByDescending<OnDemand> { label(it.title).let { l -> if (!l.dolbyVision) l.rank * 10 else if (dolbyVision) l.rank * 10 + 5 else l.rank - 1000 } }
     )
 
-    /** Button names for these versions; two with the same tags add their category so they can be told apart. */
-    fun names(items: List<OnDemand>): List<String> {
-        val texts = items.map { label(it.title).text }
+    /**
+     * Button names for these versions. A copy from another playlist adds that playlist's name ([playlist] gives it, or null
+     * for the playlist being browsed); two still alike add their category so they can be told apart.
+     */
+    fun names(items: List<OnDemand>, playlist: (OnDemand) -> String? = { null }): List<String> {
+        val texts = items.map { item -> label(item.title).text + playlist(item)?.let { " · $it" }.orEmpty() }
         return items.mapIndexed { i, item -> if (texts.count { it == texts[i] } > 1 && item.category.isNotBlank()) "${texts[i]} · ${item.category}" else texts[i] }
+    }
+
+    /** What makes provider movies one film for Search: the cleaned-up title and year. Null for anything else. */
+    fun work(item: OnDemand): String? {
+        if (!item.id.startsWith("movie:")) return null
+        val name = VodStart.titleKey(item).takeIf { it.length >= 2 } ?: return null
+        return "$name|${VodStart.release(item)}"
     }
 
     /** The title without its version tags ("4KDV: A Film (2011)" → "A Film (2011)"), for the one tile that stands for every version. */

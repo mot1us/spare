@@ -242,7 +242,7 @@ class LibraryCatalog(private val store: SecureStore) {
             runCatching { rebuildIndex(scope, gen, versions = true) }.onSuccess { built ->
                 if (indexes.replace(key, built) != null) {
                     runCatching { store.write("${prefix}keys.enc", built.bytes(gen)) }
-                    Diagnostics.library("Movie versions grouped in ${Timings.now() - began} ms · ${built.works} movies from ${built.size} titles")
+                    "Movie versions grouped in ${(Timings.now() - began) / 1000} s · ${built.works} movies from ${built.size} titles".let { Diagnostics.library(it); Diagnostics.action(it) }
                     changed?.invoke()
                 }
             }.onFailure { regrouping.remove(key) }
@@ -341,6 +341,20 @@ class LibraryCatalog(private val store: SecureStore) {
         val members = index.members(pos).takeIf { it.size > 1 } ?: return listOf(item)
         return store.catalogDb.titlesAt(snapshot.dbScope!!, snapshot.dbGen!!, members).filter { available(source, it.id) }
             .map { title -> title.item(source).let { it.copy(category = snapshot.label(it.category)) } }.ifEmpty { listOf(item) }
+    }
+    /**
+     * The same movie in another playlist's saved Movies catalog: every title there with the same cleaned-up title and year.
+     * Only a catalog already in memory is read (Search loads every enabled playlist's).
+     */
+    fun sameMovie(source: Source, item: OnDemand): List<OnDemand> {
+        val work = MovieVersions.work(item) ?: return emptyList(); val key = work.substringBefore('|')
+        val snapshot = memory(source, "movie")?.takeIf { it.whole && it.dbScope != null && it.dbGen != null } ?: return emptyList()
+        val index = indexOf(snapshot) ?: return emptyList()
+        val candidates = ArrayList<Int>()
+        for (pos in 0 until index.size) { if (index.keys[pos].contains(key)) { candidates.add(pos); if (candidates.size == 64) break } }
+        if (candidates.isEmpty()) return emptyList()
+        return store.catalogDb.titlesAt(snapshot.dbScope!!, snapshot.dbGen!!, candidates).filter { available(source, it.id) }
+            .map { title -> title.item(source).let { it.copy(category = snapshot.label(it.category)) } }.filter { MovieVersions.work(it) == work }
     }
     /** How many titles to say a catalog has: each movie once, however many versions the provider lists. */
     /** Never reads the database (it is called on the UI thread): a catalog without its index in memory gives its entry count. */

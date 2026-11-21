@@ -1236,7 +1236,7 @@ class MainActivity : Activity() {
             { position -> seekDemand(position, absolute = true) }, { seekDemand(0, absolute = true) }, { tracks(C.TRACK_TYPE_TEXT) }, { tracks(C.TRACK_TYPE_AUDIO) },
             { onDemand?.let { library.next(it) }?.let { playOnDemand(it, 0) } }, { reopenLibrary() }, ::returnToLive, ::stopDemandToLibrary)
         root.addView(demandControls, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { marginStart = dp(18); marginEnd = dp(18); bottomMargin = dp(16) })
-        library = LibraryController(this, store, ::button, { sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source }, { guide }, ::playOnDemand, ::closeLibrary, { id -> sources.firstOrNull { it.id == id && it.enabled } }, { channel -> owner(channel) })
+        library = LibraryController(this, store, ::button, { sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source }, { guide }, ::playOnDemand, ::closeLibrary, { id -> sources.firstOrNull { it.id == id && it.enabled } }, { channel -> owner(channel) }, ::enabledSources)
         library.panel.navigation = { ++focusEpoch; (if (library.browsingCatchup) guideMode else libraryButton).requestFocus() }
         library.catchupClosed = ::returnToLiveChannel
         idleBrowse = IdleBrowse(this, workers.pool("idle-browse", background = true), library.repository) { scores ->
@@ -1321,6 +1321,12 @@ class MainActivity : Activity() {
         player.stop(); player.clearMediaItems(); frameRates.clear()
         playbackLoading.visibility = View.GONE; retryPanel.visibility = View.GONE; demandControls.visibility = View.GONE
         sportsVisible = false; applyFilter(); showGuide(false); nowPlaying.hide(immediate = true)
+        // A title picked in Search returns to what Search opened (a movie's details, a series' episodes), or to the results.
+        val back = searchReturn; val entry = library.searchEntry
+        if (back != null && back.channel == null && entry != null) {
+            if (entry.kind == "episode") returnToSearch(back) else { library.reopenSearchEntry(); root.bringChildToFront(library.panel); showNavigation("library") }
+            return
+        }
         library.reopen(item); root.bringChildToFront(library.panel); showNavigation("library")
     }
     private fun playOnDemand(item: OnDemand, position: Long) {
@@ -2326,6 +2332,8 @@ class MainActivity : Activity() {
     }
     private fun updateTimes() { times.invalidate(); nowButton.isSelected = guideTimeline.ahead((focused ?: current)?.id) }
     private fun showGuide(show: Boolean) {
+        // Anything that brings the guide back ends the way back to an earlier search.
+        if (show) searchReturn = null
         val returningToGuide = show && !guideVisible
         if (show != guideVisible) Diagnostics.action(if (show) "Guide shown" else "Guide hidden")
         if (returningToGuide) navigationRail.prepareForContent()
@@ -2380,7 +2388,21 @@ class MainActivity : Activity() {
         handler.postDelayed(hideNowPlaying, 2800)
     }
     private fun search() = searchWithQuery(query)
-    private fun searchWithQuery(initial: String) {
+    /** What a search result opened: Back from it returns to these results, on that result. */
+    private data class SearchReturn(val query: String, val section: String, val kind: String, val result: String, val channel: String? = null)
+    private var searchReturn: SearchReturn? = null
+    /** Back in Library: from the page a search result opened, back to the results; otherwise Library's own Back. */
+    private fun libraryBack() {
+        searchReturn?.takeIf { it.channel == null && library.atSearchEntry }?.let { library.dismiss(); returnToSearch(it); return }
+        library.back()
+    }
+    private fun returnToSearch(back: SearchReturn) {
+        searchReturn = null; library.leaveSearchEntry()
+        openSearch(back.query, voice = false)
+        searchPanel.restore(back.section, back.kind, back.result)
+    }
+    private fun searchWithQuery(initial: String) = openSearch(initial, voice = true)
+    private fun openSearch(initial: String, voice: Boolean) {
         if (vodRequest != null) closeVodStart(restore = false)
         settingsPanel?.visibility = View.GONE
         if (::library.isInitialized && library.opened) library.dismiss()
@@ -2393,7 +2415,7 @@ class MainActivity : Activity() {
         searchPanel.recent = store.recentSearches
         searchPanel.show(query); root.bringChildToFront(searchPanel); showNavigation("search")
         updatePlaylistSearch()
-        voiceSearch()
+        if (voice) voiceSearch()
     }
     private fun watchVodFromBeginning() {
         val programme = current?.let { guide.at(it, System.currentTimeMillis()) } ?: return
@@ -2478,10 +2500,19 @@ class MainActivity : Activity() {
             val progress = if (playing) ((now - programme.start).toDouble() / (programme.end - programme.start) * 100).toInt().coerceIn(0, 100) else -1
             PlaylistSearchChannel(channel, provider?.name.orEmpty().takeIf { showPlaylist }.orEmpty(),
                 programme?.title ?: "No programme information", status, progress, provider?.allowHttp == true) {
+                val back = SearchReturn(query, "live", "", "live:${channel.id}", channel.id)
                 clearGuideSearch(); if (current?.id != channel.id || !hasPlayedChannel || player.playerError != null) tune(channel); showGuide(false)
+                searchReturn = back
             }
         }
-        val titles = (searchedDemand + searchedMedia).map { item ->
+        // One card per movie: the versions a provider lists (4K, 4K Dolby Vision…), copies remembered from watch history, and
+        // the same movie on another playlist all open one details page, which lists every copy. The active playlist's leads.
+        val order = (listOfNotNull(source?.id) + enabledSources().map { it.id }).distinct()
+        val movies = (searchedDemand + searchedMedia).groupBy { item -> MovieVersions.work(item) ?: "${item.playlistId}:${item.id}" }.values.map { copies ->
+            val pick = copies.minByOrNull { copy -> order.indexOf(copy.playlistId).let { if (it < 0) order.size else it } } ?: copies.first()
+            if (copies.size > 1) pick.copy(title = MovieVersions.title(pick.title)) else pick
+        }
+        val titles = movies.map { item ->
             val key = if (item.playlistId.isBlank() || item.playlistId == playlists.legacySource) item.id else "${item.playlistId}:${item.id}"
             val provider = owner(item)
             val subtitle = listOfNotNull(item.year, item.genre, if (item.kind == "episode") "Season ${item.season} · Episode ${item.episode}" else null,
@@ -2489,7 +2520,9 @@ class MainActivity : Activity() {
             // No badge on the poster: Search names the kind above the grid, as Library's spotlight does.
             val content = LibraryPosterTile.Content(item.title, subtitle, item.poster)
             PlaylistSearchPoster(key, item.kind, content, provider?.allowHttp == true) {
-                clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
+                val back = SearchReturn(query, "vod", searchPanel.kindShown, key)
+                clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item, fromSearch = true); showNavigation("library")
+                searchReturn = back
             }
         }.distinctBy { it.key }
         searchPanel.submit(query, live, titles, searchLoading || liveSearchBusy, searchWarning)
@@ -4080,7 +4113,7 @@ class MainActivity : Activity() {
         }
         if (::library.isInitialized && library.opened) {
             if (event.keyCode == KeyEvent.KEYCODE_SEARCH) { if (event.action == KeyEvent.ACTION_UP) search(); return true }
-            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) library.back(); return true }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) libraryBack(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_MENU) { if (event.action == KeyEvent.ACTION_UP) playbackMenu(); return true }
             return super.dispatchKeyEvent(event)
         }
@@ -4173,12 +4206,14 @@ class MainActivity : Activity() {
             if (multiview.browsing) { showGuide(false); multiview.present() } else { multiview.close(); showGuide(true) }; return
         }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
-        if (library.opened) { library.back(); return }
+        if (library.opened) { libraryBack(); return }
         if (onDemand != null) { if (sportsReplayGame != null) returnToSportsReplay() else if (onDemand?.kind == "catchup") returnToLiveChannel() else stopDemandToLibrary(); return }
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }
         else if (retryPanel.isVisible) { retryPanel.visibility = View.GONE; showGuide(true) }
         else if (!guideVisible) {
+            // A channel picked in Search returns to the results, unless the remote has since moved to another channel.
+            searchReturn?.takeIf { it.channel != null && it.channel == current?.id && onDemand == null && !sportsVisible }?.let { returnToSearch(it); return }
             // Back follows what is on screen: a game returns to the Sports cards (not its stream list);
             // any other channel, such as one recalled with Left, returns to the guide on that channel.
             if (sportsVisible && onDemand == null && !watchingRedZone && playbackGame() == null) {
