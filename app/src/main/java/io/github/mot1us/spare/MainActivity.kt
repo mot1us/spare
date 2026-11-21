@@ -2486,7 +2486,8 @@ class MainActivity : Activity() {
             val provider = owner(item)
             val subtitle = listOfNotNull(item.year, item.genre, if (item.kind == "episode") "Season ${item.season} · Episode ${item.episode}" else null,
                 provider?.name?.takeIf { showPlaylist }).filter(String::isNotBlank).joinToString(" · ")
-            val content = LibraryPosterTile.Content(item.title, subtitle, item.poster, item.kind.uppercase(java.util.Locale.ROOT))
+            // No badge on the poster: Search names the kind above the grid, as Library's spotlight does.
+            val content = LibraryPosterTile.Content(item.title, subtitle, item.poster)
             PlaylistSearchPoster(key, item.kind, content, provider?.allowHttp == true) {
                 clearGuideSearch(); showGuide(false); nowPlaying.hide(immediate = true); library.openSearchResult(item); showNavigation("library")
             }

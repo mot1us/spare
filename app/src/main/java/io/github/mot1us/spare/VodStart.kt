@@ -14,10 +14,13 @@ object VodStart {
     private val year = Regex("[\\[(]((?:19|20)[0-9]{2})[\\])]")
     private val episode = Regex("\\b(?:S([0-9]{1,3})\\s*E([0-9]{1,4})|([0-9]{1,3})x([0-9]{1,4}))\\b", RegexOption.IGNORE_CASE)
     private val prefix = Regex("^(?:(?:US|USA|UK|EN|ENG|CA|AU|Movie|Film|Cinema)\\s*[|:]\\s*)+", RegexOption.IGNORE_CASE)
-    private val quality = Regex("\\b(?:Dolby\\s*Vision|HDR10\\+?|HDR|SDR|DV|FHD|UHD|HD|SD|4K|1080[pi]|720p|2160p|HEVC|AVC|AV1|[HX]264|[HX]265)\\b", RegexOption.IGNORE_CASE)
-    private fun clean(value: String) = quality.replace(year.replace(prefix.replace(value, ""), ""), "").trim(' ', '-', ':', '|', '(', ')', '[', ']')
+    /** Version tags, including the joined "4KDV" some providers put in front of a title ("4KDV: A Film (2011)"). */
+    internal val quality = Regex("\\b(?:Dolby\\s*Vision|4K\\s*-?\\s*DV|UHD\\s*-?\\s*DV|DoVi|HDR10\\+?|HDR|SDR|DV|FHD|UHD|HD|SD|4K|1080[pi]|720p|2160p|HEVC|AVC|AV1|[HX]264|[HX]265)\\b", RegexOption.IGNORE_CASE)
+    /** A year after a dash at the end: "A Film - 2011". */
+    private val dashYear = Regex("\\s[-–]\\s*((?:19|20)[0-9]{2})\\s*$")
+    private fun clean(value: String) = quality.replace(year.replace(dashYear.replace(prefix.replace(value, ""), ""), ""), "").trim(' ', '-', ':', '|', '(', ')', '[', ']')
     private val releaseYear = Regex("(?:19|20)[0-9]{2}")
-    private fun release(item: OnDemand) = releaseYear.find(item.year)?.value ?: year.find(item.title)?.groupValues?.get(1).orEmpty()
+    internal fun release(item: OnDemand) = releaseYear.find(item.year)?.value ?: year.find(item.title)?.groupValues?.get(1) ?: dashYear.find(item.title)?.groupValues?.get(1).orEmpty()
     fun titleKey(item: OnDemand): String {
         val stamp = release(item)
         val value = clean(item.title)

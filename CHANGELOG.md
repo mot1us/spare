@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.52.0 — 2026-11-20
+
+- A movie that a provider lists more than once, once per version (for example "4KDV: A Film (2011)", "4K: A Film (2011)" and "A Film (2011)"), shows once in Library rows, grids and search, under its name without the version tags. Its details page lists each version (4K Dolby Vision, 4K, 1080p, HD, Standard). Play starts the best one for this TV: Dolby Vision only where the box and the TV both report it, otherwise the plain 4K copy. A version already part-watched is the one Play resumes. Every version stays one press away. Versions are grouped only when the cleaned-up title and year match, or the provider's movie ID and year match, so remakes and different films never merge. Title counts count each movie once. Series are not grouped.
+- Version tags in front of a title ("4KDV:", "4K:") and a year after a dash ("A Film - 2011") are recognised when matching titles.
+- Search results look like Library: posters only, with the title under the cursor and what it is (Movie, Series or Episode, year, playlist) above the grid. Before, each poster had a "MOVIE" badge and two lines of text squeezed under it, and the playlist line was cut off.
+- A Movies list saved by an earlier version is grouped into versions in the background the first time Library opens it, without delaying the rows.
+
 ## 0.51.47 — 2026-11-20
 
 - When a background update of a Movies or Series list finishes while its rows are open, the line under the heading now just gives the new count, for example "129136 titles · Saved today". It no longer says "Updated just now · New titles show when you reopen Library". On the owner's onn, 0.51.46 fetched the rest of the list in the background, from 100,000 titles to 129,136.

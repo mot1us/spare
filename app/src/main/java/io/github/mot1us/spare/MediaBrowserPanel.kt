@@ -630,7 +630,11 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotArt.visibility = VISIBLE; spotScrim.visibility = VISIBLE
         backdrops.bind(spotArt, url, artworkHttp) { bitmap -> if (bitmap == null && spotArt.drawable == null) { spotArt.visibility = GONE; spotScrim.visibility = GONE } }
     }
-    fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, busy: Boolean) {
+    /**
+     * [versions]: a movie the provider lists more than once (4K Dolby Vision, 4K, HD…) names each version under the
+     * actions, best first; [playing] is the one Play starts.
+     */
+    fun detail(item: OnDemand, makeButton: (String, () -> Unit) -> Button, play: () -> Unit, busy: Boolean, versions: List<Pair<String, () -> Unit>> = emptyList(), playing: String = "") {
         val restore = detailPane.visibility != VISIBLE || detailPane.hasFocus()
         if (detailPane.visibility != VISIBLE) spotKey = null
         val focusedAction = detailPane.findFocus()?.tag
@@ -657,12 +661,21 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         }
         // Actions lead the column beside the poster, so they stay in view above a long plot.
         val actions = LinearLayout(context)
-        val start = makeButton("▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) }); 
+        val start = makeButton(if (playing.isNotBlank()) "▶  Play · $playing" else "▶  Play / Resume", play).apply { tag = "library-play" }; actions.addView(start, LayoutParams(-2, dp(38)).apply { marginEnd = dp(10) })
         // The remote's Back button leaves this page, so the second action is the useful one: Watchlist.
         val watch = makeButton(watchLabel(savedNow)) { favoriteAction?.invoke() }.apply { tag = "library-detail-watchlist" }
         detailWatch = watch; actions.addView(watch, LayoutParams(-2, dp(38)))
         saveTitle.isVisible = false
         copy.addView(actions, 0, LayoutParams(-1, dp(42)).apply { bottomMargin = dp(14) })
+        if (versions.size > 1) {
+            // Every version stays one press away, so Dolby Vision (or a smaller copy for a slow connection) can be chosen by hand.
+            val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; tag = "library-versions" }
+            row.addView(label(12f).apply { text = "Versions"; setTextColor(Color.LTGRAY); setPadding(0, 0, dp(12), 0) }, LayoutParams(-2, -2))
+            versions.take(6).forEachIndexed { index, (name, choose) ->
+                row.addView(makeButton(name, choose).apply { tag = "library-version:$index" }, LayoutParams(-2, dp(34)).apply { marginEnd = dp(8) })
+            }
+            copy.addView(row, 1, LayoutParams(-1, dp(40)).apply { bottomMargin = dp(12) })
+        }
         hero.addView(copy, LayoutParams(0, -2, 1f)); detailPane.addView(hero, LayoutParams(-1, 0, 1f))
         if (restore) (detailPane.findViewWithTag<View>(focusedAction) ?: start).requestFocus()
     }

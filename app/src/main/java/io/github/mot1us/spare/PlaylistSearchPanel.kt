@@ -23,7 +23,10 @@ internal class PlaylistSearchPoster(
 ) {
     val id = Channel.stableLongId(key)
     val tag = "search-result:$key"
-    val description = listOf(content.title, content.badge, content.subtitle).filter(String::isNotBlank).joinToString(". ")
+    val description = listOf(content.title, kindName, content.subtitle).filter(String::isNotBlank).joinToString(". ")
+    /** The line under the title above the grid: what it is, then its year, season or playlist. */
+    val meta get() = listOf(kindName, content.subtitle).filter(String::isNotBlank).joinToString("  ·  ")
+    private val kindName get() = when (kind) { "movie" -> "Movie"; "series" -> "Series"; "episode" -> "Episode"; else -> "" }
     fun same(other: PlaylistSearchPoster) = content == other.content && http == other.http
 }
 
@@ -58,6 +61,19 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
     private val filters = LinearLayout(context)
     private val message = label(11f)
     private val titleHeader = label(13f, true).apply { tag = "search-library-heading" }
+    // Posters carry no text, as in Library: the title under the cursor and its details show here, above the grid.
+    private val spotTitle = label(16f, true).apply { tag = "search-spot-title" }
+    private val spotMeta = label(11.5f).apply { tag = "search-spot-meta" }
+    private val spot = LinearLayout(context).apply {
+        orientation = VERTICAL; tag = "search-spot"
+        addView(spotTitle, LayoutParams(-1, -2)); addView(spotMeta, LayoutParams(-1, -2).apply { topMargin = dp(2) })
+    }
+    private var spotKey: String? = null
+    private fun showSpot(item: PlaylistSearchPoster?) {
+        if (item?.key == spotKey) return
+        spotKey = item?.key
+        spotTitle.text = item?.content?.title.orEmpty(); spotMeta.text = item?.meta.orEmpty()
+    }
     private val liveHeader = label(13f, true).apply { tag = "search-live-heading" }
     private val grid = list("search-poster-grid", PosterGridLayout(context))
     private val live = list("playlist-search-results", TvFocus.Layout(context))
@@ -137,6 +153,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         addView(recentRow, LayoutParams(-1, dp(40)))
         addView(skeleton, LayoutParams(-1, 0, 1f))
         addView(titleHeader, LayoutParams(-1, dp(25)))
+        addView(spot, LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
         addView(grid, LayoutParams(-1, 0, 1f))
         addView(liveHeader, LayoutParams(-1, dp(25)))
         addView(live, LayoutParams(-1, 0, 1f))
@@ -167,8 +184,9 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         override fun getItemCount() = items.size
         override fun getItemId(position: Int) = items[position].id
         override fun onCreateViewHolder(parent: ViewGroup, type: Int): PosterHolder {
-            val tile = LibraryPosterTile(context).apply { configure(layout) }
+            val tile = LibraryPosterTile(context).apply { configure(layout, captioned = false) }
             val holder = PosterHolder(tile)
+            tile.onFocusChangeListener = OnFocusChangeListener { _, focused -> if (focused) items.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) }
             tile.setOnClickListener { items.getOrNull(holder.bindingAdapterPosition)?.let { field.hideKeyboard(); resultChosen(text); it.select() } }
             directions(tile) { key ->
                 val at = holder.bindingAdapterPosition
@@ -192,6 +210,8 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         fun submit(next: List<PlaylistSearchPoster>) {
             val before = items; items = next
             diff(before, next, this, { it.key }, PlaylistSearchPoster::same)
+            // Until the remote reaches the grid, the first result is named above it.
+            if (!list.hasFocus()) showSpot(next.firstOrNull()) else if (next.none { it.key == spotKey }) showSpot(next.firstOrNull())
         }
     }
 
@@ -315,6 +335,7 @@ internal class PlaylistSearchPanel(context: Context, private val field: GuideSea
         grid.isVisible = !showLive && titles.isNotEmpty()
         live.isVisible = showLive && channels.isNotEmpty()
         titleHeader.isVisible = !showLive && text.isNotBlank()
+        spot.isVisible = grid.isVisible
         liveHeader.isVisible = showLive && text.isNotBlank()
         titleHeader.text = "On demand · ${titles.size} ${if (kind.isEmpty()) "movies, series and episodes" else kinds[kind]?.text.toString().lowercase()}"
         liveHeader.text = "Live channels · ${channels.size}"

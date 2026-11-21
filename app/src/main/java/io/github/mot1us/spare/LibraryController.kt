@@ -304,7 +304,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
     /** The rows are on screen or about to be: catalog updates and late grid pages must not replace them. */
     private fun homeActive() = panel.shelfCatalog != null || homeToken == epoch
     /** [data] fills in as category rows scroll into view and read their titles (see [loadShelf]). */
-    private class Home(val stamp: Long, val shelves: Map<String, String>, val data: MutableMap<String, CatalogShelves.Data>, val counts: Map<String, Int>)
+    /** [titles]: the catalog's title count when these rows were made; it changes when an older index is grouped into movie versions. */
+    private class Home(val stamp: Long, val shelves: Map<String, String>, val data: MutableMap<String, CatalogShelves.Data>, val counts: Map<String, Int>, val titles: Int = 0)
     private val shelfLoads = HashSet<String>()
     /** One category row's titles, read from the database when the row comes into view. Main thread. */
     private fun loadShelf(root: String, names: Map<String, String>, full: LibraryCatalog.Snapshot, id: String) {
@@ -341,7 +342,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 { next -> if (next != null && next in names) { gridFromHome = true; openCategory(selected, mode, root, names, next, focus = true) } }, focus,
                 initial = personal.mapValues { it.value.second } + home.data, rail = emptyMap(), search = { gridFromHome = true; homeSearch = true; activateCatalog(root, full, false) })
         }
-        val ready = homes[root]?.takeIf { it.stamp == full.updated }
+        val ready = homes[root]?.takeIf { it.stamp == full.updated && it.titles == repository.titleCount(full) }
         if (ready == null) panel.page(title, "Getting your library ready…", true)
         refreshIfDue(selected, mode, root, names, full)
         val visit = visit
@@ -363,15 +364,16 @@ class LibraryController(private val activity: Activity, private val store: Secur
             // Every category with titles gets a row; only the first few read their titles now, the rest as they scroll into view.
             names.keys.filter { (rows.counts[it] ?: 0) > 0 }.forEach { id -> shelves[id] = names[id].orEmpty() }
             rows.categories.forEach { (id, items) -> data[id] = CatalogShelves.Data(items.map(::browserRow), rows.counts[id] ?: items.size, busy = false) }
-            val built = Home(full.updated, shelves, data, rows.counts)
+            val built = Home(full.updated, shelves, data, rows.counts, repository.titleCount(full))
             ui(token) { homes[root] = built; while (homes.size > 4) homes.remove(homes.keys.first()); show(built, personal) }
         }
         homeToken = epoch
     }
     private fun homeNote(root: String, full: LibraryCatalog.Snapshot): String {
         val checking = refreshing[root]?.isDone == false
-        if (checking && LibraryCatalog.outgrown(full)) return "${counted(full.count, "title")} · Getting the rest of your titles…"
-        return "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis(), checking = checking)}"
+        val titles = counted(repository.titleCount(full), "title")
+        if (checking && LibraryCatalog.outgrown(full)) return "$titles · Getting the rest of your titles…"
+        return "$titles · ${savedAge(full.updated, System.currentTimeMillis(), checking = checking)}"
     }
     /**
      * A saved catalog older than [LibraryCatalog.REFRESH_AFTER], or cut short by an older title limit, downloads again quietly once its rows are open. The rows and
@@ -394,7 +396,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
                 if (replaced != null) { Timings.since("Catalog refresh", began); Diagnostics.library("Catalog refreshed in ${(Timings.now() - began) / 1000} s · ${replaced.count} titles") }
                 else Diagnostics.library("Catalog refresh ${result.exceptionOrNull()?.let { "failed · ${SourceErrors.message(it)}" } ?: "found nothing newer"}")
                 if (opened && panel.shelfCatalog == root && homes[root]?.stamp == full.updated)
-                    panel.page(title, if (replaced != null) "${counted(replaced.count, "title")} · ${savedAge(replaced.updated, System.currentTimeMillis())}" else homeNote(root, full), false)
+                    panel.page(title, if (replaced != null) "${counted(repository.titleCount(replaced), "title")} · ${savedAge(replaced.updated, System.currentTimeMillis())}" else homeNote(root, full), false)
             }
         }
         refreshing[root] = job
@@ -568,7 +570,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
     private fun activateCatalog(key: String, snapshot: LibraryCatalog.Snapshot, busy: Boolean) {
         activeCatalog = key; activeSnapshot = snapshot; catalogImporting = busy
         activeCatalogTitle = if (kind == "movie") "Movies" else "Series"
-        panel.page(if (kind == "movie") "Movies" else "Series", if (busy) "Loading more titles in the background…" else counted(snapshot.count, "title"), busy)
+        panel.page(if (kind == "movie") "Movies" else "Series", if (busy) "Loading more titles in the background…" else counted(repository.titleCount(snapshot), "title"), busy)
         panel.hideLoading()
         val groups = snapshot.categories + snapshot.labels.mapKeys { "Category ${it.key}" }
         panel.bindCatalog(key, groups, { group, query ->
@@ -660,12 +662,34 @@ class LibraryController(private val activity: Activity, private val store: Secur
             ui(token) { playingEpisodes = if (item.kind == "episode") episodeList.filter { it.seriesId == item.seriesId }.map { it.copy(playlistId = selected.id) } else emptyList(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; play(item.copy(playlistId = selected.id), position) }
         }
     }
+    /** Each opened movie's versions, best first for this TV, and the one Play starts (see [MovieVersions]). */
+    private val versionChoices = mutableMapOf<String, Pair<List<OnDemand>, OnDemand?>>()
     private fun openDetails(selected: Source, item: OnDemand) {
         val key = "${selected.id}:${item.id}"; detailItem = details[key] ?: item
-        fun render(value: OnDemand, busy: Boolean) { detailItem = value; panel.detail(value, button, { playSelected(detailItem ?: value) }, busy); presentFavorites() }
+        // Worked out on every visit: the version watched since may now be the one to resume.
+        versionChoices.remove(key)
+        fun render(value: OnDemand, busy: Boolean) {
+            detailItem = value
+            val (versions, preferred) = versionChoices[key] ?: (emptyList<OnDemand>() to null)
+            val names = MovieVersions.names(versions)
+            panel.detail(value, button, { playSelected(preferred ?: detailItem ?: value) }, busy,
+                versions.mapIndexed { index, version -> names[index] to { playSelected(version) } }, preferred?.let { names.getOrNull(versions.indexOf(it)) }.orEmpty())
+            presentFavorites()
+        }
         render(detailItem!!, details[key] == null)
-        if (details[key] != null) return
         request { token ->
+            run {
+                val found = runCatching { repository.versions(selected, item) }.getOrDefault(listOf(item))
+                val choice = if (found.size < 2) emptyList<OnDemand>() to null else {
+                    val ordered = MovieVersions.order(found, DolbyVision.supported(panel.context))
+                    // A version already part-watched is the one Play resumes; otherwise the best one for this TV.
+                    val watched = runCatching { store.watchProgress(selected).map { it.item.id }.toSet() }.getOrDefault(emptySet())
+                    ordered to (ordered.firstOrNull { it.id in watched } ?: ordered.first())
+                }
+                if (found.size > 1) Diagnostics.library("${found.size} versions · Play starts ${choice.second?.let { MovieVersions.label(it.title).text }}")
+                ui(token) { versionChoices[key] = choice; while (versionChoices.size > 50) versionChoices.remove(versionChoices.keys.first()); render(detailItem ?: item, details[key] == null) }
+            }
+            if (details[key] != null) return@request
             val began = Timings.now()
             val provider = runCatching { VodCatalog.details(selected, item) }.getOrDefault(item)
             Timings.since("Movie details", began)

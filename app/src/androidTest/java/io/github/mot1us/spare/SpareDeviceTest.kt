@@ -681,6 +681,45 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aMovieListedInSeveralVersionsShowsOnceAndItsDetailsOfferEachVersion() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            fun movie(id: Int, name: String, category: Int) = OnDemand("movie:$id", name, "Category $category", "${server.base}/movie/test/test-secret/$id.mp4", "movie", poster = "${server.base}/logo.png", added = 1_700_000_000L + id, rating = 5f)
+            // One movie in three versions (two in the same category), and two other films.
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie").run {
+                append(listOf(movie(9001, "4KDV: Fixture Heroes (2011)", 1), movie(9002, "Another fixture film (2020)", 1), movie(9003, "4K: Fixture Heroes (2011)", 2),
+                    movie(9004, "Fixture Heroes (2011)", 1), movie(9005, "Fixture comedy (2019)", 3)))
+                finish(mapOf("1" to "Fixture cinema", "2" to "Action", "3" to "Comedy"))
+            }
+            seeded.close()
+            fun text(scenario: ActivityScenario<MainActivity>, tag: String): String { var value = ""; scenario.onActivity { value = it.window.decorView.findViewWithTag<TextView>(tag)?.text?.toString().orEmpty() }; return value }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                // Five entries, three movies.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-shelves").isShown && text(scenario, "library-status") == "3 titles · Saved today" }
+                // Searching finds the movie once, under its name without version tags.
+                scenario.onActivity { it.window.decorView.findViewWithTag<android.widget.EditText>("library-search").setText("Fixture Heroes") }
+                waitFor(scenario) { a -> a.window.decorView.findViewWithTag<RecyclerView>("library-items").let { it.isShown && it.adapter?.itemCount == 1 } && a.window.decorView.findViewWithTag<View>("library-item:movie:9001")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-item:movie:9001").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-versions")?.isShown == true }
+                scenario.onActivity { a -> val view = a.window.decorView
+                    assertEquals("Fixture Heroes (2011)", view.findViewWithTag<TextView>("library-spot-title").text.toString())
+                    // The emulator has no Dolby Vision display, so the 4K copy leads and Dolby Vision is last, still one press away.
+                    assertEquals(listOf("4K", "Standard", "4K Dolby Vision"), (0..2).map { view.findViewWithTag<TextView>("library-version:$it").text.toString() })
+                    assertEquals("▶  Play · 4K", view.findViewWithTag<TextView>("library-play").text.toString())
+                }
+                assertTrue(Diagnostics.report(), "3 versions · Play starts 4K" in Diagnostics.report())
+                device.takeScreenshot(File(context.getExternalFilesDir(null), "library-versions.png"))
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-version:2").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/movie/test/test-secret/9001.mp4" }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)
@@ -4523,6 +4562,14 @@ class SpareDeviceTest {
                 // This test's voice search times out and returns focus to Voice, so place focus directly.
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").requestFocus() }
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.hasFocus() == true }
+                // Posters carry no text, as in Library: the title under the cursor and what it is show above the grid.
+                scenario.onActivity { activity -> val root = activity.window.decorView
+                    assertEquals("Fixture movie", root.findViewWithTag<TextView>("search-spot-title").text.toString())
+                    assertTrue(root.findViewWithTag<TextView>("search-spot-meta").text.toString(), root.findViewWithTag<TextView>("search-spot-meta").text.startsWith("Movie"))
+                    val tile = root.findViewWithTag<ViewGroup>("search-result:movie:101"); val words = mutableListOf<String>()
+                    fun texts(view: View) { if (view is TextView && view.isShown && view.text.isNotBlank() && view.tag != "poster-placeholder") words += view.text.toString(); (view as? ViewGroup)?.let { g -> (0 until g.childCount).forEach { texts(g.getChildAt(it)) } } }
+                    texts(tile); assertTrue("A search poster carries no text: $words", words.isEmpty())
+                }
                 device.pressDPadUp()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-kind:vod")?.hasFocus() == true }
                 instrumentation.waitForIdleSync(); device.waitForIdle()

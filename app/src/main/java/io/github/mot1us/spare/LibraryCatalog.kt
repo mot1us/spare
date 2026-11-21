@@ -52,12 +52,52 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     data class Page(val entries: List<OnDemand>, val cursor: Int, val more: Boolean)
     /** What browsing filters on, per title position, for a whole catalog. About 100 bytes a title instead of every field. */
-    class Index(val keys: Array<String>, private val canonical: IntArray, val cats: Array<String>, val added: LongArray, val rating: FloatArray) {
+    class Index(val keys: Array<String>, private val canonical: IntArray, val cats: Array<String>, val added: LongArray, val rating: FloatArray,
+        /** Each title's provider number ("movie:123" → 123), so a title can be found again (see [positionOf]). */
+        private val ids: LongArray = LongArray(keys.size),
+        /**
+         * Versions of one movie ("4KDV: A Film", "4K: A Film", "A Film") share the position of the first of them in [first],
+         * and [next] links them in provider order (-1 ends the list). A title on its own is its own first.
+         */
+        private val first: IntArray = IntArray(keys.size) { it }, private val next: IntArray = IntArray(keys.size) { -1 },
+        /** False for an index saved before versions were grouped; [LibraryCatalog] groups it again in the background. */
+        val grouped: Boolean = true) {
         val size get() = keys.size
-        val counts: Map<String, Int> = HashMap<String, Int>().also { counts -> cats.forEach { counts[it] = (counts[it] ?: 0) + 1 } }
+        /** Titles per category, each movie once however many of its versions the category holds. */
+        val counts: Map<String, Int> = HashMap<String, Int>().also { counts ->
+            for (pos in cats.indices) if (!repeatsInCategory(pos)) counts[cats[pos]] = (counts[cats[pos]] ?: 0) + 1
+        }
+        /** Movies, not entries: the versions of one movie count once. */
+        val works: Int = (0 until size).count { first[it] == it }
+        /** Whether an earlier version of the same movie also passes [accept], so a list that shows that one leaves this one out. */
+        fun hidden(pos: Int, accept: (Int) -> Boolean): Boolean {
+            if (first[pos] == pos) return false
+            var at = first[pos]
+            while (at in 0 until pos) { if (accept(at)) return true; at = next[at] }
+            return false
+        }
+        /** Whether an earlier version of the same movie is in this one's category: a category list shows only that one. */
+        fun repeatsInCategory(pos: Int): Boolean {
+            if (first[pos] == pos) return false
+            var at = first[pos]
+            while (at in 0 until pos) { if (cats[at] == cats[pos]) return true; at = next[at] }
+            return false
+        }
+        /** Every version of the movie at [pos], in provider order. */
+        fun members(pos: Int): List<Int> {
+            val result = ArrayList<Int>(2); var at = first[pos]
+            while (at >= 0 && result.size < 32) { result.add(at); at = next[at] }
+            return result
+        }
+        fun versions(pos: Int) = if (first[pos] == pos && next[pos] < 0) 1 else members(pos).size
+        fun positionOf(id: String): Int {
+            val number = id.substringAfter(':').toLongOrNull() ?: return -1
+            for (pos in ids.indices) if (ids[pos] == number) return pos
+            return -1
+        }
         /** Positions whose matching key (see [Title.canonical]) has this hash; the caller checks the titles themselves. */
         fun canonical(key: String): List<Int> { val hash = key.hashCode(); return (0 until size).filter { canonical[it] == hash }.takeLast(64) }
-        /** Keep just enough positions for each shelf, in the same order as the full stable sort. */
+        /** Keep just enough positions for each shelf, in the same order as the full stable sort, one version of each movie. */
         internal fun homeRanks(limit: Int): Pair<List<Int>, List<Int>> {
             if (limit <= 0) return emptyList<Int>() to emptyList()
             val newest = compareByDescending<Int> { added[it] }.thenBy { it }
@@ -71,44 +111,114 @@ class LibraryCatalog(private val store: SecureStore) {
                     queue.add(position)
                 }
             }
+            val dated: (Int) -> Boolean = { added[it] > 0 }; val rated: (Int) -> Boolean = { rating[it] > 0f }
             for (position in 0 until size) {
                 if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Library rows cancelled")
-                if (added[position] > 0) keep(recent, newest, position)
-                if (rating[position] > 0f) keep(top, topRated, position)
+                if (added[position] > 0 && !hidden(position, dated)) keep(recent, newest, position)
+                if (rating[position] > 0f && !hidden(position, rated)) keep(top, topRated, position)
             }
             return recent.sortedWith(newest) to top.sortedWith(topRated)
         }
         fun bytes(gen: String): ByteArray {
             val out = java.io.ByteArrayOutputStream(size * 64)
             java.io.DataOutputStream(out).use { data ->
-                data.writeInt(2); data.writeUTF(gen); data.writeInt(size)
-                for (pos in 0 until size) { data.writeUTF(keys[pos]); data.writeInt(canonical[pos]); data.writeUTF(cats[pos]); data.writeLong(added[pos]); data.writeFloat(rating[pos]) }
+                data.writeInt(if (grouped) 3 else 2); data.writeUTF(gen); data.writeInt(size)
+                for (pos in 0 until size) {
+                    data.writeUTF(keys[pos]); data.writeInt(canonical[pos]); data.writeUTF(cats[pos]); data.writeLong(added[pos]); data.writeFloat(rating[pos])
+                    if (grouped) { data.writeLong(ids[pos]); data.writeInt(first[pos]) }
+                }
             }
             return out.toByteArray()
         }
         companion object {
+            /** Version 2 files (before 0.52.0) have no versions: the index reads with [grouped] false. */
             fun read(bytes: ByteArray, gen: String): Index? = runCatching {
                 java.io.DataInputStream(bytes.inputStream()).use { data ->
-                    require(data.readInt() == 2); if (data.readUTF() != gen) return@runCatching null
+                    val version = data.readInt(); require(version == 2 || version == 3); if (data.readUTF() != gen) return@runCatching null
                     val size = data.readInt(); require(size in 0..500_000)
                     val builder = Builder(size)
-                    repeat(size) { builder.add(data.readUTF().take(256), data.readInt(), data.readUTF().take(128), data.readLong(), data.readFloat().takeIf { it.isFinite() } ?: 0f) }
-                    builder.build()
+                    repeat(size) { at ->
+                        builder.add(data.readUTF().take(256), data.readInt(), data.readUTF().take(128), data.readLong(), data.readFloat().takeIf { it.isFinite() } ?: 0f)
+                        if (version == 3) { builder.identify(at, data.readLong()); builder.join(at, data.readInt()) }
+                    }
+                    builder.build(grouped = version == 3)
                 }
             }.getOrNull()
+            private fun hash(text: String): Long {
+                var value = -0x340d631b7bdddcdbL
+                for (char in text) { value = value xor char.code.toLong(); value *= 0x100000001b3L }
+                return value
+            }
+            private val numbered = Regex("[1-9]")
+            /** What makes two titles versions of one movie: the same cleaned-up title and year, or the same provider movie ID and year. */
+            internal fun versionKeys(title: Title): LongArray {
+                val item = OnDemand(title.id, title.name, title.category, year = title.year)
+                // Worked out again from the name: a copy saved by an older version kept the older cleanup.
+                val name = if (title.savedCanonical.isEmpty()) title.canonical else VodStart.titleKey(item)
+                val year = VodStart.release(item)
+                val external = title.externalId.takeIf { numbered.containsMatchIn(it) }
+                return when {
+                    name.length < 2 && external == null -> LongArray(0)
+                    name.length < 2 -> longArrayOf(hash("x:$external|$year"))
+                    external == null -> longArrayOf(hash("t:$name|$year"))
+                    else -> longArrayOf(hash("t:$name|$year"), hash("x:$external|$year"))
+                }
+            }
         }
-        class Builder(capacity: Int = 1024) {
+        /** [versions]: group the versions of one movie (Movies only; a series' versions differ episode by episode). */
+        class Builder(capacity: Int = 1024, private val versions: Boolean = false) {
             private val keys = ArrayList<String>(capacity); private val cats = ArrayList<String>(capacity)
             private var canonical = IntArray(capacity); private var added = LongArray(capacity); private var rating = FloatArray(capacity)
+            private var ids = LongArray(capacity); private var parent = IntArray(capacity)
             private val shared = HashMap<String, String>()
+            private val works = LongIntMap()
             val size get() = keys.size
-            fun add(title: Title) = add(title.key, title.canonical.hashCode(), title.category, title.added, title.rating)
+            fun add(title: Title) {
+                val at = keys.size
+                add(title.key, title.canonical.hashCode(), title.category, title.added, title.rating)
+                identify(at, title.id.substringAfter(':').toLongOrNull() ?: 0L)
+                if (versions) for (key in versionKeys(title)) { val other = works.putIfAbsent(key, at); if (other >= 0) join(at, other) }
+            }
             fun add(key: String, canonicalHash: Int, category: String, date: Long, score: Float) {
                 val at = keys.size
-                if (at == added.size) { val grown = maxOf(16, at * 2); canonical = canonical.copyOf(grown); added = added.copyOf(grown); rating = rating.copyOf(grown) }
-                keys.add(key); cats.add(shared.getOrPut(category) { category }); canonical[at] = canonicalHash; added[at] = date; rating[at] = score
+                if (at == added.size) { val grown = maxOf(16, at * 2); canonical = canonical.copyOf(grown); added = added.copyOf(grown); rating = rating.copyOf(grown); ids = ids.copyOf(grown); parent = parent.copyOf(grown) }
+                keys.add(key); cats.add(shared.getOrPut(category) { category }); canonical[at] = canonicalHash; added[at] = date; rating[at] = score; parent[at] = at
             }
-            fun build() = Index(keys.toTypedArray(), canonical.copyOf(size), cats.toTypedArray(), added.copyOf(size), rating.copyOf(size))
+            internal fun identify(at: Int, id: Long) { ids[at] = id }
+            private fun root(position: Int): Int {
+                var top = position; while (parent[top] != top) top = parent[top]
+                var at = position; while (parent[at] != top) { val up = parent[at]; parent[at] = top; at = up }
+                return top
+            }
+            /** The first (lowest) position stays the root, so it is the version every list shows unless a filter skips it. */
+            internal fun join(a: Int, b: Int) {
+                if (b !in 0 until keys.size) return
+                val x = root(a); val y = root(b)
+                if (x < y) parent[y] = x else if (y < x) parent[x] = y
+            }
+            fun build(grouped: Boolean = true): Index {
+                val count = size
+                val first = IntArray(count) { root(it) }; val next = IntArray(count) { -1 }; val last = IntArray(count) { -1 }
+                for (pos in 0 until count) { val top = first[pos]; if (top != pos && last[top] >= 0) next[last[top]] = pos; last[top] = pos }
+                return Index(keys.toTypedArray(), canonical.copyOf(count), cats.toTypedArray(), added.copyOf(count), rating.copyOf(count), ids.copyOf(count), first, next, grouped)
+            }
+        }
+        /** Work key → first position, without boxing: a 130,000-title catalog adds up to two keys a title. */
+        private class LongIntMap {
+            private var keys = LongArray(1024); private var values = IntArray(1024) { -1 }; private var used = BooleanArray(1024); private var count = 0
+            /** The position already stored for [key], or -1 after storing [value]. */
+            fun putIfAbsent(key: Long, value: Int): Int {
+                if (count * 2 >= keys.size) grow()
+                var slot = ((key xor (key ushr 29)) and (keys.size - 1).toLong()).toInt()
+                while (used[slot]) { if (keys[slot] == key) return values[slot]; slot = (slot + 1) and (keys.size - 1) }
+                used[slot] = true; keys[slot] = key; values[slot] = value; count++
+                return -1
+            }
+            private fun grow() {
+                val oldKeys = keys; val oldValues = values; val oldUsed = used
+                keys = LongArray(oldKeys.size * 2); values = IntArray(oldKeys.size * 2) { -1 }; used = BooleanArray(oldKeys.size * 2); count = 0
+                for (i in oldKeys.indices) if (oldUsed[i]) putIfAbsent(oldKeys[i], oldValues[i])
+            }
         }
     }
     private fun indexKey(scope: String, gen: String) = "$scope\n$gen"
@@ -117,7 +227,26 @@ class LibraryCatalog(private val store: SecureStore) {
         if (!snapshot.whole || snapshot.dbScope == null || snapshot.dbGen == null) return null
         val key = indexKey(snapshot.dbScope, snapshot.dbGen)
         indexes[key]?.let { return it }
-        return synchronized(indexes) { indexes[key] ?: runCatching { rebuildIndex(snapshot.dbScope, snapshot.dbGen) }.getOrNull()?.takeIf { it.size > 0 }?.also { indexes[key] = it } }
+        return synchronized(indexes) { indexes[key] ?: runCatching { rebuildIndex(snapshot.dbScope, snapshot.dbGen, versions = snapshot.dbScope.endsWith(":movie:")) }.getOrNull()?.takeIf { it.size > 0 }?.also { indexes[key] = it } }
+    }
+    private val grouping = java.util.concurrent.Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog-versions") }
+    /**
+     * A Movies index saved before versions were grouped (0.51.x) opens as it is, and is grouped again here from the saved
+     * titles. On a 130,000-title catalog that reads every title, so Library does not wait for it.
+     */
+    private fun groupLater(scope: String, gen: String, prefix: String) {
+        val key = indexKey(scope, gen)
+        if (!regrouping.add(key)) return
+        grouping.execute {
+            val began = Timings.now()
+            runCatching { rebuildIndex(scope, gen, versions = true) }.onSuccess { built ->
+                if (indexes.replace(key, built) != null) {
+                    runCatching { store.write("${prefix}keys.enc", built.bytes(gen)) }
+                    Diagnostics.library("Movie versions grouped in ${Timings.now() - began} ms · ${built.works} movies from ${built.size} titles")
+                    changed?.invoke()
+                }
+            }.onFailure { regrouping.remove(key) }
+        }
     }
     /** Whether a catalog has titles in provider category [scope]. */
     fun hasCategory(snapshot: Snapshot, scope: String) = hasGroup(snapshot, "Category $scope")
@@ -139,7 +268,7 @@ class LibraryCatalog(private val store: SecureStore) {
         indexes.keys.removeAll { it.startsWith("$sourceId:") }; missing.keys.removeAll { it.startsWith("$sourceId:") }
         synchronized(publishLock) { held.keys.removeAll { it.startsWith("$sourceId:") } }
     }
-    fun close() { jobs.close(); categoryJobs.close() }
+    fun close() { jobs.close(); categoryJobs.close(); grouping.shutdownNow() }
     private val publishLock = Any()
     private val writers = mutableMapOf<String, String>()
     /**
@@ -190,10 +319,33 @@ class LibraryCatalog(private val store: SecureStore) {
         return if (size == 0) null else full.copy(labels = names, scopeGroup = group, scopeCount = size)
     }
     class HomeRows(val recent: List<OnDemand>, val top: List<OnDemand>, val categories: Map<String, List<OnDemand>>, val counts: Map<String, Int>)
-    private fun items(snapshot: Snapshot, titles: List<Title>, names: Map<String, String>): List<OnDemand> {
-        val source = snapshot.source ?: return emptyList()
-        return titles.filter { available(source, it.id) }.map { title -> title.item(source).let { it.copy(category = names[it.category.removePrefix("Category ")] ?: it.category) } }
+    /** The titles at [positions], read from the database; a movie with several versions is listed under its name without version tags. */
+    private fun listed(snapshot: Snapshot, index: Index, positions: List<Int>, label: (String) -> String) = listedAt(snapshot, index, positions, label).map { it.second }
+    private fun listedAt(snapshot: Snapshot, index: Index, positions: List<Int>, label: (String) -> String): List<Pair<Int, OnDemand>> {
+        val source = snapshot.source ?: return emptyList(); val scope = snapshot.dbScope ?: return emptyList(); val gen = snapshot.dbGen ?: return emptyList()
+        if (positions.isEmpty()) return emptyList()
+        val titles = store.catalogDb.titlesAt(scope, gen, positions)
+        // titlesAt skips positions that are gone, so pair titles back to positions by reading them one at a time then.
+        val paired = if (titles.size == positions.size) positions.zip(titles) else positions.mapNotNull { pos -> store.catalogDb.titlesAt(scope, gen, listOf(pos)).firstOrNull()?.let { pos to it } }
+        return paired.filter { available(source, it.second.id) }.map { (pos, title) ->
+            val shown = if (index.versions(pos) > 1) title.copy(name = MovieVersions.title(title.name)) else title
+            pos to shown.item(source).let { it.copy(category = label(it.category)) }
+        }
     }
+    /** Every version of [item]'s movie in the saved Movies catalog, in provider order; just [item] when it has no others. */
+    fun versions(source: Source, item: OnDemand): List<OnDemand> {
+        if (item.kind != "movie") return listOf(item)
+        val snapshot = memory(source, "movie")?.takeIf { it.whole && it.dbScope != null && it.dbGen != null } ?: return listOf(item)
+        val index = indexOf(snapshot) ?: return listOf(item)
+        val pos = index.positionOf(item.id).takeIf { it >= 0 } ?: return listOf(item)
+        val members = index.members(pos).takeIf { it.size > 1 } ?: return listOf(item)
+        return store.catalogDb.titlesAt(snapshot.dbScope!!, snapshot.dbGen!!, members).filter { available(source, it.id) }
+            .map { title -> title.item(source).let { it.copy(category = snapshot.label(it.category)) } }.ifEmpty { listOf(item) }
+    }
+    /** How many titles to say a catalog has: each movie once, however many versions the provider lists. */
+    /** Never reads the database (it is called on the UI thread): a catalog without its index in memory gives its entry count. */
+    fun titleCount(snapshot: Snapshot): Int =
+        if (snapshot.whole && snapshot.dbScope != null && snapshot.dbGen != null) indexes[indexKey(snapshot.dbScope, snapshot.dbGen)]?.works ?: snapshot.count else snapshot.count
     /**
      * The rows home: newest, best rated, how many titles each category has, and the first titles of the first [eager]
      * categories. Every other category row reads its titles with [row] when it scrolls into view.
@@ -209,7 +361,7 @@ class LibraryCatalog(private val store: SecureStore) {
         for (pos in 0 until index.size) {
             if (remaining == 0) break
             val list = wanted[index.cats[pos].removePrefix("Category ")] ?: continue
-            if (list.size < perRow) {
+            if (list.size < perRow && !index.repeatsInCategory(pos)) {
                 list.add(pos)
                 remaining--
             }
@@ -217,11 +369,9 @@ class LibraryCatalog(private val store: SecureStore) {
         val (recent, top) = index.homeRanks(special)
         val positions = (recent + top + wanted.values.flatten()).distinct()
         val pickedAt = Timings.now()
-        val byId = store.catalogDb.titlesAt(scope, gen, positions)
-        Diagnostics.library("Rows picked in ${pickedAt - homeBegan} ms · ${byId.size} titles read in ${Timings.now() - pickedAt} ms")
-        // titlesAt skips positions that are gone, so pair titles back to positions by reading them one list at a time.
-        val byPos = if (byId.size == positions.size) positions.zip(byId).toMap() else positions.associateWith { store.catalogDb.titlesAt(scope, gen, listOf(it)).firstOrNull() }.filterValues { it != null }.mapValues { it.value!! }
-        fun at(list: List<Int>) = items(snapshot, list.mapNotNull(byPos::get), names)
+        val byPos = listedAt(snapshot, index, positions) { names[it.removePrefix("Category ")] ?: it }.toMap()
+        Diagnostics.library("Rows picked in ${pickedAt - homeBegan} ms · ${byPos.size} titles read in ${Timings.now() - pickedAt} ms")
+        fun at(list: List<Int>) = list.mapNotNull(byPos::get)
         val builtAt = Timings.now()
         return HomeRows(at(recent), at(top), wanted.mapValues { at(it.value) }, counts).also { Diagnostics.library("Rows built in ${Timings.now() - builtAt} ms") }
     }
@@ -229,8 +379,8 @@ class LibraryCatalog(private val store: SecureStore) {
     fun row(snapshot: Snapshot, scope: String, names: Map<String, String>, perRow: Int = 20): List<OnDemand> {
         val index = indexOf(snapshot) ?: return emptyList(); val group = "Category $scope"
         val positions = ArrayList<Int>(perRow)
-        for (pos in 0 until index.size) { if (index.cats[pos] == group) { positions.add(pos); if (positions.size == perRow) break } }
-        return items(snapshot, store.catalogDb.titlesAt(snapshot.dbScope!!, snapshot.dbGen!!, positions), names)
+        for (pos in 0 until index.size) { if (index.cats[pos] == group && !index.repeatsInCategory(pos)) { positions.add(pos); if (positions.size == perRow) break } }
+        return listed(snapshot, index, positions) { names[it.removePrefix("Category ")] ?: it }
     }
     /** Titles matching a guide programme (Watch from start): found through the in-memory index, read from the database. */
     fun matches(source: Source, request: VodStart.Request): List<OnDemand> {
@@ -276,8 +426,9 @@ class LibraryCatalog(private val store: SecureStore) {
             Diagnostics.library("$mode index file read in ${Timings.now() - fileBegan} ms · ${(file?.size ?: 0) / 1024} KB")
             val parseBegan = Timings.now()
             val index = file?.let { Index.read(it, meta.gen) }?.also { Diagnostics.library("$mode index parsed in ${Timings.now() - parseBegan} ms · ${it.size} titles") }
-                ?: rebuildIndex(wholeKey, meta.gen).also { Diagnostics.library("$mode index rebuilt from the database in ${Timings.now() - parseBegan} ms"); runCatching { store.write("${prefix}keys.enc", it.bytes(meta.gen)) } }
+                ?: rebuildIndex(wholeKey, meta.gen, versions = mode == "movie").also { Diagnostics.library("$mode index rebuilt from the database in ${Timings.now() - parseBegan} ms"); runCatching { store.write("${prefix}keys.enc", it.bytes(meta.gen)) } }
             indexes[indexKey(wholeKey, meta.gen)] = index
+            if (mode == "movie" && !index.grouped) groupLater(wholeKey, meta.gen, prefix)
             return Snapshot(meta.updated, emptyList(), index.size, meta.labels, complete = meta.complete, source = source, dbScope = wholeKey, dbGen = meta.gen, whole = true, capped = meta.capped)
                 .also { remember(prefix, it); Timings.since("Saved category", restoreBegan) }
         }
@@ -290,8 +441,8 @@ class LibraryCatalog(private val store: SecureStore) {
         old.second.chunked(64).forEach(writer::append)
         return writer.finish(emptyMap()).also { store.delete("library-${source.id}-$mode.enc") }
     }
-    private fun rebuildIndex(scope: String, gen: String): Index {
-        val builder = Index.Builder(); var offset = 0
+    private fun rebuildIndex(scope: String, gen: String, versions: Boolean): Index {
+        val builder = Index.Builder(versions = versions); var offset = 0
         while (true) { val page = store.catalogDb.titles(scope, gen, offset, 500); if (page.isEmpty()) break; page.forEach(builder::add); offset += page.size }
         return builder.build()
     }
@@ -396,7 +547,7 @@ class LibraryCatalog(private val store: SecureStore) {
         private var count = 0
         private val whole = scope.isEmpty()
         private val dbKey = store.catalogDb.scopeKey(source, mode, scope)
-        private val index = if (whole) Index.Builder() else null
+        private val index = if (whole) Index.Builder(versions = mode == "movie") else null
         val size get() = count + pending.size
         init { synchronized(publishLock) { writers[prefix] = generation } }
         private fun requireCurrent() {
@@ -458,17 +609,18 @@ class LibraryCatalog(private val store: SecureStore) {
     /** Filter and search on the in-memory index, then read only the matching page of titles from the database. */
     private fun queryWhole(snapshot: Snapshot, group: String?, query: String, cursor: Int, limit: Int): Page {
         val index = indexOf(snapshot) ?: return Page(emptyList(), snapshot.count, false)
-        val source = snapshot.source!!; val key = ChannelSearch.key(query)
+        if (snapshot.source == null) return Page(emptyList(), snapshot.count, false)
+        val key = ChannelSearch.key(query)
         val selected = (group ?: snapshot.scopeGroup)?.let { wanted -> if (wanted.startsWith("Category ")) wanted else snapshot.labels.entries.firstOrNull { it.value == wanted }?.let { "Category ${it.key}" } ?: wanted }
         val end = minOf(snapshot.count, index.size); val picked = ArrayList<Int>(limit); var pos = cursor.coerceAtLeast(0)
+        // One version of each movie: a version is left out when an earlier one of the same movie also matches.
+        val accept: (Int) -> Boolean = { at -> (selected == null || index.cats[at] == selected) && (key.isEmpty() || index.keys[at].contains(key)) }
         while (pos < end && picked.size < limit) {
-            if ((selected == null || index.cats[pos] == selected) && (key.isEmpty() || index.keys[pos].contains(key))) picked.add(pos)
+            if (accept(pos) && !index.hidden(pos, accept)) picked.add(pos)
             pos++
             if (pos and 4095 == 0 && Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Catalog query cancelled")
         }
-        val titles = store.catalogDb.titlesAt(snapshot.dbScope!!, snapshot.dbGen!!, picked)
-        val entries = titles.filter { available(source, it.id) }.map { title -> title.item(source).let { it.copy(category = snapshot.label(it.category)) } }
-        return Page(entries, pos, picked.size == limit && pos < end)
+        return Page(listed(snapshot, index, picked, snapshot::label), pos, picked.size == limit && pos < end)
     }
     private fun queryStored(snapshot: Snapshot, query: String, cursor: Int, limit: Int): Page {
         val source = snapshot.source!!; val key = ChannelSearch.key(query); val result = mutableListOf<OnDemand>(); var offset = cursor
@@ -522,6 +674,7 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     companion object {
         private val indexes = java.util.concurrent.ConcurrentHashMap<String, Index>()
+        private val regrouping = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
         /** 4 adds each title's provider "added" time and rating; older saved catalogs are refreshed once. */
         const val SCHEMA = 4
         /** The longest pause a background refresh takes after one batch of titles. */
