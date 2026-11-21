@@ -15,6 +15,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
+import androidx.core.view.isEmpty
 import androidx.core.view.isVisible
 import androidx.leanback.widget.BaseGridView
 import androidx.leanback.widget.VerticalGridView
@@ -281,6 +282,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
                 holder.box.setOnFocusChangeListener { _, active -> if (active) { rememberedKey = item.key; ++focusEpoch; pending = null; shownRows.getOrNull(holder.bindingAdapterPosition)?.let(::showSpot) } }
+                scheduleGridReadAhead()
             }
         }
         categories.setOnKeyInterceptListener { event ->
@@ -592,6 +594,17 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         spotMeta.text = spot?.meta?.takeIf { it.isNotBlank() } ?: listOf(series.year, series.category).filter { it.isNotBlank() }.joinToString("  ·  ")
         spotPlot.text = spot?.plot.orEmpty().ifBlank { series.description }
         spotArtwork(spot?.backdrop.orEmpty().ifBlank { series.backdrop.ifBlank { series.poster } })
+    }
+    /** Once the remote rests in a grid, the next two lines of posters below the screen load, as [CatalogShelves] does for rows. */
+    private val gridReadAhead = Runnable { readGridAhead() }
+    private fun scheduleGridReadAhead() { rows.removeCallbacks(gridReadAhead); if (rows.isShown) rows.postDelayed(gridReadAhead, CatalogShelves.READ_AHEAD_DELAY_MS) }
+    private fun readGridAhead() {
+        if (!rows.isShown || rows.isEmpty() || shownRows.isEmpty()) return
+        if (images.backlog > 0 || images.quietFor() > 0) { scheduleGridReadAhead(); return }
+        val last = (0 until rows.childCount).maxOf { rows.getChildAdapterPosition(rows.getChildAt(it)) }
+        if (last < 0) return
+        shownRows.subList(minOf(shownRows.size, last + 1), minOf(shownRows.size, last + 1 + columns * CatalogShelves.READ_AHEAD_ROWS))
+            .map { it.poster }.filter { it.isNotBlank() }.forEach { images.prefetch(it, artworkHttp, tileDecode) }
     }
     private fun showSpot(row: BrowserRow) {
         if (!spotlight.isVisible || detailPane.isVisible || seriesSpot != null) return

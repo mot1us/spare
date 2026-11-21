@@ -604,11 +604,68 @@ class SpareDeviceTest {
                 val saved = catalog.load(source, "movie")
                 assertTrue("The titles that fit are saved as a finished catalog", saved.complete && saved.whole)
                 assertEquals("Every title read before the limit is kept", 10, saved.count)
+                assertEquals("The copy notes the limit it stopped at", 10, saved.capped)
                 catalog.load(source, "movie")
                 assertEquals("A saved catalog that reached the limit is not downloaded again", 1, server.catalogTargets.count { "get_vod_streams" in it })
                 assertTrue(Diagnostics.report(), "Movies list is larger than Spare keeps · first 10 titles saved" in Diagnostics.report())
-            } finally { VodCatalog.maxTitles = Importers.MAX_CHANNELS; catalog.close(); store.saveSources(emptyList()); store.removeCache(source) }
+                // A newer Spare keeps more titles: the copy cut short by the old limit downloads again at once, though saved today.
+                VodCatalog.maxTitles = VodCatalog.MAX_TITLES
+                val restored = LibraryCatalog(store).let { cold -> try { cold.cached(source, "movie") } finally { cold.close() } }
+                assertTrue("A restored copy keeps its limit", restored != null && restored.capped == 10 && LibraryCatalog.outgrown(restored))
+                val grown = catalog.load(source, "movie")
+                assertEquals("The whole list is saved under the higher limit", 16, grown.count)
+                assertEquals(0, grown.capped)
+                catalog.load(source, "movie")
+                assertEquals("Then it is current again", 2, server.catalogTargets.count { "get_vod_streams" in it })
+            } finally { VodCatalog.maxTitles = VodCatalog.MAX_TITLES; catalog.close(); store.saveSources(emptyList()); store.removeCache(source) }
         }
+    }
+
+    @Test fun libraryRowsBelowTheScreenReadTheirTitlesAndPostersAhead() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true, shelfCategories = 12).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            // Twelve categories of 30 titles. The first 8 of each are its oldest and lowest rated, so only its own row shows them.
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie", stamp = System.currentTimeMillis() - 3600000L).apply {
+                (1..12).flatMap { c -> (1..30).map { j -> OnDemand("movie:${c * 100 + j}", "Shelf $c title $j", "Category $c", "${server.base}/movie/test/test-secret/${c * 100 + j}.mp4", "movie",
+                    poster = "${server.base}/art-c$c-$j.png", year = "2024", added = if (j <= 8) 1_000L + j else 1_700_000_000L + c * 100 + j, rating = if (j <= 8) 0f else 5f + j % 5) } }
+                    .chunked(64).forEach(::append)
+                finish((1..12).associate { "$it" to "Shelf $it" })
+            }
+            seeded.close()
+            fun firstPosters(id: String) = (1..CatalogShelves.COLUMNS).map { "/art-c$id-$it.png" }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { (it.currentFocus?.tag as? String)?.startsWith("library-item:") == true }
+                // The remote rests on the first row: the two rows just below the screen get their titles and first posters.
+                var ahead = emptyList<String>(); var beyond = emptyList<String>()
+                waitFor(scenario) { a ->
+                    val rows = a.window.decorView.findViewWithTag<CatalogShelves>("library-shelves")
+                    @Suppress("UNCHECKED_CAST") val order = (CatalogShelves::class.java.getDeclaredField("shelves").apply { isAccessible = true }.get(rows) as List<CatalogShelves.Shelf>).map { it.id }
+                    val last = (0 until rows.childCount).maxOf { rows.getChildAdapterPosition(rows.getChildAt(it)) }
+                    ahead = order.drop(last + 1).take(CatalogShelves.READ_AHEAD_ROWS); beyond = order.drop(last + 1 + CatalogShelves.READ_AHEAD_ROWS)
+                    ahead.size == CatalogShelves.READ_AHEAD_ROWS && beyond.isNotEmpty() && ahead.all { id -> firstPosters(id).all { (server.requests[it] ?: 0) > 0 } }
+                }
+                Thread.sleep(1500)
+                assertTrue("Rows further down wait until the remote comes nearer: ${server.requests.keys.filter { it.startsWith("/art-") }}", beyond.none { id -> firstPosters(id).any(server.requests::containsKey) })
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
+        // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
+        val db = android.database.sqlite.SQLiteDatabase.create(null)
+        try {
+            db.execSQL("CREATE TABLE meta(scope TEXT PRIMARY KEY, gen TEXT NOT NULL, updated INTEGER NOT NULL, complete INTEGER NOT NULL, count INTEGER NOT NULL, provider TEXT NOT NULL, labels BLOB NOT NULL)")
+            for ((scope, count) in listOf("cut" to 100_000, "whole" to 32_553)) db.execSQL("INSERT INTO meta VALUES (?, 'g', 0, 1, ?, 'p', x'00')", arrayOf<Any>(scope, count))
+            CatalogDb.upgrade(db, 1)
+            fun capped(scope: String) = db.rawQuery("SELECT capped FROM meta WHERE scope = ?", arrayOf(scope)).use { it.moveToFirst(); it.getInt(0) }
+            assertEquals("A list of exactly the old limit stopped there", 100_000, capped("cut"))
+            assertEquals("A shorter list is the provider's whole list", 0, capped("whole"))
+        } finally { db.close() }
     }
 
     @Test fun aBackgroundCatalogCheckCutOffByTheProviderTriesAgainAtOnce() {
@@ -6366,7 +6423,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0) : AutoCloseable {
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -6474,7 +6531,7 @@ class SpareDeviceTest {
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
                             // An event slot after its game: the provider answers with a page, not a playlist.
                             "/ended.m3u8" -> "<html><body>No event</body></html>".toByteArray() to "application/vnd.apple.mpegurl"
-                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
+                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (shelfCategories > 0) (1..shelfCategories).joinToString(",", "[", "]") { """{"category_id":"$it","category_name":"Shelf $it"}""" } else if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
                                 else if (target.contains("get_vod_streams")) when {
                                     slowVod -> slowMovies
                                     libraryCategories && target.contains("category_id=2") -> actionMovies

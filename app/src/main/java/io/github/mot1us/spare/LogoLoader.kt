@@ -291,6 +291,8 @@ class LogoLoader(private val maxDimension: Int = 256, cacheBytes: Int = 4 * 1024
     fun quiet(millis: Long = 250) { quietUntil = SystemClock.uptimeMillis() + millis }
     /** Milliseconds until held-key scrolling is considered over; 0 when it already is. */
     fun quietFor(): Long = (quietUntil - SystemClock.uptimeMillis()).coerceAtLeast(0)
+    /** Images asked for and not yet started: read-ahead waits until the ones on screen have all begun. */
+    val backlog get() = waiting.get()
     /** Load into the caches while the panel is closed, so the next open shows posters at once. */
     fun warm(url: String, http: Boolean = false, dimension: Int = 0) { request(url, http, size(dimension), {}, warm = true) }
     private fun clearBindings() { bindings.entries.toList().forEach { (view, binding) -> forget(view, binding) } }

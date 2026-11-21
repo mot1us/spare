@@ -42,7 +42,9 @@ class LibraryCatalog(private val store: SecureStore) {
         /** Titles in [scopeGroup] when this is one category's view of the whole catalog; [count] stays the catalog total for paging. */
         val scopeCount: Int? = null, val schema: Int = SCHEMA,
         /** The whole Movies or Series catalog, saved in [CatalogDb] with an [Index] in memory. */
-        val whole: Boolean = false) {
+        val whole: Boolean = false,
+        /** The title limit in force when this copy stopped at Spare's import limits; 0 when it holds the provider's whole list. */
+        val capped: Int = 0) {
         val shown get() = scopeCount ?: count
         fun label(group: String) = labels[group.removePrefix("Category ")] ?: group
         val categories: Map<String, String> get() = chunks.flatMap { it.groups }.distinct().associateWith(::label)
@@ -263,7 +265,7 @@ class LibraryCatalog(private val store: SecureStore) {
             val key = store.catalogDb.scopeKey(source, mode, scope)
             val meta = store.catalogDb.meta(key) ?: return null
             if (meta.provider != source.providerKey()) return null
-            return Snapshot(meta.updated, emptyList(), meta.count, meta.labels, complete = meta.complete, source = source, dbScope = key, dbGen = meta.gen)
+            return Snapshot(meta.updated, emptyList(), meta.count, meta.labels, complete = meta.complete, source = source, dbScope = key, dbGen = meta.gen, capped = meta.capped)
                 .also { remember(prefix, it); Timings.since("Saved category", restoreBegan) }
         }
         val wholeKey = store.catalogDb.scopeKey(source, mode, "")
@@ -276,7 +278,7 @@ class LibraryCatalog(private val store: SecureStore) {
             val index = file?.let { Index.read(it, meta.gen) }?.also { Diagnostics.library("$mode index parsed in ${Timings.now() - parseBegan} ms · ${it.size} titles") }
                 ?: rebuildIndex(wholeKey, meta.gen).also { Diagnostics.library("$mode index rebuilt from the database in ${Timings.now() - parseBegan} ms"); runCatching { store.write("${prefix}keys.enc", it.bytes(meta.gen)) } }
             indexes[indexKey(wholeKey, meta.gen)] = index
-            return Snapshot(meta.updated, emptyList(), index.size, meta.labels, complete = meta.complete, source = source, dbScope = wholeKey, dbGen = meta.gen, whole = true)
+            return Snapshot(meta.updated, emptyList(), index.size, meta.labels, complete = meta.complete, source = source, dbScope = wholeKey, dbGen = meta.gen, whole = true, capped = meta.capped)
                 .also { remember(prefix, it); Timings.since("Saved category", restoreBegan) }
         }
         // A catalog saved before the database (one large encrypted file): move it in once, reading it a title at a time.
@@ -374,7 +376,7 @@ class LibraryCatalog(private val store: SecureStore) {
                     if (limit.problem != SourceProblem.LIMIT || writer.size == 0) throw limit
                     true
                 }
-                return writer.finish(labels).also { saved ->
+                return writer.finish(labels, if (capped) VodCatalog.maxTitles else 0).also { saved ->
                     if (capped) "${if (mode == "movie") "Movies" else "Series"} list is larger than Spare keeps · first ${saved.count} titles saved".let { Diagnostics.library(it); Diagnostics.action(it) }
                 }
             }
@@ -431,12 +433,13 @@ class LibraryCatalog(private val store: SecureStore) {
             register().copy(labels = labels).also { if (!quiet) remember(prefix, it) }
         }
         fun checkpoint(labels: Map<String, String>): Snapshot = save(labels, false)
-        fun finish(labels: Map<String, String>): Snapshot = save(labels, true)
-        private fun save(labels: Map<String, String>, complete: Boolean): Snapshot = synchronized(publishLock) {
+        /** [capped]: the title limit this download stopped at, when it did. */
+        fun finish(labels: Map<String, String>, capped: Int = 0): Snapshot = save(labels, true, capped)
+        private fun save(labels: Map<String, String>, complete: Boolean, capped: Int = 0): Snapshot = synchronized(publishLock) {
             requireCurrent(); flush()
-            val value = register().copy(labels = labels, complete = complete)
+            val value = register().copy(labels = labels, complete = complete, capped = capped)
             val keep = heldGens(dbKey)
-            store.catalogDb.publish(dbKey, generation, stamp, complete, count, source.providerKey(), labels, keep)
+            store.catalogDb.publish(dbKey, generation, stamp, complete, count, source.providerKey(), labels, keep, capped)
             if (whole) indexes[indexKey(dbKey, generation)]?.let { built -> runCatching { store.write("${prefix}keys.enc", built.bytes(generation)) } }
             // Saving made this copy current and removed older copies' titles from the database: drop their indexes too,
             // except copies Library still has on screen (see [hold]).
@@ -526,7 +529,9 @@ class LibraryCatalog(private val store: SecureStore) {
         /** A saved catalog this old is refreshed in the background when Library opens it. */
         const val REFRESH_AFTER = 6 * 3600000L
         /** Whether a saved copy is old enough (or from an older format) to refresh. */
-        fun due(snapshot: Snapshot, now: Long) = snapshot.schema < SCHEMA || now - snapshot.updated !in 0 until REFRESH_AFTER
+        fun due(snapshot: Snapshot, now: Long) = snapshot.schema < SCHEMA || outgrown(snapshot) || now - snapshot.updated !in 0 until REFRESH_AFTER
+        /** A copy cut short by a lower title limit than Spare has now: it downloads again at once, not after [REFRESH_AFTER]. */
+        fun outgrown(snapshot: Snapshot) = snapshot.capped in 1 until VodCatalog.maxTitles
         const val SORT_PROVIDER = "Provider order"
         const val SORT_TITLE = "A–Z"
         const val SORT_NEWEST = "Newest"

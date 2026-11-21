@@ -67,9 +67,28 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         adapter = Rows()
     }
 
+    /**
+     * Once the remote rests, the next rows below the screen read their titles and first posters, so a row is usually
+     * ready by the time the cursor reaches it. It waits behind every poster on screen and never runs while a key is held.
+     */
+    private val readAhead = Runnable { readAhead() }
+    private fun scheduleReadAhead() { removeCallbacks(readAhead); if (isShown) postDelayed(readAhead, READ_AHEAD_DELAY_MS) }
+    private fun readAhead() {
+        if (!isShown || shelves.isEmpty() || isEmpty()) return
+        if (images.backlog > 0 || images.quietFor() > 0) { scheduleReadAhead(); return }
+        val last = (0 until childCount).maxOf { getChildAdapterPosition(getChildAt(it)) }
+        if (last < 0) return
+        for (position in last + 1..minOf(shelves.lastIndex, last + READ_AHEAD_ROWS)) {
+            val id = shelves[position].id; val value = data[id]
+            if (value == null) { load?.invoke(id); continue }
+            value.rows.asSequence().take(COLUMNS).map { it.poster }.filter { it.isNotBlank() }.forEach { images.prefetch(it, http, decode) }
+        }
+    }
+    override fun onDetachedFromWindow() { removeCallbacks(readAhead); super.onDetachedFromWindow() }
+
     /** Keeps rows, loaded titles and positions when the same catalog is shown again (Back from details or a grid). */
     fun show(catalog: String, values: List<Shelf>, initial: Map<String, Data> = emptyMap()) {
-        visibility = VISIBLE
+        visibility = VISIBLE; scheduleReadAhead()
         if (catalog == key && values == shelves) {
             // Unchanged rows are left alone: touching a row's tiles here would disturb the position it is about to be focused at.
             initial.forEach { (id, value) -> val before = data[id]; if (before == null || before.total != value.total || before.more != value.more || before.rows.size != value.rows.size || before.rows.indices.any { before.rows[it].key != value.rows[it].key || before.rows[it].detail != value.rows[it].detail }) update(id, value) }
@@ -84,6 +103,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
     fun update(id: String, value: Data) {
         val before = data[id]
         data[id] = value
+        scheduleReadAhead()
         val index = shelves.indexOfFirst { it.id == id }
         val holder = findViewHolderForAdapterPosition(index) as? ShelfHolder ?: return
         if (holder.id == id) holder.apply(before, value)
@@ -114,7 +134,7 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
         override fun onCreateViewHolder(parent: ViewGroup, type: Int) = ShelfHolder(LinearLayout(context))
         override fun onBindViewHolder(holder: ShelfHolder, position: Int) {
             val shelf = shelves[position]
-            holder.bind(shelf, data[shelf.id])
+            holder.bind(shelf, data[shelf.id]); scheduleReadAhead()
             // Unloaded, interrupted (still marked busy) or failed-empty rows ask again; a running download is not restarted.
             data[shelf.id].let { if (it == null || it.busy || it.failed && it.rows.isEmpty()) load?.invoke(shelf.id) }
         }
@@ -238,6 +258,9 @@ internal class CatalogShelves(context: Context, private val images: LogoLoader) 
 
     companion object {
         const val COLUMNS = 8
+        /** Rows below the screen that read ahead, and how long the remote rests first. */
+        const val READ_AHEAD_ROWS = 2
+        const val READ_AHEAD_DELAY_MS = 700L
         /** Screen width the rows do not get: the main menu's inset, the Library panel's right padding and the rows' own padding. */
         const val CONTENT_INSET_DP = 84 + 24 + 16
     }

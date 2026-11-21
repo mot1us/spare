@@ -368,10 +368,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
         homeToken = epoch
     }
-    private fun homeNote(root: String, full: LibraryCatalog.Snapshot) =
-        "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis(), checking = refreshing[root]?.isDone == false)}"
+    private fun homeNote(root: String, full: LibraryCatalog.Snapshot): String {
+        val checking = refreshing[root]?.isDone == false
+        if (checking && LibraryCatalog.outgrown(full)) return "${counted(full.count, "title")} · Getting the rest of your titles…"
+        return "${counted(full.count, "title")} · ${savedAge(full.updated, System.currentTimeMillis(), checking = checking)}"
+    }
     /**
-     * A saved catalog older than [LibraryCatalog.REFRESH_AFTER] downloads again quietly once its rows are open. The rows and
+     * A saved catalog older than [LibraryCatalog.REFRESH_AFTER], or cut short by an older title limit, downloads again quietly once its rows are open. The rows and
      * grids on screen keep reading the copy they show; the new one appears the next time the rows are opened. Main thread.
      */
     private fun refreshIfDue(selected: Source, mode: String, root: String, names: Map<String, String>, full: LibraryCatalog.Snapshot) {
@@ -379,7 +382,8 @@ class LibraryController(private val activity: Activity, private val store: Secur
         if (!LibraryCatalog.due(full, now) || refreshing[root]?.isDone == false || now - (refreshTried[root] ?: 0L) in 0 until REFRESH_RETRY) return
         refreshTried[root] = now
         val began = Timings.now(); val title = if (mode == "movie") "Movies" else "Series"
-        Diagnostics.library("Saved catalog is ${(now - full.updated) / 3600000L} h old · refreshing in the background")
+        Diagnostics.library(if (LibraryCatalog.outgrown(full)) "Saved catalog stopped at the old limit of ${full.capped} titles · getting the rest in the background"
+            else "Saved catalog is ${(now - full.updated) / 3600000L} h old · refreshing in the background")
         var job: java.util.concurrent.Future<*>? = null
         job = refresher.submit {
             val result = runCatching { repository.load(selected, mode, "", false, names) }

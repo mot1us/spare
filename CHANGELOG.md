@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.51.46 — 2026-11-20
+
+- A Movies or Series list saved by an older version at its lower title limit downloads again at once in the background, instead of waiting until the saved copy is 6 hours old. Spare now notes when a list stopped at the limit. Lists of exactly 100,000 titles saved by 0.51.45 and earlier count as stopped there. On the owner's onn, 0.51.45 kept showing "100000 titles · Saved today" because the copy saved earlier that day still counted as current. While the rest arrives, the rows say "Getting the rest of your titles…".
+- Library reads ahead while the remote rests. The next two rows below the screen read their titles and first posters, and so do the next two lines of a category grid. A row is usually ready when the cursor reaches it, instead of loading its posters then. Read-ahead waits until the posters on screen have started loading, and never runs while a key is held.
+
 ## 0.51.45 — 2026-11-20
 
 - Library gets a catalog ready calmly. While it saves a Movies or Series list for the first time (or opens a saved one that takes a moment), it shows three steps that tick off in turn (Categories, Titles, Rows) above placeholder rows with a soft shimmer, and says that later visits open at once. The rows fade in when ready, and posters fade in as they arrive. Before, a grid of the titles so far grew every second: the count kept changing and the title under the cursor flickered with it. "Loading more" messages no longer show a count while titles are still arriving.

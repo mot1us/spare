@@ -14,19 +14,20 @@ import java.io.File
  * Every title is sealed with the same data key as the other caches, so titles, artwork and stream paths are never plaintext
  * in the database file; only the category scope, provider order and generation are readable.
  */
-class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context.applicationContext, "library.db", null, 1) {
+class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context.applicationContext, "library.db", null, 2) {
     private val crypto = SecureStore(context.applicationContext)
     private val directory = context.applicationContext.filesDir
 
-    data class Meta(val gen: String, val updated: Long, val complete: Boolean, val count: Int, val provider: String, val labels: Map<String, String>)
+    /** [capped]: the title limit in force when this copy stopped at Spare's import limits (0 when it holds the provider's whole list). */
+    data class Meta(val gen: String, val updated: Long, val complete: Boolean, val count: Int, val provider: String, val labels: Map<String, String>, val capped: Int = 0)
 
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(false); db.enableWriteAheadLogging() }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE title(scope TEXT NOT NULL, gen TEXT NOT NULL, pos INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(scope, gen, pos)) WITHOUT ROWID")
-        db.execSQL("CREATE TABLE meta(scope TEXT PRIMARY KEY, gen TEXT NOT NULL, updated INTEGER NOT NULL, complete INTEGER NOT NULL, count INTEGER NOT NULL, provider TEXT NOT NULL, labels BLOB NOT NULL)")
+        db.execSQL("CREATE TABLE meta(scope TEXT PRIMARY KEY, gen TEXT NOT NULL, updated INTEGER NOT NULL, complete INTEGER NOT NULL, count INTEGER NOT NULL, provider TEXT NOT NULL, labels BLOB NOT NULL, capped INTEGER NOT NULL DEFAULT 0)")
         removeLegacyCategoryFiles()
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = upgrade(db, oldVersion)
 
     /** Category files written before the database: their index file ends "-<mode>-<category>-index.enc"; remove it with its pages. */
     private fun removeLegacyCategoryFiles() = runCatching {
@@ -52,10 +53,10 @@ class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context
     }
 
     /** Make [gen] the saved copy of [scope] and drop every older generation of it except [keep] (copies still on screen). */
-    fun publish(scope: String, gen: String, updated: Long, complete: Boolean, count: Int, provider: String, labels: Map<String, String>, keep: List<String> = emptyList()) {
+    fun publish(scope: String, gen: String, updated: Long, complete: Boolean, count: Int, provider: String, labels: Map<String, String>, keep: List<String> = emptyList(), capped: Int = 0) {
         writableDatabase.transaction {
             val values = ContentValues().apply {
-                put("scope", scope); put("gen", gen); put("updated", updated); put("complete", if (complete) 1 else 0); put("count", count); put("provider", provider)
+                put("scope", scope); put("gen", gen); put("updated", updated); put("complete", if (complete) 1 else 0); put("count", count); put("provider", provider); put("capped", capped)
                 put("labels", crypto.seal(JSONObject(labels).toString().toByteArray()))
             }
             insertWithOnConflict("meta", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -70,10 +71,10 @@ class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context
         if (current == gen) false else { delete("title", "scope = ? AND gen = ?", arrayOf(scope, gen)); true }
     }
 
-    fun meta(scope: String): Meta? = readableDatabase.rawQuery("SELECT gen, updated, complete, count, provider, labels FROM meta WHERE scope = ?", arrayOf(scope)).use { cursor ->
+    fun meta(scope: String): Meta? = readableDatabase.rawQuery("SELECT gen, updated, complete, count, provider, labels, capped FROM meta WHERE scope = ?", arrayOf(scope)).use { cursor ->
         if (!cursor.moveToFirst()) return null
         val labels = JSONObject(String(crypto.open(cursor.getBlob(5))))
-        Meta(cursor.getString(0), cursor.getLong(1), cursor.getInt(2) == 1, cursor.getInt(3), cursor.getString(4), labels.keys().asSequence().associateWith { labels.getString(it) })
+        Meta(cursor.getString(0), cursor.getLong(1), cursor.getInt(2) == 1, cursor.getInt(3), cursor.getString(4), labels.keys().asSequence().associateWith { labels.getString(it) }, cursor.getInt(6))
     }
 
     fun titles(scope: String, gen: String, offset: Int, limit: Int): List<LibraryCatalog.Title> =
@@ -103,6 +104,14 @@ class CatalogDb private constructor(context: Context) : SQLiteOpenHelper(context
     }
 
     companion object {
+        internal fun upgrade(db: SQLiteDatabase, oldVersion: Int) {
+            if (oldVersion < 2) {
+                db.execSQL("ALTER TABLE meta ADD COLUMN capped INTEGER NOT NULL DEFAULT 0")
+                // Versions up to 0.51.45 kept the first 100,000 titles of a longer list without noting it: a copy of exactly that
+                // size stopped there, so it downloads again now that Spare keeps more.
+                db.execSQL("UPDATE meta SET capped = 100000 WHERE count = 100000")
+            }
+        }
         @Volatile private var instance: CatalogDb? = null
         fun get(context: Context): CatalogDb = instance ?: synchronized(this) { instance ?: CatalogDb(context.applicationContext).also { instance = it } }
     }
