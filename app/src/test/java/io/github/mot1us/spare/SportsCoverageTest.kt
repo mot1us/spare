@@ -214,4 +214,29 @@ class SportsCoverageTest {
         assertTrue(right in SportsStreams.confirmationTargets(future, before, listOf(right), emptySet(), emptyMap(), now))
     }
 
+    @Test fun anEventSlotNamingTheGameAndItsTimePlaysWhenItsListingIsStale() {
+        val at = java.time.Instant.parse("2026-11-21T21:30:00Z").toEpochMilli()
+        val teams = listOf("nba:ATL", "nba:BOS").map { SportsCatalog.byId.getValue(it) }
+        // Tip-off 3:30 PM ET on Nov 21.
+        val live = SportsGame(teams, at - 3600000, at + 3600000, emptyList(), "slot", "in", competition = "NBA")
+        fun check(name: String, listing: String?): List<Channel> {
+            val slot = Channel("slot", name, "NBA Events", "https://example.com/slot")
+            val guide = Guide(listOf(slot), if (listing == null) emptyMap() else mapOf("slot" to listOf(Programme("slot", listing, at - 7200000, at + 7200000))))
+            return SportsStreams.automaticChoices(SportsSchedule.match(live, guide, emptySet(), at), GuideFilters(), emptyMap(), guide, at)
+        }
+        val dated = "ESPN UNLTD 317: NBA: Atlanta vs. Boston (11.21 03:30 PM ET)"
+        // The slot's listing still shows filler or its last game: the name with today's date and start time wins.
+        assertEquals(1, check(dated, "World News").size)
+        assertEquals(1, check(dated, "NBA: Lakers at Warriors").size)
+        assertEquals(1, check("NBA 07: Hawks vs Celtics @ Nov 21 3:30 PM ET", "NBA: Lakers at Warriors").size)
+        // Without a date and time in the name, a listing for something else still means "choose a stream".
+        assertTrue(check("NBA 01: Hawks vs Celtics", "NBA: Lakers at Warriors").isEmpty())
+        assertTrue("A time alone could be yesterday's game", check("NBA 01: Hawks vs Celtics 3:30 PM ET", "World News").isEmpty())
+        assertTrue("A start time hours away is another game", check("NBA 01: Hawks vs Celtics (11.21 08:00 PM ET)", "World News").isEmpty())
+        // Unchanged: a name alone plays when the guide has nothing else to say.
+        assertEquals(1, check("NBA 01: Hawks vs Celtics", null).size)
+        assertTrue(EventChannelNames.declaresGameTime(dated, live.start))
+        assertFalse(EventChannelNames.declaresGameTime(dated.replace("11.21", "11.20"), live.start))
+        assertTrue(EventChannelNames.declaresOtherTime(dated.replace("11.21", "11.20"), live.start))
+    }
 }

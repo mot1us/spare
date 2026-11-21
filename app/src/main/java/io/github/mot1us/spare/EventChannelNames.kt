@@ -44,6 +44,24 @@ object EventChannelNames {
      * and a start time counts only with a US zone and only when it is more than three hours from the game's.
      */
     fun declaresOtherTime(name: String, start: Long): Boolean {
+        val declared = declared(name, start)
+        if (declared.days.isNotEmpty() && !declared.sameDay) return true
+        return (declared.minutesAway ?: return false) > 180
+    }
+
+    /**
+     * True when a channel name gives this game's day and its start time (a US zone, within 90 minutes): "ESPN UNLTD 317:
+     * … (11.21 04:00 PM ET)". A provider renames an event slot for each game, but its guide listing can still show the
+     * slot's last event or filler; a name this specific is the fresher evidence.
+     */
+    fun declaresGameTime(name: String, start: Long): Boolean {
+        val declared = declared(name, start)
+        return declared.days.isNotEmpty() && declared.sameDay && (declared.minutesAway ?: return false) <= 90
+    }
+
+    /** The days a name declares (each reading of an ambiguous date), whether one is the game's, and how far its time is. */
+    private class Declared(val days: List<Set<Pair<Int, Int>>>, val sameDay: Boolean, val minutesAway: Int?)
+    private fun declared(name: String, start: Long): Declared {
         val instant = java.time.Instant.ofEpochMilli(start)
         val days = listOf(java.time.ZoneId.systemDefault(), java.time.ZoneId.of("America/New_York"))
             .map { instant.atZone(it).toLocalDate().let { date -> date.monthValue to date.dayOfMonth } }.toSet()
@@ -59,14 +77,14 @@ object EventChannelNames {
             val day = m.groupValues[2].ifEmpty { m.groupValues[3] }.toIntOrNull() ?: return@forEach
             (monthNames.indexOf(month) + 1 to day).takeIf(::valid)?.let { declared += setOf(it) }
         }
-        if (declared.isNotEmpty() && declared.none { options -> options.any { it in days } }) return true
-        val time = clock.find(name) ?: return false
+        val sameDay = declared.any { options -> options.any { it in days } }
+        val time = clock.find(name) ?: return Declared(declared, sameDay, null)
         val hour = time.groupValues[1].toInt(); val minute = time.groupValues[2].toIntOrNull() ?: 0
-        if (hour !in 1..12 || minute !in 0..59) return false
+        if (hour !in 1..12 || minute !in 0..59) return Declared(declared, sameDay, null)
         val minutes = (hour % 12 + if (time.groupValues[3].equals("p", true)) 12 else 0) * 60 + minute
         val local = instant.atZone(java.time.ZoneId.of(usZones.getValue(time.groupValues[4].lowercase()[0])))
         val difference = kotlin.math.abs(minutes - (local.hour * 60 + local.minute)).let { minOf(it, 1440 - it) }
-        return difference > 180
+        return Declared(declared, sameDay, difference)
     }
 
     @Volatile private var names: Map<String, String> = emptyMap()

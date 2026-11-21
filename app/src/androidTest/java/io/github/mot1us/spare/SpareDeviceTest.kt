@@ -3407,7 +3407,8 @@ class SpareDeviceTest {
         FixtureServer(longVideo = true).use { server ->
             val source = Source(name = "Background slate fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
             store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
-            val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(16).chunked(2)
+            // Fourteen games: enough that the background pass asks for the guide index partway through.
+            val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(28).chunked(2)
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
             val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
                 if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
@@ -3423,7 +3424,9 @@ class SpareDeviceTest {
                     val snapshot = guideField.get(activity) as Guide
                     // The last game is on no channel: its card says so, and keeps saying so.
                     val feeds = pairs.dropLast(1).mapIndexed { i, (home, away) -> Channel("ready-feed-$i", "NBA ${i + 1}: ${away.name} vs ${home.name}", "NBA", "${server.base}/channel2.mp4") }
-                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + feeds))
+                    val now = System.currentTimeMillis()
+                    val listings = feeds.associate { snapshot.key(it) to listOf(Programme(it.id, "NBA Basketball", now - 3_600_000, now + 3_600_000)) }
+                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + feeds, programmes = snapshot.programmes + listings))
                     // Playback has been steady for more than a minute (instead of waiting for it in the test).
                     val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
                     PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
@@ -3443,6 +3446,8 @@ class SpareDeviceTest {
                     assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                 }
                 waitFor(scenario) { Diagnostics.sportsBackgroundLine().contains("${pairs.size} live games · ${pairs.size - 1} found a stream") }
+                val indexed = Regex("(\\d+) with the guide index").find(Diagnostics.sportsBackgroundLine())?.groupValues?.get(1)?.toInt() ?: 0
+                assertTrue("The background pass used the guide index: ${Diagnostics.sportsBackgroundLine()}", indexed > 0)
                 // Scores two and a half minutes old count as saved; the background pass still sees the live games and every
                 // card keeps its result, including the game no channel names.
                 scenario.onActivity { activity ->
@@ -3463,11 +3468,51 @@ class SpareDeviceTest {
                 // Opening Sports shows the streams at once: before its own searches start (Sports settles for 3.5 s first).
                 val opened = android.os.SystemClock.elapsedRealtime()
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-0")?.takeIf { view -> view.isShown }?.text?.startsWith("NBA 1:") == true }
+                var shown: String? = null
+                val until = System.currentTimeMillis() + 10_000
+                while (System.currentTimeMillis() < until) {
+                    scenario.onActivity { shown = it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-0")?.takeIf { view -> view.isShown }?.text?.toString() }
+                    if (shown?.startsWith("NBA 1:") == true) break
+                    Thread.sleep(100)
+                }
+                scenario.onActivity { activity -> assertTrue("First card: $shown · summaries ${summaries(activity)}", shown?.startsWith("NBA 1:") == true) }
                 assertTrue("The first card showed its stream ${android.os.SystemClock.elapsedRealtime() - opened} ms after Sports opened",
                     android.os.SystemClock.elapsedRealtime() - opened < 3000)
                 waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("live cards were ready from the background") } }
-                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-$unnamed")?.let { view -> !view.isShown || view.text.toString() == "No stream names this game" } == true }
+                // The last card is far below the screen and may not be built at all; a built one says no stream names it.
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-$unnamed")?.let { view -> !view.isShown || view.text.toString() == "No stream names this game" } != false }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun anEventSlotNamingTheGamesDayAndStartTimePlaysOnOkDespiteAStaleListing() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Dated slot fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA"); store.sportsAutoPlay = true
+            val (home, away) = SportsCatalog.teams.filter { it.league == "NBA" }.take(2)
+            val start = (System.currentTimeMillis() / 60_000 - 5) * 60_000
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = {
+                    LiveSportsSnapshot(listOf(LiveEvent("slot-0", setOf(home.id, away.id), start, league = "NBA")), System.currentTimeMillis(), setOf("NBA")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                val eastern = java.time.Instant.ofEpochMilli(start).atZone(java.time.ZoneId.of("America/New_York"))
+                val name = "NBA 07: ${away.name} vs ${home.name} (${eastern.format(java.time.format.DateTimeFormatter.ofPattern("MM.dd hh:mm a", java.util.Locale.US))} ET)"
+                scenario.onActivity { activity ->
+                    val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val snapshot = guideField.get(activity) as Guide
+                    val slot = Channel("dated-slot", name, "NBA Events", "${server.base}/channel2.mp4")
+                    // The slot's listing still shows the last event it carried.
+                    val stale = Programme(slot.id, "NBA: Los Angeles Lakers at Golden State Warriors", start - 3_600_000, start + 4 * 3_600_000)
+                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + slot, programmes = snapshot.programmes + (snapshot.key(slot) to listOf(stale))))
+                    activity.window.decorView.findViewWithTag<View>("sports-mode").performClick()
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:slot-0")?.text?.toString() == name }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("NBA:slot-0").performClick() }
+                waitFor(scenario) { playingPath(scenario) == "/channel2.mp4" }
             } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
         }
     }

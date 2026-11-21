@@ -897,15 +897,42 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun showGames() { removeCallbacks(settleGameFocus); setSearching(false); rows.post { updateScrollHint() }; matchNotice.visibility = GONE; gridArea.animate().cancel(); heroContent.animate().cancel(); gridArea.alpha = 1f; heroContent.alpha = 1f; actionsOpen = false; heroActions(false); progress.visibility = INVISIBLE; empty.visibility = GONE; replayMode = false; replays = emptyList(); watchMode = false; matchingKey = null; streams.isVisible = false; streamsArea.isVisible = false; rows.isVisible = true; gridArea.isVisible = true; streamsHeader.isVisible = false; filtersButton.isVisible = false; presentationChanged?.invoke() }
     /**
      * Build game cards ahead of time, one per frame while Sports is closed, and keep them ready in the grid's pool.
-     * Building the first screenful at once when Sports opened froze the screen for about 0.3 s on an onn 4K Pro.
+     * Building the first screenful at once when Sports opened froze the screen for about 0.3 s on an onn 4K Pro. Twenty
+     * cover the first screen and a scroll down the list.
      */
-    fun prewarmCards(count: Int = 12) {
+    fun prewarmCards(count: Int = 20) {
         fun step() {
-            if (isShown || rows.adapter == null || rows.recycledViewPool.getRecycledViewCount(0) >= count) return
+            if (isShown || rows.adapter == null) return
+            if (rows.recycledViewPool.getRecycledViewCount(0) >= count) { warmCardFill(); return }
             rows.recycledViewPool.putRecycledView(cards.createViewHolder(rows, 0))
             postOnAnimation(::step)
         }
         post(::step)
+    }
+    private var cardFillWarmed = false
+    /**
+     * Fill and draw one spare card off screen with a sample game, once. The first real fill then finds its fonts, text
+     * layouts and code warm: after an update, the first opening of Sports still paused for 0.2–0.6 s while the cards
+     * filled in, although they were already built.
+     */
+    private fun warmCardFill() {
+        if (cardFillWarmed || isShown) return
+        val holder = rows.recycledViewPool.getRecycledView(0) as? GameCard ?: return
+        cardFillWarmed = true
+        runCatching {
+            val teams = SportsCatalog.teams.filter { it.league == "NBA" }.take(2)
+            val now = System.currentTimeMillis()
+            val sample = SportsGame(teams, now - 3600000, now + 3600000, emptyList(), "card-warmup", "in", scores = teams.associate { it.id to "88" },
+                status = "4th", competition = "NBA", records = teams.associate { it.id to "10-4" })
+            renderCardText(holder, sample, false); holder.stream.show("NBA 01: ${sample.title}", false)
+            val width = maxOf(1, (rows.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) / COLUMNS); val height = dp(CARD_HEIGHT_DP)
+            holder.itemView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+            holder.itemView.layout(0, 0, width, height)
+            val bitmap = androidx.core.graphics.createBitmap(width, height)
+            holder.itemView.draw(android.graphics.Canvas(bitmap)); bitmap.recycle()
+        }
+        holder.textState = null; holder.dateStart = Long.MIN_VALUE; holder.game = null
+        rows.recycledViewPool.putRecycledView(holder)
     }
     fun home() { showGames(); pendingEnter = true; pendingInput = inputEpoch }
     fun back(): Boolean {

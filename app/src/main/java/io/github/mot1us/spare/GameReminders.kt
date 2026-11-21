@@ -133,6 +133,7 @@ object SportsStreams {
         fun teams(programme: Programme) = SportsGuide.teams(programme, game.teams.first().league)?.map { it.id }?.toSet()
         fun excluded(programme: Programme) = SportsGuide.excludedTitle(SportsCatalog.normalize(programme.title))
         val saved = game.broadcasts.firstOrNull { it.channel.id == channel.id && SportsSchedule.broadcastWindow(game, it.programme, now) }?.programme
+        if (!upcoming && datedTitle(game, channel)) return Coverage.CHANNEL_TITLE
         if (upcoming) {
             val entries = guide.programmes[guide.key(channel)]
             if (entries?.any { SportsSchedule.broadcastWindow(game, it, now) && !excluded(it) && teams(it) == target } == true)
@@ -240,12 +241,19 @@ object SportsStreams {
             }
         }
     }
+    /**
+     * An event channel whose name gives both teams and this game's day and start time. Its guide listing may still show the
+     * slot's last event or filler ("World News", another game): the card then said "1 stream names this game · Select to
+     * choose" and OK opened a list. The name is the fresher evidence, so it plays.
+     */
+    internal fun datedTitle(game: SportsGame, channel: Channel): Boolean =
+        game.titleMatches.any { it.id == channel.id } && EventChannelNames.declaresGameTime(EventChannelNames.name(channel), game.start)
     fun automaticChoices(game: SportsGame, filters: GuideFilters, quality: Map<String, VideoInfo>, guide: Guide, now: Long,
         available: (Channel) -> Boolean = { true }): List<Channel> {
         if (!game.live(now)) return emptyList()
         val exact = game.broadcasts.filter { now in it.programme.start until it.programme.end }.map { it.channel.id }.toSet() + game.titleMatches.map { it.id }
         return rank(game, filters, quality, available).filter {
-            (it.id in exact || advertisedCoverage(game, it, guide, now)) &&
+            datedTitle(game, it) || (it.id in exact || advertisedCoverage(game, it, guide, now)) &&
                 coverage(game, it, guide, now) != Coverage.UNCONFIRMED && !conflictingCoverage(game, it, guide, now)
         }
     }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.55.0 — 2026-11-21
+
+- More Sports cards play on OK. An event channel whose name gives both teams and the game's date and start time ("ESPN UNLTD 317: … (11.21 04:00 PM ET)") now plays even when its guide listing still shows the slot's last event or filler; the card said "1 stream names this game · Select to choose" and OK opened a list. A name without a date and time still asks you to choose when the guide says the channel is showing something else.
+- The background Sports pass uses the guide index while several games still need their first look, and then looks up three games a step. Without it each game's search read the whole guide, about five seconds a game on the owner's second onn. The performance report's background line says how long the searching took and how many games used the index.
+- Sports keeps 20 cards built ahead of time instead of 12, and fills one with a sample game off screen once, so the first opening after an update or restart does not pause while the cards fill in.
+
 ## 0.54.1 — 2026-11-21
 
 - Sports cards made ready in the background keep their results. Scores more than two minutes old count as saved, and their games as "checking live status", so for part of each three-minute score cycle the background pass saw no live games and dropped every card's result. A card whose stream was found got it back from the stream cache, but a game nothing named went back to "Select to find stream" until Sports looked again. On the owner's second onn, 16 of 20 cards were ready when Sports opened; the rest followed within six seconds.
