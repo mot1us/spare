@@ -2549,7 +2549,12 @@ class MainActivity : Activity() {
     private fun finishSearch(close: Boolean) {
         voiceInput.stop(); voiceSearchPending = false
         handler.removeCallbacks(filterSearch); query = guideSearch.query(); applyFilter(); guideSearch.hideKeyboard()
-        if (close) { searchPanel.dismiss(); playlistSearch.pause(); showGuide(true); focusChannel() }
+        if (close) {
+            // Closing Search keeps its words as a guide filter. Words that match no channel (a movie, say) would leave the
+            // guide empty, with only the tabs above it for the remote, and Back with no row to return to: drop the filter.
+            if (query.isNotEmpty() && adapter.channels.isEmpty()) { clearGuideSearch(); applyFilter() } else { searchPanel.dismiss(); playlistSearch.pause() }
+            showGuide(true); focusChannel()
+        }
         else { updatePlaylistSearch(); searchPanel.focusResults() }
     }
     private fun voiceSearch() {
@@ -4254,6 +4259,8 @@ class MainActivity : Activity() {
         else if (list.hasFocus() || (sportsVisible && sportsPanel.hasFocus())) focusSidebar()
         else if (sidebar.hasFocus()) openNavigation()
         else if (!sportsVisible && navigationRail.hasFocus() && current != null) showGuide(false)
+        // An empty guide (a search left as a filter that matches nothing) has no row for the remote: clear the search, or go to the categories.
+        else if (!sportsVisible && adapter.channels.isEmpty()) { if (query.isNotEmpty()) { clearGuideSearch(); applyFilter(); focusChannel() } else focusSidebar() }
         else focusChannel()
     }
     override fun onStart() { super.onStart(); started = true; Diagnostics.start(); Diagnostics.action("Spare came to the front"); Diagnostics.playback = { if (::player.isInitialized) playbackDiagnostics() else "" }; syncPerformanceOverlay(); if (::searchPanel.isInitialized && searchPanel.isVisible) updatePlaylistSearch(); sportsCalendar?.takeIf { it.opened }?.let { previewCalendarDate(it.activeDate, false) }; handler.removeCallbacks(refreshTick); handler.post(refreshTick); deferredRefresh?.let { deferredRefresh = null; mergeRefresh(it) }; scheduleProgrammeIndex(); if (::programmeArtwork.isInitialized) programmeArtwork.resume(); if (::player.isInitialized && (current != null || onDemand != null)) playAttempt(if (hasPlayedChannel) PlaybackPhase.RECONNECTING else PlaybackPhase.OPENING); scheduleEpg(); scheduleSports(); if (!additionalRestoreStarted && additionalRestoreAsked != 0L) handler.post(restoreAdditionalLater); if (onDemand != null) { handler.removeCallbacks(demandTick); handler.postDelayed(demandTick, 1000) } }

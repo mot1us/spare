@@ -802,6 +802,47 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun leavingASearchForAMovieAfterWatchingItLeavesTheWholeGuideReachable() {
+        store.performanceOverlay = false
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Search fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val channels = listOf(Channel("xc:1", "Fixture live", "Other", "${server.base}/live/test/test-secret/1.mp4"), Channel("xc:2", "Second live", "Other", "${server.base}/live/test/test-secret/2.mp4"))
+            store.saveSources(listOf(source)); store.active = source.id; store.cache(source, Guide(channels, emptyMap())); store.markPlaylistRefreshed(source)
+            fun search(activity: MainActivity) = activity.window.decorView.findViewWithTag<View>("playlist-search")
+            fun rows(activity: MainActivity) = (channelList(activity)!!.adapter as GuideAdapter).channels.size
+            fun filter(activity: MainActivity) = MainActivity::class.java.getDeclaredField("query").apply { isAccessible = true }.get(activity) as String
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                // A search for a movie, watched and stopped: nothing plays afterwards, as on the owner's onn.
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Fixture movie")
+                }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-kind:vod").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:movie:101")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("search-result:movie:101").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/movie/test/test-secret/101.") == true }
+                device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
+                device.pressBack(); waitFor(scenario) { a -> search(a).isShown && (a.currentFocus?.tag as? String) == "search-result:movie:101" }
+                // Closing Search: its words match no channel, so they do not stay behind as a filter that empties the guide.
+                device.pressBack()
+                waitFor(scenario) { a -> !search(a).isShown && rows(a) == 2 && filter(a).isEmpty() && channelList(a)?.hasFocus() == true }
+                device.pressBack(); waitFor(scenario) { a -> a.window.decorView.findViewWithTag<View>("category-column")?.hasFocus() == true }
+                // A search that does match channels still filters the guide when Search closes.
+                scenario.onActivity {
+                    it.window.decorView.findViewWithTag<View>("search").performClick()
+                    it.window.decorView.findViewWithTag<EditText>("guide-search-input").setText("Second")
+                }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("search-result:live:xc:2")?.isShown == true }
+                device.pressBack()
+                waitFor(scenario) { a -> !search(a).isShown && rows(a) == 1 && filter(a) == "Second" }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)

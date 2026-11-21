@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.52.3 — 2026-11-20
+
+- Backing out of Search no longer leaves an empty guide. Closing Search keeps its words as a guide filter, so a search for a movie (which matches no channel) left the guide with no channels. After watching that movie nothing was playing, so the remote could reach only the All channels / Local / catch-up tabs, and Back did nothing. Now a search that matches no channel is dropped when Search closes and the whole guide shows, with the cursor on a channel. A search that does match channels still filters the guide as before. Back on an empty guide also clears a leftover search, or moves to the categories.
+
 ## 0.52.2 — 2026-11-20
 
 - New setting: Playback › Surround sound. "Sent on as is" (the default, as before) sends Dolby and DTS sound undecoded for the TV or a receiver to decode, when Android says they can. "Decoded on this box" has the box decode it into ordinary sound every TV plays, for a TV or soundbar that stays silent. On the owner's onn, every version of a movie from one playlist played without sound, while the same movie from another playlist (ordinary sound) played with it. Changing the setting restarts the playing stream so it applies at once.
