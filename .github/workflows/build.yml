@@ -22,6 +22,10 @@ jobs:
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
       - run: python3 scripts/version.py
       - run: python3 -m unittest discover -s scripts/tests
+      - name: Build the DTS and Dolby TrueHD decoder (FFmpeg)
+        run: |
+          for attempt in 1 2 3; do sdkmanager 'ndk;27.2.12479018' 'cmake;3.22.1' > /dev/null && break; echo "sdkmanager attempt $attempt failed"; sleep 10; done
+          bash scripts/build-ffmpeg.sh
       - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

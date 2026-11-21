@@ -2,6 +2,9 @@
 .kotlin/
 **/build/
 local.properties
+# FFmpeg source and libraries built by scripts/build-ffmpeg.sh
+/ffmpeg/src/main/jni/ffmpeg/
+**/.cxx/
 *.jks
 *.keystore
 keystore.properties

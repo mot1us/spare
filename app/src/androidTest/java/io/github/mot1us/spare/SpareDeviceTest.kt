@@ -870,6 +870,31 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aMovieWithDtsSoundIsDecodedBySpareOnABoxWithoutADtsDecoder() {
+        // The emulator, like an onn 4K Pro whose DTS decoder plays silence, has no DTS decoder Spare will use.
+        // The movie is Media3's DTS-HD Master Audio 7.1 sample, the sound on the owner's silent copies.
+        FixtureServer(libraryCategories = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source); store.decodeAudioOnBox = false
+            val movie = OnDemand("movie:8801", "Fixture DTS film (2011)", "Category 1", "${server.base}/movie/test/test-secret/8801.mkv", "movie", poster = "${server.base}/logo.png", added = 1_700_000_000L)
+            LibraryCatalog(store).run { Writer(source, "movie").run { append(listOf(movie)); finish(mapOf("1" to "Fixture cinema")) }; close() }
+            assertTrue("Spare's DTS decoder is in the app", androidx.media3.decoder.ffmpeg.FfmpegLibrary.isAvailable())
+            assertTrue(androidx.media3.decoder.ffmpeg.FfmpegLibrary.supportsFormat(androidx.media3.common.MimeTypes.AUDIO_DTS))
+            fun report(activity: MainActivity) = MainActivity::class.java.getDeclaredMethod("playbackDiagnostics").apply { isAccessible = true }.invoke(activity) as String
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player != null }
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, Long::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, movie.copy(playlistId = source.id), 0L) }
+                // The DTS track plays, decoded in Spare rather than left silent or unplayable.
+                waitFor(scenario) { a -> (find<PlayerView>(a.window.decorView)!!.player as androidx.media3.exoplayer.ExoPlayer).audioFormat?.sampleMimeType == androidx.media3.common.MimeTypes.AUDIO_DTS_HD && "decoded by Spare" in report(a) }
+                scenario.onActivity { a ->
+                    assertTrue(report(a), Regex("Audio · DTS-HD · \\d+ channels · decoded by Spare \\(ffmpeg").containsMatchIn(report(a)))
+                    assertTrue(Diagnostics.report(), Regex("Last sound: Fixture DTS film \\(2011\\) · .*DTS-HD.*\\(playing\\) · decoded by Spare").containsMatchIn(Diagnostics.report()))
+                    assertFalse("No \"No sound\" note", Diagnostics.report().contains("No sound ·"))
+                }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)
@@ -6692,6 +6717,7 @@ class SpareDeviceTest {
         private val video = instrumentation.context.assets.open("sample.mp4").use { it.readBytes() }
         private val transport = instrumentation.context.assets.open("no-aud.ts").use { it.readBytes() }
         private val avTransport by lazy { instrumentation.context.assets.open("stall-av.ts").use { it.readBytes() } }
+        private val dtsMovie by lazy { instrumentation.context.assets.open("dts-hd-ma.mkv").use { it.readBytes() } }
         private val captionTransport by lazy { EmbeddedCaptionFixture.add(repeatTransport(avTransport, 8), embeddedCaptions == 708) }
         private val longTransport by lazy { repeatTransport(avTransport, liveCycles) }
         private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
@@ -6783,6 +6809,7 @@ class SpareDeviceTest {
                             "/guide.xml" -> xml to "application/xml"
                             "/logo.png" -> logo to "image/png"
                             "/av.ts" -> (if (embeddedCaptions != 0) captionTransport else avTransport) to "video/mp2t"
+                            "/movie/test/test-secret/8801.mkv" -> dtsMovie to "video/x-matroska"
                             "/media.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:${if (embeddedCaptions != 0) 20 else 3}\n#EXTINF:${if (embeddedCaptions != 0) 20 else 2.5},\n$base/av.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:2.5,\n$base/captions.vtt\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"

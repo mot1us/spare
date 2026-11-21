@@ -9,6 +9,14 @@ Apache License, Version 2.0
 https://android.googlesource.com/platform/frameworks/support/
 https://github.com/androidx/media
 
+FFmpeg n6.0.1 (DTS and Dolby TrueHD audio decoders only)
+The FFmpeg developers
+GNU Lesser General Public License, version 2.1 or later
+Source: https://github.com/FFmpeg/FFmpeg/tree/n6.0.1
+Built without GPL or non-free parts by scripts/build-ffmpeg.sh in Spare's repository, https://github.com/mot1us/spare,
+whose source lets anyone rebuild Spare with a modified FFmpeg. The decoder's Java and JNI code is AndroidX Media3
+1.11.1 decoder_ffmpeg (Apache License, Version 2.0).
+
 Kotlin standard library and kotlinx.coroutines
 JetBrains and Kotlin contributors
 Apache License, Version 2.0

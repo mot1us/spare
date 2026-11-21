@@ -856,6 +856,8 @@ class MainActivity : Activity() {
             override fun buildAudioSink(context: android.content.Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean) =
                 super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)?.let(AudioOutput::sink)
         }.setEnableDecoderFallback(true)
+            // Spare's own DTS and Dolby TrueHD decoder runs after the box's decoders, which AudioOutput.codecs keeps away from those formats.
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON).setMediaCodecSelector(AudioOutput.codecs)
         player = ExoPlayer.Builder(this, renderers).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
             .setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             .setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF).build()
@@ -3910,7 +3912,7 @@ class MainActivity : Activity() {
                 val videoSummary = if (videoOutput.isEmpty()) "" else videoOutput.joinToString("\n", prefix = "Video output by screen (decoder counters)\n", postfix = "\n\n")
                 panel.scrollingNote(videoSummary + Diagnostics.report() + "\n\nDown scrolls this report.", "performance-report")
             }
-            "Open-source licenses" -> { panel.page(page, ""); panel.note(listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt").joinToString("\n\n") { assets.open("licenses/$it").bufferedReader().use { reader -> reader.readText() } }) }
+            "Open-source licenses" -> { panel.page(page, ""); panel.note(listOf("NOTICES.txt", "MIT.txt", "Apache-2.0.txt", "LGPL-2.1.txt").joinToString("\n\n") { assets.open("licenses/$it").bufferedReader().use { reader -> reader.readText() } }) }
             "Exit Spare" -> { panel.page(page, "Close the player."); panel.action("Exit Spare") { finish() } }
         }
     }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.53.0 — 2026-11-20
+
+- DTS and Dolby TrueHD sound plays on every box. Spare no longer uses a box's own DTS or TrueHD decoder: whether a box is licensed for them varies, and an onn 4K Pro reports a DTS-HD decoder that plays silence (another player there is silent too). On the owner's onn, every 4K copy of a movie from one playlist (DTS-HD Master Audio 5.1) and the DTS track of another played without sound. A TV or receiver that takes DTS or TrueHD still gets it undecoded. Otherwise Spare decodes it itself with FFmpeg's decoders (the ffmpeg module: AndroidX Media3's decoder_ffmpeg over FFmpeg n6.0.1, built with only those decoders, LGPL). The performance report says "decoded by Spare". The app grows by about 2 MB.
+- Settings › Open-source licenses includes FFmpeg's notice and the LGPL-2.1 text.
+
 ## 0.52.5 — 2026-11-20
 
 - A soft tick replaces Android's navigation click. Library's rows and grids played the system click on every poster the cursor passed, which the owner found too clicky. Spare now moves the cursor itself, so the click never plays, and plays a short, quiet, low tick instead, thinned out while a key is held. Settings › Guide › Navigation sound turns it off. It stays silent when the TV's system sounds are off.

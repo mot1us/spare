@@ -6,7 +6,13 @@ Android uses JDK 17, the checked-in Gradle wrapper, and an Android SDK with
 platform 36 and the build tools selected by Gradle. Set `ANDROID_HOME` to an SDK
 available to the build. The optimized-release smoke script also requires
 `JAVA_HOME` and SDK build-tools 35.0.0 for `apksigner`. Device tests additionally need platform-tools, an emulator,
-and an Android TV system image. CI configuration is in
+and an Android TV system image.
+
+Spare decodes DTS and Dolby TrueHD sound with FFmpeg (the `ffmpeg` module). Install
+NDK 27.2.12479018 and CMake 3.22.1 from the SDK manager and run
+`bash scripts/build-ffmpeg.sh` once before building; it downloads a pinned FFmpeg
+release and builds only those decoders (about a minute). Debug builds without it
+simply lack the decoder; release builds refuse to start without it. CI configuration is in
 [build.yml](../.github/workflows/build.yml) and
 [release.yml](../.github/workflows/release.yml).
 
@@ -23,6 +29,7 @@ Run from the repository root:
 ```sh
 python3 scripts/version.py
 python3 -m unittest discover -s scripts/tests
+bash scripts/build-ffmpeg.sh
 ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest
 ```
 

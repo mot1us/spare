@@ -10,6 +10,8 @@ val signingPath = providers.environmentVariable("SPARE_KEYSTORE").orNull
 android {
     namespace = "io.github.mot1us.spare"
     compileSdk = 36
+    // The NDK the ffmpeg module builds with; the app needs it too to strip native libraries for release.
+    ndkVersion = "27.2.12479018"
     defaultConfig {
         applicationId = "io.github.mot1us.spare"
         minSdk = 26
@@ -59,6 +61,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
     implementation("androidx.media3:media3-exoplayer-dash:$media3")
     implementation("androidx.media3:media3-ui:$media3")
+    // DTS and Dolby TrueHD decoded in Spare when the TV or receiver cannot take them (see AudioOutput).
+    implementation(project(":ffmpeg"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
     testImplementation("net.sf.kxml:kxml2:2.3.0")
@@ -69,6 +73,13 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
+
+// A release always carries the DTS/TrueHD decoder: scripts/build-ffmpeg.sh must have built FFmpeg first.
+val requireFfmpeg by tasks.registering {
+    val stamp = rootProject.file("ffmpeg/src/main/jni/ffmpeg/android-libs/.spare-build")
+    doLast { check(stamp.isFile) { "FFmpeg is not built: run scripts/build-ffmpeg.sh before building a release" } }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(requireFfmpeg) }
 
 // Fetch this large test-only media once; pin its bytes and keep it out of release assets.
 val streamFixtureHash = "454aa16b73fb477ee971540bff53948749a96117643994df1265e9f6b456b5bb"

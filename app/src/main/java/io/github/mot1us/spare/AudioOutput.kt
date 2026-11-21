@@ -8,6 +8,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.decoder.ffmpeg.FfmpegLibrary
 
 /**
  * How a stream's sound reaches the TV. Surround sound (Dolby, DTS) is normally sent on undecoded for the TV or a receiver
@@ -25,6 +27,18 @@ internal object AudioOutput {
     fun sink(base: AudioSink): AudioSink = object : ForwardingAudioSink(base) {
         override fun supportsFormat(format: Format) = if (decodeOnBox && format.sampleMimeType in surround) false else super.supportsFormat(format)
         override fun getFormatSupport(format: Format) = if (decodeOnBox && format.sampleMimeType in surround) AudioSink.SINK_FORMAT_UNSUPPORTED else super.getFormatSupport(format)
+    }
+
+    private val decodedBySpare = setOf(MimeTypes.AUDIO_DTS, MimeTypes.AUDIO_DTS_HD, MimeTypes.AUDIO_DTS_EXPRESS, MimeTypes.AUDIO_TRUEHD)
+    /**
+     * The decoders Media3 may use, without the box's own DTS and Dolby TrueHD decoders: whether a box is licensed for
+     * them varies, and some report one that plays silence (an onn 4K Pro's DTS decoder, and other players there with it).
+     * Sending the sound on undecoded to a TV or receiver that takes it is unaffected; anything else is decoded in Spare
+     * by FFmpeg (the ffmpeg module), the same on every box. Without that library the box's decoders are used as before.
+     */
+    val codecs = MediaCodecSelector { mime, secure, tunneling ->
+        if (mime in decodedBySpare && FfmpegLibrary.isAvailable() && FfmpegLibrary.supportsFormat(mime)) emptyList()
+        else MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
     }
 
     fun name(mime: String?): String = when (mime) {
@@ -58,7 +72,11 @@ internal object AudioOutput {
     }.ifEmpty { listOf("no audio tracks") }.joinToString(", ")
     /** How the playing sound left this box, for the performance report. */
     fun route(config: AudioSink.AudioTrackConfig, decoder: String): String = buildString {
-        append(if (Util.isEncodingLinearPcm(config.encoding)) "decoded on this box" + decoder.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty() else "sent on undecoded (passthrough)")
+        append(when {
+            !Util.isEncodingLinearPcm(config.encoding) -> "sent on undecoded (passthrough)"
+            decoder.startsWith("ffmpeg", ignoreCase = true) -> "decoded by Spare ($decoder)"
+            else -> "decoded on this box" + decoder.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+        })
         if (config.tunneling) append(" · tunneled")
         if (config.offload) append(" · offloaded")
     }
