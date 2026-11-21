@@ -415,6 +415,20 @@ class MainActivity : Activity() {
     @Volatile private var measuredFrameRate = 0f
     @Volatile private var decoderFrameRate = 0f
     @Volatile private var videoDecoderName = ""
+    @Volatile private var audioDecoderName = ""
+    /** How the playing sound leaves this box (see [AudioOutput.route]); blank until audio starts. */
+    @Volatile private var audioRoute = ""
+    private var unplayableAudio = ""
+    private var unplayableNoted = -1
+    /** A stream whose sound this box cannot play at all would otherwise play silently with no explanation. */
+    private fun noteUnplayableAudio(tracks: Tracks) {
+        val name = AudioOutput.unplayable(tracks).orEmpty(); unplayableAudio = name
+        if (name.isEmpty() || unplayableNoted == playbackToken || (current == null && onDemand == null)) return
+        unplayableNoted = playbackToken
+        val what = if (onDemand?.kind == "movie") "copy" else if (onDemand != null) "title" else "channel"
+        Diagnostics.action("No sound · ${onDemand?.title ?: current?.name} has $name audio, which this box cannot play")
+        Toast.makeText(this, "No sound: this $what has $name audio, which this box can’t play." + if (onDemand?.kind == "movie") " Try another version." else "", Toast.LENGTH_LONG).show()
+    }
     /** Whether the TV's video hardware is timing frames for the current stream (Media3 may decline for some tracks). */
     private fun tunneled() = ::player.isInitialized && player.isTunnelingEnabled
     /** Ask for tunneled playback on the main player, except while multiview shares the screen with other players. */
@@ -829,8 +843,11 @@ class MainActivity : Activity() {
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
         val loadControl = PlaybackLoadControl()
         sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
+        AudioOutput.decodeOnBox = store.decodeAudioOnBox
         val renderers = object : DefaultRenderersFactory(this) {
             override fun getCodecAdapterFactory() = sourceVideoFrames
+            override fun buildAudioSink(context: android.content.Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean) =
+                super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)?.let(AudioOutput::sink)
         }.setEnableDecoderFallback(true)
         player = ExoPlayer.Builder(this, renderers).setMediaSourceFactory(mediaFactory).setLoadControl(loadControl)
             .setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
@@ -904,7 +921,7 @@ class MainActivity : Activity() {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) journal(PlaybackJournal.Event.DISCONTINUITY, code = reason)
             }
             override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) { syncPlaybackMonitoring() }
-            override fun onTracksChanged(tracks: Tracks) { applySubtitleAppearance(); reconcileCaptions() }
+            override fun onTracksChanged(tracks: Tracks) { applySubtitleAppearance(); reconcileCaptions(); noteUnplayableAudio(tracks) }
             override fun onCues(cueGroup: CueGroup) {
                 SubtitleAppearance.render(video, cueGroup.cues, store.subtitleSize)
                 if (cueGroup.cues.isNotEmpty()) { captionSawCue = true; cancelCaptionProbe() }
@@ -959,6 +976,8 @@ class MainActivity : Activity() {
         })
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { videoDecoderName = decoderName }
+            override fun onAudioDecoderInitialized(eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long) { audioDecoderName = decoderName }
+            override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: androidx.media3.exoplayer.audio.AudioSink.AudioTrackConfig) { audioRoute = AudioOutput.route(audioTrackConfig, audioDecoderName) }
             override fun onDroppedVideoFrames(eventTime: AnalyticsListener.EventTime, droppedFrames: Int, elapsedMs: Long) {
                 if (started && player.currentMediaItem?.mediaId == expectedMediaId) {
                     playbackDroppedFrames += droppedFrames.coerceAtLeast(0)
@@ -1917,7 +1936,7 @@ class MainActivity : Activity() {
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
         if (onDemand == null) Traffic.streamStarted(Traffic.now()) else Traffic.streamStopped()
         performanceOverlay?.sports?.playing?.attempt(expectedMediaId)
-        firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
+        firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; audioRoute = ""; audioDecoderName = ""; unplayableAudio = ""; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
         if (onDemand?.kind in setOf("movie", "episode")) itemBuilder.setTag(PlaybackLoadControl.VOD)
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
@@ -3574,7 +3593,8 @@ class MainActivity : Activity() {
         val presentation = "Video · ${decoderLabel()} · $playbackDroppedFrames dropped frames this playback attempt\nDisplay ${rate(frameRates.displayRefreshRate)} Hz · Requested ${rate(frameRates.requestedRate)} fps · Matching ${if (frameRates.enabled) "on" else "off"}${if (streamer) "\nGoogle TV Streamer · video starts on a full restart frame · 25 and 30 fps request 50 and 60 Hz" else ""}"
         val audio = player.audioFormat
         return listOf(onDemand?.title ?: current?.name ?: "No stream playing", lastVideoInfo?.label().orEmpty(), evidence.trim(), health.trim(), presentation,
-            audio?.let { "Audio · ${it.sampleMimeType?.removePrefix("audio/").orEmpty()} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" }.orEmpty())
+            audio?.let { "Audio · ${AudioOutput.name(it.sampleMimeType)} · ${it.channelCount.takeIf { count -> count > 0 } ?: "unknown"} channels" + audioRoute.takeIf { route -> route.isNotBlank() }?.let { route -> " · $route" }.orEmpty() }
+                ?: unplayableAudio.takeIf { it.isNotBlank() }?.let { "Audio · none playing · $it, which this box cannot play" }.orEmpty())
             .filter { it.isNotBlank() }.joinToString("\n\n")
     }
     private fun showDetails() {
@@ -3747,6 +3767,11 @@ class MainActivity : Activity() {
                     store.tunneledPlayback = !store.tunneledPlayback
                     if (current != null || onDemand != null) playAttempt(PlaybackPhase.RECONNECTING)
                     refresh("Tunneled playback")
+                }
+                panel.action("Surround sound", if (store.decodeAudioOnBox) "Decoded on this box · for a TV or soundbar that stays silent" else "Sent on as is · the TV or receiver decodes Dolby and DTS", store.decodeAudioOnBox) {
+                    store.decodeAudioOnBox = !store.decodeAudioOnBox; AudioOutput.decodeOnBox = store.decodeAudioOnBox
+                    if (current != null || onDemand != null) playAttempt(PlaybackPhase.RECONNECTING)
+                    refresh("Surround sound")
                 }
                 listOf("Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Sports stream recovery", "Playback diagnostics", "Temporarily hidden channels").forEach { label ->
                     panel.action(label, when (label) { "Frame-rate matching" -> if (store.frameRateMatching) "On" else if (store.frameRateMatchingStalled) "Off · switched off after the picture kept stalling with it on" else "Off"; "Subtitles" -> "Channel tracks, app defaults, size and style"; "Stream format" -> playbackSource()?.let(store::streamFormat).orEmpty(); "Sports stream recovery" -> if (store.sportsAutoFailover) "After ${store.sportsFailoverSeconds}s buffering" else "Off"; else -> "" }) { renderSettingsPage(label); panel.focusContent() }

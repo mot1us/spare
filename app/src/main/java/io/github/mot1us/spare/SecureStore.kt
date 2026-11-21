@@ -429,6 +429,10 @@ class SecureStore(private val context: Context) {
         get() = preferences.getInt("sports-failover-seconds", 15).takeIf { it in listOf(10, 15, 20, 30) } ?: 15
         set(value) { preferences.edit { putInt("sports-failover-seconds", value.takeIf { it in listOf(10, 15, 20, 30) } ?: 15) } }
     /** The TV's video hardware times frames (tunneled playback); on by default, switched off for good if a channel fails to start with it. */
+    /** Settings › Playback › Surround sound: decode Dolby and DTS on this box instead of sending them on (see [AudioOutput]). */
+    var decodeAudioOnBox: Boolean
+        get() = preferences.getBoolean("decode-audio-on-box", false)
+        set(value) { preferences.edit { putBoolean("decode-audio-on-box", value) } }
     var tunneledPlayback: Boolean
         get() = preferences.getBoolean("tunneled-playback", true)
         set(value) { preferences.edit { putBoolean("tunneled-playback", value); if (value) putBoolean("tunneling-failed", false) } }

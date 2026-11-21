@@ -5249,6 +5249,30 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun surroundSoundCanBeDecodedOnThisBoxAndTheReportSaysHowSoundLeavesIt() {
+        FixtureServer(tsMode = true).use { server ->
+            val source = Source(name = "Audio fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.decodeAudioOnBox = false
+            fun report(activity: MainActivity) = MainActivity::class.java.getDeclaredMethod("playbackDiagnostics").apply { isAccessible = true }.invoke(activity) as String
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.let { p -> p.repeatMode = Player.REPEAT_MODE_ONE; p.isPlaying } == true }
+                var attempt = ""
+                scenario.onActivity { attempt = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                device.pressMenu(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("settings-panel")?.isShown == true }
+                activateSetting(scenario, "Surround sound")
+                assertTrue(SecureStore(context).decodeAudioOnBox); assertTrue(AudioOutput.decodeOnBox)
+                // The stream starts again so the choice applies at once, and keeps playing.
+                waitFor(scenario) { a -> find<PlayerView>(a.window.decorView)!!.player!!.let { it.isPlaying && it.currentMediaItem!!.mediaId != attempt } }
+                waitFor(scenario) { a -> val player = find<PlayerView>(a.window.decorView)!!.player as androidx.media3.exoplayer.ExoPlayer
+                    player.audioFormat == null || report(a).contains("decoded on this box") }
+                scenario.onActivity { a -> val player = find<PlayerView>(a.window.decorView)!!.player as androidx.media3.exoplayer.ExoPlayer
+                    if (player.audioFormat != null) assertTrue(report(a), Regex("Audio · \\S.* · \\d+ channels · decoded on this box").containsMatchIn(report(a))) }
+                activateSetting(scenario, "Surround sound")
+                assertFalse(SecureStore(context).decodeAudioOnBox); assertFalse(AudioOutput.decodeOnBox)
+            } } finally { store.decodeAudioOnBox = false; AudioOutput.decodeOnBox = false; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun twoPaneSettingsKeepsFullscreenVideoAndLauncherUsesWordmarkBanner() {
         FixtureServer().use { server ->
             val source = Source(name = "Settings fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -5400,7 +5424,7 @@ class SpareDeviceTest {
 
     private fun activateSetting(scenario: ActivityScenario<MainActivity>, label: String) {
         val parent = when (label) {
-            "Frame-rate matching", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
+            "Frame-rate matching", "Surround sound", "Audio track", "Subtitles", "Stream format", "Playback diagnostics", "Temporarily hidden channels" -> "Playback"
             "Navigation dock", "Time format", "Switch categories on highlight", "Open channels full screen", "Loop guide channels" -> "Guide"
             "Category order" -> "Categories"
             else -> null

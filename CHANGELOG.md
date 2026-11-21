@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.52.2 — 2026-11-20
+
+- New setting: Playback › Surround sound. "Sent on as is" (the default, as before) sends Dolby and DTS sound undecoded for the TV or a receiver to decode, when Android says they can. "Decoded on this box" has the box decode it into ordinary sound every TV plays, for a TV or soundbar that stays silent. On the owner's onn, every version of a movie from one playlist played without sound, while the same movie from another playlist (ordinary sound) played with it. Changing the setting restarts the playing stream so it applies at once.
+- A stream whose sound this box cannot play at all (no decoder and nothing to pass it to) now says so on screen ("No sound: this copy has DTS audio, which this box can't play. Try another version.") instead of playing silently.
+- The performance report names the sound's format (for example "Dolby Digital Plus") and says whether it was decoded on this box or sent on undecoded, and whether it was tunneled.
+
 ## 0.52.1 — 2026-11-20
 
 - Search shows a movie once. On the owner's onn, 0.52.0 showed two results for a moment and then four identical posters again: copies already part-watched came back from watch history ungrouped, and the same movie on a second playlist had its own card. Now every copy with the same cleaned-up title and year shares one card, led by the active playlist, under the title without version tags.
