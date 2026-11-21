@@ -831,6 +831,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        NavigationSound.prepare(applicationContext)
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
         Motion.use(store.navigationAnimation, store.navigationSpeed)
@@ -3814,6 +3815,9 @@ class MainActivity : Activity() {
                 panel.action("Clear recent searches", if (store.recentSearches.isEmpty()) "None saved" else "${store.recentSearches.size} saved on this TV") {
                     store.recentSearches = emptyList(); searchPanel.recent = emptyList(); refresh("Clear recent searches")
                 }
+                panel.action("Navigation sound", if (store.navigationSound) "Soft · a quiet tick as the cursor moves" else "Off", store.navigationSound) {
+                    store.navigationSound = !store.navigationSound; refresh("Navigation sound")
+                }
                 panel.action("Switch categories on highlight", if (store.guideAutoCategories) "On · show channels as you browse" else "Off · press OK to select", store.guideAutoCategories) {
                     store.guideAutoCategories = !store.guideAutoCategories; cancelCategoryPreview(); refresh("Switch categories on highlight")
                 }
@@ -4096,7 +4100,38 @@ class MainActivity : Activity() {
         renderSettingsPage(if (type == C.TRACK_TYPE_TEXT) "Subtitles" else "Audio track"); settingsPanel?.focusContent()
     }
     @SuppressLint("GestureBackNavigation") // TV-only activity opts out of predictive back in the manifest so hold-Back receives key-down/up.
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean = routeKey(event) || moveFocus(event)
+    /**
+     * An arrow key nothing else handled moves the cursor as Android would, but without Android's navigation click, which
+     * Library's rows and grids played on every poster: Spare plays its own soft tick instead (see [NavigationSound]).
+     * When there is nowhere to go, Android's own handling runs as before.
+     */
+    private fun moveFocus(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN || !event.hasNoModifiers()) return false
+        val direction = when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> View.FOCUS_LEFT; KeyEvent.KEYCODE_DPAD_RIGHT -> View.FOCUS_RIGHT
+            KeyEvent.KEYCODE_DPAD_UP -> View.FOCUS_UP; KeyEvent.KEYCODE_DPAD_DOWN -> View.FOCUS_DOWN
+            else -> return false
+        }
+        val root = window.decorView as? ViewGroup ?: return false
+        val focused = root.findFocus() ?: return false
+        // The search runs once per press: a scrolling Leanback row answers with the focused view and queues the move for
+        // when its scroll ends, so letting Android search again queued a second move and skipped a row.
+        val next = focused.focusSearch(direction)
+        if (next != null && next !== focused) {
+            val area = android.graphics.Rect(); focused.getFocusedRect(area)
+            val placed = runCatching { root.offsetDescendantRectToMyCoords(focused, area); root.offsetRectIntoDescendantCoords(next, area) }.isSuccess
+            if (if (placed) next.requestFocus(direction, area) else next.requestFocus(direction)) {
+                if (store.navigationSound) NavigationSound.play(this, fast = event.repeatCount > 0)
+                return true
+            }
+        }
+        // Nowhere to go from here: the focused view's own last chance, as Android gives it.
+        root.dispatchUnhandledMove(focused, direction)
+        return true
+    }
+    @SuppressLint("GestureBackNavigation") // See dispatchKeyEvent: remote Back is handled here, with hold detection.
+    private fun routeKey(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             lastInputAt = android.os.SystemClock.elapsedRealtime()
             if (::idleBrowse.isInitialized) idleBrowse.pause()

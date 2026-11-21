@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.52.5 — 2026-11-20
+
+- A soft tick replaces Android's navigation click. Library's rows and grids played the system click on every poster the cursor passed, which the owner found too clicky. Spare now moves the cursor itself, so the click never plays, and plays a short, quiet, low tick instead, thinned out while a key is held. Settings › Guide › Navigation sound turns it off. It stays silent when the TV's system sounds are off.
+
 ## 0.52.4 — 2026-11-20
 
 - The performance report keeps a "Last sound" line after a stream stops: every audio track it carried (language, format, channels), which one played, which this box cannot play, and whether the sound was decoded on the box or sent on undecoded. A movie has to be stopped to open Settings, so the "Playing now" line could not show it. On the owner's onn, three copies of a movie from one playlist play without sound here and in another player app.

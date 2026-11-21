@@ -843,6 +843,33 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun theCursorMovesWithASoftTickInsteadOfTheSystemClickAndCanBeSilent() {
+        FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true).use { server ->
+            val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source); store.navigationSound = true
+            val seeded = LibraryCatalog(store)
+            seeded.Writer(source, "movie").run { (1..30).map { n -> OnDemand("movie:${6000 + n}", "Tick title $n", "Category 1", "${server.base}/movie/test/test-secret/${6000 + n}.mp4", "movie", poster = "${server.base}/logo.png", added = 1_700_000_000L + n) }.chunked(30).forEach(::append); finish(mapOf("1" to "Fixture cinema")) }
+            seeded.close()
+            fun focusTag(scenario: ActivityScenario<MainActivity>): String { var tag = ""; scenario.onActivity { tag = it.currentFocus?.tag as? String ?: "" }; return tag }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                device.pressBack(); waitFor(scenario) { channelList(it)?.hasFocus() == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("library").performClick() }
+                waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:6030" }
+                // Right along the newest row: the cursor moves poster by poster, each with one soft tick.
+                val before = NavigationSound.played
+                device.pressDPadRight(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:6029" }
+                device.pressDPadRight(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:6028" }
+                assertEquals("One tick per move", before + 2, NavigationSound.played)
+                // Off: the cursor still moves, silently.
+                store.navigationSound = false
+                device.pressDPadLeft(); waitFor(scenario) { (it.currentFocus?.tag as? String) == "library-item:movie:6029" }
+                assertEquals(before + 2, NavigationSound.played)
+                assertTrue(focusTag(scenario).startsWith("library-item:"))
+            } } finally { store.navigationSound = true; store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)

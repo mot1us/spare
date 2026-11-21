@@ -400,6 +400,10 @@ class SecureStore(private val context: Context) {
     var captions: Boolean
         get() = preferences.getBoolean("captions", false)
         set(value) { preferences.edit { putBoolean("captions", value) } }
+    /** Settings › Guide › Navigation sound: a soft tick as the cursor moves (see [NavigationSound]). */
+    var navigationSound: Boolean
+        get() = preferences.getBoolean("navigation-sound", true)
+        set(value) { preferences.edit { putBoolean("navigation-sound", value) } }
     var hiddenDock: Boolean
         get() = preferences.getBoolean("hidden-dock", true)
         set(value) { preferences.edit { putBoolean("hidden-dock", value) } }
