@@ -3403,6 +3403,112 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsCardsAreReadyFromTheBackgroundBeforeSportsOpens() {
+        FixtureServer(longVideo = true).use { server ->
+            val source = Source(name = "Background slate fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(16).chunked(2)
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
+                    LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) -> LiveEvent("ready-$i", setOf(home.id, away.id), now - 600000 + i * 1000L, league = "NBA") }, now, setOf("NBA")) }
+            }
+            fun summaries(activity: MainActivity) = @Suppress("UNCHECKED_CAST") (MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>)
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                val media = playingPath(scenario)
+                scenario.onActivity { activity ->
+                    val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val snapshot = guideField.get(activity) as Guide
+                    val feeds = pairs.mapIndexed { i, (home, away) -> Channel("ready-feed-$i", "NBA ${i + 1}: ${away.name} vs ${home.name}", "NBA", "${server.base}/channel2.mp4") }
+                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + feeds))
+                    // Playback has been steady for more than a minute (instead of waiting for it in the test).
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
+                    PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
+                    PlaybackWarmup::class.java.getDeclaredField("readySince").apply { isAccessible = true }.setLong(warmup, 1L)
+                }
+                // Live TV plays in full screen and Sports has never been opened: every live game looks for its stream anyway.
+                val deadline = System.currentTimeMillis() + 60_000
+                var missing = pairs.indices.toList()
+                while (missing.isNotEmpty() && System.currentTimeMillis() < deadline) {
+                    scenario.onActivity { activity -> missing = pairs.indices.filterNot { summaries(activity)["NBA:ready-$it"]?.startsWith("NBA ${it + 1}:") == true } }
+                    if (missing.isNotEmpty()) Thread.sleep(250)
+                }
+                scenario.onActivity { activity ->
+                    assertTrue("Cards still without a stream: ${missing.map { summaries(activity)["NBA:ready-$it"] }}", missing.isEmpty())
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
+                }
+                waitFor(scenario) { Diagnostics.sportsBackgroundLine().contains("${pairs.size} live games · ${pairs.size} found a stream") }
+                assertEquals("Looking for streams never changes the channel", media, playingPath(scenario))
+                assertNull("Looking for streams never opens one", server.requests["/channel2.mp4"])
+                // Opening Sports shows the streams at once: before its own searches start (Sports settles for 3.5 s first).
+                val opened = android.os.SystemClock.elapsedRealtime()
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { it.window.decorView.findViewWithTag<TextView>("sports-coverage:NBA:ready-0")?.takeIf { view -> view.isShown }?.text?.startsWith("NBA 1:") == true }
+                assertTrue("The first card showed its stream ${android.os.SystemClock.elapsedRealtime() - opened} ms after Sports opened",
+                    android.os.SystemClock.elapsedRealtime() - opened < 3000)
+                waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("${pairs.size} of ${pairs.size} live cards were ready from the background") } }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun aGameEndingBeforeTheViewersCardLeavesTheCursorWhereItIs() {
+        FixtureServer().use { server ->
+            val source = Source(name = "Hold fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(18).chunked(2)
+            val began = System.currentTimeMillis()
+            val finished = java.util.concurrent.atomic.AtomicReference(emptySet<Int>())
+            fun slate(ended: Set<Int>, now: Long = System.currentTimeMillis()) = LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) ->
+                LiveEvent("hold-$i", setOf(home.id, away.id), began - 3_600_000 + i * 60_000L, state = if (i in ended) "post" else "in", status = if (i in ended) "Final" else "", league = "NBA") }, now, setOf("NBA"))
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { slate(finished.get()) }
+            }
+            @Suppress("UNCHECKED_CAST") fun cards(activity: MainActivity) = SportsPanel::class.java.getDeclaredField("games").apply { isAccessible = true }
+                .get(activity.window.decorView.findViewWithTag<SportsPanel>("sports-panel")) as List<SportsGame>
+            fun focusedPosition(activity: MainActivity): Int {
+                val grid = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games")
+                return grid.findFocus()?.let { grid.findContainingViewHolder(it)?.bindingAdapterPosition } ?: -1
+            }
+            fun scores(scenario: ActivityScenario<MainActivity>, ended: Set<Int>) = scenario.onActivity { activity ->
+                finished.set(ended)
+                MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, slate(ended))
+                MainActivity::class.java.getDeclaredMethod("refreshSports").apply { isAccessible = true }.invoke(activity)
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                waitFor(scenario) { cards(it).size == pairs.size && focusedPosition(it) == 0 }
+                // The viewer moves to the middle card of the second row.
+                device.pressDPadRight(); waitFor(scenario) { focusedPosition(it) == 1 }
+                device.pressDPadDown(); waitFor(scenario) { focusedPosition(it) == 4 }
+                // Game 1, before the cursor, ends and leaves Live now.
+                scores(scenario, setOf(1))
+                waitFor(scenario) { cards(it).getOrNull(1)?.state == "post" }
+                Thread.sleep(500)
+                scenario.onActivity { activity ->
+                    assertEquals("The cursor stays on its card", 4, focusedPosition(activity))
+                    assertEquals("NBA:hold-4", cards(activity)[4].key)
+                    assertEquals("The ended game keeps its place and shows it ended", "Final", cards(activity)[1].status)
+                    assertEquals(pairs.size, cards(activity).size)
+                }
+                // Game 7, after the cursor, ends too: cards after the cursor follow the live order at once.
+                scores(scenario, setOf(1, 7))
+                waitFor(scenario) { cards(it).none { game -> game.key == "NBA:hold-7" } }
+                scenario.onActivity { activity -> assertEquals(4, focusedPosition(activity)); assertEquals("NBA:hold-4", cards(activity)[4].key) }
+                // Once the cursor leaves the cards, the next update puts Live now back in order.
+                device.pressDPadUp(); waitFor(scenario) { focusedPosition(it) == 1 }
+                device.pressDPadUp(); waitFor(scenario) { focusedPosition(it) == -1 }
+                scores(scenario, setOf(1, 7))
+                waitFor(scenario) { cards(it).none { game -> game.key == "NBA:hold-1" } }
+                scenario.onActivity { activity -> assertEquals(pairs.size - 2, cards(activity).size) }
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsCardsSearchBeforeTheProvidersEventNamesArriveAndLookAgainAfter() {
         val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(6).chunked(2)
         val named = pairs[0]; val renamed = pairs[1]

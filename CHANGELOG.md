@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.54.0 — 2026-11-21
+
+- Sports cards are made ready in the background. While live TV plays or the guide rests and Sports is closed, Spare checks the scores every three minutes when a game in your leagues is live or about to start, and every live game looks for its stream, one game at a time, a second and a half apart, at background priority. Opening Sports then shows each card's stream at once. A found stream is kept until the game ends; a game nothing names is looked at again every five minutes. The pass waits like other idle work: never during a movie, multiview, a channel starting or rebuffering, or within three seconds of a key.
+- Every live game gets its first look before any card is looked at again. On a big college slate the cards on screen were re-checked every 30 seconds, and on a slower box the cards further down stayed on "Select to find stream" until the cursor reached them.
+- The Sports cursor no longer jumps when a game ends. A game that ended left Live now and every card after it moved back one place, so the highlighted card jumped up a row and across. While the cursor rests on a card, that card and the cards before it keep their places (an ended game shows its final score); the order catches up once the cursor leaves the cards.
+- The provider's event channel names keep loading when you leave Sports, instead of starting over next time.
+- The performance report says when every live card was last made ready in the background, and how many cards were ready when Sports opened.
+
 ## 0.53.2 — 2026-11-21
 
 - Sports cards start looking for streams a few seconds after Sports opens. They waited for the provider's event channel names (ESPN+, NCAAB and other event slots), which can take up to 25 provider requests; on the owner's second onn the first card filled about 30 seconds in. Cards now search with the names Spare already has, and every card looks again when the fresh names arrive, keeping its result meanwhile. Until then, a game nothing names yet says "Checking event channels…" rather than "No stream names this game".

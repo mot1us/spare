@@ -129,6 +129,10 @@ internal object Diagnostics {
     private val sportsOpening = Opening(); private val libraryOpening = Opening()
     fun sportsOpened(text: String) = sportsOpening.start(text)
     fun sports(text: String, keep: Boolean = false) = sportsOpening.add(text, keep)
+    /** The last time every live Sports card had looked for its stream while Sports was closed. */
+    @Volatile private var sportsBackground = ""
+    fun sportsBackground(text: String) { sportsBackground = "${clock()} · $text" }
+    internal fun sportsBackgroundLine() = sportsBackground
     internal fun sportsLines() = sportsOpening.lines()
     fun libraryOpened(text: String) = libraryOpening.start(text)
     fun library(text: String) = libraryOpening.add(text)
@@ -158,9 +162,10 @@ internal object Diagnostics {
         lines += worst
         val background = synchronized(jobs) { jobs.toList() }
         if (background.isNotEmpty()) { lines += "Background jobs:"; lines += background.map { "  $it" } }
+        sportsBackground.takeIf { it.isNotEmpty() }?.let { lines += "Sports cards ready in the background: $it" }
         sportsLines().takeIf { it.isNotEmpty() }?.let { lines += "Last Sports opening (seconds after it was chosen):"; lines += it }
         actionLines().takeIf { it.isNotEmpty() }?.let { lines += "Recent actions (oldest first; keys say which remote sent them):"; lines += it }
         return lines.joinToString("\n")
     }
-    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(actions) { actions.clear() }; sportsOpening.clear(); libraryOpening.clear(); synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
+    fun reset() { synchronized(stalls) { stalls.clear() }; synchronized(hiccups) { hiccups.clear() }; synchronized(jobs) { jobs.clear() }; synchronized(actions) { actions.clear() }; sportsOpening.clear(); libraryOpening.clear(); sportsBackground = ""; synchronized(this) { posters = 0; posterWait = 0; posterWork = 0; posterWorst = 0; posterFailed = 0 } }
 }

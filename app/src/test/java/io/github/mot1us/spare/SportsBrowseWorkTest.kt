@@ -41,4 +41,37 @@ class SportsBrowseWorkTest {
         assertEquals(2, SportsBrowseWork.plan(games, emptySet(), null, emptySet(), limit = 2).all.size)
         assertTrue(SportsBrowseWork.plan(games, emptySet(), games[0], emptySet(), limit = 0).all.isEmpty())
     }
+    @Test fun everyGameGetsItsFirstLookBeforeTheCardsOnScreenAreLookedAtAgain() {
+        val slate = games.take(40)
+        val plan = SportsBrowseWork.plan(slate, slate.take(9).map { it.key }.toSet(), slate[0], emptySet())
+        // A slow box: the nine cards on screen were looked up long ago and found nothing, so they are due again.
+        val looked = slate.take(9).map { it.key }.toSet()
+        val queue = SportsBrowseWork.queue(plan, looked = { it.key in looked }, upgrade = { false }, due = { game, _ -> game.key in looked }, lastLook = { 0L })
+        assertEquals("Every unlooked game comes first, in order", slate.drop(9), queue.take(31).map { it.game })
+        assertTrue(queue.take(31).all { it.look == SportsBrowseWork.Look.FIRST })
+        assertEquals("Then the cards on screen are looked at again", slate.take(9).toSet(), queue.drop(31).map { it.game }.toSet())
+        assertTrue(queue.drop(31).all { it.look == SportsBrowseWork.Look.AGAIN })
+    }
+    @Test fun theScreenStillGoesFirstAndRepeatLooksStartWithTheOldest() {
+        val slate = games.take(12)
+        val plan = SportsBrowseWork.plan(slate, slate.drop(6).take(3).map { it.key }.toSet(), null, emptySet())
+        val first = SportsBrowseWork.queue(plan, looked = { false }, upgrade = { false }, due = { _, _ -> true }, lastLook = { 0L })
+        assertEquals(slate.drop(6).take(3), first.take(3).map { it.game }); assertTrue(first.take(3).all { it.look == SportsBrowseWork.Look.FIRST_NEAR })
+        val lastLook = slate.withIndex().associate { (i, game) -> game.key to 1000L - i }
+        val again = SportsBrowseWork.queue(plan, looked = { true }, upgrade = { it == slate[7] }, due = { _, _ -> true }, lastLook = { lastLook.getValue(it.key) })
+        assertEquals("A sharper feed for a card on screen comes before repeat looks", SportsBrowseWork.Step(slate[7], SportsBrowseWork.Look.UPGRADE), again.first())
+        assertEquals("Repeat looks start with the game looked at longest ago", slate.filter { it != slate[7] }.reversed(), again.drop(1).map { it.game })
+    }
+    @Test fun theViewersCardAndEveryCardBeforeItKeepTheirPlaces() {
+        val shown = games.take(9)
+        val ended = shown[2].copy(state = "post", status = "Final")
+        // Game 2 ended and left Live now; game 3 changed score; two new games start, one sorted before the cursor.
+        val next = listOf(shown[0], shown[1], shown[3].copy(scores = mapOf("x" to "7")), games[100], shown[4], shown[5], shown[6], games[101], shown[7], shown[8])
+        val held = SportsBrowseWork.hold(shown, next, shown[5].key, mapOf(ended.key to ended))
+        assertEquals("The cursor's card does not move", 5, held.indexOfFirst { it.key == shown[5].key })
+        assertEquals(listOf(shown[0], shown[1], ended, shown[3].copy(scores = mapOf("x" to "7")), shown[4], shown[5]), held.take(6))
+        assertEquals("New games and the rest follow the cursor", listOf(games[100], shown[6], games[101], shown[7], shown[8]), held.drop(6))
+        assertEquals("A card the scoreboard no longer lists cannot be held", next, SportsBrowseWork.hold(shown, next, shown[5].key))
+        assertEquals("A card that is not shown holds nothing", next, SportsBrowseWork.hold(shown, next, "elsewhere"))
+    }
 }

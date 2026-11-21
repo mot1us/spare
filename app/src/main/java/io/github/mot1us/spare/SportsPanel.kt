@@ -745,7 +745,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     }
     fun loading(message: String) { contextLine.text = message; loadingGames = games.isEmpty(); progress.isVisible = true; status.text = message; if (games.isEmpty()) { empty.text = "Loading scores and schedules…"; empty.isVisible = true; if (initialReveal) showSkeleton() } }
     /** [hidden] counts games left out by "Show only my teams", so an empty-looking screen says why. */
-    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean, hidden: Int = 0, coverage: List<SportsCoverage> = emptyList()) {
+    /** [latest] has games that ended and left Live now, so a card held in place before the cursor shows its final score. */
+    fun submit(next: List<SportsGame>, followed: Set<String>, selected: String?, message: String, scanning: Boolean, hidden: Int = 0, coverage: List<SportsCoverage> = emptyList(),
+        latest: Map<String, SportsGame> = emptyMap()) {
         val shownCoverage = if (selected == "live" && selectedLeague == null) coverage else emptyList()
         if (cardsClosed) return
         val request = ++cardsRequest
@@ -785,8 +787,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
         empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games right now. Choose a league for its upcoming games and results." else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && shownCoverage.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
-        if (games != next || displayedRedZone != showRedZone || displayedCoverage != shownCoverage) {
-            cardUpdates.submit(CardUpdate(request, games, gameKeys, next.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered, displayedCoverage, shownCoverage))
+        // While the viewer's cursor rests on a card, that card and the cards before it keep their places.
+        val anchor = remembered
+        val held = if (!changedScope && browsingGames && !watchMode && !actionsOpen && anchor != null && rows.hasFocus()) SportsBrowseWork.hold(games, next, anchor, latest) else next
+        if (games != held || displayedRedZone != showRedZone || displayedCoverage != shownCoverage) {
+            cardUpdates.submit(CardUpdate(request, games, gameKeys, held.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered, displayedCoverage, shownCoverage))
             return
         }
         if (first || skeleton.isVisible) revealContent()
