@@ -3403,6 +3403,51 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsCardsSearchBeforeTheProvidersEventNamesArriveAndLookAgainAfter() {
+        val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(6).chunked(2)
+        val named = pairs[0]; val renamed = pairs[1]
+        // Game 0 is named in the lineup. Game 1's event slot is renamed for it only in the provider's fresh event names.
+        // Game 2 is on no channel at all.
+        val slots = listOf("NBA 01: ${named[1].name} vs ${named[0].name}" to "NBA 01: ${named[1].name} vs ${named[0].name}",
+            "NBA 02: No Event" to "NBA 02: ${renamed[1].name} vs ${renamed[0].name}", "NBA 03: No Event" to "NBA 03: No Event")
+        FixtureServer(eventSlots = slots).use { server ->
+            val source = Source(name = "Event names fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
+                    LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) -> LiveEvent("names-$i", setOf(home.id, away.id), now - 300000, league = "NBA") }, now, setOf("NBA")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            fun summaries(activity: MainActivity) = @Suppress("UNCHECKED_CAST") (MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>)
+            // An event slot the guide does not confirm is offered, not played on OK: "1 stream names this game".
+            fun found(text: String?, slot: String) = text != null && (text.startsWith(slot) || text.startsWith("1 stream names this game"))
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                // The provider holds its event names back; the cards search anyway.
+                waitFor(scenario) { activity -> found(summaries(activity)["NBA:names-0"], "NBA 01:") }
+                waitFor(scenario) { activity -> (1..2).all { summaries(activity)["NBA:names-$it"] == "Checking event channels…" } }
+                scenario.onActivity { activity ->
+                    assertTrue("The provider was asked for its event names", server.requests.keys.any { it == "/player_api.php" })
+                    assertTrue(Diagnostics.sportsLines().joinToString("\n"), Diagnostics.sportsLines().any { it.contains("Cards started looking for streams") })
+                    assertTrue(Diagnostics.sportsLines().none { it.contains("Event channel names read") })
+                    assertEquals("Waiting cards are not counted as searched", 0, Diagnostics.sportsLines().count { it.contains("Every live card has looked") })
+                }
+                server.releaseEventNames.countDown()
+                // With the fresh names every card looks again: the renamed slot is found, and the third game says nothing names it.
+                waitFor(scenario) { activity -> found(summaries(activity)["NBA:names-1"], "NBA 02: ${renamed[1].name}") && summaries(activity)["NBA:names-2"] == "No stream names this game" }
+                scenario.onActivity { activity ->
+                    assertTrue(found(summaries(activity)["NBA:names-0"], "NBA 01:"))
+                    val lines = Diagnostics.sportsLines()
+                    assertTrue(lines.joinToString("\n"), lines.any { it.contains("Event channel names read in") && it.contains("3 channels in 1 categories") })
+                    assertTrue(lines.indexOfFirst { it.contains("Cards started looking for streams") } < lines.indexOfFirst { it.contains("Event channel names read") })
+                }
+                waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("Every live card has looked for streams · 3 games · 2 found one") } }
+            } } finally { server.releaseEventNames.countDown(); lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsLeagueRowShowsScrollCuesWhenLeaguesOverflow() {
         FixtureServer().use { server ->
             val source = Source(name = "League overflow fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
@@ -6752,7 +6797,11 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0) : AutoCloseable {
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0,
+        /** An Xtream event category: each slot's name in the lineup and the fresh name its category answers with. */
+        private val eventSlots: List<Pair<String, String>>? = null) : AutoCloseable {
+        /** Holds the event category's answer until the test releases it. */
+        val releaseEventNames = java.util.concurrent.CountDownLatch(1)
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -6767,7 +6816,10 @@ class SpareDeviceTest {
         private val dtsMovie by lazy { instrumentation.context.assets.open("dts-hd-ma.mkv").use { it.readBytes() } }
         private val captionTransport by lazy { EmbeddedCaptionFixture.add(repeatTransport(avTransport, 8), embeddedCaptions == 708) }
         private val longTransport by lazy { repeatTransport(avTransport, liveCycles) }
-        private val streams = (1..channelCount).joinToString(",", "[", "]") { id ->
+        private fun eventStreams(fresh: Boolean) = eventSlots.orEmpty().withIndex().joinToString(",", "[", "]") { (i, names) ->
+            """{"stream_id":${i + 1},"name":"${if (fresh) names.second else names.first}","category_id":"1","container_extension":"mp4","epg_channel_id":"","tv_archive":0}"""
+        }.toByteArray()
+        private val streams = if (eventSlots != null) eventStreams(false) else (1..channelCount).joinToString(",", "[", "]") { id ->
             """{"stream_id":$id,"name":"Xtream Test $id","category_id":"${if (regionGroups) listOf("uk", "us-news", "us-sports", "ca")[(id - 1) % 4] else "1"}","container_extension":"${if (fallbackHls || missingStatus != 0) "ts" else "mp4"}","epg_channel_id":"${if (fullGuide) "test$id" else ""}","tv_archive":1,"tv_archive_duration":7}"""
         }.toByteArray()
         private val logo = ByteArrayOutputStream().also { out ->
@@ -6873,7 +6925,9 @@ class SpareDeviceTest {
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
                                 else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"1"}]""".toByteArray()
                                 else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"${if (archivedSports) "NFL: Seattle Seahawks vs San Francisco 49ers" else "Archived fixture"}","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
-                                else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray() else streams) to "application/json"
+                                else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (eventSlots != null) """[{"category_id":"1","category_name":"NBA Events"}]""" else if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray()
+                                else if (eventSlots != null && target.contains("get_live_streams") && target.contains("category_id=")) { releaseEventNames.await(30, java.util.concurrent.TimeUnit.SECONDS); eventStreams(true) }
+                                else streams) to "application/json"
                             "/xmltv.php" -> xml to "application/xml"
                             "/live/test/test-secret/1.m3u8" -> "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2,\n$base/segment.ts\n#EXT-X-ENDLIST\n".toByteArray() to "application/vnd.apple.mpegurl"
                             else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (longVideo && path.endsWith(".ts")) longTransport to "video/mp2t" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"

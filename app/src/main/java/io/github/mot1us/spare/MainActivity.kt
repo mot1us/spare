@@ -212,6 +212,8 @@ class MainActivity : Activity() {
     }
     private val sportsWorker = workers.pool("sports")
     private val sportsDestinationWorker = workers.pool("destinations", background = true)
+    /** Reading event channel names is up to 25 provider requests; guide scans must not queue behind it. */
+    private val eventNamesWorker = workers.pool("event-names", background = true)
     private val sportsScheduleDisk = workers.pool("schedule-cache", background = true)
     private var sportsDestinationTask: java.util.concurrent.Future<*>? = null
     internal var redZoneLoader: (Guide, GuideFilters, Map<String, VideoInfo>, Long) -> List<Channel> = { snapshot, profile, quality, now -> redZoneCache.find(snapshot, profile, quality, now) }
@@ -1495,6 +1497,7 @@ class MainActivity : Activity() {
         if (sports) {
             sportsExtrasNotBefore = android.os.SystemClock.uptimeMillis() + 3500
             Diagnostics.sportsOpened("Sports chosen · ${liveSports.events.size} games in memory${if (liveSportsChecking) " · scoreboard loading" else ""}")
+            sportsWarmWaits.clear(); sportsWarmStarted = false; sportsWarmNoted = emptySet()
             ensureSportsLeague()
             sportsPanel.loading("Finding live games…")
             showGuideSection()
@@ -2675,7 +2678,7 @@ class MainActivity : Activity() {
         liveSportsTask = liveSportsWorker.submit {
             val result = runCatching { liveSportsLoader() }.getOrDefault(LiveSportsSnapshot.EMPTY)
             handler.post { if (!closed) {
-                Diagnostics.sports("Scoreboard finished · ${result.events.size} games · ${result.leagues.size} leagues")
+                Diagnostics.sports("Scoreboard finished · ${result.events.size} games · ${result.leagues.size} leagues", keep = true)
                 liveSportsChecking = false; if (liveSportsDay == requestedDay) { liveSports = liveSports.mergeRefresh(result, complete = true); rememberScores(liveSports); reorderEpgForGames() }
                 if (liveSportsAgain) { liveSportsAgain = false; checkLiveSports(force = true) }
                 else retrySportsSoonIfMissing()
@@ -2831,6 +2834,8 @@ class MainActivity : Activity() {
      */
     private var eventNamesAt = 0L
     private var eventNamesTask: java.util.concurrent.Future<*>? = null
+    /** The first reading of event channel names this session has finished (or there is nothing to read). */
+    private var eventNamesKnown = false
     /**
      * While Live now is open, re-read the provider's event categories (Game Pass, PPV…) every 10 minutes, so channels
      * renamed for today's games are found without downloading the whole channel list.
@@ -2841,20 +2846,33 @@ class MainActivity : Activity() {
         val snapshot = guide; val owners = enabledSources().filter { it.kind == "xtream" }
         val legacy = if (::playlists.isInitialized) playlists.legacySource else source?.id.orEmpty()
         eventNamesAt = now
-        if (owners.isEmpty()) return
+        if (owners.isEmpty()) { eventNamesKnown = true; return }
         // Categories for the chosen leagues and today's broadcasters (ESPN+, ACCNX…) are read first.
         val preferred = store.sportsLeagues.flatMap(EventChannelNames::leagueWords) + sportsWarmGames.flatMap { it.networks }
-        eventNamesTask = sportsDestinationWorker.submit {
+        // Cards do not wait for this: they search with the names already known and look again when fresh names arrive.
+        eventNamesTask = eventNamesWorker.submit {
+            val began = android.os.SystemClock.elapsedRealtime()
+            fun done(note: String, fresh: Map<String, Map<String, String>> = emptyMap()) {
+                Diagnostics.sports("Event channel names read in ${String.format(java.util.Locale.ROOT, "%.1f", (android.os.SystemClock.elapsedRealtime() - began) / 1000.0)} s · $note", keep = true)
+                handler.post {
+                    if (closed) return@post
+                    eventNamesKnown = true
+                    val changed = fresh.isNotEmpty() && EventChannelNames.update(guide.channels, ::playlistId, fresh)
+                    if (!started || !sportsVisible || !guideVisible) return@post
+                    // Every card looks again with the new names and keeps its last result meanwhile.
+                    if (changed) { sportsStreamCache.clear(); sportsWarmAttempted.clear(); scheduleSports() }
+                    else { sportsStreamSummaries.filterValues { it == SPORTS_CHECKING_NAMES }.keys.forEach(sportsWarmAttempted::remove); queueSportsPrefetch() }
+                }
+            }
             // Scanning every channel name (tens of thousands) froze the screen for 0.7 s when it ran on the screen thread.
             val wanted = owners.associateWith { owner ->
                 EventChannelNames.eventGroups(snapshot.channels.filter { it.playlistId.ifBlank { legacy } == owner.id }, preferred)
             }.filterValues { it.isNotEmpty() }
-            if (wanted.isEmpty() || Thread.currentThread().isInterrupted) return@submit
+            if (Thread.currentThread().isInterrupted) return@submit
+            if (wanted.isEmpty()) { done("no event categories in this playlist"); return@submit }
             val fresh = wanted.mapNotNull { (owner, groups) -> runCatching { owner.id to EventChannelNames.fetch(owner, groups) }.getOrNull() }.toMap()
-            if (fresh.isEmpty() || Thread.currentThread().isInterrupted) return@submit
-            handler.post {
-                if (!closed && started && sportsVisible && guideVisible && EventChannelNames.update(guide.channels, ::playlistId, fresh)) { sportsStreamCache.clear(); scheduleSports() }
-            }
+            if (Thread.currentThread().isInterrupted) return@submit
+            done(if (fresh.isEmpty()) "the provider did not answer" else "${fresh.values.sumOf { it.size }} channels in ${wanted.values.sumOf { it.size }} categories", fresh)
         }
     }
     private fun ensureSportsLeague(): String? {
@@ -3222,15 +3240,24 @@ class MainActivity : Activity() {
     /** A card that has not shown a search result yet. */
     private fun unsearchedSummary(summary: String?) = summary == null || summary == "Select to find stream" || summary.startsWith("Finding stream")
     private var sportsWarmNoted = emptySet<String>()
+    /** What the first card search of this Sports visit waited for, for the performance report. */
+    private val sportsWarmWaits = linkedSetOf<String>()
+    private var sportsWarmStarted = false
     /** Once per slate, the report says when every live card has looked for its streams. */
     private fun noteSportsWarmDone() {
         val live = sportsWarmGames.mapTo(hashSetOf()) { it.key }
-        if (live.isEmpty() || live == sportsWarmNoted || live.any { unsearchedSummary(sportsStreamSummaries[it]) }) return
+        if (live.isEmpty() || live == sportsWarmNoted || live.any { unsearchedSummary(sportsStreamSummaries[it]) || sportsStreamSummaries[it] == SPORTS_CHECKING_NAMES }) return
         sportsWarmNoted = live
         val named = live.count { key -> sportsStreamSummaries[key]?.let { !it.startsWith("No stream") && !it.startsWith("Select to") } == true }
-        Diagnostics.sports("Every live card has looked for streams · ${live.size} games · $named found one")
+        Diagnostics.sports("Every live card has looked for streams · ${live.size} games · $named found one", keep = true)
     }
     private fun sportsStreamSummary(match: SportsStreamCache.Match, snapshot: Guide, profile: GuideFilters,
+        quality: Map<String, VideoInfo>, hidden: Map<String, Long>, now: Long, namesPending: Boolean = false): String {
+        val summary = sportsStreamSummaryNow(match, snapshot, profile, quality, hidden, now)
+        // Saying "No stream names this game" before the provider's event channels are known would claim a miss too early.
+        return if (namesPending && summary.startsWith("No stream names")) SPORTS_CHECKING_NAMES else summary
+    }
+    private fun sportsStreamSummaryNow(match: SportsStreamCache.Match, snapshot: Guide, profile: GuideFilters,
         quality: Map<String, VideoInfo>, hidden: Map<String, Long>, now: Long): String {
         val evidence = if (match.warmed.isEmpty()) snapshot else snapshot.copy(programmes = object : AbstractMap<String, List<Programme>>() {
             override fun get(key: String) = match.warmed[key] ?: snapshot.programmes[key]
@@ -3245,13 +3272,21 @@ class MainActivity : Activity() {
     }
     private fun prefetchSportsStream() {
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive.isNotEmpty()) return
-        if (liveSportsChecking || sportsExtrasDelay() > 0 || sportsDestinationTask?.isDone == false || sportsCoverageTask?.isDone == false || eventNamesTask?.isDone == false) {
+        // Searches wait for the scoreboard, a settled remote and the short guide scans, but not for the provider's event
+        // channel names: those can take a minute, and cards look again when they arrive.
+        val waits = listOfNotNull("scores".takeIf { liveSportsChecking }, "Sports to settle".takeIf { sportsExtrasDelay() > 0 },
+            "the replay and RedZone scan".takeIf { sportsDestinationTask?.isDone == false }, "the guide read for other sports".takeIf { sportsCoverageTask?.isDone == false })
+        if (waits.isNotEmpty()) {
+            if (!sportsWarmStarted) sportsWarmWaits += waits
             handler.postDelayed(warmSportsStreams, 800)
             return
         }
         // Wait while the picture behind Sports starts or rebuffers. A channel that stopped, ended or failed has nothing to
         // protect, and waiting for it left every card on "Select to find stream".
-        if (player.playbackState == Player.STATE_BUFFERING || current != null && player.playbackState == Player.STATE_READY && !firstFrame) { handler.postDelayed(warmSportsStreams, 1000); return }
+        if (player.playbackState == Player.STATE_BUFFERING || current != null && player.playbackState == Player.STATE_READY && !firstFrame) {
+            if (!sportsWarmStarted) sportsWarmWaits += "the picture behind Sports"
+            handler.postDelayed(warmSportsStreams, 1000); return
+        }
         val selected = source ?: return
         val now = System.currentTimeMillis(); val snapshot = guide; val sourceEpoch = generation
         // Read the cards on screen now. The list taken as the games arrived could describe the cards they replaced, and then
@@ -3266,6 +3301,12 @@ class MainActivity : Activity() {
         val epoch = ++sportsWarmEpoch; val favoriteSnapshot = favorites; val profile = sportsStreamFilters()
         val quality = videoInfo.toMap(); val hidden = unavailable.snapshot(); val attempted = sportsWarmAttempted.toMap(); val upgrades = sportsUpgradeKeys
         val shown = sportsStreamSummaries.toMap(); val near = plan.near.mapTo(hashSetOf()) { it.key }
+        // Until the first event names arrive, a game nothing names yet may still be on an event channel.
+        val namesPending = !eventNamesKnown && eventNamesTask?.isDone == false
+        if (!sportsWarmStarted) {
+            sportsWarmStarted = true
+            Diagnostics.sports("Cards started looking for streams${if (sportsWarmWaits.isEmpty()) "" else " · waited for ${sportsWarmWaits.joinToString(", ")}"}", keep = true)
+        }
         var nearRound = true
         sportsWarmPending = false; sportsWarmActive = setOf(games.first().key)
         sportsWarmTask = sportsWarmWorker.submit {
@@ -3275,10 +3316,10 @@ class MainActivity : Activity() {
                 if (Thread.currentThread().isInterrupted) return@submit
                 val summaries = linkedMapOf<String, String>()
                 // Labels are refreshed for the cards on screen; a game further down gets its label when it is looked up.
-                plan.near.forEach { game ->
+                (plan.near + plan.later.filter { shown[it.key] == SPORTS_CHECKING_NAMES }).forEach { game ->
                     val cached = sportsStreamCache.get(token, game, now, forAuto = false, allowStale = true)
                     // A card keeps what it last found while it is checked again (fresh event names empty the cache).
-                    summaries[game.key] = cached?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, now) }
+                    summaries[game.key] = cached?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, now, namesPending) }
                         ?: shown[game.key]?.takeUnless(::unsearchedSummary) ?: "Select to find stream"
                 }
                 fun due(target: SportsGame, retryMs: Long): Boolean {
@@ -3320,7 +3361,7 @@ class MainActivity : Activity() {
                         val at = System.currentTimeMillis()
                         val retained = result?.takeIf { sportsStreamCache.put(token, it, at) }
                             ?: sportsStreamCache.get(token, target, at, forAuto = false, allowStale = true)
-                        val summary = retained?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, at) }
+                        val summary = retained?.let { sportsStreamSummary(it, snapshot, profile, quality, hidden, at, namesPending) }
                             ?: shown[target.key]?.takeUnless(::unsearchedSummary)?.takeUnless { it == "Select to finish stream search" } ?: "Select to finish stream search"
                         Triple(target.key, summary, result?.game?.coverageComplete == true)
                     } }
@@ -3671,7 +3712,7 @@ class MainActivity : Activity() {
         if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun configurePlaylists(next: List<Source>) {
-        EventChannelNames.clear(); eventNamesAt = 0L
+        EventChannelNames.clear(); eventNamesAt = 0L; eventNamesKnown = false
         store.saveSources(next); sources = next
         if (::playlists.isInitialized) playlists.configure(next)
         source = next.firstOrNull { it.id == source?.id && it.enabled } ?: next.firstOrNull { it.enabled }
@@ -4514,6 +4555,8 @@ private val SPORTS_SECTIONS = listOf("Preferences" to "Play on OK, my teams only
 private const val SPORTS_QUICK_RETRIES = 4
 private const val ADDITIONAL_RESTORE_MAX_WAIT_MS = 45000L
 private const val SPORTS_QUICK_RETRY_MS = 3000L
+/** A card whose game nothing names yet, while the provider's event channel names are still being read. */
+private const val SPORTS_CHECKING_NAMES = "Checking event channels…"
 /** A card on screen whose search found nothing looks again after this long. */
 private const val SPORTS_WARM_RETRY_MS = 30_000L
 /** A live game off screen looks again less often; its card keeps the last result meanwhile. */

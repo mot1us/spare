@@ -93,7 +93,7 @@ internal object Diagnostics {
     @Synchronized private fun posterLine() = if (posters == 0) null else "Posters: $posters loaded · waited ${posterWait / posters} ms · took ${posterWork / posters} ms each (worst $posterWorst) · $posterFailed failed"
 
     // Recent actions: what changed the screen or the channel and what caused it, so a jump nobody asked for can be traced.
-    private class Action(val at: Long, val text: String) { var times = 1 }
+    private class Action(val at: Long, val text: String, val keep: Boolean = false) { var times = 1 }
     private val actions = java.util.ArrayDeque<Action>()
     /** Repeats of the same action (a held or repeated key) are counted on one line. Channel and key names only; never addresses. */
     fun action(text: String) = synchronized(actions) {
@@ -111,12 +111,13 @@ internal object Diagnostics {
     private class Opening {
         private val steps = ArrayList<Action>(); private var began = 0L; private var skipped = 0
         fun start(text: String) { synchronized(steps) { steps.clear(); skipped = 0; began = SystemClock.elapsedRealtime() }; add(text) }
-        fun add(text: String) = synchronized(steps) {
+        /** [keep]: a milestone that stays in the report when a burst of other steps would push it out. */
+        fun add(text: String, keep: Boolean = false) = synchronized(steps) {
             if (began == 0L) return@synchronized
             val last = steps.lastOrNull()
             if (last != null && last.text == text.take(110)) { last.times++; return@synchronized }
-            if (steps.size >= HEAD + TAIL) { steps.removeAt(HEAD); skipped++ }
-            steps += Action(SystemClock.elapsedRealtime(), text.take(110))
+            if (steps.size >= HEAD + TAIL) { steps.removeAt((HEAD until steps.size).firstOrNull { !steps[it].keep } ?: HEAD); skipped++ }
+            steps += Action(SystemClock.elapsedRealtime(), text.take(110), keep)
         }
         fun lines() = synchronized(steps) {
             val lines = steps.map { String.format(Locale.ROOT, "  +%.1f s %s%s", (it.at - began) / 1000.0, it.text, if (it.times > 1) " ×${it.times}" else "") }
@@ -127,7 +128,7 @@ internal object Diagnostics {
     }
     private val sportsOpening = Opening(); private val libraryOpening = Opening()
     fun sportsOpened(text: String) = sportsOpening.start(text)
-    fun sports(text: String) = sportsOpening.add(text)
+    fun sports(text: String, keep: Boolean = false) = sportsOpening.add(text, keep)
     internal fun sportsLines() = sportsOpening.lines()
     fun libraryOpened(text: String) = libraryOpening.start(text)
     fun library(text: String) = libraryOpening.add(text)

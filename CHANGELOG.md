@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.53.2 — 2026-11-21
+
+- Sports cards start looking for streams a few seconds after Sports opens. They waited for the provider's event channel names (ESPN+, NCAAB and other event slots), which can take up to 25 provider requests; on the owner's second onn the first card filled about 30 seconds in. Cards now search with the names Spare already has, and every card looks again when the fresh names arrive, keeping its result meanwhile. Until then, a game nothing names yet says "Checking event channels…" rather than "No stream names this game".
+- Event channel names are read on their own worker, so the guide scans Sports waits for no longer queue behind them.
+- The performance report's Sports opening says when cards started looking for streams and what they waited for, how long the event names took, and when every live card had looked. Those lines stay when a burst of scoreboard replies fills the list.
+
 ## 0.53.1 — 2026-11-21
 
 - Every live Sports card finds its stream on its own. Cards looked only when the cursor reached them or when they sat in the top row: the list of cards to search was taken before the new cards were on screen, and games further down were never searched. With a Saturday of live college football, most cards said "Select to find stream" until the cursor passed them. Now the card under the cursor and the cards on screen go first, then followed teams, then every other live game in order. Games off screen are looked up a small batch at a time, about a second apart, and checked again every three minutes when nothing named them.
