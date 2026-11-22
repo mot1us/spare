@@ -18,7 +18,9 @@ class NativeVoiceInput(private val context: Context, private val message: (Strin
         stop()
         if (!SpeechRecognizer.isRecognitionAvailable(context)) { message("Voice input is unavailable on this TV. Select the field to type."); return }
         try {
-            val engine = SpeechRecognizer.createSpeechRecognizer(context)
+            // The app's context, not the screen's: Android keeps the recognizer's connection object until the speech service
+            // lets go of it, after destroy(), and through the screen it kept the whole lineup (100 MB in a large one).
+            val engine = SpeechRecognizer.createSpeechRecognizer(context.applicationContext)
             recognizer = engine
             engine.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) { if (recognizer === engine) message("Listening… say a channel, movie or show") }

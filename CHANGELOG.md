@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.56.1 — 2026-11-21
+
+- Voice search no longer keeps Spare's screen in memory after it closes. Android holds the speech recognizer's connection until the speech service releases it, and the recognizer was created with the screen as its context, so the screen and its whole lineup stayed in memory (about 100 MB with a 100,000-channel lineup) for a minute or more. It now uses the app's context. This also made the device test suite run out of memory once.
+- Device test progress reports the memory still in use after each test and, when it stays high, which Spare threads are still working.
+
 ## 0.56.0 — 2026-11-21
 
 - Sports cards are ready at tip-off. While Sports is closed, the background pass also looks up games in your leagues that start within 15 minutes; a channel the provider has already named for the game, or a guide listing for it, carries into the live game, so its card shows the stream and OK plays it the moment the game starts. Upcoming cards look the same as before. A stream found more than 15 minutes ahead still ends at kickoff, and finding nothing beforehand does not hold back the live game's own search.
