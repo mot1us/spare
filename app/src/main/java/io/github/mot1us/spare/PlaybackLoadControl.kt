@@ -10,9 +10,13 @@ import androidx.media3.exoplayer.source.MediaSource.MediaPeriodId
 import androidx.media3.exoplayer.source.TrackGroupArray
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 
-/** One allocator/player, with a steadier startup cushion for on-demand files. */
+/**
+ * One allocator/player, with a steadier startup cushion for on-demand files. Movies and episodes may buffer more than live
+ * channels ([vodBytes]): a 4K remux fills the live budget with a few seconds of video, so a connection slightly slower
+ * than the film stalled every 15 to 20 seconds.
+ */
 @UnstableApi
-class PlaybackLoadControl(private val targetBytes: Int = bufferBytes(), private val base: LoadControl = DefaultLoadControl.Builder()
+class PlaybackLoadControl(private val targetBytes: Int = bufferBytes(), private val vodBytes: Int = vodBufferBytes(), private val base: LoadControl = DefaultLoadControl.Builder()
     .setBufferDurationsMs(60000, 90000, 1500, 10000)
     .setTargetBufferBytes(targetBytes).setPrioritizeTimeOverSizeThresholds(false).build()) : LoadControl {
     private val period = Timeline.Period()
@@ -26,24 +30,38 @@ class PlaybackLoadControl(private val targetBytes: Int = bufferBytes(), private 
     override fun getAllocator(playerId: PlayerId) = base.getAllocator(playerId)
     override fun getBackBufferDurationUs(playerId: PlayerId) = base.getBackBufferDurationUs(playerId)
     override fun retainBackBufferFromKeyframe(playerId: PlayerId) = base.retainBackBufferFromKeyframe(playerId)
-    override fun shouldContinueLoading(parameters: LoadControl.Parameters) = base.shouldContinueLoading(parameters)
+    override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean {
+        if (!onDemand(parameters)) return base.shouldContinueLoading(parameters)
+        // Up to the movie budget, and at most two minutes ahead.
+        return base.getAllocator(parameters.playerId).totalBytesAllocated < vodBytes && parameters.bufferedDurationUs < VOD_AHEAD_US
+    }
+    private fun onDemand(parameters: LoadControl.Parameters): Boolean {
+        val timeline = parameters.timeline
+        val index = timeline.getIndexOfPeriod(parameters.mediaPeriodId.periodUid)
+        return index >= 0 && timeline.getWindow(timeline.getPeriod(index, period).windowIndex, window).mediaItem.localConfiguration?.tag == VOD
+    }
     override fun shouldContinuePreloading(playerId: PlayerId, timeline: Timeline, mediaPeriodId: MediaPeriodId, bufferedDurationUs: Long) = base.shouldContinuePreloading(playerId, timeline, mediaPeriodId, bufferedDurationUs)
 
     override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean {
-        val timeline = parameters.timeline
-        val index = timeline.getIndexOfPeriod(parameters.mediaPeriodId.periodUid)
-        if (index < 0 || timeline.getWindow(timeline.getPeriod(index, period).windowIndex, window)
-                .mediaItem.localConfiguration?.tag != VOD) return base.shouldStartPlayback(parameters)
+        if (!onDemand(parameters)) return base.shouldStartPlayback(parameters)
         // ExoPlayer handles fully loaded short files/the end of a file separately.
         // High-bitrate files may reach the byte budget before the time cushion.
-        // Resume with those queued bytes rather than waiting for data we cannot allocate.
-        val cushionUs = if (parameters.rebuffering) 12000000L else 5000000L
+        // Resume with those queued bytes rather than waiting for data we cannot allocate. After a stall, gather more before
+        // resuming: a film arriving slightly slower than it plays then pauses now and then instead of every few seconds.
+        val cushionUs = if (parameters.rebuffering) VOD_REBUFFER_US else 5000000L
         return Util.getPlayoutDurationForMediaDuration(parameters.bufferedDurationUs, parameters.playbackSpeed) >= cushionUs ||
-            parameters.bufferedDurationUs > 0 && base.getAllocator(parameters.playerId).totalBytesAllocated >= targetBytes
+            parameters.bufferedDurationUs > 0 && base.getAllocator(parameters.playerId).totalBytesAllocated >= vodBytes
     }
 
     companion object {
         const val VOD = "spare-vod"
+        const val VOD_AHEAD_US = 120_000_000L
+        const val VOD_REBUFFER_US = 20_000_000L
+        /** Movies and episodes: about two fifths of the heap, at most 160 MB (with Spare's large heap on an onn, 384 MB). */
+        fun vodBufferBytes(maxHeapBytes: Long = Runtime.getRuntime().maxMemory()): Int {
+            val mib = 1024 * 1024
+            return (maxHeapBytes * 2 / 5).coerceIn(32L * mib, 160L * mib).toInt()
+        }
         /** A byte target, not a whole-app memory limit; leave room for guide/decoders. */
         fun bufferBytes(maxHeapBytes: Long = Runtime.getRuntime().maxMemory(), multiview: Boolean = false): Int {
             val mib = 1024 * 1024

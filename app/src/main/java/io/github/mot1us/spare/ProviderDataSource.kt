@@ -48,6 +48,9 @@ class ProviderDataSource(private val allowHttp: () -> Boolean) : BaseDataSource(
                 } else {
                     if (code !in 200..299) throw HttpDataSource.InvalidResponseCodeException(code, client.responseMessage, null, responseHeaders(client), dataSpec, byteArrayOf())
                     destination = target.toUri()
+                    // The whole file's size ("bytes 0-99/12345" or the full length), for the report's "title needs" rate.
+                    (client.getHeaderField("Content-Range")?.substringAfterLast('/')?.trim()?.toLongOrNull()
+                        ?: client.contentLengthLong.takeIf { code == 200 && dataSpec.position == 0L })?.let { if (it > 0) Traffic.titleSize(it) }
                     input = client.inputStream.let { if (client.contentEncoding.equals("gzip", true)) GZIPInputStream(it) else it }
                     remaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) dataSpec.length else if (client.contentEncoding.equals("gzip", true)) C.LENGTH_UNSET.toLong() else client.contentLengthLong
                     if (code == 200 && dataSpec.position > 0) {

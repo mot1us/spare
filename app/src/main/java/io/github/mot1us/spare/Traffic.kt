@@ -36,10 +36,14 @@ internal object Traffic {
     @Volatile private var streamLast = -1L
     private val others = ConcurrentHashMap<String, Meter>()
 
-    /** A new live playback attempt: its average starts again. */
-    fun streamStarted(nowMs: Long) { streamFrom = nowMs; streamTotal = 0; streamLast = -1 }
-    /** On-demand titles read through another source, so no live stream is measured. */
-    fun streamStopped() { streamFrom = -1; streamTotal = 0; streamLast = -1 }
+    /** A movie's or episode's size and length, so the report can say how fast it has to arrive (zero when unknown). */
+    @Volatile var titleBytes = 0L
+    @Volatile var titleDurationMs = 0L
+    /** A new playback attempt, live or on demand: its average starts again. */
+    fun streamStarted(nowMs: Long) { streamFrom = nowMs; streamTotal = 0; streamLast = -1; titleBytes = 0; titleDurationMs = 0 }
+    /** The largest file a movie's source opened in this attempt: the movie itself, not its subtitle files. */
+    fun titleSize(bytes: Long) { if (bytes > titleBytes) titleBytes = bytes }
+    fun streamStopped() { streamFrom = -1; streamTotal = 0; streamLast = -1; titleBytes = 0; titleDurationMs = 0 }
     fun stream(nowMs: Long, amount: Long) {
         if (amount <= 0) return
         stream.add(nowMs, amount)
@@ -72,6 +76,9 @@ internal object Traffic {
             val last = streamLast
             parts += "stream ${mbits(rate(stream.recent(nowMs), window))} last ${window / 1000} s (avg ${mbits(average)})" +
                 if (last < 0) " · no data yet" else String.format(Locale.ROOT, " · last data %.1f s ago", (nowMs - last) / 1000.0)
+            // A movie stalls over and over when it arrives more slowly than it plays: say how fast it has to arrive.
+            val bytes = titleBytes; val length = titleDurationMs
+            if (bytes > 0 && length > 0) parts += "title needs ${mbits(rate(bytes, length))}"
         }
         val busy = others.entries.map { it.key to it.value.recent(nowMs) }.filter { it.second > 0 }.sortedByDescending { it.second }
         parts += if (busy.isEmpty()) "other downloads: none" else

@@ -11,7 +11,7 @@
     <application android:label="Spare" android:icon="@drawable/ic_spare" android:banner="@drawable/tv_banner"
         android:theme="@style/AppTheme" android:allowBackup="false" android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:networkSecurityConfig="@xml/network_security_config"
-        android:supportsRtl="true">
+        android:supportsRtl="true" android:largeHeap="true">
         <!-- TV remote hold-Back needs key down/up; predictive back consumes those on API 36. API 26–32 ignore this opt-out and already deliver remote key events. -->
         <activity android:name=".MainActivity" android:icon="@drawable/ic_spare" android:banner="@drawable/tv_banner" android:exported="true" android:enableOnBackInvokedCallback="false" tools:targetApi="33">
             <intent-filter>

@@ -45,4 +45,17 @@ class TrafficTest {
         Traffic.streamStarted(4_000)
         assertEquals("stream 0.0 Mbit/s last 1 s (avg 0.0 Mbit/s) · no data yet · other downloads: none", Traffic.summary(4_200))
     }
+
+    @Test fun aMovieSaysHowFastItHasToArrive() {
+        Traffic.streamStarted(0)
+        // A 4K remux: 48 GB over 2 hours averages about 53 Mbit/s; it arrives at 40 Mbit/s (5 MB a second).
+        Traffic.titleSize(1_000_000); Traffic.titleSize(48_000_000_000); Traffic.titleSize(80_000)
+        Traffic.titleDurationMs = 7_200_000
+        for (s in 0 until 10) Traffic.stream(s * 1000L, 5_000_000)
+        val line = Traffic.summary(9_900)
+        assertTrue(line, line.startsWith("stream 40.8 Mbit/s last 9 s (avg 40.4 Mbit/s)"))
+        assertTrue("The movie's own size counts, not a subtitle file's: $line", "title needs 53.3 Mbit/s" in line)
+        Traffic.streamStarted(20_000)
+        assertTrue("A new attempt forgets the last title", "title needs" !in Traffic.summary(20_500))
+    }
 }

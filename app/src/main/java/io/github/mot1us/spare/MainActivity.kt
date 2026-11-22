@@ -713,7 +713,7 @@ class MainActivity : Activity() {
     private lateinit var providerFactory: DataSource.Factory
     private lateinit var mediaFactory: DefaultMediaSourceFactory
     private val streamer = StreamerQuirks.active
-    /** Counts the playing live stream's bytes for the performance report (see [Traffic]). */
+    /** Counts the playing stream's bytes, live or on demand, for the performance report (see [Traffic]). */
     private val streamTraffic = object : androidx.media3.datasource.TransferListener {
         override fun onTransferInitializing(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
         override fun onTransferStart(source: DataSource, dataSpec: androidx.media3.datasource.DataSpec, isNetwork: Boolean) = Unit
@@ -868,7 +868,7 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } else ProviderDataSource { playbackSource()?.allowHttp == true } }
+        providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } else ProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } }
         mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
         val loadControl = PlaybackLoadControl()
         sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
@@ -1000,6 +1000,7 @@ class MainActivity : Activity() {
                 // finished matching a game.
                 if (state == Player.STATE_BUFFERING) { playbackWarmup.reset(); idleBrowse.pause() }
                 if (state == Player.STATE_READY && sportsVisible && guideVisible && !sportsPanel.watching) queueSportsPrefetch()
+                if (state == Player.STATE_READY && onDemand != null && player.duration > 0) Traffic.titleDurationMs = player.duration
                 syncPlaybackMonitoring(); syncReplayDiscovery()
                 if (state == Player.STATE_ENDED && started && onDemand != null) { saveDemandProgress(ended = true); showDemandControls() }
                 else if (state == Player.STATE_ENDED && started && current != null) reconnectOrFail("The provider ended this stream. Try another channel or Retry. (STREAM_ENDED)")
@@ -1974,7 +1975,8 @@ class MainActivity : Activity() {
         cancelPlaybackCallbacks()
         performanceOverlay?.attempt()
         playbackToken++; playbackDroppedFrames = 0; expectedMediaId = "${onDemand?.id ?: current?.id}:$playbackToken"
-        if (onDemand == null) Traffic.streamStarted(Traffic.now()) else Traffic.streamStopped()
+        // Movies are measured too: a 4K title that arrives more slowly than it plays stalls every few seconds.
+        Traffic.streamStarted(Traffic.now())
         performanceOverlay?.sports?.playing?.attempt(expectedMediaId)
         firstFrame = false; lastVideoInfo = null; measuredFrameRate = 0f; decoderFrameRate = 0f; scanEvidence = "unknown"; audioRoute = ""; audioDecoderName = ""; unplayableAudio = ""; captionSawCue = false; captionScanCount = 0; cancelCaptionProbe(); showPlaybackLoading(phase)
         val itemBuilder = MediaItem.Builder().setUri(playbackUrl.toUri()).setMediaId(expectedMediaId)
@@ -4521,6 +4523,9 @@ class MainActivity : Activity() {
         }
         if (settingsPanel?.opened == true) { settingsPanel?.back(); return }
         if (library.opened) { libraryBack(); return }
+        // With a movie's controls on screen (OK shows them), Back closes them and the movie keeps playing; the next Back
+        // leaves the movie for its page in Library.
+        if (onDemand != null && demandControls.isShown) { handler.removeCallbacks(hideDemandControls); demandControls.visibility = View.GONE; return }
         if (onDemand != null) { if (sportsReplayGame != null) returnToSportsReplay() else if (onDemand?.kind == "catchup") returnToLiveChannel() else stopDemandToLibrary(); return }
         if (details.isVisible) closeDetails()
         else if (guideVisible && guideSearch.isVisible) { finishSearch(true); searchButton.requestFocus() }

@@ -27,4 +27,15 @@ class PlaybackBufferBudgetTest {
         assertFalse(progress.stalled(2, 0, 0, 100, false, true, 5000))
         assertTrue("Buffer growth does not conceal a frozen READY decoder", progress.stalled(2, 21000, 0, 100, false, true, 6000))
     }
+
+    @Test fun moviesMayBufferMoreThanLiveChannelsWithinTheHeap() {
+        val mib = 1024 * 1024L
+        assertEquals("An onn 4K Pro with Spare's large heap", 153, PlaybackLoadControl.vodBufferBytes(384 * mib) / mib.toInt())
+        assertEquals(160 * mib, PlaybackLoadControl.vodBufferBytes(1024 * mib).toLong())
+        assertEquals(32 * mib, PlaybackLoadControl.vodBufferBytes(64 * mib).toLong())
+        for (heap in listOf(128L, 192L, 256L, 384L, 512L)) {
+            assertTrue(PlaybackLoadControl.vodBufferBytes(heap * mib) >= PlaybackLoadControl.bufferBytes(heap * mib))
+            assertTrue("A movie's buffer leaves most of the heap for the rest of Spare", PlaybackLoadControl.vodBufferBytes(heap * mib) <= heap * mib / 2)
+        }
+    }
 }

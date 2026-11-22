@@ -794,6 +794,16 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/movie/test/test-secret/101.") == true }
+                // OK shows the movie's controls; Back closes them and the movie keeps playing.
+                device.pressDPadCenter()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("on-demand-controls")?.isShown == true }
+                device.pressBack()
+                waitFor(scenario) { it.window.decorView.findViewWithTag<View>("on-demand-controls")?.isShown != true }
+                Thread.sleep(500)
+                scenario.onActivity { activity ->
+                    assertTrue("The movie keeps playing", find<PlayerView>(activity.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/movie/test/test-secret/101.") == true)
+                    assertFalse(activity.window.decorView.findViewWithTag<View>("library-play")?.isShown == true)
+                }
                 device.pressBack()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 device.pressBack()
@@ -825,6 +835,7 @@ class SpareDeviceTest {
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("library-play").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/movie/test/test-secret/101.") == true }
+                closeDemandControls(scenario)
                 device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-play")?.isShown == true }
                 device.pressBack(); waitFor(scenario) { a -> search(a).isShown && (a.currentFocus?.tag as? String) == "search-result:movie:101" }
                 // Closing Search: its words match no channel, so they do not stay behind as a filter that empties the guide.
@@ -4857,6 +4868,7 @@ class SpareDeviceTest {
                     assertEquals("Only the matching broadcaster's metadata archive is queried", 1, server.archiveRequests.get())
                     waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true && (player?.videoSize?.width ?: 0) > 0 }
                     scenario.onActivity { assertSame(player, find<PlayerView>(it.window.decorView)!!.player) }
+                    closeDemandControls(scenario)
                     device.pressBack()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() && find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/live/") == true }
                     scenario.onActivity { activity ->
@@ -4873,6 +4885,7 @@ class SpareDeviceTest {
                     }
                     waitFor(scenario) { player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/") == true }
                     assertEquals("Repeat replay lookup uses its saved match", 1, server.archiveRequests.get())
+                    closeDemandControls(scenario)
                     device.pressBack(); waitFor(scenario) { it.window.decorView.findViewWithTag<RecyclerView>("sports-games").hasFocus() }
                     scenario.onActivity { activity ->
                         assertEquals("Score hidden", activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-score").text.toString())
@@ -5475,8 +5488,11 @@ class SpareDeviceTest {
                         assertTrue("Live channel startup stays fast", control.shouldStartPlayback(parameters(1500000, false, false)))
                         assertFalse("VOD must build its startup cushion", control.shouldStartPlayback(parameters(1500000, false, true)))
                         assertTrue(control.shouldStartPlayback(parameters(5000000, false, true)))
-                        assertFalse("VOD rebuffering builds a larger cushion", control.shouldStartPlayback(parameters(10000000, true, true)))
-                        assertTrue(control.shouldStartPlayback(parameters(12000000, true, true)))
+                        // After a stall a movie gathers 20 seconds, so a connection that only just keeps up pauses now and then
+                        // instead of every few seconds.
+                        assertFalse("VOD rebuffering builds a larger cushion", control.shouldStartPlayback(parameters(12000000, true, true)))
+                        assertFalse(control.shouldStartPlayback(parameters(PlaybackLoadControl.VOD_REBUFFER_US - 1000000, true, true)))
+                        assertTrue(control.shouldStartPlayback(parameters(PlaybackLoadControl.VOD_REBUFFER_US, true, true)))
                     } finally { control.onReleased(id) }
                     samePlayer!!.pause(); samePlayer!!.seekTo(samePlayer!!.duration / 3)
                 }
@@ -5576,6 +5592,7 @@ class SpareDeviceTest {
                 scenario.onActivity { it.window.decorView.findViewWithTag<View>("on-demand-next").performClick() }
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path == "/series/test/test-secret/202.mp4" && samePlayer?.playbackState == Player.STATE_READY }
                 assertEquals("On-demand titles must not replace live channel history", "xc:1", store.last(source))
+                closeDemandControls(scenario)
                 device.pressBack()
                 waitFor(scenario) { it.window.decorView.findViewWithTag<View>("library-item:episode:201")?.isShown == true && samePlayer?.currentMediaItem == null }
                 scenario.onActivity { activity ->
@@ -7071,6 +7088,14 @@ class SpareDeviceTest {
         (MainActivity::class.java.getDeclaredField("voiceInput").apply { isAccessible = true }.get(activity) as NativeVoiceInput).stop()
     }
 
+    /** A title's controls show as it starts; the first Back closes them, and only the next one leaves the title. */
+    private fun closeDemandControls(scenario: ActivityScenario<MainActivity>) {
+        var shown = false
+        scenario.onActivity { shown = it.window.decorView.findViewWithTag<View>("on-demand-controls")?.isShown == true }
+        if (!shown) return
+        device.pressBack()
+        waitFor(scenario) { it.window.decorView.findViewWithTag<View>("on-demand-controls")?.isShown != true }
+    }
     private fun waitFor(scenario: ActivityScenario<MainActivity>, predicate: (MainActivity) -> Boolean) {
         val deadline = System.currentTimeMillis() + 20000
         val ready = AtomicBoolean()

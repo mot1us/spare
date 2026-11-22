@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.56.2 — 2026-11-21
+
+- 4K movies stall far less often on a connection that only just keeps up. Spare kept at most 64 MB of a movie in memory, only 8 to 10 seconds of a 4K remux, so on the owner's main onn a Dolby Vision remux stalled every 18 seconds with an empty buffer while the box waited on the provider. Spare now asks Android for the larger memory limit TV players use (384 MB on an onn 4K Pro instead of 256 MB), lets movies and episodes buffer up to about 150 MB and two minutes ahead, and after a stall gathers 20 seconds before playing again instead of 12. Jellyfin's Android TV app and Just Player also use the larger limit, and Media3's default buffer is about 144 MB.
+- Back closes a movie's controls. With the controls on screen (OK shows them), Back left the movie altogether; now it closes them and the movie keeps playing, and the next Back returns to the movie's page in Library.
+- The performance report and each stall line show how fast a movie is arriving and how fast it has to arrive ("stream 40 Mbit/s … · title needs 53 Mbit/s"). Movies were not measured before.
+
 ## 0.56.1 — 2026-11-21
 
 - Voice search no longer keeps Spare's screen in memory after it closes. Android holds the speech recognizer's connection until the speech service releases it, and the recognizer was created with the screen as its context, so the screen and its whole lineup stayed in memory (about 100 MB with a 100,000-channel lineup) for a minute or more. It now uses the app's context. This also made the device test suite run out of memory once.
