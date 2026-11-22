@@ -3409,6 +3409,8 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
             // Fourteen games: enough that the background pass asks for the guide index partway through.
             val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(28).chunked(2)
+            // A schedule another test saved from the real scoreboard would add its own live games to this slate.
+            store.delete("sports-schedule-default.enc"); store.delete("sports-schedule.enc")
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
             val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
                 if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
@@ -3445,7 +3447,10 @@ class SpareDeviceTest {
                     assertTrue("Cards still without a result: ${missing.map { summaries(activity)["NBA:ready-$it"] }}", missing.isEmpty())
                     assertFalse(activity.window.decorView.findViewWithTag<View>("sports-panel").isShown)
                 }
-                waitFor(scenario) { Diagnostics.sportsBackgroundLine().contains("${pairs.size} live games · ${pairs.size - 1} found a stream") }
+                val passDeadline = System.currentTimeMillis() + 30_000
+                fun counts() = Regex("(\\d+) live games · (\\d+) found a stream").find(Diagnostics.sportsBackgroundLine())?.destructured?.let { (live, found) -> live.toInt() to found.toInt() }
+                while (counts()?.let { (live, found) -> live >= pairs.size && found >= pairs.size - 1 } != true && System.currentTimeMillis() < passDeadline) Thread.sleep(250)
+                assertTrue("Background line: ${Diagnostics.sportsBackgroundLine()}", counts()?.let { (live, found) -> live >= pairs.size && found >= pairs.size - 1 } == true)
                 val indexed = Regex("(\\d+) with the guide index").find(Diagnostics.sportsBackgroundLine())?.groupValues?.get(1)?.toInt() ?: 0
                 assertTrue("The background pass used the guide index: ${Diagnostics.sportsBackgroundLine()}", indexed > 0)
                 // Scores two and a half minutes old count as saved; the background pass still sees the live games and every
@@ -3665,6 +3670,54 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun sportsCardsUseTheEventNamesSavedLastTimeBeforeTheProviderAnswers() {
+        val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(4).chunked(2)
+        val renamed = pairs[0]
+        // The lineup still says "No Event"; the provider renamed the slot for game 0 and holds that answer back.
+        val fresh = "NBA 01: ${renamed[1].name} vs ${renamed[0].name}"
+        FixtureServer(eventSlots = listOf("NBA 01: No Event" to fresh, "NBA 02: No Event" to "NBA 02: No Event", "NBA 03: No Event" to "NBA 03: No Event")).use { server ->
+            val source = Source(name = "Saved names fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            // Spare read these names five minutes ago, before it was restarted.
+            store.write("event-names.enc", EventChannelNames.Saved(System.currentTimeMillis() - 300_000, mapOf(source.id to mapOf("xc:1" to fresh))).json().toByteArray())
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { val now = System.currentTimeMillis()
+                    LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) -> LiveEvent("saved-$i", setOf(home.id, away.id), now - 300000, league = "NBA") }, now, setOf("NBA")) }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            fun summaries(activity: MainActivity) = @Suppress("UNCHECKED_CAST") (MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>)
+            fun found(text: String?) = text != null && (text.startsWith("NBA 01:") || text.startsWith("1 stream names this game"))
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                // The provider has not answered, yet the renamed slot is found with the saved names, and the game nothing
+                // names says so instead of waiting for the provider.
+                waitFor(scenario) { activity -> found(summaries(activity)["NBA:saved-0"]) && summaries(activity)["NBA:saved-1"] == "No stream names this game" }
+                assertTrue(Diagnostics.sportsLines().joinToString("\n"), Diagnostics.sportsLines().any { it.contains("Event channel names saved 5 min ago · 1 channels") })
+                assertTrue(Diagnostics.sportsLines().none { it.contains("Event channel names read") && it.contains("channels in") })
+                // The held answer outlasts Spare's 8-second wait; once the provider answers, the next reading succeeds.
+                server.releaseEventNames.countDown()
+                fun read() = Diagnostics.sportsLines().any { it.contains("Event channel names read") && it.contains("channels in") }
+                val until = System.currentTimeMillis() + 40_000
+                while (!read() && System.currentTimeMillis() < until) {
+                    // Ask again once the reading that gave up has finished (a reading still under way may yet succeed).
+                    scenario.onActivity { activity ->
+                        val task = MainActivity::class.java.getDeclaredField("eventNamesTask").apply { isAccessible = true }.get(activity) as java.util.concurrent.Future<*>?
+                        if (task?.isDone != false) {
+                            MainActivity::class.java.getDeclaredField("eventNamesAt").apply { isAccessible = true }.setLong(activity, 0L)
+                            MainActivity::class.java.getDeclaredMethod("refreshEventNames").apply { isAccessible = true }.invoke(activity)
+                        }
+                    }
+                    Thread.sleep(1000)
+                }
+                assertTrue(Diagnostics.sportsLines().joinToString("\n"), read())
+                // The fresh reading is saved for the next start.
+                waitFor(scenario) { EventChannelNames.Saved.from(store.read("event-names.enc")!!.toString(Charsets.UTF_8), setOf(source.id), System.currentTimeMillis())?.let { System.currentTimeMillis() - it.at < 60_000 } == true }
+            } } finally { server.releaseEventNames.countDown(); lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source); store.delete("event-names.enc") }
+        }
+    }
+
     @Test fun sportsCardsSearchBeforeTheProvidersEventNamesArriveAndLookAgainAfter() {
         val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(6).chunked(2)
         val named = pairs[0]; val renamed = pairs[1]
@@ -3710,7 +3763,7 @@ class SpareDeviceTest {
                     assertTrue(lines.indexOfFirst { it.contains("Cards started looking for streams") } < lines.indexOfFirst { it.contains("Event channel names read") })
                 }
                 waitFor(scenario) { Diagnostics.sportsLines().any { it.contains("Every live card has looked for streams · 3 games · 2 found one") } }
-            } } finally { server.releaseEventNames.countDown(); lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+            } } finally { server.releaseEventNames.countDown(); lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source); store.delete("event-names.enc") }
         }
     }
 

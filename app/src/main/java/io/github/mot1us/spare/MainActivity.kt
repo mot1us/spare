@@ -857,6 +857,9 @@ class MainActivity : Activity() {
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         // The optional metadata service was removed in 0.50.8; drop its saved address and poster cache.
         imports.execute { runCatching { store.delete("metadata-addon.enc"); store.delete("metadata-posters.enc") } }
+        // The provider's event channel names from the last run, so Sports can match event channels before it answers again.
+        cacheWrites.execute { savedEventNames = runCatching { store.read(EVENT_NAMES_FILE)?.let { saved ->
+            EventChannelNames.Saved.from(saved.toString(Charsets.UTF_8), store.sources().mapTo(hashSetOf()) { it.id }, System.currentTimeMillis()) } }.getOrNull() }
         logos = LogoLoader(160, 12 * 1024 * 1024, GuideLogoFiles(this))
         configureAppearance(); GuideClock.use24Hour = store.clock24; sportsTeam = "live"
         // Build the team-name index off the screen thread; its first use there froze the screen for about half a second.
@@ -2854,6 +2857,22 @@ class MainActivity : Activity() {
      */
     private var eventNamesAt = 0L
     private var eventNamesTask: java.util.concurrent.Future<*>? = null
+    @Volatile private var savedEventNames: EventChannelNames.Saved? = null
+    private var savedEventNamesUsed = false
+    /**
+     * Once per run, the event channel names saved last time are used before the provider is asked again. Reading them
+     * fresh took 25 seconds on an onn 4K Pro, and until then every card on an event channel kept looking.
+     */
+    private fun useSavedEventNames() {
+        if (savedEventNamesUsed || guide.channels.isEmpty()) return
+        val saved = savedEventNames ?: return
+        savedEventNamesUsed = true; savedEventNames = null
+        val changed = EventChannelNames.update(guide.channels, ::playlistId, saved.names)
+        val age = System.currentTimeMillis() - saved.at
+        if (age <= EventChannelNames.SAVED_CURRENT_MS) eventNamesKnown = true
+        Diagnostics.sports("Event channel names saved ${age / 60000} min ago · ${saved.names.values.sumOf { it.size }} channels", keep = true)
+        if (changed) { sportsStreamCache.clear(); sportsWarmAttempted.clear() }
+    }
     /** The first reading of event channel names this session has finished (or there is nothing to read). */
     private var eventNamesKnown = false
     /**
@@ -2861,6 +2880,7 @@ class MainActivity : Activity() {
      * renamed for today's games are found without downloading the whole channel list.
      */
     private fun refreshEventNames() {
+        useSavedEventNames()
         val now = android.os.SystemClock.elapsedRealtime()
         if (eventNamesAt != 0L && now - eventNamesAt < EventChannelNames.REFRESH_MS || eventNamesTask?.isDone == false) return
         val snapshot = guide; val owners = enabledSources().filter { it.kind == "xtream" }
@@ -2876,8 +2896,9 @@ class MainActivity : Activity() {
                 Diagnostics.sports("Event channel names read in ${String.format(java.util.Locale.ROOT, "%.1f", (android.os.SystemClock.elapsedRealtime() - began) / 1000.0)} s · $note", keep = true)
                 handler.post {
                     if (closed) return@post
-                    eventNamesKnown = true
+                    eventNamesKnown = true; savedEventNamesUsed = true; savedEventNames = null
                     val changed = fresh.isNotEmpty() && EventChannelNames.update(guide.channels, ::playlistId, fresh)
+                    if (fresh.isNotEmpty()) cacheWrites.execute { runCatching { store.write(EVENT_NAMES_FILE, EventChannelNames.Saved(System.currentTimeMillis(), fresh).json().toByteArray()) } }
                     // Every card looks again with the new names and keeps its last result meanwhile, in Sports or in the background.
                     if (changed) { sportsStreamCache.clear(); sportsWarmAttempted.clear() }
                     if (!started || !sportsVisible || !guideVisible) return@post
@@ -3376,7 +3397,8 @@ class MainActivity : Activity() {
                     sportsBackgroundNotBefore = finished + SPORTS_BACKGROUND_PAUSE_MS
                 } else {
                     sportsBackgroundPass?.let { pass ->
-                        val found = labels.values.count { !it.startsWith("No stream") && !it.startsWith("Select to") && it != SPORTS_CHECKING_NAMES }
+                        // What the cards show: a result stays on its card after its cache entry lapses.
+                        val found = games.count { game -> (labels[game.key] ?: sportsStreamSummaries[game.key])?.let { !unsearchedSummary(it) && !it.startsWith("No stream") && !it.startsWith("Select to") && it != SPORTS_CHECKING_NAMES } == true }
                         Diagnostics.sportsBackground("${games.size} live games · $found found a stream · ${pass.looks} looked up in ${(finished - pass.began + 500) / 1000} s" +
                             " · searching ${(pass.searchMs + 500) / 1000} s · ${pass.indexed} with the guide index")
                         Diagnostics.job("Sports cards", pass.began, finished)
@@ -3389,6 +3411,7 @@ class MainActivity : Activity() {
     }
     private fun prefetchSportsStream() {
         if (!started || closed || !sportsVisible || !guideVisible || sportsPanel.watching || multiview.active || sportsWarmActive.isNotEmpty()) return
+        useSavedEventNames()
         // Searches wait for the scoreboard, a settled remote and the short guide scans, but not for the provider's event
         // channel names: those can take a minute, and cards look again when they arrive.
         val waits = listOfNotNull("scores".takeIf { liveSportsChecking }, "Sports to settle".takeIf { sportsExtrasDelay() > 0 },
@@ -3832,7 +3855,7 @@ class MainActivity : Activity() {
         if (::details.isInitialized) { details.pauseImages(); details.visibility = View.GONE }
     }
     private fun configurePlaylists(next: List<Source>) {
-        EventChannelNames.clear(); eventNamesAt = 0L; eventNamesKnown = false
+        EventChannelNames.clear(); eventNamesAt = 0L; eventNamesKnown = false; savedEventNames = null
         store.saveSources(next); sources = next
         if (::playlists.isInitialized) playlists.configure(next)
         source = next.firstOrNull { it.id == source?.id && it.enabled } ?: next.firstOrNull { it.enabled }
@@ -4680,6 +4703,8 @@ private const val SPORTS_QUICK_RETRY_MS = 3000L
 private const val SPORTS_CHECKING_NAMES = SportsPanel.CHECKING_NAMES
 /** A card on screen whose search found nothing looks again after this long. */
 private const val SPORTS_WARM_RETRY_MS = 30_000L
+/** The provider's event channel names from the last reading, encrypted like the rest of Spare's saved data. */
+private const val EVENT_NAMES_FILE = "event-names.enc"
 /** Sports cards made ready while Sports is closed: a pause between games, and how often a finished pass checks again. */
 private const val SPORTS_BACKGROUND_PAUSE_MS = 1500L
 private const val SPORTS_BACKGROUND_IDLE_MS = 30_000L

@@ -46,4 +46,27 @@ class EventChannelNamesTest {
         assertEquals("NFL Game Pass 11: SEA @ LV", EventChannelNames.name(slots.last()))
         assertFalse("The same names again change nothing", EventChannelNames.update(slots, { "p1" }, mapOf("p1" to mapOf("xc:111" to "NFL Game Pass 11: SEA @ LV"))))
     }
+    @Test fun categoriesAreReadAFewAtATimeAndOneThatFailsKeepsTheOthers() {
+        val source = Source(name = "Fixture", kind = "xtream", url = "https://provider.example", username = "u", password = "p")
+        val categories = (1..9).joinToString(",", "[", "]") { """{"category_id":"$it","category_name":"Events $it"}""" }
+        val inFlight = java.util.concurrent.atomic.AtomicInteger(); var most = 0
+        val fresh = EventChannelNames.fetch(source, (1..9).map { "Events $it" }.toSet()) { url ->
+            if ("get_live_categories" in url) categories else {
+                val id = url.substringAfter("category_id=").toInt()
+                val now = inFlight.incrementAndGet(); synchronized(this) { most = maxOf(most, now) }
+                try { Thread.sleep(60); if (id == 4) error("timeout") else """[{"stream_id":${id * 10},"name":"NBA $id: Game"}]""" } finally { inFlight.decrementAndGet() }
+            }
+        }
+        assertEquals((1..9).filter { it != 4 }.associate { "xc:${it * 10}" to "NBA $it: Game" }, fresh)
+        assertTrue("Requests overlap, at most ${EventChannelNames.PARALLEL_CATEGORIES} at a time: $most", most in 2..EventChannelNames.PARALLEL_CATEGORIES)
+    }
+    @Test fun savedNamesComeBackForKnownPlaylistsWhileTheyAreRecent() {
+        val now = 1_800_000_000_000L
+        val saved = EventChannelNames.Saved(now - 3600000, mapOf("main" to mapOf("xc:5" to "NBA 05: Hawks vs Celtics"), "gone" to mapOf("xc:6" to "Old")))
+        val back = EventChannelNames.Saved.from(saved.json(), setOf("main"), now)!!
+        assertEquals(mapOf("main" to mapOf("xc:5" to "NBA 05: Hawks vs Celtics")), back.names); assertEquals(now - 3600000, back.at)
+        assertNull("Names from yesterday are not used", EventChannelNames.Saved.from(saved.json(), setOf("main"), now + EventChannelNames.SAVED_MAX_MS))
+        assertNull("Names for removed playlists are not used", EventChannelNames.Saved.from(saved.json(), setOf("other"), now))
+        assertNull(EventChannelNames.Saved.from("not json", setOf("main"), now))
+    }
 }

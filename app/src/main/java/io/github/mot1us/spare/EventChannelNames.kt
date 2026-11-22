@@ -119,17 +119,55 @@ object EventChannelNames {
             .filter { it.optString("category_name").take(128) in groups }.map { it.optString("category_id") }
             .filter { it.matches(Regex("[0-9]{1,12}")) }.take(MAX_CATEGORIES)
         val fresh = HashMap<String, String>()
-        for (id in wanted) {
-            if (Thread.currentThread().isInterrupted) break
-            val streams = Importers.xtreamArray(get(Importers.endpoint(source, "player_api.php", "get_live_streams") + "&category_id=$id"))
-            for (i in 0 until minOf(streams.length(), 5000)) {
-                val stream = streams.optJSONObject(i) ?: continue
-                val streamId = stream.optString("stream_id").takeIf { it.matches(Regex("[0-9]{1,20}")) } ?: continue
-                stream.optString("name").trim().take(256).takeIf { it.isNotBlank() }?.let { fresh["xc:$streamId"] = it }
-            }
+        if (wanted.isEmpty()) return fresh
+        // A few categories at a time: one by one, 24 categories took 25 seconds on an onn 4K Pro. A category that does not
+        // answer no longer loses the names the others returned.
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(PARALLEL_CATEGORIES, wanted.size)) { task ->
+            Thread(task, "spare-event-names").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
         }
+        try {
+            val replies = wanted.map { id -> pool.submit(java.util.concurrent.Callable {
+                runCatching { get(Importers.endpoint(source, "player_api.php", "get_live_streams") + "&category_id=$id") }.getOrNull()
+            }) }
+            for (reply in replies) {
+                if (Thread.currentThread().isInterrupted) break
+                val body = runCatching { reply.get() }.getOrNull() ?: continue
+                val streams = runCatching { Importers.xtreamArray(body) }.getOrNull() ?: continue
+                for (i in 0 until minOf(streams.length(), 5000)) {
+                    val stream = streams.optJSONObject(i) ?: continue
+                    val streamId = stream.optString("stream_id").takeIf { it.matches(Regex("[0-9]{1,20}")) } ?: continue
+                    stream.optString("name").trim().take(256).takeIf { it.isNotBlank() }?.let { fresh["xc:$streamId"] = it }
+                }
+            }
+        } finally { pool.shutdownNow() }
         return fresh
     }
+
+    /** Fresh names by playlist, saved so that the next start of Spare can match event channels before the provider answers. */
+    class Saved(val at: Long, val names: Map<String, Map<String, String>>) {
+        fun json(): String = org.json.JSONObject().put("at", at).put("playlists", org.json.JSONObject().apply {
+            names.forEach { (playlist, channels) -> put(playlist, org.json.JSONObject(channels)) }
+        }).toString()
+        companion object {
+            /** Names saved more than [SAVED_MAX_MS] ago, or for no playlist in [playlists], are not used. */
+            fun from(text: String, playlists: Set<String>, now: Long): Saved? = runCatching {
+                val root = org.json.JSONObject(text)
+                val at = root.getLong("at")
+                if (now - at !in 0..SAVED_MAX_MS) return null
+                val all = root.getJSONObject("playlists")
+                val names = all.keys().asSequence().filter { it in playlists }.take(16).associateWith { playlist ->
+                    val channels = all.getJSONObject(playlist)
+                    channels.keys().asSequence().take(20_000).filter { it.length <= 40 }.associateWith { channels.optString(it).take(256) }.filterValues { it.isNotBlank() }
+                }.filterValues { it.isNotEmpty() }
+                Saved(at, names).takeIf { names.isNotEmpty() }
+            }.getOrNull()
+        }
+    }
+    const val PARALLEL_CATEGORIES = 3
+    /** Names from earlier today are still the right names for most games in progress; fresh ones replace them shortly. */
+    const val SAVED_MAX_MS = 12 * 3600000L
+    /** Names this recent count as known: a card that nothing names says so instead of waiting for the provider. */
+    const val SAVED_CURRENT_MS = 30 * 60000L
 
     /**
      * Record fresh names for the guide's channels (matched by playlist and native ID). Returns true when any name the

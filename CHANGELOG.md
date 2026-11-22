@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.55.2 — 2026-11-21
+
+- Spare remembers the provider's event channel names between restarts (encrypted, like the rest of its saved data, for up to 12 hours). Sports and the background pass match event channels with them right away instead of waiting for the provider: reading them took 25 seconds on the owner's second onn, and until then every card on an event channel kept looking. Names saved within the last 30 minutes count as current, so a game nothing names says so at once; fresh names still replace them as soon as the provider answers.
+- The provider's event categories are read three at a time instead of one by one, and a category that does not answer no longer loses the names the others returned.
+
 ## 0.55.1 — 2026-11-21
 
 - The first Sports card no longer blinks while Sports loads. Until a key is pressed, each scoreboard reply took the highlight off the top card and put it back; the highlight now moves only when its card leaves the list.
