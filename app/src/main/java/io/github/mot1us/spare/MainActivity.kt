@@ -2077,7 +2077,10 @@ class MainActivity : Activity() {
         saveDemandProgress(); player.stop(); showPlaybackLoading(PlaybackPhase.RECONNECTING); handler.postDelayed(retry, 1500)
     }
     private fun saveUnavailable() {
-        sportsStreamSummaries.clear(); val hidden = unavailable.snapshot(); val owners = sources.toList()
+        // Cards keep what they found: a hidden channel returning after 15 minutes cleared every card's result, so after an hour
+        // of RedZone each card searched again. Sports relabels its cards from the saved results with the new hidden set.
+        if (sportsVisible && guideVisible && ::sportsPanel.isInitialized) queueSportsPrefetch()
+        val hidden = unavailable.snapshot(); val owners = sources.toList()
         if (::playlists.isInitialized) cacheWrites.execute { owners.forEach { selected -> store.saveUnavailable(selected, UnavailableChannels(hidden.filterKeys { playlists.belongs(selected, it) }.mapKeys { playlists.rawKey(selected.id, it.key) }.toMutableMap())) } }
     }
     private fun hideUnavailable() {

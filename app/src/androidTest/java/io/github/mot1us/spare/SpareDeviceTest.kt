@@ -3827,6 +3827,16 @@ class SpareDeviceTest {
                 assertTrue(Diagnostics.sportsLines().joinToString("\n"), read())
                 // The fresh reading is saved for the next start.
                 waitFor(scenario) { EventChannelNames.Saved.from(store.read("event-names.enc")!!.toString(Charsets.UTF_8), setOf(source.id), System.currentTimeMillis())?.let { System.currentTimeMillis() - it.at < 60_000 } == true }
+                // A channel hidden after a failure returns 15 minutes later: every card keeps what it found.
+                scenario.onActivity { activity ->
+                    val unavailable = MainActivity::class.java.getDeclaredField("unavailable").apply { isAccessible = true }.get(activity)
+                    unavailable.javaClass.getMethod("hide", String::class.java, Long::class.javaPrimitiveType).apply { isAccessible = true }
+                        .invoke(unavailable, "xc:3", System.currentTimeMillis() - 16 * 60000L)
+                    (MainActivity::class.java.getDeclaredField("minuteTick").apply { isAccessible = true }.get(activity) as Runnable).run()
+                    assertTrue(summaries(activity).toString(), found(summaries(activity)["NBA:saved-0"]))
+                }
+                Thread.sleep(2000)
+                scenario.onActivity { activity -> assertTrue(summaries(activity).toString(), found(summaries(activity)["NBA:saved-0"])) }
             } } finally { server.releaseEventNames.countDown(); lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source); store.delete("event-names.enc") }
         }
     }
