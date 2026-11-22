@@ -211,7 +211,7 @@ object Importers {
                     XmlPullParser.DOCDECL -> throw IllegalArgumentException("DTDs are not accepted")
                     XmlPullParser.ENTITY_REF -> {
                         require(parser.name in setOf("amp", "lt", "gt", "quot", "apos") || parser.name.matches(Regex("#(?:x[0-9a-fA-F]+|[0-9]+)"))) { "Custom XML entities are not accepted" }
-                        if (field.isNotEmpty()) { require(text.length < 16384); text.append(parser.text.orEmpty()) }
+                        if (field.isNotEmpty() && text.length < XMLTV_FIELD_MAX) text.append(parser.text.orEmpty())
                     }
                     XmlPullParser.START_TAG -> {
                         require(++elements <= XMLTV_MAX_ELEMENTS && parser.depth <= 32) { GUIDE_TOO_LARGE }
@@ -229,8 +229,9 @@ object Importers {
                             "title", "desc" -> if (inside) { field = parser.name; text = StringBuilder() }
                         }
                     }
-                    XmlPullParser.TEXT, XmlPullParser.CDSECT -> if (field.isNotEmpty()) {
-                        require(text.length + parser.text.length <= 16384) { "Guide field too long" }; text.append(parser.text)
+                    // An overlong title or description keeps its first part; one such field threw the whole guide away.
+                    XmlPullParser.TEXT, XmlPullParser.CDSECT -> if (field.isNotEmpty() && text.length < XMLTV_FIELD_MAX) {
+                        val part = parser.text.orEmpty(); text.append(part, 0, minOf(part.length, XMLTV_FIELD_MAX - text.length))
                     }
                     XmlPullParser.END_TAG -> when (parser.name) {
                         "display-name" -> if (field == "display-name") { names?.put(listed, text.toString().trim().take(256)); field = "" }
@@ -253,6 +254,7 @@ object Importers {
     /** Unpacked bytes and XML elements a guide may have: a 680,000-programme guide is about 600 MB and 4 million elements. */
     const val XMLTV_MAX_BYTES = 1024L * 1024 * 1024
     const val XMLTV_MAX_ELEMENTS = 20_000_000
+    const val XMLTV_FIELD_MAX = 16384
     const val GUIDE_TOO_LARGE = "Guide exceeds safety limits"
     fun timestamp(value: String): Long = runCatching {
         val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L

@@ -140,4 +140,15 @@ class ImportersTest {
             SourceErrors.message(IllegalArgumentException(Importers.GUIDE_TOO_LARGE)))
         assertTrue(Importers.XMLTV_MAX_BYTES >= 600L * 1024 * 1024 && Importers.XMLTV_MAX_ELEMENTS >= 4_000_000)
     }
+
+    @Test fun anOverlongGuideFieldIsCutInsteadOfDiscardingTheWholeGuide() {
+        val now = System.currentTimeMillis()
+        fun stamp(at: Long) = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").format(java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneOffset.UTC))
+        val long = "x".repeat(40_000)
+        val xml = """<tv><programme channel="a" start="${stamp(now - 60000)}" stop="${stamp(now + 3600000)}"><title>Long &amp; $long</title><desc>$long</desc></programme>
+            <programme channel="b" start="${stamp(now - 60000)}" stop="${stamp(now + 3600000)}"><title>Next</title></programme></tv>"""
+        val result = Importers.xmltv(xml.toByteArray().inputStream(), setOf("a", "b"), now)
+        assertTrue(result.getValue("a").single().title.startsWith("Long & xxx"))
+        assertEquals("Next", result.getValue("b").single().title)
+    }
 }

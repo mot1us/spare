@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.56.4 — 2026-11-22
+
+- A guide with one overlong title or description loads. Spare threw the whole guide away when any field passed 16 KB, so a full third-party guide failed with "could not process the provider's channel data"; it now keeps the first 16 KB of that field and reads on.
+
 ## 0.56.3 — 2026-11-22
 
 - Large guide links work. Spare stopped reading a guide after 64 MB unpacked and 2 million XML elements, so a full third-party guide (48 MB packed, about 680,000 programmes) failed with "could not process the provider's channel data". The limits are now 1 GB unpacked and 20 million elements; the download itself stays capped at 64 MB, DTDs and custom entities are still refused, and only the playlist's own channels are kept.
