@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.57.1 — 2026-11-22
+
+- A full guide link reads several times faster. Spare built a new pattern and date formatter for each of a full guide's 1.4 million programme times, which took most of a 5-minute read on an onn 4K Pro; it now reads the digits directly, and skips the times, titles and images of channels the playlist lacks and days outside the guide. On the test emulator the same 48 MB guide went from 26 s to 4 to 8 s.
+
 ## 0.57.0 — 2026-11-22
 
 - A guide link no longer hides the playlist's own guide. The link wins for every channel it lists, and the playlist's guide fills the channels it lacks, so adding a third-party guide only adds listings. If the link fails, its saved listings stay and the playlist's guide fills only channels with nothing ahead; removing the link returns to the playlist's guide alone. Channels still empty ask the provider one channel at a time, as without a link.

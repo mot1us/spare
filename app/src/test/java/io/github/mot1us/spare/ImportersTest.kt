@@ -119,6 +119,23 @@ class ImportersTest {
         assertEquals(now, Importers.timestamp("20261024140000 +0200"))
         assertEquals(0, Importers.timestamp("garbage"))
     }
+    @Test fun readsGuideTimesExactlyAsTheFormatterDid() {
+        // The pattern-and-formatter reading Spare used before 0.57.1; the digit reader must agree on every case.
+        fun before(value: String): Long = runCatching {
+            val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L
+            val digits = match.groupValues[1].padEnd(14, '0')
+            val zoneText = match.groupValues[2].uppercase(java.util.Locale.ROOT)
+            val zone = if (zoneText in setOf("", "UTC", "GMT")) java.time.ZoneOffset.UTC else java.time.ZoneOffset.of(zoneText)
+            java.time.LocalDateTime.parse(digits, java.time.format.DateTimeFormatter.ofPattern("uuuuMMddHHmmss", java.util.Locale.ROOT)
+                .withResolverStyle(java.time.format.ResolverStyle.STRICT)).toInstant(zone).toEpochMilli()
+        }.getOrDefault(0L)
+        val cases = listOf("20261122183000 +0000", "20261122183000", "202611221830", "202611221830 +0100", "20261122183000Z", "20261122183000 z", "20261122183000 utc",
+            "20261122183000GMT", "20261122183000 +05:30", "20261122183000 -0930", "20261122183000 +1800", "20261122183000 +1830", "20261122183000 +1900",
+            "20261122183000 +0560", "20261122183000 -00:00", "20261122183000 +05:3", "20261122183000 +05-30", "2026112218300 +0000", "202611221830001 +0000",
+            "20240229120000 +0000", "20230229120000 +0000", "20261322120000", "20261100120000", "20261122240000", "20261122236000", "20261122235960",
+            "  20261122183000 +0000  ", "20261122183000\t+0000", "20261122183000 EST", "20261122183000 +0000 extra", "", " ", "x20261122183000", "00001122183000")
+        cases.forEach { assertEquals("\"$it\"", before(it), Importers.timestamp(it)) }
+    }
     @Test fun roundTripsEncryptedCachePayloadShapeWithoutDroppingProgrammeFields() {
         val channel = Channel("one", "One", "News", "https://example.com/one", guideId = "one")
         val guide = Guide(listOf(channel), Importers.xmltv(xml(programme()), setOf("one"), now))

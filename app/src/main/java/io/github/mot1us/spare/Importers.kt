@@ -9,7 +9,6 @@ import java.io.Reader
 import java.net.URI
 import java.net.URLEncoder
 import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object Importers {
@@ -210,13 +209,13 @@ object Importers {
             fun choose() { if (!chosen) { chosen = true; wanted = wanted + listed!!(guideNames!!); guideNames.clear() } }
             var result: ProgrammeBudget? = null
             var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
-            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0; var listing = ""
+            var text = StringBuilder(); var field = ""; var inside = false; var keep = false; var programmeDepth = 0; var elements = 0; var listing = ""
             while (true) {
                 when (parser.nextToken()) {
                     XmlPullParser.END_DOCUMENT -> break
                     XmlPullParser.DOCDECL -> throw IllegalArgumentException("DTDs are not accepted")
                     XmlPullParser.ENTITY_REF -> {
-                        require(parser.name in setOf("amp", "lt", "gt", "quot", "apos") || parser.name.matches(Regex("#(?:x[0-9a-fA-F]+|[0-9]+)"))) { "Custom XML entities are not accepted" }
+                        require(parser.name in XML_ENTITIES || XML_CHARACTER.matches(parser.name)) { "Custom XML entities are not accepted" }
                         if (field.isNotEmpty() && text.length < XMLTV_FIELD_MAX) text.append(parser.text.orEmpty())
                     }
                     XmlPullParser.START_TAG -> {
@@ -228,13 +227,16 @@ object Importers {
                             "programme" -> {
                                 choose()
                                 channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
-                                start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
-                                end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
+                                // Most of a full guide is other channels or other days: their titles and images are never read.
+                                keep = channel in wanted
+                                start = if (keep) timestamp(parser.getAttributeValue(null, "start").orEmpty()) else 0L
+                                end = if (keep) timestamp(parser.getAttributeValue(null, "stop").orEmpty()) else 0L
+                                keep = keep && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L
                                 title = ""; description = ""; artwork = ""; inside = true; programmeDepth = parser.depth
                             }
-                            "icon" -> if (inside && parser.depth == programmeDepth + 1 && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }
-                            "image" -> if (inside && parser.depth == programmeDepth + 1) { field = "image"; text = StringBuilder() }
-                            "title", "desc" -> if (inside) { field = parser.name; text = StringBuilder() }
+                            "icon" -> if (inside && keep && parser.depth == programmeDepth + 1 && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }
+                            "image" -> if (inside && keep && parser.depth == programmeDepth + 1) { field = "image"; text = StringBuilder() }
+                            "title", "desc" -> if (inside && keep) { field = parser.name; text = StringBuilder() }
                         }
                     }
                     // An overlong title or description keeps its first part; one such field threw the whole guide away.
@@ -249,7 +251,7 @@ object Importers {
                         "image" -> if (inside && parser.depth == programmeDepth + 1 && field == "image") { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
                         "programme" -> {
                             inside = false; field = ""
-                            if (channel in wanted && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
+                            if (keep) {
                                 (result ?: ProgrammeBudget(wanted.size.coerceAtMost(ProgrammeBudget.MAX), now).also { result = it })
                                     .add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
                             }
@@ -261,6 +263,8 @@ object Importers {
             result?.result().orEmpty()
         }
     }
+    private val XML_ENTITIES = setOf("amp", "lt", "gt", "quot", "apos")
+    private val XML_CHARACTER = Regex("#(?:x[0-9a-fA-F]+|[0-9]+)")
     /** Unpacked bytes and XML elements a guide may have: a 680,000-programme guide is about 600 MB and 4 million elements. */
     const val XMLTV_MAX_BYTES = 1024L * 1024 * 1024
     const val XMLTV_MAX_ELEMENTS = 20_000_000
@@ -268,11 +272,34 @@ object Importers {
     const val XMLTV_LISTED_MAX = 100_000
     const val XMLTV_FIELD_MAX = 16384
     const val GUIDE_TOO_LARGE = "Guide exceeds safety limits"
-    fun timestamp(value: String): Long = runCatching {
-        val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L
-        val digits = match.groupValues[1].padEnd(14, '0')
-        val zoneText = match.groupValues[2].uppercase(Locale.ROOT)
-        val zone = if (zoneText in setOf("", "UTC", "GMT")) ZoneOffset.UTC else ZoneOffset.of(zoneText)
-        java.time.LocalDateTime.parse(digits, DateTimeFormatter.ofPattern("uuuuMMddHHmmss", Locale.ROOT).withResolverStyle(java.time.format.ResolverStyle.STRICT)).toInstant(zone).toEpochMilli()
-    }.getOrDefault(0L)
+    /**
+     * An XMLTV time ("20261122183000 +0000"): 12 or 14 digits, then optionally a zone (Z, UTC, GMT, +hhmm or +hh:mm); 0 when it
+     * is not a real time. Read digit by digit: a full guide has over a million of these, and building a pattern and a date
+     * formatter for each took most of a 5-minute guide read on an onn 4K Pro.
+     */
+    fun timestamp(value: String): Long {
+        val text = value.trim()
+        var digits = 0
+        while (digits < text.length && digits < 15 && text[digits] in '0'..'9') digits++
+        if (digits != 12 && digits != 14) return 0L
+        fun number(from: Int, length: Int): Int { var n = 0; for (i in from until from + length) n = n * 10 + (text[i] - '0'); return n }
+        var at = digits
+        while (at < text.length && text[at].isWhitespace()) at++
+        val zone = text.substring(at)
+        val offset = when {
+            zone.isEmpty() || zone.equals("Z", true) || zone.equals("UTC", true) || zone.equals("GMT", true) -> 0
+            (zone.length == 5 || zone.length == 6 && zone[3] == ':') && (zone[0] == '+' || zone[0] == '-') -> {
+                val hours = zone.substring(1, 3); val minutes = zone.substring(zone.length - 2)
+                if (!hours.all { it in '0'..'9' } || !minutes.all { it in '0'..'9' }) return 0L
+                val h = hours.toInt(); val m = minutes.toInt()
+                if (m > 59 || h > 18 || h == 18 && m > 0) return 0L
+                (h * 3600 + m * 60) * (if (zone[0] == '-') -1 else 1)
+            }
+            else -> return 0L
+        }
+        return try {
+            java.time.LocalDateTime.of(number(0, 4), number(4, 2), number(6, 2), number(8, 2), number(10, 2), if (digits == 14) number(12, 2) else 0)
+                .toEpochSecond(ZoneOffset.ofTotalSeconds(offset)) * 1000L
+        } catch (_: java.time.DateTimeException) { 0L }
+    }
 }
