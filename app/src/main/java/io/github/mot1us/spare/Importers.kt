@@ -182,12 +182,13 @@ object Importers {
         xmltv(bytes.inputStream(), channelIds, now, historyDays)
 
     /**
-     * [names] collects the guide's display name for each wanted channel id, when a caller needs to check that a channel number
-     * in the guide really is the same channel. A full guide (24,000 channels, 680,000 programmes) unpacks to several hundred MB:
-     * the stream is bounded at [XMLTV_MAX_BYTES] unpacked and [XMLTV_MAX_ELEMENTS] elements, and only wanted channels are kept.
+     * [listed], when given, receives every channel the guide lists with its display names once the channel list ends, and returns
+     * more channel ids to keep: a caller matches channels the guide names differently (a stream number, a name) there. A full
+     * guide (24,000 channels, 680,000 programmes) unpacks to several hundred MB: the stream is bounded at [XMLTV_MAX_BYTES]
+     * unpacked and [XMLTV_MAX_ELEMENTS] elements, and only wanted channels are kept.
      */
     fun xmltv(input: java.io.InputStream, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap(),
-        names: MutableMap<String, String>? = null): Map<String, List<Programme>> {
+        listed: ((Map<String, List<String>>) -> Set<String>)? = null): Map<String, List<Programme>> {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         catch (_: org.xmlpull.v1.XmlPullParserException) { /* Some parsers only expose the disabled default. */ }
@@ -202,9 +203,14 @@ object Importers {
         }
         return bounded.use { stream ->
             parser.setInput(stream, null)
-            val result = ProgrammeBudget(channelIds.size, now)
+            var wanted = channelIds
+            // Display names of every listed channel, only while a caller still has to choose more channels.
+            val guideNames = if (listed != null) LinkedHashMap<String, MutableList<String>>() else null
+            var chosen = listed == null
+            fun choose() { if (!chosen) { chosen = true; wanted = wanted + listed!!(guideNames!!); guideNames.clear() } }
+            var result: ProgrammeBudget? = null
             var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
-            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0; var listed = ""
+            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0; var listing = ""
             while (true) {
                 when (parser.nextToken()) {
                     XmlPullParser.END_DOCUMENT -> break
@@ -216,9 +222,11 @@ object Importers {
                     XmlPullParser.START_TAG -> {
                         require(++elements <= XMLTV_MAX_ELEMENTS && parser.depth <= 32) { GUIDE_TOO_LARGE }
                         when (parser.name) {
-                            "channel" -> if (!inside) listed = parser.getAttributeValue(null, "id").orEmpty().trim().take(256)
-                            "display-name" -> if (!inside && names != null && listed in channelIds && listed !in names) { field = "display-name"; text = StringBuilder() }
+                            "channel" -> if (!inside) listing = parser.getAttributeValue(null, "id").orEmpty().trim().take(256)
+                            "display-name" -> if (!inside && !chosen && listing.isNotEmpty() && (guideNames!!.size < XMLTV_LISTED_MAX || listing in guideNames) &&
+                                guideNames.getOrPut(listing) { ArrayList(2) }.size < 8) { field = "display-name"; text = StringBuilder() }
                             "programme" -> {
+                                choose()
                                 channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
                                 start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
                                 end = timestamp(parser.getAttributeValue(null, "stop").orEmpty())
@@ -234,26 +242,30 @@ object Importers {
                         val part = parser.text.orEmpty(); text.append(part, 0, minOf(part.length, XMLTV_FIELD_MAX - text.length))
                     }
                     XmlPullParser.END_TAG -> when (parser.name) {
-                        "display-name" -> if (field == "display-name") { names?.put(listed, text.toString().trim().take(256)); field = "" }
-                        "channel" -> if (!inside) listed = ""
+                        "display-name" -> if (field == "display-name") { text.toString().trim().take(256).takeIf { it.isNotEmpty() }?.let { guideNames?.get(listing)?.add(it) }; field = "" }
+                        "channel" -> if (!inside) listing = ""
                         "title" -> if (inside) { if (title.isEmpty()) title = text.toString().take(512); field = "" }
                         "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
                         "image" -> if (inside && parser.depth == programmeDepth + 1 && field == "image") { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
                         "programme" -> {
                             inside = false; field = ""
-                            if (channel in channelIds && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
-                                result.add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
+                            if (channel in wanted && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L) {
+                                (result ?: ProgrammeBudget(wanted.size.coerceAtMost(ProgrammeBudget.MAX), now).also { result = it })
+                                    .add(Programme(channel, title.ifBlank { "Untitled" }, start, end, description, artwork))
                             }
                         }
                     }
                 }
             }
-            result.result()
+            choose()
+            result?.result().orEmpty()
         }
     }
     /** Unpacked bytes and XML elements a guide may have: a 680,000-programme guide is about 600 MB and 4 million elements. */
     const val XMLTV_MAX_BYTES = 1024L * 1024 * 1024
     const val XMLTV_MAX_ELEMENTS = 20_000_000
+    /** Channels whose display names a caller may compare: a full third-party guide lists about 24,000. */
+    const val XMLTV_LISTED_MAX = 100_000
     const val XMLTV_FIELD_MAX = 16384
     const val GUIDE_TOO_LARGE = "Guide exceeds safety limits"
     fun timestamp(value: String): Long = runCatching {

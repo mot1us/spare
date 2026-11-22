@@ -2121,7 +2121,7 @@ class MainActivity : Activity() {
     }
     private fun scheduleEpg() { handler.removeCallbacks(fetchVisibleEpg); handler.postDelayed(fetchVisibleEpg, 250) }
     private fun collectVisibleEpg() {
-        if (!started || library.opened || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" && it.epgUrl.isBlank() }) return
+        if (!started || library.opened || onDemand != null || multiview.active || enabledSources().none { it.kind == "xtream" }) return
         if (!guideVisible || sportsVisible || searchPanel.isVisible) { pumpEpg(); return }
         val channels = adapter.channels
         val layout = list.layoutManager as LinearLayoutManager
@@ -2155,7 +2155,7 @@ class MainActivity : Activity() {
         fun needs(channel: Channel): Boolean {
             val selected = owner(channel) ?: return false
             if (selected.id in restoringProgrammes) return false
-            if (selected.kind != "xtream" || selected.epgUrl.isNotBlank()) return false
+            if (!providerEpgFor(selected, channel, now)) return false
             val target = if (sportsVisible && guideVisible) now else maxOf(now, guideTimeline.start(channel.id)) + 30 * 60000L
             val missing = guide.at(channel, now) == null || (!(sportsVisible && guideVisible) && (guide.programmes[guide.key(channel)].orEmpty().maxOfOrNull { it.end } ?: 0) < target)
             return (channel.id in sportsForcedEpg || missing) && (now - (epgCheckedAt[channel.id] ?: 0) >= 5 * 60000L || depth(channel) > (epgDepth[channel.id] ?: 0))
@@ -2214,7 +2214,7 @@ class MainActivity : Activity() {
         while (epgBackgroundCursor < order.size) {
             val channel = order[epgBackgroundCursor++]
             val selected = owner(channel) ?: continue
-            if (!selected.enabled || selected.kind != "xtream" || selected.epgUrl.isNotBlank() || selected.id in restoringProgrammes) continue
+            if (!selected.enabled || !providerEpgFor(selected, channel, now) || selected.id in restoringProgrammes) continue
             // A running full-guide refresh will fill these channels itself.
             if (PlaylistRefresh.running(selected.id)) { handler.removeCallbacks(fetchBackgroundEpg); handler.postDelayed(fetchBackgroundEpg, 15000); epgBackgroundCursor--; return }
             if (unavailable.contains(channel.id, now) || "$epoch:${channel.id}" in epgInFlight) continue
@@ -2227,6 +2227,12 @@ class MainActivity : Activity() {
             return
         }
     }
+    /**
+     * An Xtream channel's own guide, asked one channel at a time. A guide link replaces it only where the link has programmes
+     * ahead: a channel the link lacks still shows the provider's guide.
+     */
+    private fun providerEpgFor(source: Source, channel: Channel, now: Long) = source.kind == "xtream" &&
+        (source.epgUrl.isBlank() || guide.programmes[guide.key(channel)].orEmpty().none { it.end > now })
     private fun startEpgRequest(channel: Channel, selected: Source, requestedDepth: Int, epoch: Int, now: Long, background: Boolean) {
         val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
         epgWorkers.execute {

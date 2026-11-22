@@ -126,16 +126,19 @@ class ImportersTest {
         assertEquals(guide, restored)
     }
 
-    @Test fun aGuideNamesItsWantedChannelsWhenAsked() {
+    @Test fun aGuideOffersItsListedChannelsBeforeItsProgrammesSoACallerCanChooseMore() {
         val now = System.currentTimeMillis()
         fun stamp(at: Long) = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").format(java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneOffset.UTC))
+        fun programme(id: String) = """<programme channel="$id" start="${stamp(now - 60000)}" stop="${stamp(now + 3600000)}"><title>Show $id</title></programme>"""
         val xml = """<tv><channel id="150130"><display-name>ESPN+ 19: Game</display-name><display-name>Second name</display-name></channel>
-            <channel id="9"><display-name>Not wanted</display-name></channel>
-            <programme channel="150130" start="${stamp(now - 60000)}" stop="${stamp(now + 3600000)}"><title>Game</title></programme></tv>"""
-        val names = HashMap<String, String>()
-        val result = Importers.xmltv(xml.toByteArray().inputStream(), setOf("150130"), now, names = names)
-        assertEquals(mapOf("150130" to "ESPN+ 19: Game"), names)
-        assertEquals("Game", result.getValue("150130").single().title)
+            <channel id="9"><display-name>Chosen by name</display-name></channel><channel id="10"><display-name>Not chosen</display-name></channel>
+            ${programme("150130")}${programme("9")}${programme("10")}</tv>"""
+        var offered: Map<String, List<String>> = emptyMap(); var calls = 0
+        val result = Importers.xmltv(xml.toByteArray().inputStream(), setOf("150130"), now, listed = { offered = it.toMap(); calls++; setOf("9") })
+        assertEquals(1, calls)
+        assertEquals(mapOf("150130" to listOf("ESPN+ 19: Game", "Second name"), "9" to listOf("Chosen by name"), "10" to listOf("Not chosen")), offered)
+        assertEquals(setOf("150130", "9"), result.keys)
+        assertEquals("Without a caller, nothing beyond the wanted channels is kept", setOf("150130"), Importers.xmltv(xml.toByteArray().inputStream(), setOf("150130"), now).keys)
         assertEquals("The guide is larger than Spare reads (GUIDE_SIZE). Use a smaller guide link, or leave the link empty for the provider's guide.",
             SourceErrors.message(IllegalArgumentException(Importers.GUIDE_TOO_LARGE)))
         assertTrue(Importers.XMLTV_MAX_BYTES >= 600L * 1024 * 1024 && Importers.XMLTV_MAX_ELEMENTS >= 4_000_000)

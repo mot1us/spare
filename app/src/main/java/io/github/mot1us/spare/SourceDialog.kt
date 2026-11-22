@@ -78,7 +78,7 @@ object SourceDialog {
             }
         }
         form.addView(showPassword)
-        val epg = input("Optional XMLTV URL (overrides provider guide)", existing?.epgUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
+        val epg = input("Optional XMLTV guide link (provider guide fills gaps)", existing?.epgUrl.orEmpty(), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
         val allow = CheckBox(activity).apply { id = View.generateViewId(); text = "Allow HTTP-only links from this provider"; isChecked = existing?.allowHttp ?: true }
         form.addView(allow)
         form.addView(TextView(activity).apply {

@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 /** One bounded background queue shared by the app and Android jobs. Never touches a player. */
 object PlaylistRefresh {
     data class Result(val guide: Guide?, val error: String = "", val playlistChanged: Boolean = false)
+    const val FILLING = "Filling gaps from the playlist's guide…"
     private val worker = Executors.newSingleThreadExecutor { work -> Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); work.run() }, "spare-refresh") }
     private val handler = Handler(Looper.getMainLooper())
     // Requests may share a saved ID while an account/address edit replaces its owner.
@@ -45,7 +46,7 @@ object PlaylistRefresh {
                         // Source edits/removal must invalidate an in-flight response.
                         require(store.sources().any { it == source })
                         cached = Guide(lineup.channels, emptyMap(), lineup.categoryOrder)
-                        store.saveLineup(source, cached, source.epgUrl.ifBlank { lineup.epgUrl }); store.markArchiveMetadataAttempted(source); store.markPlaylistRefreshed(source); changed = true
+                        store.saveLineup(source, cached, lineup.epgUrl); store.markArchiveMetadataAttempted(source); store.markPlaylistRefreshed(source); changed = true
                     }.onFailure { errors.add("Playlist: ${SourceErrors.message(it)}") }
                 }
                 val savedStamp = store.programmesStamp(source)
@@ -54,12 +55,30 @@ object PlaylistRefresh {
                 if (epg && cached.channels.isNotEmpty()) {
                     runCatching {
                         stage("Updating programme guide…")
-                        val url = source.epgUrl.ifBlank { store.guideUrl(source) }.ifBlank { if (source.kind == "xtream") Importers.endpoint(source, "xmltv.php") else "" }
-                        var fullFailure: Throwable? = null
-                        val full = if (url.isBlank()) emptyMap() else runCatching { FullEpg.load(source, cached.channels, url) }
-                            .onFailure { fullFailure = it }.getOrDefault(emptyMap())
+                        // The playlist's own guide. A guide link from an older Spare was saved in its place; it is replaced
+                        // with the playlist's guide on the next playlist download.
+                        val own = store.guideUrl(source).takeIf { it != source.epgUrl }.orEmpty().ifBlank { if (source.kind == "xtream") Importers.endpoint(source, "xmltv.php") else "" }
+                        val scratch = java.io.File(app.cacheDir, "guide-download/guide.xml")
+                        fun read(url: String, channels: List<Channel>, from: Source, budget: Int) = FullEpg.load(from, channels, url, scratch, budget) { stage(it) }
+                        var linkFailure: Throwable? = null; var ownFailure: Throwable? = null
+                        val linked = if (source.epgUrl.isBlank()) emptyMap() else runCatching { read(source.epgUrl, cached.channels, source, ProgrammeBudget.MAX) }
+                            .onFailure { linkFailure = it }.getOrDefault(emptyMap())
+                        // A guide link wins where it has a channel and the playlist's own guide fills the channels it lacks.
+                        // When the link fails, its saved programmes stay and only channels with nothing ahead are filled.
+                        // Removing the link returns to the playlist's guide alone.
+                        val started = System.currentTimeMillis()
+                        val missing = cached.channels.filter { channel -> val key = channel.guideId.ifBlank { channel.id }
+                            key !in linked && (linkFailure == null || saved[key].orEmpty().none { it.end > started }) }
+                        val room = ProgrammeBudget.MAX - linked.values.sumOf { it.size }
+                        val provided = if (own.isBlank() || missing.isEmpty() || room <= 0) emptyMap() else {
+                            if (source.epgUrl.isNotBlank()) stage(FILLING)
+                            runCatching { read(own, missing, source.copy(epgUrl = ""), room) }.onFailure { ownFailure = it }.getOrDefault(emptyMap())
+                        }
+                        val fullFailure = linkFailure ?: ownFailure
+                        val full = provided + linked
+                        if (full.isNotEmpty() || source.kind == "xtream") linkFailure?.let { errors.add("Guide link: ${SourceErrors.message(it)}") }
                         if (full.isNotEmpty()) programmes = saved + full
-                        else if (source.kind == "xtream" && source.epgUrl.isBlank()) {
+                        else if (source.kind == "xtream") {
                             // Unsupported XMLTV never blocks browsing: the visible guide still uses short EPG.
                             // Keep scheduled fallback work bounded instead of querying the entire playlist.
                             stage("Updating recently watched channels…")

@@ -1225,7 +1225,7 @@ class SpareDeviceTest {
                     val root = dialog!!.window!!.decorView
                     val username = root.findViewWithTag<EditText>("Xtream username")
                     val password = root.findViewWithTag<EditText>("Xtream password")
-                    val epg = root.findViewWithTag<EditText>("Optional XMLTV URL (overrides provider guide)")
+                    val epg = root.findViewWithTag<EditText>("Optional XMLTV guide link (provider guide fills gaps)")
                     assertTrue(password.transformationMethod is android.text.method.PasswordTransformationMethod)
                     username.requestFocus()
                     username.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN))
@@ -3756,6 +3756,29 @@ class SpareDeviceTest {
                 waitFor(scenario) { activity -> "Numbered guide 1" in titles(activity, "xc:1") }
                 assertTrue(server.requests.keys.any { it == "/numbered-guide.xml" })
                 scenario.onActivity { activity -> assertTrue("A number whose guide name is another channel does not attach", titles(activity, "xc:2").none { it.startsWith("Numbered guide") }) }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
+    @Test fun aGuideLinkWinsWhereItHasAChannelAndTheProvidersGuideFillsTheRest() {
+        FixtureServer(channelCount = 3, fullGuide = true).use { server ->
+            val source = Source(name = "Partial guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true,
+                epgUrl = "${server.base}/partial-guide.xml")
+            store.saveSources(listOf(source)); store.active = source.id
+            fun titles(activity: MainActivity, id: String): List<String> {
+                val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                val channel = guide.channels.firstOrNull { it.native().id == id } ?: return emptyList()
+                return guide.programmes[guide.key(channel)].orEmpty().map { it.title }
+            }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                try { waitFor(scenario) { activity -> "Linked guide" in titles(activity, "xc:1") && "World News" in titles(activity, "xc:2") && "Named guide" in titles(activity, "xc:3") } }
+                catch (failure: AssertionError) { throw AssertionError("requests=${server.requests}, error=${store.refreshError(source)}", failure) }
+                assertEquals(1, server.requests["/partial-guide.xml"]); assertEquals(1, server.requests["/xmltv.php"])
+                scenario.onActivity { activity ->
+                    assertTrue("The link's channel never mixes in the provider's listings", titles(activity, "xc:1").none { it == "World News" })
+                    assertTrue(titles(activity, "xc:3").none { it == "World News" })
+                }
+                assertFalse("The downloaded guide file is removed after reading", java.io.File(context.cacheDir, "guide-download/guide.xml").exists())
             } } finally { store.saveSources(emptyList()); store.removeCache(source) }
         }
     }
@@ -7256,6 +7279,7 @@ class SpareDeviceTest {
         }).toByteArray()
         private val xml: ByteArray
         private val numberedGuide: ByteArray
+        private val partialGuide: ByteArray
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
@@ -7290,6 +7314,10 @@ class SpareDeviceTest {
             numberedGuide = ("<tv><channel id=\"1\"><display-name>${eventSlots?.getOrNull(0)?.first.orEmpty()}</display-name></channel>" +
                 "<channel id=\"2\"><display-name>Some Other Channel</display-name></channel>" + (1..2).joinToString("") { id ->
                 "<programme channel=\"$id\" start=\"${format.format(Instant.ofEpochMilli(now - 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + 3 * 3600000L))}\"><title>Numbered guide $id</title></programme>" } + "</tv>").toByteArray()
+            // A guide link that lists channel 1 by its guide ID and channel 3 only by name, and lacks channel 2.
+            partialGuide = ("<tv><channel id=\"test1\"><display-name>Xtream Test 1</display-name></channel>" +
+                "<channel id=\"other3\"><display-name>Xtream Test 3</display-name></channel>" + listOf("test1" to "Linked guide", "other3" to "Named guide").joinToString("") { (id, title) ->
+                "<programme channel=\"$id\" start=\"${format.format(Instant.ofEpochMilli(now - 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + 3 * 3600000L))}\"><title>$title</title></programme>" } + "</tv>").toByteArray()
             fun serve(client: java.net.Socket) {
                 clients.add(client)
                 runCatching {
@@ -7336,6 +7364,7 @@ class SpareDeviceTest {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
                             "/numbered-guide.xml" -> numberedGuide to "application/xml"
+                            "/partial-guide.xml" -> partialGuide to "application/xml"
                             "/logo.png" -> logo to "image/png"
                             "/av.ts" -> (if (embeddedCaptions != 0) captionTransport else avTransport) to "video/mp2t"
                             "/movie/test/test-secret/8801.mkv" -> dtsMovie to "video/x-matroska"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.57.0 — 2026-11-22
+
+- A guide link no longer hides the playlist's own guide. The link wins for every channel it lists, and the playlist's guide fills the channels it lacks, so adding a third-party guide only adds listings. If the link fails, its saved listings stay and the playlist's guide fills only channels with nothing ahead; removing the link returns to the playlist's guide alone. Channels still empty ask the provider one channel at a time, as without a link.
+- Guides are saved before Spare reads them. A TV box takes minutes to read a full third-party guide, and the server dropped the connection while Spare read it straight from the download ("The provider connection was interrupted"). Spare now downloads the file to its cache first, reads it from there and deletes it, as Jellyfin and Kodi do. The refresh status says "Reading programme guide…" while it reads.
+- A channel a guide lists under another ID is matched by name when exactly one guide channel has that name, ignoring accents, a country tag ("US: ", "UK | ") and quality tags (HD, FHD, 4K). A name two guide channels share is never guessed, and a channel the guide lists by its own ID keeps it.
+
 ## 0.56.4 — 2026-11-22
 
 - A guide with one overlong title or description loads. Spare threw the whole guide away when any field passed 16 KB, so a full third-party guide failed with "could not process the provider's channel data"; it now keeps the first 16 KB of that field and reads on.
