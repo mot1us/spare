@@ -3614,6 +3614,67 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aGameAboutToStartIsLookedUpBeforehandAndItsCardIsReadyAtTipOff() {
+        FixtureServer(longVideo = true).use { server ->
+            val source = Source(name = "Tip-off fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
+            store.delete("sports-schedule-default.enc"); store.delete("sports-schedule.enc")
+            val (home, away) = SportsCatalog.teams.filter { it.league == "NBA" }.take(2)
+            val tipOff = System.currentTimeMillis() + 90_000
+            val started = java.util.concurrent.atomic.AtomicBoolean(false)
+            fun slate() = LiveSportsSnapshot(listOf(LiveEvent("soon-0", setOf(home.id, away.id), tipOff, state = if (started.get()) "in" else "pre", league = "NBA")), System.currentTimeMillis(), setOf("NBA"))
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { slate() }
+            }
+            fun summaries(activity: MainActivity) = @Suppress("UNCHECKED_CAST") (MainActivity::class.java.getDeclaredField("sportsStreamSummaries").apply { isAccessible = true }.get(activity) as Map<String, String>)
+            fun attempted(activity: MainActivity) = @Suppress("UNCHECKED_CAST") (MainActivity::class.java.getDeclaredField("sportsWarmAttempted").apply { isAccessible = true }.get(activity) as Map<String, Long>)
+            lifecycle.addLifecycleCallback(fixture)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                scenario.onActivity { activity ->
+                    val guideField = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }
+                    val snapshot = guideField.get(activity) as Guide
+                    // The provider has already named the event channel for tonight's game.
+                    val slot = Channel("soon-slot", "NBA 01: ${away.name} vs ${home.name}", "NBA Events", "${server.base}/channel2.mp4")
+                    guideField.set(activity, snapshot.copy(channels = snapshot.channels + slot))
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
+                    PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
+                    PlaybackWarmup::class.java.getDeclaredField("readySince").apply { isAccessible = true }.setLong(warmup, 1L)
+                }
+                // Before tip-off the background pass looks the game up; its card shows nothing yet.
+                waitFor(scenario) { activity -> "pre:NBA:soon-0" in attempted(activity) }
+                scenario.onActivity { activity -> assertNull(summaries(activity)["NBA:soon-0"]) }
+                // Tip-off: the game goes live, and its card has the stream without being looked up again.
+                while (System.currentTimeMillis() < tipOff - 50_000) Thread.sleep(250)
+                started.set(true)
+                fun steady(activity: MainActivity) {
+                    // A busy emulator can make the fixture video rebuffer, which restarts the 30-second "steady playback" wait.
+                    val warmup = MainActivity::class.java.getDeclaredField("playbackWarmup").apply { isAccessible = true }.get(activity)
+                    PlaybackWarmup::class.java.getDeclaredField("token").apply { isAccessible = true }.setInt(warmup, MainActivity::class.java.getDeclaredField("playbackToken").apply { isAccessible = true }.getInt(activity))
+                    PlaybackWarmup::class.java.getDeclaredField("readySince").apply { isAccessible = true }.setLong(warmup, 1L)
+                }
+                scenario.onActivity { activity ->
+                    MainActivity::class.java.getDeclaredField("liveSports").apply { isAccessible = true }.set(activity, slate())
+                    MainActivity::class.java.getDeclaredField("sportsBackgroundNotBefore").apply { isAccessible = true }.setLong(activity, 0L)
+                    steady(activity)
+                }
+                val readyBy = System.currentTimeMillis() + 40_000
+                var label: String? = null
+                while (System.currentTimeMillis() < readyBy) {
+                    scenario.onActivity { activity -> label = summaries(activity)["NBA:soon-0"]; steady(activity) }
+                    if (label?.startsWith("NBA 01:") == true) break
+                    Thread.sleep(500)
+                }
+                scenario.onActivity { activity ->
+                    assertTrue("Card: $label · looked up: ${attempted(activity).keys} · background: ${Diagnostics.sportsBackgroundLine()}", label?.startsWith("NBA 01:") == true)
+                }
+                scenario.onActivity { activity -> assertFalse("The live game needed no new search", "NBA:soon-0" in attempted(activity)) }
+                assertNull("Looking for streams never opens one", server.requests["/channel2.mp4"])
+            } } finally { lifecycle.removeLifecycleCallback(fixture); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aGameEndingBeforeTheViewersCardLeavesTheCursorWhereItIs() {
         FixtureServer().use { server ->
             val source = Source(name = "Hold fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

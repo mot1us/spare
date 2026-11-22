@@ -2,6 +2,7 @@ package io.github.mot1us.spare
 
 /** Session-only coverage evidence. Never stores a player or assumes that a stream is online. */
 class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs: Long = 120000, private val clock: () -> Long = System::currentTimeMillis) {
+    companion object { const val KICKOFF_CARRY_MS = 15 * 60000L }
     enum class Peek(val label: String) {
         HIT("hit"), NO_CONTEXT("miss: no context"), LINEUP("miss: lineup changed"),
         INELIGIBLE("miss: game not eligible"), NO_ENTRY("miss: no entry"), SIGNATURE("miss: game changed"),
@@ -68,7 +69,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         }
     }
     private data class Signature(val key: String, val state: String, val start: Long, val end: Long, val teams: List<String>, val networks: List<String>)
-    private data class Entry(val signature: Signature, val match: Match, val expires: Long, val displayUntil: Long)
+    private data class Entry(val signature: Signature, val match: Match, val expires: Long, val displayUntil: Long, val carried: Boolean = false)
     private var context: Context? = null
     private val entries = LinkedHashMap<String, Entry>(16, .75f, true)
     private data class Published(val context: Context?, val entries: Map<String, Entry>)
@@ -92,7 +93,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         }
         if (!game.live(now) && !(game.upcoming(now) && !forAuto)) { trace?.peek(Peek.INELIGIBLE, begin); return null }
         val entry = saved.entries[game.key] ?: run { trace?.peek(Peek.NO_ENTRY, begin); return null }
-        if (entry.signature != signature(game)) { trace?.peek(Peek.SIGNATURE, begin); return null }
+        if (!fits(entry, game)) { trace?.peek(Peek.SIGNATURE, begin); return null }
         if (entry.displayUntil <= now) { trace?.peek(Peek.DISPLAY_EXPIRED, begin); return null }
         val confirmed = entry.match.confirmed(now)
         if (owner.guide.programmes !== guide.programmes && (!confirmed || entry.match.needsRefresh(owner.guide, guide, now, trace))) {
@@ -105,6 +106,11 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
     }
 
     private fun signature(game: SportsGame) = Signature(game.key, game.state, game.start, game.end, game.teams.map { it.id }, game.networks)
+    /** An entry still describes [game]; a stream found minutes before kickoff stays valid once the game is live. */
+    private fun fits(entry: Entry, game: SportsGame): Boolean {
+        val now = signature(game)
+        return entry.signature == now || entry.carried && entry.signature.state == "pre" && game.state == "in" && entry.signature.copy(state = "in") == now
+    }
     @Synchronized fun use(source: String, generation: Int, guide: Guide, favorites: Set<String>): Context {
         val previous = context; val now = clock()
         if (previous != null && previous.source == source && previous.generation == generation && previous.guide.channels == guide.channels && previous.favorites == favorites) {
@@ -138,7 +144,7 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
     @Synchronized fun get(token: Context, game: SportsGame, now: Long, forAuto: Boolean = true, allowStale: Boolean = false): Match? {
         if (context !== token || !game.live(now) && !(game.upcoming(now) && !forAuto)) return null
         val entry = entries[game.key] ?: return null
-        if (entry.displayUntil <= now || entry.signature != signature(game)) { entries.remove(game.key); publish(); return null }
+        if (entry.displayUntil <= now || !fits(entry, game)) { entries.remove(game.key); publish(); return null }
         val confirmed = entry.match.confirmed(now)
         if (entry.match.game.broadcasts.isNotEmpty() && !confirmed) return null
         // Confirmed coverage lasts for this game, not a two-minute background timer.
@@ -152,11 +158,15 @@ class SportsStreamCache(private val capacity: Int = 128, private val lifetimeMs:
         if (active !== token && (active.source != token.source || active.generation != token.generation || active.guide.channels != token.guide.channels || active.favorites != token.favorites || match.needsRefresh(token.guide, active.guide, now))) return false
         val existing = entries[match.game.key]
         if (existing?.match?.autoReady == true && !match.autoReady) return false
-        val boundary = if (match.game.upcoming(now)) match.game.start else match.game.end
-        val expires = minOf(now + lifetimeMs, boundary)
         val found = match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty() || match.game.candidates.isNotEmpty()
-        val retained = existing?.takeIf { it.signature == signature(match.game) && it.match.confirmed(now) }?.let { match.retainCoverage(it.match) } ?: match
-        entries[match.game.key] = Entry(signature(match.game), retained, expires, if (found || retained.confirmed(now)) boundary else expires)
+        // Scheduled matches found long before kickoff are for display and end at kickoff. A stream found in the last minutes
+        // before the start (the background pass looks then) carries into the live game, so its card plays the moment it
+        // starts; finding nothing beforehand does not hold back the live game's own search.
+        val carried = match.game.upcoming(now) && match.game.start - now <= KICKOFF_CARRY_MS && (match.game.broadcasts.isNotEmpty() || match.game.titleMatches.isNotEmpty())
+        val boundary = if (match.game.upcoming(now) && !carried) match.game.start else match.game.end
+        val expires = minOf(now + lifetimeMs, boundary)
+        val retained = existing?.takeIf { fits(it, match.game) && it.match.confirmed(now) }?.let { match.retainCoverage(it.match) } ?: match
+        entries[match.game.key] = Entry(signature(match.game), retained, expires, if (found || retained.confirmed(now)) boundary else expires, carried)
         while (entries.size > capacity) entries.remove(entries.keys.first())
         publish(); return true
     }

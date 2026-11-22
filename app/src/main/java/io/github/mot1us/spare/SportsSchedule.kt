@@ -254,7 +254,9 @@ object SportsSchedule {
             if (SportsGuide.excludedTitle(sportsKey) || named && EventChannelNames.declaresOtherTime(name, game.start)) continue
             // The game's league is context for a bare "Basketball: Richmond vs. Towson": event categories often
             // say only the sport, and the channel's category alone did not say college.
-            if (game.live(now) && named && matchesTarget(Programme(channel.id, name, game.start, game.end), "$league ${channel.group}")) titles.add(channel)
+            // A channel already named for a game minutes before it starts counts too, so its card is ready at tip-off.
+            val nameCounts = game.live(now) || game.upcoming(now) && game.start - now <= SportsStreamCache.KICKOFF_CARRY_MS
+            if (nameCounts && named && matchesTarget(Programme(channel.id, name, game.start, game.end), "$league ${channel.group}")) titles.add(channel)
             else if (possibleNetwork) {
                 val key = if (renamed) SportsStreams.broadcasterKey(name) else channel.broadcastKey
                 if (networkKeys.any { it in key && (it.trimEnd() + " plus ") !in key }) candidates.add(channel)

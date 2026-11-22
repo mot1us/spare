@@ -183,6 +183,29 @@ class SportsStreamCacheTest {
         assertNull(cache.get(token, future, future.start, forAuto = false, allowStale = true))
     }
 
+    @Test fun aMatchFoundMinutesBeforeKickoffCarriesIntoTheLiveGame() {
+        val soon = game.copy(state = "pre", start = now + 10 * 60000L, end = now + 8 * 3600000L)
+        val slot = channel("slot").copy(name = "NFL 05: ${soon.title}")
+        val cache = SportsStreamCache(clock = { now }); val token = cache.use("source", 1, Guide(listOf(slot), emptyMap()), emptySet())
+        assertTrue(cache.put(token, SportsStreamCache.Match(soon.copy(titleMatches = listOf(slot))), now))
+        val live = soon.copy(state = "in", scores = mapOf("nfl:SEA" to "7"))
+        val atKickoff = soon.start + 60000L
+        assertEquals("The live game finds the slot found before kickoff", listOf(slot), cache.get(token, live, atKickoff, forAuto = false)?.game?.titleMatches)
+        assertNotNull("and it can play it", cache.get(token, live, atKickoff))
+        assertNull("A finished game does not", cache.get(token, live.copy(state = "post"), atKickoff, forAuto = false))
+        // Finding nothing before kickoff leaves the live game to look for itself.
+        val other = soon.copy(eventId = "other")
+        assertTrue(cache.put(token, SportsStreamCache.Match(other), now))
+        assertNull(cache.get(token, other.copy(state = "in"), atKickoff, forAuto = false, allowStale = true))
+    }
+    @Test fun aChannelNamedForAGameMinutesBeforeItStartsIsFound() {
+        val soon = game.copy(state = "pre", start = now + 10 * 60000L, end = now + 8 * 3600000L)
+        val slot = channel("slot").copy(name = "NFL 05: Seattle Seahawks vs San Francisco 49ers")
+        val guide = Guide(listOf(slot), emptyMap())
+        assertEquals(listOf(slot), SportsSchedule.match(soon, guide, emptySet(), now).titleMatches)
+        assertTrue("Hours ahead, a name alone is not enough", SportsSchedule.match(soon.copy(start = now + 3 * 3600000L), guide, emptySet(), now).titleMatches.isEmpty())
+    }
+
     @Test fun unrelatedCandidateGuideUpdatesAndRefreshAgeDoNotDiscardExactLiveCoverage() {
         val c = channel("known"); val candidate = channel("guess")
         val p = Programme(c.id, game.title, now - 1000, now + 3600000)

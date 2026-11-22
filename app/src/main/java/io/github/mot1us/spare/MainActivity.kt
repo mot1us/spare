@@ -3316,7 +3316,7 @@ class MainActivity : Activity() {
     private var sportsBackgroundEpoch = 0
     private var sportsBackgroundNotBefore = 0L
     /** One background pass, from the first game it looks up to the moment every live card has looked, for the report. */
-    private class SportsBackgroundPass(val began: Long) { var looks = 0; var searchMs = 0L; var indexed = 0 }
+    private class SportsBackgroundPass(val began: Long) { var looks = 0; var searchMs = 0L; var indexed = 0; var soon = 0 }
     private var sportsBackgroundPass: SportsBackgroundPass? = null
     private fun stopSportsBackground() {
         ++sportsBackgroundEpoch; sportsBackgroundTask?.cancel(true); sportsBackgroundTask = null; sportsBackgroundIndexWanted = false
@@ -3359,21 +3359,29 @@ class MainActivity : Activity() {
             // "checking live status" and none is live: the pass then saw no games and dropped every card's result.
             val games = SportsPanel.ordered(SportsSchedule.games(scores.copy(checked = at), snapshot, "live", favoriteSnapshot, at, matchChannels = false)
                 .filter { it.leagueId in leagues && it.live(at) }, followed, at).take(SportsBrowseWork.MAX_GAMES)
+            // Games starting within 15 minutes are looked up too: what they find carries into the live game, so a card plays the
+            // moment its game starts. Their looks are kept apart, so a game that found nothing beforehand looks again at once.
+            val soon = SportsSchedule.games(scores.copy(checked = at), snapshot, "today", favoriteSnapshot, at, matchChannels = false)
+                .filter { it.leagueId in leagues && it.state == "pre" && it.start - at in 0..SportsStreamCache.KICKOFF_CARRY_MS }.sortedBy { it.start }.take(24)
             val token = sportsStreamCache.use(selected.id, sourceEpoch, snapshot, favoriteSnapshot)
             val labels = linkedMapOf<String, String>()
             games.forEach { game -> sportsStreamCache.get(token, game, at, forAuto = false, allowStale = true)?.let { labels[game.key] = sportsStreamSummary(it, snapshot, profile, quality, hidden, at, namesPending) } }
+            fun lookKey(game: SportsGame) = if (game.state == "pre") "pre:${game.key}" else game.key
+            fun cachedSoon(game: SportsGame) = sportsStreamCache.get(token, game, at, forAuto = false, allowStale = true) != null
             // Every game's first look, then a game still without a stream after five minutes. With the guide index a look is
             // cheap, so a few games share a step.
-            val first = games.filter { it.key !in attempted && it.key !in labels }
-            val todo = (first + games.filter { it.key !in labels && it.key in attempted && at - (attempted[it.key] ?: 0L) >= SPORTS_BACKGROUND_RETRY_MS }
-                .sortedBy { attempted[it.key] ?: 0L }).take(if (ready != null) 3 else 1)
+            val first = games.filter { it.key !in attempted && it.key !in labels } + soon.filter { lookKey(it) !in attempted && !cachedSoon(it) }
+            val again = (games.filter { it.key !in labels && it.key in attempted } + soon.filter { lookKey(it) in attempted && !cachedSoon(it) })
+                .filter { at - (attempted[lookKey(it)] ?: 0L) >= SPORTS_BACKGROUND_RETRY_MS }.sortedBy { attempted[lookKey(it)] ?: 0L }
+            val todo = (first + again).take(if (ready != null) 3 else 1)
             val began = android.os.SystemClock.elapsedRealtime()
             for (game in todo) {
                 if (Thread.currentThread().isInterrupted) break
                 val result = runCatching { resolveSportsMatch(selected, game, snapshot, favoriteSnapshot, profile, quality, false, { _, _, _ -> }, preparedIndex = ready) }.getOrNull()
                 val done = System.currentTimeMillis()
                 val retained = result?.takeIf { sportsStreamCache.put(token, it, done) } ?: sportsStreamCache.get(token, game, done, forAuto = false, allowStale = true) ?: result
-                retained?.let { labels[game.key] = sportsStreamSummary(it, snapshot, profile, quality, hidden, done, namesPending) }
+                // An upcoming game's card shows no stream yet; its result waits in the cache for kickoff.
+                if (game.state != "pre") retained?.let { labels[game.key] = sportsStreamSummary(it, snapshot, profile, quality, hidden, done, namesPending) }
             }
             val searching = android.os.SystemClock.elapsedRealtime() - began
             val firstLeft = first.size - todo.count { it in first }
@@ -3389,10 +3397,11 @@ class MainActivity : Activity() {
                 // Going full screen pauses an index build; ask again while it is still wanted and not built for this guide.
                 if (sportsBackgroundIndexWanted && programmeIndex?.isFor(guide) != true && programmeIndexTask?.isDone != false) scheduleProgrammeIndex()
                 if (todo.isNotEmpty()) {
-                    todo.forEach { sportsWarmAttempted[it.key] = at }
-                    if (sportsWarmAttempted.size > 2 * SportsBrowseWork.MAX_GAMES) sportsWarmAttempted.keys.retainAll(keys)
+                    todo.forEach { sportsWarmAttempted[lookKey(it)] = at }
+                    if (sportsWarmAttempted.size > 2 * SportsBrowseWork.MAX_GAMES) sportsWarmAttempted.keys.retainAll(keys + soon.map(::lookKey))
                     val pass = sportsBackgroundPass ?: SportsBackgroundPass(finished)
                     pass.looks += todo.size; pass.searchMs += searching; if (ready != null) pass.indexed += todo.size
+                    pass.soon += todo.count { it.state == "pre" }
                     sportsBackgroundPass = pass
                     sportsBackgroundNotBefore = finished + SPORTS_BACKGROUND_PAUSE_MS
                 } else {
@@ -3400,7 +3409,8 @@ class MainActivity : Activity() {
                         // What the cards show: a result stays on its card after its cache entry lapses.
                         val found = games.count { game -> (labels[game.key] ?: sportsStreamSummaries[game.key])?.let { !unsearchedSummary(it) && !it.startsWith("No stream") && !it.startsWith("Select to") && it != SPORTS_CHECKING_NAMES } == true }
                         Diagnostics.sportsBackground("${games.size} live games · $found found a stream · ${pass.looks} looked up in ${(finished - pass.began + 500) / 1000} s" +
-                            " · searching ${(pass.searchMs + 500) / 1000} s · ${pass.indexed} with the guide index")
+                            " · searching ${(pass.searchMs + 500) / 1000} s · ${pass.indexed} with the guide index" +
+                            if (pass.soon > 0) " · ${pass.soon} about to start" else "")
                         Diagnostics.job("Sports cards", pass.began, finished)
                     }
                     sportsBackgroundPass = null

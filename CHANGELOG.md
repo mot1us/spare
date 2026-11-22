@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.56.0 — 2026-11-21
+
+- Sports cards are ready at tip-off. While Sports is closed, the background pass also looks up games in your leagues that start within 15 minutes; a channel the provider has already named for the game, or a guide listing for it, carries into the live game, so its card shows the stream and OK plays it the moment the game starts. Upcoming cards look the same as before. A stream found more than 15 minutes ahead still ends at kickoff, and finding nothing beforehand does not hold back the live game's own search.
+- The performance report's background line says how many games were looked up before they started.
+
 ## 0.55.2 — 2026-11-21
 
 - Spare remembers the provider's event channel names between restarts (encrypted, like the rest of its saved data, for up to 12 hours). Sports and the background pass match event channels with them right away instead of waiting for the provider: reading them took 25 seconds on the owner's second onn, and until then every card on an event channel kept looking. Names saved within the last 30 minutes count as current, so a game nothing names says so at once; fresh names still replace them as soon as the provider answers.
