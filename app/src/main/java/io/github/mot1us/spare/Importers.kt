@@ -181,7 +181,13 @@ object Importers {
     fun xmltv(bytes: ByteArray, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> =
         xmltv(bytes.inputStream(), channelIds, now, historyDays)
 
-    fun xmltv(input: java.io.InputStream, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap()): Map<String, List<Programme>> {
+    /**
+     * [names] collects the guide's display name for each wanted channel id, when a caller needs to check that a channel number
+     * in the guide really is the same channel. A full guide (24,000 channels, 680,000 programmes) unpacks to several hundred MB:
+     * the stream is bounded at [XMLTV_MAX_BYTES] unpacked and [XMLTV_MAX_ELEMENTS] elements, and only wanted channels are kept.
+     */
+    fun xmltv(input: java.io.InputStream, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap(),
+        names: MutableMap<String, String>? = null): Map<String, List<Programme>> {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         catch (_: org.xmlpull.v1.XmlPullParserException) { /* Some parsers only expose the disabled default. */ }
@@ -190,7 +196,7 @@ object Importers {
         val decoded = if (gzip) java.util.zip.GZIPInputStream(raw) else raw
         val bounded = object : java.io.FilterInputStream(decoded) {
             private var consumed = 0L
-            private fun count(size: Int) { if (size > 0) consumed += size; require(consumed <= 64L * 1024 * 1024) { "Guide exceeds download limit" }; if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Guide cancelled") }
+            private fun count(size: Int) { if (size > 0) consumed += size; require(consumed <= XMLTV_MAX_BYTES) { GUIDE_TOO_LARGE }; if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Guide cancelled") }
             override fun read(): Int = `in`.read().also { count(if (it < 0) 0 else 1) }
             override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { count(it) }
         }
@@ -198,7 +204,7 @@ object Importers {
             parser.setInput(stream, null)
             val result = ProgrammeBudget(channelIds.size, now)
             var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
-            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0
+            var text = StringBuilder(); var field = ""; var inside = false; var programmeDepth = 0; var elements = 0; var listed = ""
             while (true) {
                 when (parser.nextToken()) {
                     XmlPullParser.END_DOCUMENT -> break
@@ -208,8 +214,10 @@ object Importers {
                         if (field.isNotEmpty()) { require(text.length < 16384); text.append(parser.text.orEmpty()) }
                     }
                     XmlPullParser.START_TAG -> {
-                        require(++elements <= 2_000_000 && parser.depth <= 32) { "Guide exceeds safety limits" }
+                        require(++elements <= XMLTV_MAX_ELEMENTS && parser.depth <= 32) { GUIDE_TOO_LARGE }
                         when (parser.name) {
+                            "channel" -> if (!inside) listed = parser.getAttributeValue(null, "id").orEmpty().trim().take(256)
+                            "display-name" -> if (!inside && names != null && listed in channelIds && listed !in names) { field = "display-name"; text = StringBuilder() }
                             "programme" -> {
                                 channel = parser.getAttributeValue(null, "channel").orEmpty().trim().take(256)
                                 start = timestamp(parser.getAttributeValue(null, "start").orEmpty())
@@ -225,6 +233,8 @@ object Importers {
                         require(text.length + parser.text.length <= 16384) { "Guide field too long" }; text.append(parser.text)
                     }
                     XmlPullParser.END_TAG -> when (parser.name) {
+                        "display-name" -> if (field == "display-name") { names?.put(listed, text.toString().trim().take(256)); field = "" }
+                        "channel" -> if (!inside) listed = ""
                         "title" -> if (inside) { if (title.isEmpty()) title = text.toString().take(512); field = "" }
                         "desc" -> if (inside) { if (description.isEmpty()) description = text.toString().take(2048); field = "" }
                         "image" -> if (inside && parser.depth == programmeDepth + 1 && field == "image") { val image = text.toString().trim().take(4096); if (Network.allowed(image, true)) artwork = image; field = "" }
@@ -240,6 +250,10 @@ object Importers {
             result.result()
         }
     }
+    /** Unpacked bytes and XML elements a guide may have: a 680,000-programme guide is about 600 MB and 4 million elements. */
+    const val XMLTV_MAX_BYTES = 1024L * 1024 * 1024
+    const val XMLTV_MAX_ELEMENTS = 20_000_000
+    const val GUIDE_TOO_LARGE = "Guide exceeds safety limits"
     fun timestamp(value: String): Long = runCatching {
         val match = Regex("^([0-9]{12}(?:[0-9]{2})?)\\s*(Z|UTC|GMT|[+-][0-9]{2}:?[0-9]{2})?$", RegexOption.IGNORE_CASE).matchEntire(value.trim()) ?: return 0L
         val digits = match.groupValues[1].padEnd(14, '0')

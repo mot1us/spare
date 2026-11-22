@@ -3742,6 +3742,24 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aGuideLinkMadeForTheProviderListsEventSlotsByStreamNumberWhenTheirNamesAgree() {
+        FixtureServer(eventSlots = listOf("NBA 01: Hawks vs Celtics" to "NBA 01: Hawks vs Celtics", "NBA 02: No Event" to "NBA 02: No Event", "NBA 03: No Event" to "NBA 03: No Event")).use { server ->
+            val source = Source(name = "Numbered guide fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true,
+                epgUrl = "${server.base}/numbered-guide.xml")
+            store.saveSources(listOf(source)); store.active = source.id
+            fun titles(activity: MainActivity, id: String): List<String> {
+                val guide = MainActivity::class.java.getDeclaredField("guide").apply { isAccessible = true }.get(activity) as Guide
+                val channel = guide.channels.firstOrNull { it.native().id == id } ?: return emptyList()
+                return guide.programmes[guide.key(channel)].orEmpty().map { it.title }
+            }
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { activity -> "Numbered guide 1" in titles(activity, "xc:1") }
+                assertTrue(server.requests.keys.any { it == "/numbered-guide.xml" })
+                scenario.onActivity { activity -> assertTrue("A number whose guide name is another channel does not attach", titles(activity, "xc:2").none { it.startsWith("Numbered guide") }) }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun sportsCardsUseTheEventNamesSavedLastTimeBeforeTheProviderAnswers() {
         val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(4).chunked(2)
         val renamed = pairs[0]
@@ -7237,6 +7255,7 @@ class SpareDeviceTest {
             "#EXTINF:-1 tvg-id=\"test$it\" tvg-logo=\"$base/logo.png\" group-title=\"${if (regionGroups) listOf("UK | News", "USA | News", "US | MLB", "CA | News")[(it - 1) % 4] else if (it <= 4) "News" else "Culture"}\",Test Channel $it\n$base/channel$it.${if (captionsMode || embeddedHls) "m3u8" else if (tsMode || stalled || longVideo || embeddedCaptions != 0) "ts" else "mp4"}"
         }).toByteArray()
         private val xml: ByteArray
+        private val numberedGuide: ByteArray
         val finishSportsGuide = java.util.concurrent.CountDownLatch(1)
         val sportsTailBlocked = java.util.concurrent.CountDownLatch(1)
         private val liveSportsSent = AtomicBoolean(false)
@@ -7266,6 +7285,11 @@ class SpareDeviceTest {
             xml = ("<tv>" + (1..if (fullGuide) channelCount else 8).joinToString("") { channel -> (0..6).joinToString("") { slot ->
                 "<programme channel=\"test$channel\" start=\"${format.format(Instant.ofEpochMilli(now + slot * 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + (slot + 1) * 1800000L))}\"><title>${if (programmeTitle == "World News") listOf("World News", "Live Report", "Evening Update")[slot % 3] else programmeTitle}</title><desc>Spare playback and guide test fixture.</desc></programme>"
             } } + "</tv>").toByteArray()
+            // A guide made for this provider: event slots under their stream numbers. Slot 1's name agrees; slot 2's guide name
+            // is another channel, so its listing must not attach.
+            numberedGuide = ("<tv><channel id=\"1\"><display-name>${eventSlots?.getOrNull(0)?.first.orEmpty()}</display-name></channel>" +
+                "<channel id=\"2\"><display-name>Some Other Channel</display-name></channel>" + (1..2).joinToString("") { id ->
+                "<programme channel=\"$id\" start=\"${format.format(Instant.ofEpochMilli(now - 1800000L))}\" stop=\"${format.format(Instant.ofEpochMilli(now + 3 * 3600000L))}\"><title>Numbered guide $id</title></programme>" } + "</tv>").toByteArray()
             fun serve(client: java.net.Socket) {
                 clients.add(client)
                 runCatching {
@@ -7311,6 +7335,7 @@ class SpareDeviceTest {
                         val (body, mime) = when (path) {
                             "/playlist.m3u" -> playlist to "application/x-mpegURL"
                             "/guide.xml" -> xml to "application/xml"
+                            "/numbered-guide.xml" -> numberedGuide to "application/xml"
                             "/logo.png" -> logo to "image/png"
                             "/av.ts" -> (if (embeddedCaptions != 0) captionTransport else avTransport) to "video/mp2t"
                             "/movie/test/test-secret/8801.mkv" -> dtsMovie to "video/x-matroska"

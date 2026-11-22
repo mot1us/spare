@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.56.3 — 2026-11-22
+
+- Large guide links work. Spare stopped reading a guide after 64 MB unpacked and 2 million XML elements, so a full third-party guide (48 MB packed, about 680,000 programmes) failed with "could not process the provider's channel data". The limits are now 1 GB unpacked and 20 million elements; the download itself stays capped at 64 MB, DTDs and custom entities are still refused, and only the playlist's own channels are kept.
+- A guide link made for an Xtream provider can list channels under the provider's own stream numbers (an ESPN+ event slot as "150130"). Spare matches such a number when the guide's channel name agrees with the channel, or names the same event slot ("ESPN+ 19:"), so event channels get listings the provider's guide never had. A number alone is not trusted: guides list other providers' numbers too.
+- Guide link errors say what went wrong: a guide too large to read, or one with no listings for the playlist's channels, instead of blaming the provider's channel data.
+
 ## 0.56.2 — 2026-11-21
 
 - 4K movies stall far less often on a connection that only just keeps up. Spare kept at most 64 MB of a movie in memory, only 8 to 10 seconds of a 4K remux, so on the owner's main onn a Dolby Vision remux stalled every 18 seconds with an empty buffer while the box waited on the provider. Spare now asks Android for the larger memory limit TV players use (384 MB on an onn 4K Pro instead of 256 MB), lets movies and episodes buffer up to about 150 MB and two minutes ahead, and after a stall gathers 20 seconds before playing again instead of 12. Jellyfin's Android TV app and Just Player also use the larger limit, and Media3's default buffer is about 144 MB.

@@ -125,4 +125,19 @@ class ImportersTest {
         val restored = Guide.from(guide.json())
         assertEquals(guide, restored)
     }
+
+    @Test fun aGuideNamesItsWantedChannelsWhenAsked() {
+        val now = System.currentTimeMillis()
+        fun stamp(at: Long) = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").format(java.time.Instant.ofEpochMilli(at).atZone(java.time.ZoneOffset.UTC))
+        val xml = """<tv><channel id="150130"><display-name>ESPN+ 19: Game</display-name><display-name>Second name</display-name></channel>
+            <channel id="9"><display-name>Not wanted</display-name></channel>
+            <programme channel="150130" start="${stamp(now - 60000)}" stop="${stamp(now + 3600000)}"><title>Game</title></programme></tv>"""
+        val names = HashMap<String, String>()
+        val result = Importers.xmltv(xml.toByteArray().inputStream(), setOf("150130"), now, names = names)
+        assertEquals(mapOf("150130" to "ESPN+ 19: Game"), names)
+        assertEquals("Game", result.getValue("150130").single().title)
+        assertEquals("The guide is larger than Spare reads (GUIDE_SIZE). Use a smaller guide link, or leave the link empty for the provider's guide.",
+            SourceErrors.message(IllegalArgumentException(Importers.GUIDE_TOO_LARGE)))
+        assertTrue(Importers.XMLTV_MAX_BYTES >= 600L * 1024 * 1024 && Importers.XMLTV_MAX_ELEMENTS >= 4_000_000)
+    }
 }

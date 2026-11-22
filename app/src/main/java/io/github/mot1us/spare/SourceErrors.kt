@@ -48,6 +48,8 @@ object SourceErrors {
         if (causes.any { it is ProtocolException }) return "The provider returned an unsupported HTTP response (HTTP_PROTOCOL). Check the server address and provider connection."
         if (causes.any { it is SocketException }) return "The provider connection was interrupted (NETWORK_CONNECTION). Retry or check the provider connection."
         if (causes.any { it is IOException }) return "Could not read the provider's response (NETWORK_IO). Retry or check the provider connection."
+        if (causes.any { it is IllegalArgumentException && it.message == Importers.GUIDE_TOO_LARGE }) return "The guide is larger than Spare reads (GUIDE_SIZE). Use a smaller guide link, or leave the link empty for the provider's guide."
+        if (causes.any { it is IllegalArgumentException && it.message == "No programme data matched this playlist" }) return "The guide link has no listings for this playlist's channels (GUIDE_MATCH). Check that it is made for this provider."
         if (causes.any { it is IllegalArgumentException }) return "Spare could not process the provider's channel data (IMPORT_DATA). Check the source settings."
         return "Could not load live channels (IMPORT_FAILED). Retry or check the source settings."
     }
