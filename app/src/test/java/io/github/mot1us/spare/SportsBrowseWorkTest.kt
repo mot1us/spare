@@ -74,4 +74,16 @@ class SportsBrowseWorkTest {
         assertEquals("A card the scoreboard no longer lists cannot be held", next, SportsBrowseWork.hold(shown, next, shown[5].key))
         assertEquals("A card that is not shown holds nothing", next, SportsBrowseWork.hold(shown, next, "elsewhere"))
     }
+    @Test fun theGameOnThePlayingChannelNamesThatChannelUntilItsSearchFindsOne() {
+        val now = 2000L
+        val live = games[0]; val teamsPlaying = live.teams.mapTo(hashSetOf()) { it.id }
+        val playing = teamsPlaying to "ESPN+ 05: Seahawks vs 49ers"
+        for (waiting in listOf("", SportsPanel.FIND_STREAM, "Finding stream…", SportsPanel.CHECKING_NAMES, "No stream names this game", "Select to finish stream search"))
+            assertEquals(waiting, "Playing now · ESPN+ 05: Seahawks vs 49ers", SportsBrowseWork.withPlaying(waiting, live, playing, now))
+        assertEquals("A card that found its stream keeps it", "FOX 4K", SportsBrowseWork.withPlaying("FOX 4K", live, playing, now))
+        assertEquals("1 stream names this game\nSelect to choose", SportsBrowseWork.withPlaying("1 stream names this game\nSelect to choose", live, playing, now))
+        assertEquals("Another game's card is unchanged", "No stream names this game", SportsBrowseWork.withPlaying("No stream names this game", live, setOf("nfl:SEA", "nfl:LAR") to "Other", now))
+        assertEquals("Nothing playing", "No stream names this game", SportsBrowseWork.withPlaying("No stream names this game", live, null, now))
+        assertEquals("A game that is not live", "", SportsBrowseWork.withPlaying("", live.copy(state = "pre"), playing, now))
+    }
 }

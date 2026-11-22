@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.55.1 — 2026-11-21
+
+- The first Sports card no longer blinks while Sports loads. Until a key is pressed, each scoreboard reply took the highlight off the top card and put it back; the highlight now moves only when its card leaves the list.
+- The card of the game on the playing channel names that channel ("Playing now · …") until its own search finds a stream. On the owner's main onn the first card said "No stream names this game" for a couple of minutes while that very game played. OK on a card that says "Playing now" returns to the game full screen; a card whose search found streams still plays the best one.
+- The first opening of Sports no longer pauses for a quarter of a second: RedZone's channel-name patterns are prepared in the background shortly after Spare starts, instead of on the screen thread when Sports opens.
+- Around a game's start time, the background Sports pass checks scores every minute instead of every three, so games that tip off on the hour are looked up before Sports opens. On the owner's second onn, nine games that started at 7 PM ET were not yet known to the background pass when Sports opened two minutes later.
+
 ## 0.55.0 — 2026-11-21
 
 - More Sports cards play on OK. An event channel whose name gives both teams and the game's date and start time ("ESPN UNLTD 317: … (11.21 04:00 PM ET)") now plays even when its guide listing still shows the slot's last event or filler; the card said "1 stream names this game · Select to choose" and OK opened a list. A name without a date and time still asks you to choose when the guide says the channel is showing something else.

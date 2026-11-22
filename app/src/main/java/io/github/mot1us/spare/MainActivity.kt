@@ -1211,7 +1211,11 @@ class MainActivity : Activity() {
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
         // Ready Sports' cards once startup has settled, so opening Sports does not build them all at once.
-        handler.postDelayed({ if (!closed && !sportsVisible) sportsPanel.prewarmCards() }, 8000)
+        handler.postDelayed({
+            if (!closed && !sportsVisible) sportsPanel.prewarmCards()
+            // RedZone's name patterns compile the first time Sports opens: 0.25 s on an onn 4K Pro's screen thread. Do it here.
+            if (!closed) sportsDestinationWorker.execute { runCatching { SportsDestinations.redZoneDay } }
+        }, 8000)
         sportsPanel.leagueSelected = ::selectSportsLeague
         sportsPanel.cardsReady = { queueSportsPrefetch(); syncReplayDiscovery() }
         sportsPanel.scorePresentation = ::presentScore
@@ -1235,6 +1239,9 @@ class MainActivity : Activity() {
         }
         sportsPanel.watchBest = { selectGame(it, autoWatch = true) }
         sportsPanel.playOnSelection = { store.sportsAutoPlay && !(::multiview.isInitialized && multiview.browsing) }
+        sportsPanel.playingStream = { playbackGame()?.let { context -> current?.let { context.game.teams.mapTo(hashSetOf()) { team -> team.id } to channelLabel(it) } } }
+        // A card that says "Playing now" found no stream of its own: OK returns to the game already playing, full screen.
+        sportsPanel.returnToPlaying = { Diagnostics.action("Sports card: already playing · full screen"); showGuide(false) }
         sportsPanel.findRedZone = { findRedZone(false) }
         sportsPanel.watchCoverage = ::playCoverage
         sportsPanel.chooseCoverage = { item -> sportsPanel.showCoverageStreams(item, coverageChoices(item)) { channelLabel(it) + " · " + it.qualityLabel(videoInfo[it.id]) } }
@@ -3309,9 +3316,12 @@ class MainActivity : Activity() {
         val snapshot = guide
         if (snapshot.channels.isEmpty() || liveSportsChecking) return
         val wall = System.currentTimeMillis(); val scores = liveSports
-        // Scores every three minutes while a game is live or about to start; every half hour otherwise.
+        // Scores every three minutes while a game is live or about to start, every minute around a game's start time (games
+        // that tip off on the hour are then looked up before Sports opens), and every half hour otherwise.
         val active = scores.events.any { it.state == "in" || it.state == "pre" && it.start - wall in 0..SPORTS_BACKGROUND_SOON_MS }
-        if (wall - scores.checked > if (active || scores.events.isEmpty()) SPORTS_BACKGROUND_SCORES_MS else SPORTS_BACKGROUND_QUIET_MS) {
+        val starting = scores.events.any { it.state == "pre" && kotlin.math.abs(it.start - wall) <= SPORTS_BACKGROUND_STARTING_MS }
+        val interval = when { starting -> SPORTS_BACKGROUND_STARTING_SCORES_MS; active || scores.events.isEmpty() -> SPORTS_BACKGROUND_SCORES_MS; else -> SPORTS_BACKGROUND_QUIET_MS }
+        if (wall - scores.checked > interval) {
             checkLiveSports(); sportsBackgroundNotBefore = now + 5000; return
         }
         if (!active) { sportsBackgroundNotBefore = now + 60_000; return }
@@ -3577,6 +3587,7 @@ class MainActivity : Activity() {
     /** Views that name the playing game catch up once it is known. */
     private fun playbackGameKnown() {
         scoreDelayPlayingKey = if (onDemand == null) playbackGame()?.game?.key else null
+        if (::sportsPanel.isInitialized && sportsVisible) sportsPanel.refreshStreams()
         if (::details.isInitialized && details.isVisible) refreshDetails()
         retryPanel.findViewWithTag<View>("sports-other-streams")?.let { if (retryPanel.isVisible) it.isVisible = true }
     }
@@ -4677,6 +4688,8 @@ private const val SPORTS_BACKGROUND_RETRY_MS = 300_000L
 private const val SPORTS_BACKGROUND_SCORES_MS = 180_000L
 private const val SPORTS_BACKGROUND_QUIET_MS = 1_800_000L
 private const val SPORTS_BACKGROUND_SOON_MS = 1_800_000L
+private const val SPORTS_BACKGROUND_STARTING_MS = 600_000L
+private const val SPORTS_BACKGROUND_STARTING_SCORES_MS = 60_000L
 /** A live game off screen looks again less often; its card keeps the last result meanwhile. */
 private const val SPORTS_WARM_LATER_RETRY_MS = 180_000L
 /** The pause between lookups for games off screen. */

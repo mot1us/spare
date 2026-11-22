@@ -49,6 +49,19 @@ object SportsBrowseWork {
      * stay where they are (a game that ended shows its final score from [latest]); the cards after it follow [next].
      * The full order returns once the cursor leaves the grid.
      */
+    /**
+     * A live card whose game is on the channel playing now names that channel until its own search finds something: the
+     * first card said "No stream names this game" for minutes while the owner watched that very game. [playing] is the
+     * playing game's two teams and the channel's label.
+     */
+    fun withPlaying(summary: String, game: SportsGame, playing: Pair<Set<String>, String>?, now: Long): String {
+        if (playing == null || !game.live(now) || playing.first != game.teams.mapTo(hashSetOf()) { it.id }) return summary
+        val found = summary.isNotEmpty() && summary != SportsPanel.FIND_STREAM && !summary.startsWith("Finding stream") && summary != SportsPanel.CHECKING_NAMES &&
+            !summary.startsWith("No stream") && !summary.startsWith("Select to finish")
+        return if (found) summary else "$PLAYING_NOW${playing.second}"
+    }
+    const val PLAYING_NOW = "Playing now · "
+
     fun hold(current: List<SportsGame>, next: List<SportsGame>, anchor: String, latest: Map<String, SportsGame> = emptyMap()): List<SportsGame> {
         val at = current.indexOfFirst { it.key == anchor }
         if (at < 0) return next

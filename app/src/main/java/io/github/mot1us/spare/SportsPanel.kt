@@ -108,7 +108,12 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private var cardReplays = emptyMap<String, SportsReplay>()
     private var replayChecking: String? = null
     private var replayChecked = emptySet<String>()
-    private fun cardStream(game: SportsGame): String = if (scorePresentation(game).state != "post") streamSummaries[game.key].orEmpty()
+    /** The game on the playing channel (its two teams) and that channel's label, when Spare knows it. */
+    var playingStream: () -> Pair<Set<String>, String>? = { null }
+    var returnToPlaying: () -> Unit = {}
+    fun refreshStreams() = refreshCardStreams()
+    private fun cardStream(game: SportsGame): String = if (scorePresentation(game).state != "post")
+        SportsBrowseWork.withPlaying(streamSummaries[game.key].orEmpty(), game, playingStream(), System.currentTimeMillis())
         else if (hasReplay(game)) cardReplays.getValue(game.key).let { "▶ Play replay · ${it.channel.name}\nCatch-up confirmed" }
         else if (replayChecking == game.key) CHECKING_CATCHUP
         else if (game.key in replayChecked) "Replay not found"
@@ -223,7 +228,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     @Volatile private var cardsRequest = 0
     var cardsReady: () -> Unit = {}
     private data class CardUpdate(val request: Int, val before: List<SportsGame>, val beforeKeys: List<String>, val next: List<SportsGame>, val redZone: Boolean, val first: Boolean, val hadFocus: Boolean, val input: Int, val focus: Int, val anchor: String?,
-        val beforeCoverage: List<SportsCoverage> = emptyList(), val coverage: List<SportsCoverage> = emptyList())
+        val beforeCoverage: List<SportsCoverage> = emptyList(), val coverage: List<SportsCoverage> = emptyList(), val focusedKey: String? = null)
     private val cardDiffWorker = java.util.concurrent.Executors.newSingleThreadExecutor { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-card-diff") }
     private val cardUpdates by lazy { LatestTask<CardUpdate>(cardDiffWorker) { update ->
         if (update.request == cardsRequest) {
@@ -558,7 +563,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             cardReplays[game.key]?.takeIf { Catchup.available(it.channel, it.programme, System.currentTimeMillis()) }?.let { focused(game); watchReplay(it); return }
             if (SportsReplays.eligible(game, archiveWindowDays, System.currentTimeMillis())) { focused(game); select(game); return }
         }
-        if (direct && playOnSelection() && game.live(System.currentTimeMillis())) { focused(game); watchBest(game); return }
+        if (direct && playOnSelection() && game.live(System.currentTimeMillis())) {
+            focused(game)
+            if (cardStream(game).startsWith(SportsBrowseWork.PLAYING_NOW)) returnToPlaying() else watchBest(game)
+            return
+        }
         actionsOpen = true; showHero(game); focused(game)
         heroActions(true)
         status.text = if (game.state == "post" && !findStreams.isEnabled) "No catch-up available for this game." else "Back returns to games"
@@ -795,7 +804,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val anchor = remembered
         val held = if (!changedScope && browsingGames && !watchMode && !actionsOpen && anchor != null && rows.hasFocus()) SportsBrowseWork.hold(games, next, anchor, latest) else next
         if (games != held || displayedRedZone != showRedZone || displayedCoverage != shownCoverage) {
-            cardUpdates.submit(CardUpdate(request, games, gameKeys, held.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered, displayedCoverage, shownCoverage))
+            val focusedKey = rows.findFocus()?.let(rows::findContainingItemView)?.tag as? String
+            cardUpdates.submit(CardUpdate(request, games, gameKeys, held.toList(), showRedZone, first, rows.hasFocus(), inputEpoch, focusEpoch, remembered, displayedCoverage, shownCoverage, focusedKey))
             return
         }
         if (first || skeleton.isVisible) revealContent()
@@ -805,7 +815,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     private fun publishCards(update: CardUpdate, keys: List<String>, ids: LongArray, positions: Map<String, Int>, diff: DiffUtil.DiffResult) {
         if (rows.isComputingLayout) { postOnAnimation { if (!cardsClosed && update.request == cardsRequest) publishCards(update, keys, ids, positions, diff) }; return }
         if (update.before !== games) return
-        if (update.hadFocus && update.anchor !in positions && rows.hasFocus()) {
+        // Only when the highlighted card is leaving does the grid hold the focus meanwhile. Taking it on every update (the
+        // cursor Spare placed has no remembered card) made the top card lose and regain its highlight with each scoreboard
+        // reply: the first card blinked while Sports loaded.
+        val leaving = (rows.findFocus()?.let(rows::findContainingItemView)?.tag as? String ?: update.focusedKey)?.let { it !in positions } == true
+        if (update.hadFocus && leaving && rows.hasFocus()) {
             val before = rows.descendantFocusability; rows.descendantFocusability = FOCUS_BEFORE_DESCENDANTS; rows.requestFocus(); rows.descendantFocusability = before
         }
         games = update.next; gameKeys = keys; gameIds = ids; gamePositions = positions; displayedRedZone = update.redZone; displayedCoverage = update.coverage
