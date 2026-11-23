@@ -2234,8 +2234,8 @@ class MainActivity : Activity() {
      * An Xtream channel's own guide, asked one channel at a time. A guide link replaces it only where the link has programmes
      * ahead: a channel the link lacks still shows the provider's guide.
      */
-    private fun providerEpgFor(source: Source, channel: Channel, now: Long) = source.kind == "xtream" &&
-        (source.epgUrl.isBlank() || guide.programmes[guide.key(channel)].orEmpty().none { it.end > now })
+    private fun providerEpgFor(source: Source, channel: Channel, now: Long, within: Guide = guide) = source.kind == "xtream" &&
+        (source.epgUrl.isBlank() || within.programmes[within.key(channel)].orEmpty().none { it.end > now })
     private fun startEpgRequest(channel: Channel, selected: Source, requestedDepth: Int, epoch: Int, now: Long, background: Boolean) {
         val request = "$epoch:${channel.id}"; epgInFlight.add(request); epgCheckedAt[channel.id] = now; epgDepth[channel.id] = requestedDepth; sportsForcedEpg.remove(channel.id); epgActive++
         epgWorkers.execute {
@@ -3170,7 +3170,7 @@ class MainActivity : Activity() {
             }
             val height = known.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
             val targets = SportsDestinations.guideTargets(snapshot, quality, now) { channel ->
-                owner(channel)?.let { provider -> provider.enabled && provider.kind == "xtream" && provider.epgUrl.isBlank() } == true && (height == 0 || (channel.quality(quality[channel.id])?.height ?: 0) > height)
+                owner(channel)?.let { provider -> provider.enabled && providerEpgFor(provider, channel, now, snapshot) } == true && (height == 0 || (channel.quality(quality[channel.id])?.height ?: 0) > height)
             }
             if (targets.isNotEmpty() && selected != null) {
                 val highest = targets.maxOfOrNull { it.quality(quality[it.id])?.height ?: 0 } ?: 0
@@ -3684,7 +3684,8 @@ class MainActivity : Activity() {
             if (now - lastProgress > 100_000_000L || checked == total) { lastProgress = now; progress(SportsPanel.SEARCHING, checked, total) }
         }
         val warmed = cached?.warmed.orEmpty().toMutableMap()
-        val needsProvider = enabledSources().any { it.kind == "xtream" && it.epgUrl.isBlank() }
+        // With a guide link, Sports asks the provider about the channels the link has no listings for, as the guide does.
+        val needsProvider = enabledSources().any { it.kind == "xtream" }
         val coverageNow = System.currentTimeMillis()
         val locallyConfirmed = result.broadcasts.any { game.state == "pre" || coverageNow in it.programme.start until it.programme.end } || result.titleMatches.isNotEmpty()
         val confirmationFloor = SportsStreams.confirmationFloor(result, profile, quality, coverageNow)
@@ -3696,7 +3697,7 @@ class MainActivity : Activity() {
         if (confirm && !playable && needsProvider && confirmationFloor != null && (game.state != "pre" || game.start < coverageNow + 3 * 86400000L) && !Thread.currentThread().isInterrupted) {
             val choices = SportsStreams.rank(result, profile.copy(excludedFps = emptySet()), quality)
             val targets = SportsStreams.confirmationTargets(game, snapshot, choices, favoritesSnapshot, quality, System.currentTimeMillis(), betterThanHeight = confirmationFloor)
-                .filter { owner(it)?.let { source -> source.kind == "xtream" && source.epgUrl.isBlank() } == true }
+                .filter { channel -> owner(channel)?.let { source -> providerEpgFor(source, channel, coverageNow, snapshot) } == true }
             if (targets.isNotEmpty()) {
                 val targetOrder = SportsStreams.preferenceComparator(profile, quality); val bestTarget = targets.minWith(targetOrder)
                 val label = if (game.state == "pre") SportsPanel.CHECKING_SCHEDULES else SportsPanel.CONFIRMING

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.57.3 — 2026-11-22
+
+- Sports asks the provider again for a playlist with a guide link. Since 0.57.0 a link only adds listings, but Sports still skipped every provider check for such a playlist: confirming a game on a channel, checking upcoming schedules and looking for a sharper feed. It now asks about the channels the link has no listings for, as the guide does; channels the link lists are matched from the link.
+
 ## 0.57.2 — 2026-11-22
 
 - Sports cards keep the streams they found while you watch. A channel Spare hides for 15 minutes after a failure cleared every card's result when it came back, so after an hour of RedZone, Back to Sports showed every card searching again. Cards now keep their results and are relabelled from what Spare already found.

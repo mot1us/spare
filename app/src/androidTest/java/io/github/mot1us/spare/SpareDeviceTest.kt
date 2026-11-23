@@ -6594,11 +6594,15 @@ class SpareDeviceTest {
         }
     }
 
-    @Test fun aLiveCardWithoutSavedListingsAsksItsBroadcasterAndPlaysIt() {
+    @Test fun aLiveCardWithoutSavedListingsAsksItsBroadcasterAndPlaysIt() = broadcasterFirst(linked = false)
+    // 0.57.2 skipped every provider check in Sports for a playlist with a guide link, though the link lacks this channel.
+    @Test fun aGuideLinkWithoutTheBroadcastersListingsStillLetsSportsAskTheProvider() = broadcasterFirst(linked = true)
+    private fun broadcasterFirst(linked: Boolean) {
         // 0.51.31 on an onn: no saved listing confirmed the game, the provider was asked about Atlanta locals, 4K and
         // League Pass channels instead of the network on the scoreboard, and OK opened the stream list.
         FixtureServer(longVideo = true, parallelClients = true, liveListing = 40 to "NBA Basketball: Atlanta Hawks at Oklahoma City Thunder").use { server ->
-            val source = Source(name = "Broadcaster first", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            val source = Source(name = "Broadcaster first", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true,
+                epgUrl = if (linked) "${server.base}/partial-guide.xml" else "")
             val now = System.currentTimeMillis()
             val news = Channel("xc:1", "News", "News", "${server.base}/channel1.mp4")
             val locals = (2..9).map { Channel("xc:$it", "GA | Atlanta | Local $it", "US | Locals", "${server.base}/unused$it.mp4", reportedQuality = VideoInfo(1920, 1080, 0f)) }
