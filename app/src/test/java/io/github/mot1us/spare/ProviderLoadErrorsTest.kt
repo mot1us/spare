@@ -22,4 +22,21 @@ class ProviderLoadErrorsTest {
         assertNull(policy.missingSegmentDelay(404, "file:///segment.ts", 1))
         assertNull("VOD and generic sources retain their existing missing-file handling", ProviderLoadErrors().missingSegmentDelay(404, "https://cdn.test/movie.ts", 1))
     }
+
+    @Test fun aPlayingMovieRetriesADroppedConnectionWhileItsBufferPlays() {
+        val policy = ProviderLoadErrors(demand = { true }, demandPlaying = { true })
+        assertEquals(ProviderLoadErrors.DEMAND_RETRIES, policy.getMinimumLoadableRetryCount(C.DATA_TYPE_MEDIA))
+        // A connection limit or a dropped socket while the film plays: retried, the buffer kept.
+        listOf(403, 429, 458, 503, null).forEach { status -> assertEquals("$status", 1000L, policy.demandDelay(status, 1, demand = true, playing = true)) }
+        assertEquals(3000L, policy.demandDelay(403, 7, demand = true, playing = true))
+        assertEquals(C.TIME_UNSET, policy.demandDelay(null, ProviderLoadErrors.DEMAND_RETRIES + 1, demand = true, playing = true))
+        // Answers that cannot change still fail at once.
+        listOf(302, 401, 404, 410).forEach { status -> assertEquals("$status", C.TIME_UNSET, policy.demandDelay(status, 1, demand = true, playing = true)) }
+        // Before the first frame a movie keeps Media3's budget, so a broken film still fails quickly.
+        assertNull(policy.demandDelay(403, 1, demand = true, playing = false))
+        assertEquals(C.TIME_UNSET, policy.demandDelay(null, ProviderLoadErrors.START_RETRIES + 1, demand = true, playing = false))
+        // Live channels are unchanged.
+        assertNull(policy.demandDelay(403, 1, demand = false, playing = true))
+        assertEquals(3, ProviderLoadErrors().getMinimumLoadableRetryCount(C.DATA_TYPE_MEDIA))
+    }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.57.5 — 2026-11-24
+
+- A movie whose connection drops keeps playing from its buffer while Spare reconnects. On the owner's main onn a 4K film buffered for a few seconds every 2 to 5 minutes while TiviMate played it smoothly: when a provider ended the connection and refused the first reconnect (for example with a connection-limit error), Spare gave up at once, stopped the player and started the film again. Once a movie or episode is playing, Spare now retries every one to three seconds for about half a minute and keeps what it has buffered. Answers that cannot change (gone, unauthorized, a refused redirect) still fail at once, and a movie that never starts fails as quickly as before. Live channels are unchanged.
+
 ## 0.57.4 — 2026-11-23
 
 - A full guide link reads faster again. Programmes for channels the playlist lacks, or days outside the guide, are now skipped before the XML parser reads them, instead of after. On the test emulator the same 48 MB guide reads in 2.7 to 5.7 s instead of 4.7 to 6.8 s, and gives exactly the same listings; anything the skip cannot read with certainty (an attribute with an entity, an unusual tag) still goes to the parser.

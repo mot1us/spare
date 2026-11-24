@@ -906,6 +906,35 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun aMovieWhoseConnectionDropsKeepsPlayingFromItsBufferWhileSpareReconnects() {
+        // 0.57.4 on the owner's main onn: a 4K film buffered for a few seconds every 2 to 5 minutes while TiviMate played it
+        // smoothly. A dropped connection whose reconnect was refused made Spare stop the player and start the film again.
+        FixtureServer(libraryCategories = true, parallelClients = true, longVideo = true, droppingMovie = true).use { server ->
+            val source = Source(name = "Dropping fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            val movie = OnDemand("movie:5501", "Dropping film (2025)", "Category 1", "${server.base}/movie/test/test-secret/5501.ts", "movie", poster = "${server.base}/logo.png", added = 1_700_000_000L)
+            LibraryCatalog(store).run { Writer(source, "movie").run { append(listOf(movie)); finish(mapOf("1" to "Fixture cinema")) }; close() }
+            fun reconnects(activity: MainActivity) = MainActivity::class.java.getDeclaredField("playbackReconnects").apply { isAccessible = true }.getInt(activity)
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player != null }
+                scenario.onActivity { MainActivity::class.java.getDeclaredMethod("playOnDemand", OnDemand::class.java, Long::class.javaPrimitiveType).apply { isAccessible = true }.invoke(it, movie.copy(playlistId = source.id), 0L) }
+                waitFor(scenario) { server.refusedMovie.get() >= 2 }
+                // Past the point where the first connection ended, without a restart: the buffer carried the film across.
+                val until = System.currentTimeMillis() + 60_000; var position = 0L
+                while (System.currentTimeMillis() < until) {
+                    scenario.onActivity { position = find<PlayerView>(it.window.decorView)!!.player!!.currentPosition }
+                    if (position > 20_000) break
+                    Thread.sleep(500)
+                }
+                scenario.onActivity { activity ->
+                    assertTrue("position $position", position > 20_000)
+                    assertEquals("The film was never restarted", 0, reconnects(activity))
+                    assertTrue("The refused reconnect was retried, not restarted", server.refusedMovie.get() >= 2)
+                }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun aLibraryDatabaseFromAnEarlierVersionMarksAListCutAtTheOldLimit() {
         // The tables as versions up to 0.51.45 made them, which kept the first 100,000 titles of a longer list without noting it.
         val db = android.database.sqlite.SQLiteDatabase.create(null)
@@ -3692,9 +3721,13 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id; store.sportsLeagues = setOf("NBA")
             val pairs = SportsCatalog.teams.filter { it.league == "NBA" }.take(18).chunked(2)
             val began = System.currentTimeMillis()
+            // Games start today: after midnight, a game that started yesterday and ends leaves today's Sports instead of
+            // showing its final, and this test failed when run between midnight and 1 AM.
+            val today = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val first = maxOf(began - 3_600_000, today + 60_000)
             val finished = java.util.concurrent.atomic.AtomicReference(emptySet<Int>())
             fun slate(ended: Set<Int>, now: Long = System.currentTimeMillis()) = LiveSportsSnapshot(pairs.mapIndexed { i, (home, away) ->
-                LiveEvent("hold-$i", setOf(home.id, away.id), began - 3_600_000 + i * 60_000L, state = if (i in ended) "post" else "in", status = if (i in ended) "Final" else "", league = "NBA") }, now, setOf("NBA"))
+                LiveEvent("hold-$i", setOf(home.id, away.id), first + i * 60_000L, state = if (i in ended) "post" else "in", status = if (i in ended) "Final" else "", league = "NBA") }, now, setOf("NBA"))
             val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
             val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
                 if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) activity.liveSportsLoader = { slate(finished.get()) }
@@ -7259,9 +7292,15 @@ class SpareDeviceTest {
 
     private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0,
         /** An Xtream event category: each slot's name in the lineup and the fresh name its category answers with. */
-        private val eventSlots: List<Pair<String, String>>? = null) : AutoCloseable {
+        private val eventSlots: List<Pair<String, String>>? = null,
+        /** Movie 5501 drops its connection 16 seconds in, refuses the first reconnect with 403, then serves byte ranges. */
+        private val droppingMovie: Boolean = false) : AutoCloseable {
         /** Holds the event category's answer until the test releases it. */
         val releaseEventNames = java.util.concurrent.CountDownLatch(1)
+        /** Resume requests for movie 5501: the first is refused, the rest are served. */
+        val refusedMovie = java.util.concurrent.atomic.AtomicInteger()
+        val resumedMovie = java.util.concurrent.atomic.AtomicInteger()
+        private val droppedMovie = java.util.concurrent.atomic.AtomicBoolean()
         private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
         val base = "http://127.0.0.1:${socket.localPort}"
         private val worker = Executors.newSingleThreadExecutor()
@@ -7339,7 +7378,8 @@ class SpareDeviceTest {
                         connection.soTimeout = 5000
                         val reader = connection.getInputStream().bufferedReader()
                         val request = reader.readLine().orEmpty()
-                        for (i in 0 until 100) { if (reader.readLine().isNullOrEmpty()) break }
+                        var range = ""
+                        for (i in 0 until 100) { val header = reader.readLine(); if (header.isNullOrEmpty()) break; if (header.startsWith("Range:", true)) range = header.substringAfter(':').trim() }
                         val target = request.split(' ').getOrNull(1).orEmpty()
                         val path = target.substringBefore('?'); requests.merge(path, 1, Int::plus)
                         // An event slot that never answers.
@@ -7406,6 +7446,20 @@ class SpareDeviceTest {
                             else -> if (embeddedHls && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,CLOSED-CAPTIONS=NONE\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (embeddedCaptions != 0 && path.endsWith(".ts")) captionTransport to "video/mp2t" else if (captionsMode && path.endsWith(".m3u8")) "#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,URI=\"$base/captions.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,SUBTITLES=\"subs\"\n$base/media.m3u8\n".toByteArray() to "application/vnd.apple.mpegurl" else if (longVideo && path.endsWith(".ts")) longTransport to "video/mp2t" else if (stalled && path == "/channel1.ts") longTransport to "video/mp2t" else if (path.endsWith(".ts")) transport to "video/mp2t" else video to "video/mp4"
                         }
                         val output = connection.getOutputStream()
+                        if (droppingMovie && path == "/movie/test/test-secret/5501.ts") {
+                            val whole = longTransport
+                            val from = Regex("bytes=(\\d+)-").find(range)?.groupValues?.get(1)?.toInt() ?: 0
+                            when {
+                                from == 0 && !droppedMovie.get() -> { output.write("HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: ${whole.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                                    output.write(whole, 0, whole.size * 2 / 5); output.flush(); Thread.sleep(3000); droppedMovie.set(true) }
+                                // Only the reconnect after the drop is refused; the player's look at the file's end is served.
+                                droppedMovie.get() && refusedMovie.getAndIncrement() == 0 -> output.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                else -> { resumedMovie.incrementAndGet()
+                                    output.write(("HTTP/1.1 206 Partial Content\r\nContent-Type: video/mp2t\r\nContent-Range: bytes $from-${whole.size - 1}/${whole.size}\r\n" +
+                                        "Content-Length: ${whole.size - from}\r\nConnection: close\r\n\r\n").toByteArray()); output.write(whole, from, whole.size - from) }
+                            }
+                            output.flush(); return@use
+                        }
                         if (path == "/channel1.ts" && transientLiveFailures.getAndUpdate { count -> (count - 1).coerceAtLeast(0) } > 0) {
                             output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); output.flush(); return@use
                         }

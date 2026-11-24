@@ -869,7 +869,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(WindowInsets.Type.systemBars())
         else window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         providerFactory = DataSource.Factory { if (onDemand == null) LiveProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } else ProviderDataSource { playbackSource()?.allowHttp == true }.apply { addTransferListener(streamTraffic) } }
-        mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors())
+        mediaFactory = DefaultMediaSourceFactory(providerFactory, DefaultExtractorsFactory().setTsExtractorFlags(tsFlags).setTsSubtitleFormats(CaptionTracks.compatibility)).setLoadErrorHandlingPolicy(ProviderLoadErrors(demand = { onDemand != null }, demandPlaying = { onDemand != null && firstFrame }))
         val loadControl = PlaybackLoadControl()
         sourceVideoFrames = SourceVideoFrames(androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory.getDefault(this)) { playbackToken }
         AudioOutput.decodeOnBox = store.decodeAudioOnBox
@@ -1984,7 +1984,7 @@ class MainActivity : Activity() {
         if (onDemand == null) itemBuilder.setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build())
         val item = itemBuilder.build()
         val media = if (playbackUrl.substringBefore('?').endsWith(".m3u8", true)) {
-            HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors(liveHlsEndpoint = playbackUrl.takeIf { onDemand == null })).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
+            HlsMediaSource.Factory(providerFactory).setAllowChunklessPreparation(!captionsEnabled()).setLoadErrorHandlingPolicy(ProviderLoadErrors(liveHlsEndpoint = playbackUrl.takeIf { onDemand == null }, demand = { onDemand != null }, demandPlaying = { onDemand != null && firstFrame })).setExtractorFactory(CaptionHlsExtractors(tsFlags)).createMediaSource(item)
         } else mediaFactory.createMediaSource(item)
         if (onDemand == null) player.setMediaSource(media) else player.setMediaSource(media, demandPosition.coerceAtLeast(0))
         if (!multiview.active) frameRates.begin(if (onDemand == null) videoInfo[current?.id]?.fps ?: 0f else 0f)
