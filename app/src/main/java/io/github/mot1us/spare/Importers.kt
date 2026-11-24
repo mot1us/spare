@@ -187,7 +187,7 @@ object Importers {
      * unpacked and [XMLTV_MAX_ELEMENTS] elements, and only wanted channels are kept.
      */
     fun xmltv(input: java.io.InputStream, channelIds: Set<String>, now: Long = System.currentTimeMillis(), historyDays: Map<String, Int> = emptyMap(),
-        listed: ((Map<String, List<String>>) -> Set<String>)? = null): Map<String, List<Programme>> {
+        listed: ((Map<String, List<String>>) -> Set<String>)? = null, prefilter: Boolean = true): Map<String, List<Programme>> {
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         try { parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false) }
         catch (_: org.xmlpull.v1.XmlPullParserException) { /* Some parsers only expose the disabled default. */ }
@@ -201,12 +201,16 @@ object Importers {
             override fun read(bytes: ByteArray, offset: Int, length: Int): Int = `in`.read(bytes, offset, length).also { count(it) }
         }
         return bounded.use { stream ->
-            parser.setInput(stream, null)
             var wanted = channelIds
             // Display names of every listed channel, only while a caller still has to choose more channels.
             val guideNames = if (listed != null) LinkedHashMap<String, MutableList<String>>() else null
             var chosen = listed == null
             fun choose() { if (!chosen) { chosen = true; wanted = wanted + listed!!(guideNames!!); guideNames.clear() } }
+            fun kept(channel: String, start: Long, end: Long) = channel in wanted && start > 0 && end > start &&
+                end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L
+            // Programmes Spare would discard skip the XML parser once the channels to keep are known.
+            parser.setInput(if (!prefilter) stream else XmltvProgrammeFilter(stream, wanted = { channel -> if (!chosen) null else channel in wanted },
+                window = { channel, start, stop -> kept(channel, timestamp(start), timestamp(stop)) }), null)
             var result: ProgrammeBudget? = null
             var channel = ""; var title = ""; var description = ""; var artwork = ""; var start = 0L; var end = 0L
             var text = StringBuilder(); var field = ""; var inside = false; var keep = false; var programmeDepth = 0; var elements = 0; var listing = ""
@@ -231,7 +235,7 @@ object Importers {
                                 keep = channel in wanted
                                 start = if (keep) timestamp(parser.getAttributeValue(null, "start").orEmpty()) else 0L
                                 end = if (keep) timestamp(parser.getAttributeValue(null, "stop").orEmpty()) else 0L
-                                keep = keep && start > 0 && end > start && end > now - maxOf(3600000L, (historyDays[channel] ?: 0).coerceIn(0, 30) * 86400000L) && start < now + 3 * 86400000L
+                                keep = keep && kept(channel, start, end)
                                 title = ""; description = ""; artwork = ""; inside = true; programmeDepth = parser.depth
                             }
                             "icon" -> if (inside && keep && parser.depth == programmeDepth + 1 && artwork.isEmpty()) { val image = parser.getAttributeValue(null, "src").orEmpty().take(4096); if (Network.allowed(image, true)) artwork = image }

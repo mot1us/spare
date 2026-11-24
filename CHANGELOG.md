@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.57.4 — 2026-11-23
+
+- A full guide link reads faster again. Programmes for channels the playlist lacks, or days outside the guide, are now skipped before the XML parser reads them, instead of after. On the test emulator the same 48 MB guide reads in 2.7 to 5.7 s instead of 4.7 to 6.8 s, and gives exactly the same listings; anything the skip cannot read with certainty (an attribute with an entity, an unusual tag) still goes to the parser.
+
 ## 0.57.3 — 2026-11-22
 
 - Sports asks the provider again for a playlist with a guide link. Since 0.57.0 a link only adds listings, but Sports still skipped every provider check for such a playlist: confirming a game on a channel, checking upcoming schedules and looking for a sharper feed. It now asks about the channels the link has no listings for, as the guide does; channels the link lists are matched from the link.
