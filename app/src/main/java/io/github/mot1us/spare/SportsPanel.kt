@@ -28,8 +28,10 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
     val teamsButton = button("Leagues and teams", chooseTeams).apply { tag = "sports-teams"; contentDescription = "Leagues and teams settings" }
     private val liveButton = button("Live now") { selectSchedule("live") }.apply { tag = "sports-live"; isSelected = true }
     private val todayButton = button("Today") { selectSchedule("today") }.apply { tag = "sports-today" }
+    /** Followed teams' games across every league: this past week's results, live now, and the coming week. */
+    private val myTeamsButton = button("My teams") { selectSchedule("followed") }.apply { tag = "sports-my-teams" }
     private val dateButton = button("Calendar") { chooseDate() }.apply { tag = "sports-date" }
-    private val scheduleOptions = listOf(liveButton, todayButton, dateButton)
+    private val scheduleOptions = listOf(liveButton, todayButton, myTeamsButton, dateButton)
     /** The single filter row: when (schedule), which league, then settings. Left/Right walk it in order. */
     private val filterBar = LinearLayout(context).apply { tag = "sports-filter-bar"; gravity = Gravity.CENTER_VERTICAL }
     private val leagueChoices = LinearLayout(context).apply { tag = "sports-league-rail"; gravity = Gravity.CENTER_VERTICAL }
@@ -291,8 +293,8 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (hadFocus) focusLeagueFilter()
     }
     private fun focusSelectedLeague() {
-        // Live now has no league selected: the cursor rests on Live now itself.
-        val target = leagueControls[selectedLeague] ?: (if (selectedLeague == null && liveButton.isSelected) liveButton else null) ?: leagueControls.values.firstOrNull() ?: teamsButton
+        // Live now and My teams have no league selected: the cursor rests on that button itself.
+        val target = leagueControls[selectedLeague] ?: (if (selectedLeague == null) listOf(liveButton, myTeamsButton).firstOrNull { it.isSelected } else null) ?: leagueControls.values.firstOrNull() ?: teamsButton
         target.requestFocus(); leagueScroll.post { leagueScroll.requestChildRectangleOnScreen(target, android.graphics.Rect(0, 0, target.width, target.height), false) }
     }
     private fun barControls(): List<View> = scheduleOptions + leagueControls.values + teamsButton
@@ -683,7 +685,9 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         heroScore.setTextColor(if (!hidden && display.live(System.currentTimeMillis())) 0xFFB6F3CE.toInt() else Color.WHITE)
         heroRecords.visibility = GONE
         val situation = SportsCardContent.situation(display, hidden)
-        val schedule = GuideClock.sportsDate(game.start) + " · " + SportsText.status(display, hidden, System.currentTimeMillis())
+        // An upcoming game's status is its date; say it once.
+        val date = GuideClock.sportsDate(game.start); val status = SportsText.status(display, hidden, System.currentTimeMillis())
+        val schedule = if (status == date) date else "$date · $status"
         val network = game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
         setTextChanged(heroDetail, "$schedule\n" + if (situation.isNotBlank()) "$network · $situation" else network)
     }
@@ -778,9 +782,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         restoringLeague = false
         todayButton.isSelected = selected == "today"
         liveButton.isSelected = selected == "live"
+        myTeamsButton.isSelected = selected == "followed"
         dateButton.isSelected = selected?.startsWith("date:") == true
         val schedule = when (selected) {
             "live" -> "Live now"
+            "followed" -> "My teams"
             else -> SportsSchedule.selectedDate(selected)?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d")) ?: "Today"
         }
         dateButton.text = if (dateButton.isSelected) "$schedule ▾" else "Calendar"
@@ -796,9 +802,11 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             return
         }
         val first = initialReveal; initialReveal = false; loadingGames = false
-        val showRedZone = "NFL" in enabledLeagues && SportsDestinations.redZoneDay(now)
+        val showRedZone = "NFL" in enabledLeagues && SportsDestinations.redZoneDay(now) && selected != "followed"
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
-        empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games right now. Choose a league for its upcoming games and results." else "No games on this date. Try another date or league."
+        empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games right now. Choose a league for its upcoming games and results."
+            else if (selected == "followed") (if (followed.isEmpty()) "Follow your teams in Leagues and teams to see their games here." else "None of your teams played this past week or play in the coming week.")
+            else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && shownCoverage.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
         // While the viewer's cursor rests on a card, that card and the cards before it keep their places.
         val anchor = remembered

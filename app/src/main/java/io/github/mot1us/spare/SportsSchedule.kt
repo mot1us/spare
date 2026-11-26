@@ -59,7 +59,7 @@ object SportsSchedule {
             team.competitions.filter { it in enabledLeagues }.forEach { leagueId ->
                 val league = SportsLeagues.byId[leagueId] ?: return@forEach
                 val key = "$leagueId:$id"; val cached = teamCache[key]
-                if (cached != null && now - cached.first in 0 until 6 * 3600000L) cached.second.filter { it.state == "pre" && it.start > now }.forEach { events["${it.league}:${it.id}"] = it }
+                if (cached != null && now - cached.first in 0 until 6 * 3600000L) cached.second.filter { it.state == "pre" && it.start > now || it.state == "post" && it.start >= now - RECENT_MS }.forEach { events["${it.league}:${it.id}"] = it }
                 else urls.add(leagueId to "https://site.api.espn.com/apis/site/v2/sports/${league.path}/teams/${team.apiId.ifBlank { id.substringAfter(':').lowercase(java.util.Locale.ROOT) }}/schedule")
             }
         } }
@@ -69,7 +69,7 @@ object SportsSchedule {
         val pool = Executors.newFixedThreadPool(4) { task -> Thread({ runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }; task.run() }, "spare-scoreboard").apply { priority = Thread.MIN_PRIORITY } }
         try {
             val completion = java.util.concurrent.ExecutorCompletionService<Triple<String, String, List<LiveEvent>>>(pool)
-            urls.forEach { (league, url) -> completion.submit(java.util.concurrent.Callable { Triple(league, url, (if (url.contains("/scoreboard")) scoreboard(league, url, now, get) else LiveSports.parse(get(url), league, now, onlyLive = false)).map { it.copy(scoreboard = url.contains("/scoreboard")) }) }) }
+            urls.forEach { (league, url) -> completion.submit(java.util.concurrent.Callable { Triple(league, url, (if (url.contains("/scoreboard")) scoreboard(league, url, now, get) else teamSchedule(get(url), league, now)).map { it.copy(scoreboard = url.contains("/scoreboard")) }) }) }
             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(if (calendarOnly) 6 else 12)
             repeat(urls.size) {
                 if (Thread.currentThread().isInterrupted) return LiveSportsSnapshot.EMPTY
@@ -144,6 +144,46 @@ object SportsSchedule {
         else -> null
     }
     internal fun onDay(start: Long, now: Long, zone: ZoneId = ZoneId.systemDefault()) = Instant.ofEpochMilli(start).atZone(zone).toLocalDate() == Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    /** How far back My teams lists results, and how far ahead it lists games beyond each team's next one. */
+    const val RECENT_MS = 7 * 86400000L
+    const val AHEAD_MS = 7 * 86400000L
+    private const val TEAM_UPCOMING = 4
+    /** A followed team's season: its results from the last week and its next few games. A whole season would crowd out the scoreboards. */
+    internal fun teamSchedule(text: String, league: String, now: Long): List<LiveEvent> {
+        val events = LiveSports.parse(text, league, now, onlyLive = false, includeCompleted = true)
+        val upcoming = events.filter { it.state == "pre" && it.start > now }.sortedBy { it.start }.take(TEAM_UPCOMING)
+        return events.filter { it.state == "in" || it.state == "post" && it.start in (now - RECENT_MS)..now } + upcoming
+    }
+    private fun eventLeague(event: LiveEvent) = event.league.ifBlank { event.teams.firstNotNullOfOrNull { SportsCatalog.byId[it]?.league }.orEmpty() }
+    /** My teams: every game a followed team played this past week, is playing now, or plays this coming week, and each team's next game however far off. */
+    fun followedGames(snapshot: LiveSportsSnapshot, followed: Set<String>, now: Long): List<SportsGame> {
+        if (followed.isEmpty()) return emptyList()
+        val mine = snapshot.events.filter { event -> event.teams.any { it in followed } }
+        val next = followed.mapNotNull { team -> mine.filter { team in it.teams && it.state == "pre" && it.start > now }.minByOrNull { it.start } }
+        val shown = mine.filter { event -> when (event.state) {
+            "in", "hold" -> event.start in (now - 18 * 3600000L)..(now + 60000L)
+            "post" -> event.start in (now - RECENT_MS)..now
+            "pre" -> event.start in (now - 6 * 3600000L)..(now + AHEAD_MS)
+            else -> false
+        } } + next
+        return shown.distinctBy { "${eventLeague(it)}:${it.id}" }.sortedBy { it.start }.take(256).mapNotNull { game(it, snapshot, now) }
+    }
+    /** In a league, each followed team's game a viewer looks for first: the one on now, else its next, else its latest result this week. */
+    fun followedNext(snapshot: LiveSportsSnapshot, followed: Set<String>, league: String, now: Long): List<SportsGame> {
+        if (followed.isEmpty()) return emptyList()
+        val inLeague = snapshot.events.filter { event -> eventLeague(event) == league && event.teams.any { it in followed } }
+        return followed.mapNotNull { team ->
+            val games = inLeague.filter { team in it.teams }
+            games.filter { it.state == "in" && it.start in (now - 18 * 3600000L)..(now + 60000L) }.maxByOrNull { it.start }
+                ?: games.filter { it.state == "pre" && it.start > now }.minByOrNull { it.start }
+                ?: games.filter { it.state == "post" && it.start in (now - RECENT_MS)..now }.maxByOrNull { it.start }
+        }.distinctBy { it.id }.mapNotNull { game(it, snapshot, now) }
+    }
+    private fun game(event: LiveEvent, snapshot: LiveSportsSnapshot, now: Long): SportsGame? {
+        val teams = event.teams.mapNotNull { SportsCatalog.byId[it] }.sortedBy { it.id }; if (teams.size != 2) return null
+        val stale = event.state == "in" && !snapshot.fresh(now)
+        return SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records, situation = if (stale) "" else event.situation, possession = if (stale) "" else event.possession)
+    }
     fun games(snapshot: LiveSportsSnapshot, guide: Guide, team: String?, favorites: Set<String>, now: Long, matchChannels: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<SportsGame> {
         val selectedDay = selectedDate(team, now)
         val events = if (selectedDay != null) snapshot.events.filter { it.scoreboard && Instant.ofEpochMilli(it.start).atZone(zone).toLocalDate() == selectedDay }
@@ -156,9 +196,7 @@ object SportsSchedule {
                 .sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(1)
                 .ifEmpty { snapshot.events.filter { team in it.teams && it.state == "post" }.sortedByDescending { it.start }.take(1) }
         return events.sortedWith(compareBy<LiveEvent> { it.state != "in" }.thenBy { it.start }).take(1024).mapNotNull { event ->
-            val teams = event.teams.mapNotNull { SportsCatalog.byId[it] }.sortedBy { it.id }; if (teams.size != 2) return@mapNotNull null
-            val stale = event.state == "in" && !snapshot.fresh(now)
-            val game = SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records, situation = if (stale) "" else event.situation, possession = if (stale) "" else event.possession)
+            val game = game(event, snapshot, now) ?: return@mapNotNull null
             if (matchChannels) match(game, guide, favorites, now) else game
         }
     }

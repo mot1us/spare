@@ -2950,6 +2950,8 @@ class SpareDeviceTest {
                     device.pressDPadLeft()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-date").hasFocus() }
                     device.pressDPadLeft()
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-my-teams").hasFocus() }
+                    device.pressDPadLeft()
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-today").hasFocus() }
                     screenshot("sports-filter-bar.png")
                     device.pressDPadDown()
@@ -3185,6 +3187,58 @@ class SpareDeviceTest {
             } finally {
                 lifecycle.removeLifecycleCallback(fixture)
                 store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
+    @Test fun myTeamsListsAFollowedTeamsWeekAndALeagueLeadsWithTheTeamOnADayItDoesNotPlay() {
+        FixtureServer().use { server ->
+            val source = Source(name = "My teams tab fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL"); store.followedTeams = setOf("nfl:SEA")
+            val nextStart = java.util.concurrent.atomic.AtomicLong()
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = {
+                        val now = System.currentTimeMillis(); val day = 86400000L; nextStart.compareAndSet(0, now + 4 * day)
+                        // Seattle played three days ago and plays again in four; only Buffalo and Kansas City play today.
+                        LiveSportsSnapshot(listOf(LiveEvent("other-live", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL"),
+                            LiveEvent("sea-final", setOf("nfl:SEA", "nfl:LAR"), now - 3 * day, "post", scores = mapOf("nfl:SEA" to "27", "nfl:LAR" to "20"), scoreboard = false, league = "NFL"),
+                            LiveEvent("sea-next", setOf("nfl:SEA", "nfl:DAL"), nextStart.get(), "pre", scoreboard = false, league = "NFL")), now, setOf("NFL"))
+                    }
+                }
+            }
+            fun cards(activity: MainActivity): List<String?> {
+                val rows = activity.window.decorView.findViewWithTag<RecyclerView>("sports-games") ?: return emptyList()
+                return (0 until rows.childCount).map(rows::getChildAt).sortedBy(rows::getChildAdapterPosition).map { it.tag as? String }
+            }
+            fun context(activity: MainActivity) = activity.window.decorView.findViewWithTag<android.widget.TextView>("sports-context")?.text?.toString()
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-my-teams")?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-my-teams").performClick() }
+                    // My teams: the team's next game, then its result this week. No other team's game and no RedZone card.
+                    // The banner names the upcoming game's date once.
+                    waitFor(scenario) { cards(it) == listOf("NFL:sea-next", "NFL:sea-final") && context(it) == "My teams · 2 games · 0 live" &&
+                        it.window.decorView.findViewWithTag<android.widget.TextView>("sports-hero-detail")?.text?.toString()?.lines()?.first() == GuideClock.sportsDate(nextStart.get()) }
+                    scenario.onActivity { activity ->
+                        assertTrue(activity.window.decorView.findViewWithTag<View>("sports-my-teams").isSelected)
+                        activity.window.decorView.findViewWithTag<View>("sports-league:NFL").performClick()
+                    }
+                    // The league's day leads with Seattle's next game, though Seattle does not play today.
+                    waitFor(scenario) { cards(it).take(2) == listOf("NFL:sea-next", "NFL:other-live") }
+                    scenario.onActivity { activity ->
+                        assertTrue(activity.window.decorView.findViewWithTag<View>("sports-today").isSelected)
+                        assertFalse(activity.window.decorView.findViewWithTag<View>("sports-my-teams").isSelected)
+                    }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.followedTeams = emptySet(); store.saveSources(emptyList()); store.removeCache(source)
             }
         }
     }
@@ -4806,7 +4860,7 @@ class SpareDeviceTest {
                         grid.postOnAnimation { grid.postOnAnimation { focusFrames.countDown() } }
                     }
                     assertTrue("Sports focus layout completes", focusFrames.await(5, java.util.concurrent.TimeUnit.SECONDS))
-                    scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-date").hasFocus()) }
+                    scenario.onActivity { assertTrue("New header input wins over delayed card focus", it.window.decorView.findViewWithTag<View>("sports-my-teams").hasFocus()) }
                     scenario.onActivity { selectSportsSchedule(it, "sports-date") }
                     waitFor(scenario) { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}")?.isShown == true }
                     scenario.onActivity { it.window.decorView.findViewWithTag<View>("calendar-game:NFL:calendar-${java.time.LocalDate.now()}").performClick() }

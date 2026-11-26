@@ -105,6 +105,52 @@ class SportsRebuildTest {
         assertEquals(other, SportsPanel.featured(listOf(other, mineNext.copy(state = "post")), setOf("nfl:SEA"), now))
         assertFalse(mineLive.copy(eventId = "", state = "post").live(now)); assertFalse(mineLive.copy(eventId = "", state = "hold").live(now))
     }
+    @Test fun myTeamsShowsFollowedTeamsLiveGamesThisWeeksResultsAndWhatIsNext() {
+        val day = 86400000L
+        val events = listOf(LiveEvent("live", setOf("nfl:SEA", "nfl:SF"), now - 1000, league = "NFL"),
+            LiveEvent("last-week", setOf("nfl:SEA", "nfl:LAR"), now - 6 * day, "post", scores = mapOf("nfl:SEA" to "20", "nfl:LAR" to "17"), league = "NFL"),
+            LiveEvent("too-old", setOf("nfl:SEA", "nfl:ARI"), now - 9 * day, "post", league = "NFL"),
+            LiveEvent("next", setOf("nfl:SEA", "nfl:DAL"), now + 5 * day, "pre", scoreboard = false, league = "NFL"),
+            LiveEvent("later", setOf("nfl:SEA", "nfl:NYG"), now + 12 * day, "pre", scoreboard = false, league = "NFL"),
+            // A team with nothing this coming week still shows its next game.
+            LiveEvent("bos-next", setOf("nba:BOS", "nba:MIL"), now + 20 * day, "pre", scoreboard = false, league = "NBA"),
+            LiveEvent("others", setOf("nfl:BUF", "nfl:KC"), now - 1000, league = "NFL"))
+        val snapshot = LiveSportsSnapshot(events, now, setOf("NFL", "NBA")); val followed = setOf("nfl:SEA", "nba:BOS")
+        val mine = SportsPanel.ordered(SportsSchedule.followedGames(snapshot, followed, now), followed, now)
+        assertEquals("Live first, then what is next, then this week's results", listOf("live", "next", "bos-next", "last-week"), mine.map { it.eventId })
+        assertEquals("20", mine.last().scores["nfl:SEA"])
+        assertTrue(SportsSchedule.followedGames(snapshot, emptySet(), now).isEmpty())
+    }
+    @Test fun aLeagueLeadsWithAFollowedTeamsGameOnADayTheTeamDoesNotPlay() {
+        val day = 86400000L; val utc = java.time.ZoneOffset.UTC
+        val tonight = LiveEvent("tonight", setOf("nfl:BUF", "nfl:KC"), now + 3600000, "pre", league = "NFL")
+        val final = LiveEvent("sea-final", setOf("nfl:SEA", "nfl:LAR"), now - 2 * day, "post", scoreboard = false, league = "NFL")
+        val next = LiveEvent("sea-next", setOf("nfl:SEA", "nfl:DAL"), now + 4 * day, "pre", scoreboard = false, league = "NFL")
+        val after = next.copy(id = "sea-after", start = now + 11 * day)
+        val basketball = LiveEvent("bos-next", setOf("nba:BOS", "nba:MIL"), now + day, "pre", scoreboard = false, league = "NBA")
+        val snapshot = LiveSportsSnapshot(listOf(tonight, final, next, after, basketball), now, setOf("NFL", "NBA")); val followed = setOf("nfl:SEA", "nba:BOS")
+        assertEquals("Only the league's own followed teams, one game each", listOf("sea-next"), SportsSchedule.followedNext(snapshot, followed, "NFL", now).map { it.eventId })
+        val live = LiveEvent("sea-live", setOf("nfl:SEA", "nfl:SF"), now - 1000, league = "NFL")
+        assertEquals(listOf("sea-live"), SportsSchedule.followedNext(snapshot.copy(events = snapshot.events + live), followed, "NFL", now).map { it.eventId })
+        assertEquals("With no game ahead, its latest result", listOf("sea-final"), SportsSchedule.followedNext(snapshot.copy(events = listOf(tonight, final)), followed, "NFL", now).map { it.eventId })
+        // What the league's Today shows: the followed team first, then the day's games.
+        val day0 = SportsSchedule.games(snapshot, Guide.EMPTY, "today", emptySet(), now, matchChannels = false, zone = utc).filter { it.leagueId == "NFL" }
+        assertEquals(listOf("tonight"), day0.map { it.eventId })
+        assertEquals(listOf("sea-next", "tonight"), SportsPanel.ordered((day0 + SportsSchedule.followedNext(snapshot, followed, "NFL", now)).distinctBy { it.key }, followed, now).map { it.eventId })
+    }
+    @Test fun aFollowedTeamsSeasonKeepsThisWeeksResultsAndItsNextFewGames() {
+        val day = 86400000L
+        fun game(id: String, start: Long, state: String, name: String, completed: Boolean): JSONObject {
+            val sides = JSONArray(listOf("SEA" to "24", "SF" to "17").map { (code, score) -> JSONObject().put("team", JSONObject().put("abbreviation", code)).put("score", JSONObject().put("value", score.toDouble()).put("displayValue", score)) })
+            val status = JSONObject().put("type", JSONObject().put("state", state).put("name", name).put("completed", completed))
+            return JSONObject().put("id", id).put("date", Instant.ofEpochMilli(start).toString()).put("competitions", JSONArray().put(JSONObject().put("competitors", sides).put("status", status)))
+        }
+        val season = listOf(game("old", now - 20 * day, "post", "STATUS_FINAL", true), game("recent", now - 3 * day, "post", "STATUS_FINAL", true)) +
+            (1..6).map { game("next$it", now + it * 7 * day, "pre", "STATUS_SCHEDULED", false) }
+        val kept = SportsSchedule.teamSchedule(JSONObject().put("events", JSONArray(season)).toString(), "NFL", now)
+        assertEquals(listOf("recent", "next1", "next2", "next3", "next4"), kept.map { it.id })
+        assertEquals(mapOf("nfl:SEA" to "24", "nfl:SF" to "17"), kept.first().scores); assertEquals("post", kept.first().state)
+    }
     @Test fun soccerFindsTheNextMatchdayBetweenRounds() {
         val date = Instant.ofEpochMilli(now).atOffset(java.time.ZoneOffset.UTC)
         val json = JSONObject().put("leagues", JSONArray().put(JSONObject().put("calendar", JSONArray().put(date.minusDays(1).toString()).put(date.plusDays(3).toString()).put(date.plusDays(7).toString()))))

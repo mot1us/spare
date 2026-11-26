@@ -373,7 +373,9 @@ class MainActivity : Activity() {
             runCatching { (store.read(file) ?: if (day == null) store.read("sports-schedule.enc") else null)?.let { SportsSchedule.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull()
                 ?.let { publishSportsSchedule(it, day, request, cached = true) }
         }
-        val followed = if (liveSportsTeamScope in setOf("today", "live")) emptySet() else store.followedTeams + listOfNotNull(liveSportsTeamScope?.takeIf { it in SportsCatalog.byId })
+        // Followed teams' own schedules give My teams its week and let a league lead with a team that does not play today.
+        // Live now needs only the scoreboards.
+        val followed = if (liveSportsTeamScope == "live") emptySet() else store.followedTeams + listOfNotNull(liveSportsTeamScope?.takeIf { it in SportsCatalog.byId })
         SportsSchedule.load(followed, requestedDate = day, enabledLeagues = store.sportsLeagues, priorityLeague = sportsBrowseLeague,
             partial = { publishSportsSchedule(it, day, request) }).also { snapshot ->
             if (snapshot.leagues.isNotEmpty() && !closed) sportsScheduleDisk.execute { runCatching { store.write(file, SportsSchedule.json(snapshot).toString().toByteArray()) } }
@@ -1208,10 +1210,12 @@ class MainActivity : Activity() {
         content.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         sportsPanel = SportsPanel(this, ::button, ::sportsTeams, { team ->
             ++sportsMatchEpoch; sportsMatchTask?.cancel(true); clearSportsPlayback()
-            val previousDate = SportsSchedule.selectedDate(sportsTeam); sportsTeam = team; store.sportsTeam = team.orEmpty()
-            // Live now spans every chosen league; Today and dates return to the last league.
-            sportsBrowseLeague = if (team == "live") null else sportsBrowseLeague ?: store.sportsLastLeague; ensureSportsLeague()
-            if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate) checkLiveSports(force = true); sportsPanel.loading("Checking live games…"); scheduleSports()
+            val previous = sportsTeam; val previousDate = SportsSchedule.selectedDate(previous); sportsTeam = team; store.sportsTeam = team.orEmpty()
+            // Live now and My teams span every chosen league; Today and dates return to the last league.
+            sportsBrowseLeague = if (spansLeagues(team)) null else sportsBrowseLeague ?: store.sportsLastLeague; ensureSportsLeague()
+            // Live now loads no team schedules, so leaving it asks again.
+            if (team in SportsCatalog.byId || SportsSchedule.selectedDate(team) != previousDate || previous == "live" && team != "live") checkLiveSports(force = true)
+            sportsPanel.loading(if (team == "followed") "Checking your teams…" else "Checking live games…"); scheduleSports()
         }, ::selectGame, ::showGameInfo, ::openSportsQuality, { focusSidebar() })
         sportsPanel.chooseDate = ::openSportsCalendar
         // Ready Sports' cards once startup has settled, so opening Sports does not build them all at once.
@@ -2788,10 +2792,14 @@ class MainActivity : Activity() {
         val coverageFound = if (wantCoverage) knownCoverage?.third.orEmpty() else emptyList()
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
-            val teamGames = followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
-            val rawGames = if (selectedTeam == "followed") teamGames.distinctBy { it.key } else {
+            val rawGames = if (selectedTeam == "followed") SportsSchedule.followedGames(liveSnapshot, followed, now) else {
                 val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
-                (scheduled + teamGames.filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }).distinctBy { it.key }
+                // A league on Today leads with each followed team's game, even on a day the team does not play.
+                val mine = if (selectedTeam == "today" && selectedLeague != null) SportsSchedule.followedNext(liveSnapshot, followed, selectedLeague, now)
+                    else if (selectedTeam == null || selectedTeam.startsWith("league:")) followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
+                        .filter { selectedTeam == null || selectedTeam == "league:${it.leagueId}" }
+                    else emptyList()
+                (scheduled + mine).distinctBy { it.key }
             }
             val inLeague = rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) }
             // Live now also lists golf, tennis, racing and fights the guide marks as live (no scoreboard for those).
@@ -2815,7 +2823,7 @@ class MainActivity : Activity() {
                 val progress = when {
                     scanning -> "Updating sports…"
                     !liveSports.fresh(now) || liveSports.leagues.isEmpty() -> "Schedule unavailable · Saved games are shown · Retrying automatically"
-                    else -> "${if (selectedTeam == "today") "Today · Your leagues" else if (selectedTeam == "live") "Live now · Your leagues" else if (selectedTeam == null) "All games" else "Team / league scoreboard"} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
+                    else -> "${when (selectedTeam) { "today" -> "Today · Your leagues"; "live" -> "Live now · Your leagues"; "followed" -> "My teams · This week"; null -> "All games"; else -> "Team / league scoreboard" }} · ${games.size} ${if (games.size == 1) "game" else "games"} · ESPN schedule"
                 }
                 sportsPanel.setSpoilers(store.hideCompletedScores); sportsPanel.setLeagues(selectedLeague?.let { setOf(it) } ?: leagues); sportsPanel.setLeagueFilter(selectedLeague); sportsPanel.submit(games, followed, selectedTeam, progress, scanning, hiddenByTeams, coverage, ended); scheduleScoreDelay()
                 if (browsing) selectedGame?.let(::showGameInfo) ?: run {
@@ -2928,24 +2936,27 @@ class MainActivity : Activity() {
             done(if (fresh.isEmpty()) "the provider did not answer" else "${fresh.values.sumOf { it.size }} channels in ${wanted.values.sumOf { it.size }} categories", fresh)
         }
     }
+    /** Live now and My teams show every chosen league at once; the other schedules show one league. */
+    private fun spansLeagues(team: String?) = team == "live" || team == "followed"
     private fun ensureSportsLeague(): String? {
         if (sportsBrowseLeague != null && sportsBrowseLeague !in store.sportsLeagues) sportsBrowseLeague = null
-        if (sportsBrowseLeague == null && sportsTeam != "live") sportsBrowseLeague = store.sportsLastLeague
+        if (sportsBrowseLeague == null && !spansLeagues(sportsTeam)) sportsBrowseLeague = store.sportsLastLeague
         sportsPanel.setAvailableLeagues(store.sportsLeagues)
         sportsPanel.setLeagueFilter(sportsBrowseLeague)
         return sportsBrowseLeague
     }
     private fun selectSportsLeague(league: String) {
-        if (league !in store.sportsLeagues || league == sportsBrowseLeague && sportsTeam != "live") return
-        // Choosing a league from Live now shows that league's whole day: live, upcoming and results.
-        if (sportsTeam == "live") { sportsTeam = "today"; store.sportsTeam = "today" }
+        if (league !in store.sportsLeagues || league == sportsBrowseLeague && !spansLeagues(sportsTeam)) return
+        // Choosing a league from Live now or My teams shows that league's whole day: live, upcoming and results.
+        val fromLive = sportsTeam == "live"
+        if (spansLeagues(sportsTeam)) { sportsTeam = "today"; store.sportsTeam = "today" }
         // Browsing another league preserves the current stream's recovery plan.
         stopSportsPrefetch(); ++sportsMatchEpoch; sportsMatchTask?.cancel(true)
         sportsWarmGames = emptyList(); sportsWarmPriority = null; sportsUpgradeKeys = emptySet(); replayDiscovery?.pause()
         ++sportsEpoch; sportsTask?.cancel(true); sportsComputing = false; sportsDirty = false
         sportsBrowseLeague = league; store.sportsLastLeague = league
         sportsPanel.setLeagueFilter(league); scheduleSports()
-        if (league !in liveSports.leagues) checkLiveSports(force = true)
+        if (fromLive || league !in liveSports.leagues) checkLiveSports(force = true)
     }
     private fun openOnboarding() {
         val panel = onboarding ?: OnboardingPanel(this, store, ::button, { sources.isNotEmpty() }, { prefill -> editSource(null, prefill) },

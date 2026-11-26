@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.58.0 — 2026-11-25
+
+- Sports has a My teams tab beside Live now and Today. It lists only the teams you follow, across every league: games on now, results from the past week (with the provider's replay when it has one) and games coming up this week, plus each team's next game however far off. Live games come first, then the next games, then the latest results.
+- A league leads with your teams. Opening a league on Today used to show only that day's games, so a followed team that was not playing that day had no card at all. The league now puts each followed team's game first: the one on now, or its next game, or its latest result this week.
+- The Sports banner says an upcoming game's date once instead of twice.
+
 ## 0.57.5 — 2026-11-24
 
 - A movie whose connection drops keeps playing from its buffer while Spare reconnects. On the owner's main onn a 4K film buffered for a few seconds every 2 to 5 minutes while TiviMate played it smoothly: when a provider ended the connection and refused the first reconnect (for example with a connection-limit error), Spare gave up at once, stopped the player and started the film again. Once a movie or episode is playing, Spare now retries every one to three seconds for about half a minute and keeps what it has buffered. Answers that cannot change (gone, unauthorized, a refused redirect) still fail at once, and a movie that never starts fails as quickly as before. Live channels are unchanged.
