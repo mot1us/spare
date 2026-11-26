@@ -5,7 +5,9 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap(), val situation: String = "", val possession: String = "")
+data class LiveEvent(val id: String, val teams: Set<String>, val start: Long, val state: String = "in", val networks: List<String> = emptyList(), val scores: Map<String, String> = emptyMap(), val logos: Map<String, String> = emptyMap(), val status: String = "", val scoreboard: Boolean = true, val league: String = "", val records: Map<String, String> = emptyMap(), val situation: String = "", val possession: String = "",
+    /** A fight night's name ("UFC 324: Gaethje vs. Pimblett"); empty for team games. */
+    val event: String = "")
 data class LiveSportsSnapshot(val events: List<LiveEvent>, val checked: Long, val leagues: Set<String>) {
     fun fresh(now: Long) = now - checked in 0..120000L
     /** A partial reply must not erase leagues whose requests are still pending. */
@@ -49,6 +51,7 @@ object LiveSports {
     }
     fun parse(text: String, league: String, now: Long, onlyLive: Boolean = true, includeCompleted: Boolean = false): List<LiveEvent> {
         require(league in SportsLeagues.byId)
+        if (SportsLeagues.fights(league)) return fights(text, league, now, onlyLive, includeCompleted)
         val entries = JSONObject(text).getJSONArray("events"); require(entries.length() <= 500)
         val result = mutableListOf<LiveEvent>()
         for (index in 0 until entries.length()) {
@@ -104,6 +107,56 @@ object LiveSports {
                     result.add(LiveEvent(event.optString("id").take(80), teams, start, when { live -> "in"; status.optBoolean("completed") || status.optString("state") == "post" -> "post"; upcoming -> "pre"; else -> "hold" }, networks.distinct(), scores, logos, SportsSituation.status(timing, status, league), league = league, records = records, situation = SportsSituation.detail(ball, league), possession = possession))
                 }
             }
+        }
+        return result.distinctBy { it.id }
+    }
+    /**
+     * Fight nights: one event per card, named for its main event (the card's last bout), with those two fighters in place of
+     * teams. Its start is the first bout's, so the card is live from the prelims on; there is no score.
+     */
+    internal fun fights(text: String, league: String, now: Long, onlyLive: Boolean, includeCompleted: Boolean): List<LiveEvent> {
+        val entries = JSONObject(text).getJSONArray("events"); require(entries.length() <= 500)
+        val result = mutableListOf<LiveEvent>()
+        for (index in 0 until entries.length()) {
+            val event = entries.optJSONObject(index) ?: continue
+            val type = event.optJSONObject("status")?.optJSONObject("type") ?: continue
+            val bouts = event.optJSONArray("competitions") ?: continue
+            val cards = (0 until minOf(bouts.length(), 40)).mapNotNull { bouts.optJSONObject(it) }.filter { (it.optJSONArray("competitors")?.length() ?: 0) == 2 }
+            val main = cards.lastOrNull() ?: continue
+            val start = runCatching { java.time.OffsetDateTime.parse(event.optString("date")).toInstant().toEpochMilli() }.getOrNull() ?: continue
+            val completed = type.optBoolean("completed") || type.optString("state") == "post"
+            val live = type.optString("state") == "in" && !completed && start <= now + 60000L && start >= now - 18 * 3600000L
+            val upcoming = !onlyLive && type.optString("state") == "pre" && !completed
+            if (!live && !upcoming && !(includeCompleted && completed)) continue
+            if (upcoming && !includeCompleted && start < now - 300000L) continue
+            if (kotlin.math.abs(start - now) > 370 * 86400000L) continue
+            val sides = main.getJSONArray("competitors")
+            val fighters = (0 until 2).mapNotNull { i -> sides.optJSONObject(i)?.let { side -> side.optJSONObject("athlete")?.let { athlete ->
+                SportsFighters.id(league, side.optString("id"), athlete.optString("displayName").ifBlank { athlete.optString("fullName") })?.let { id -> id to side } } } }
+            if (fighters.size != 2 || fighters[0].first == fighters[1].first) continue
+            val records = linkedMapOf<String, String>(); val flags = linkedMapOf<String, String>()
+            fighters.forEach { (id, side) ->
+                val summaries = side.optJSONArray("records")
+                (0 until minOf(summaries?.length() ?: 0, 12)).mapNotNull { summaries?.optJSONObject(it) }
+                    .firstOrNull { it.optString("type") == "total" || it.optString("name").equals("overall", true) }
+                    ?.optString("summary")?.takeIf { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }?.let { records[id] = it }
+                side.optJSONObject("athlete")?.optJSONObject("flag")?.optString("href")?.takeIf { it.length <= 2048 && Network.allowed(it, false) }?.let { flags[id] = it }
+            }
+            val networks = mutableListOf<String>()
+            main.optJSONArray("broadcasts")?.let { array -> for (i in 0 until minOf(array.length(), 20)) {
+                val names = array.optJSONObject(i)?.optJSONArray("names") ?: continue
+                for (n in 0 until minOf(names.length(), 20)) networks.add(names.optString(n).take(80))
+            } }
+            fun name(side: JSONObject) = side.optJSONObject("athlete")?.let { it.optString("shortName").ifBlank { it.optString("displayName") } }.orEmpty().take(60)
+            val status = when {
+                live -> cards.firstOrNull { it.optJSONObject("status")?.optJSONObject("type")?.optString("state") == "in" }?.optJSONArray("competitors")
+                    ?.let { now -> if (now.length() == 2) "Now: ${name(now.getJSONObject(0))} vs ${name(now.getJSONObject(1))}" else null } ?: "Fight night"
+                completed -> fighters.firstOrNull { it.second.optBoolean("winner") }?.let { "Final · ${name(it.second)} won the main event" } ?: "Final"
+                else -> runCatching { java.time.OffsetDateTime.parse(main.optString("date")).toInstant().toEpochMilli() }.getOrNull()
+                    ?.takeIf { it > start }?.let { "Main card ${GuideClock.time(it)}" }.orEmpty()
+            }
+            result.add(LiveEvent(event.optString("id").take(80), fighters.map { it.first }.toSet(), start, if (live) "in" else if (completed) "post" else "pre",
+                networks.filter { it.isNotBlank() }.distinct(), emptyMap(), flags, status, league = league, records = records, event = event.optString("name").take(120)))
         }
         return result.distinctBy { it.id }
     }

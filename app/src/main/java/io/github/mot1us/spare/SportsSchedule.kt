@@ -51,7 +51,8 @@ object SportsSchedule {
             urls.addAll(league.scoreboards(date).map { league.id to it })
         }
         enabled.forEach { league ->
-            if (league.id in setOf("NFL", "NCAAF") || league.path.startsWith("soccer/")) urls.addAll(league.scoreboards().map { league.id to it })
+            // Weekly leagues, soccer rounds and fight promotions: the undated board lists the next round or fight night.
+            if (league.id in setOf("NFL", "NCAAF") || league.path.startsWith("soccer/") || league.fights) urls.addAll(league.scoreboards().map { league.id to it })
             urls.addAll(league.scoreboards(date.minusDays(1)).map { league.id to it })
         }
         }
@@ -182,7 +183,7 @@ object SportsSchedule {
     private fun game(event: LiveEvent, snapshot: LiveSportsSnapshot, now: Long): SportsGame? {
         val teams = event.teams.mapNotNull { SportsCatalog.byId[it] }.sortedBy { it.id }; if (teams.size != 2) return null
         val stale = event.state == "in" && !snapshot.fresh(now)
-        return SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records, situation = if (stale) "" else event.situation, possession = if (stale) "" else event.possession)
+        return SportsGame(teams, event.start, event.start + 8 * 3600000L, emptyList(), event.id, if (stale) "hold" else event.state, event.networks, scores = event.scores, logos = event.logos, status = if (stale) "Saved score · checking live status" else event.status, competition = event.league, records = event.records, situation = if (stale) "" else event.situation, possession = if (stale) "" else event.possession, event = event.event)
     }
     fun games(snapshot: LiveSportsSnapshot, guide: Guide, team: String?, favorites: Set<String>, now: Long, matchChannels: Boolean = true, zone: ZoneId = ZoneId.systemDefault()): List<SportsGame> {
         val selectedDay = selectedDate(team, now)
@@ -206,7 +207,8 @@ object SportsSchedule {
         quality: Map<String, VideoInfo> = emptyMap(), trace: SportsClickTrace? = null, index: GuideProgrammeIndex? = null,
         progress: (Int, Int) -> Unit = { _, _ -> }): SportsGame {
         if (game.state == "post") return game
-        val prepared = index?.takeIf { deadlineNanos == Long.MAX_VALUE && it.isFor(guide) && it.covers(game, now) }
+        // The prepared index is built from the team catalog, which has no fighters.
+        val prepared = index?.takeIf { !SportsLeagues.fights(game.leagueId) && deadlineNanos == Long.MAX_VALUE && it.isFor(guide) && it.covers(game, now) }
         val measurement = trace?.matchStarted()
         val result = matchLocal(game, guide, favorites, now, deadlineNanos, quality, progress, measurement, prepared)
         if (measurement != null) {
@@ -220,12 +222,16 @@ object SportsSchedule {
         quality: Map<String, VideoInfo>, progress: (Int, Int) -> Unit, measurement: SportsMatchMeasurement?,
         prepared: GuideProgrammeIndex?): SportsGame {
         val target = game.teams.map { it.id }.toSet()
-        val hints = game.teams.map { team -> (team.aliases + team.name.split(' ').filter { it.length >= 4 }).distinct() }
+        // A fighter is found by full name or surname; a first name ("Israel") would match unrelated listings.
+        val fights = SportsLeagues.fights(game.leagueId)
+        val hints = game.teams.map { team -> (team.aliases + if (fights) emptyList() else team.name.split(' ').filter { it.length >= 4 }).distinct() }
         fun relevant(title: String, description: String = "") = hints.all { aliases -> aliases.any { alias -> title.contains(alias, true) || description.contains(alias, true) } }
         val parsed = HashMap<Pair<String, String>, Boolean>()
         fun matchesTarget(p: Programme, context: String = ""): Boolean {
             if (!relevant(p.title, p.description)) return false
             val key = p.title to (p.description + context)
+            // A fight night is the listing or event channel that names both main-event fighters.
+            if (fights) return true
             return parsed.getOrPut(key) { SportsGuide.teams(p, context)?.map { it.id }?.toSet() == target }
         }
         // Possible streams are only the game's own broadcasters' channels. "ESPN+" once became "espn" and every ESPN channel
@@ -351,11 +357,11 @@ object SportsSchedule {
         } }
     }
     fun json(snapshot: LiveSportsSnapshot) = JSONObject().put("checked", snapshot.checked).put("leagues", JSONArray(snapshot.leagues.toList()))
-        .put("events", JSONArray(snapshot.events.take(1024).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league).put("records", JSONObject(it.records)).put("situation", it.situation).put("possession", it.possession) }))
+        .put("events", JSONArray(snapshot.events.take(1024).map { JSONObject().put("id", it.id).put("teams", JSONArray(it.teams.toList())).put("start", it.start).put("state", it.state).put("networks", JSONArray(it.networks)).put("scores", JSONObject(it.scores)).put("logos", JSONObject(it.logos)).put("status", it.status).put("scoreboard", it.scoreboard).put("league", it.league).put("records", JSONObject(it.records)).put("situation", it.situation).put("possession", it.possession).put("event", it.event) }))
     fun from(json: JSONObject): LiveSportsSnapshot {
         val entries = json.getJSONArray("events"); require(entries.length() <= 1024)
         fun strings(array: JSONArray?) = if (array == null) emptyList() else List(minOf(array.length(), 80)) { array.optString(it) }
         fun map(j: JSONObject?) = j?.keys()?.asSequence()?.take(2)?.associateWith { j.optString(it).take(2048) }.orEmpty()
-        return LiveSportsSnapshot(List(entries.length()) { i -> val j = entries.getJSONObject(i); LiveEvent(j.getString("id"), strings(j.optJSONArray("teams")).toSet(), j.getLong("start"), j.optString("state"), strings(j.optJSONArray("networks")), map(j.optJSONObject("scores")), map(j.optJSONObject("logos")), j.optString("status"), j.optBoolean("scoreboard", true), j.optString("league"), map(j.optJSONObject("records")).filterValues { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }, j.optString("situation").take(120), j.optString("possession").take(80).takeIf { it in strings(j.optJSONArray("teams")) }.orEmpty()) }, json.getLong("checked"), strings(json.optJSONArray("leagues")).toSet())
+        return LiveSportsSnapshot(List(entries.length()) { i -> val j = entries.getJSONObject(i); LiveEvent(j.getString("id"), strings(j.optJSONArray("teams")).toSet(), j.getLong("start"), j.optString("state"), strings(j.optJSONArray("networks")), map(j.optJSONObject("scores")), map(j.optJSONObject("logos")), j.optString("status"), j.optBoolean("scoreboard", true), j.optString("league"), map(j.optJSONObject("records")).filterValues { it.matches(Regex("[0-9]{1,3}-[0-9]{1,3}(-[0-9]{1,3})?")) }, j.optString("situation").take(120), j.optString("possession").take(80).takeIf { it in strings(j.optJSONArray("teams")) }.orEmpty(), j.optString("event").take(120)) }, json.getLong("checked"), strings(json.optJSONArray("leagues")).toSet())
     }
 }

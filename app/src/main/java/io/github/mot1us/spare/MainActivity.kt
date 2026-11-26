@@ -860,6 +860,7 @@ class MainActivity : Activity() {
         NavigationSound.prepare(applicationContext)
         Log.setLogLevel(Log.LOG_LEVEL_OFF)
         store = SecureStore(this)
+        runCatching { store.addNewSportsLeagues() }
         Motion.use(store.navigationAnimation, store.navigationSpeed)
         reminders = runCatching { store.read("game-reminders.enc")?.let { GameReminders.from(org.json.JSONObject(it.toString(Charsets.UTF_8))) } }.getOrNull() ?: GameReminders()
         // The optional metadata service was removed in 0.50.8; drop its saved address and poster cache.
@@ -2798,7 +2799,10 @@ class MainActivity : Activity() {
         sportsTask = sportsWorker.submit {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             val rawGames = if (selectedTeam == "followed") SportsSchedule.followedGames(liveSnapshot, followed, now) else {
-                val scheduled = SportsSchedule.games(liveSnapshot, snapshot, selectedTeam, favoriteSnapshot, now, matchChannels = false)
+                // A fight promotion's Today lists its fight nights (yesterday's, today's and the next), not only today's:
+                // weeks often pass between them.
+                val scope = if (selectedTeam == "today" && selectedLeague != null && SportsLeagues.fights(selectedLeague)) "league:$selectedLeague" else selectedTeam
+                val scheduled = SportsSchedule.games(liveSnapshot, snapshot, scope, favoriteSnapshot, now, matchChannels = false)
                 // A league on Today leads with each followed team's game, even on a day the team does not play.
                 val mine = if (selectedTeam == "today" && selectedLeague != null) SportsSchedule.followedNext(liveSnapshot, followed, selectedLeague, now)
                     else if (selectedTeam == null || selectedTeam.startsWith("league:")) followed.flatMap { team -> SportsSchedule.games(liveSnapshot, snapshot, team, favoriteSnapshot, now, matchChannels = false) }
@@ -2808,7 +2812,10 @@ class MainActivity : Activity() {
             }
             val inLeague = rawGames.filter { it.leagueId in leagues && (selectedLeague == null || it.leagueId == selectedLeague) }
             // Live now also lists golf, tennis, racing and fights the guide marks as live (no scoreboard for those).
-            val coverage = coverageFound.map { item -> item.copy(channels = item.channels.sortedWith(SportsStreams.preferenceComparator(redZoneProfile, qualitySnapshot))) }
+            // A fight the guide marks live is left out when a fight night's card already names both of its fighters.
+            val fightNights = rawGames.filter { SportsLeagues.fights(it.leagueId) && it.state == "in" }
+            val coverage = coverageFound.filterNot { item -> fightNights.any { game -> game.teams.all { fighter -> fighter.aliases.any { item.title.contains(it, true) } } } }
+                .map { item -> item.copy(channels = item.channels.sortedWith(SportsStreams.preferenceComparator(redZoneProfile, qualitySnapshot))) }
             val games = SportsPanel.ordered(inLeague.filter { selectedTeam == "live" || !store.sportsFollowedOnly || it.teams.any { team -> team.id in followed } }, followed, now)
             val hiddenByTeams = inLeague.size - games.size
             // A game that ends leaves Live now; a card held in place before the cursor shows its final score instead.
@@ -3016,12 +3023,12 @@ class MainActivity : Activity() {
             root.addView(it, FrameLayout.LayoutParams(-1, -1))
         }
         panel.background = GuideTheme.guideBackground(store.guideOpacity)
-        root.bringChildToFront(panel); panel.open(SPORTS_SECTIONS.map { it.first }.filter { it != "Your teams" } + SportsLeagues.all.map { it.name }); syncScoreStrip()
+        root.bringChildToFront(panel); panel.open(SPORTS_SECTIONS.map { it.first }.filter { it != "Your teams" } + SportsLeagues.all.filter { !it.fights }.map { it.name }); syncScoreStrip()
     }
     /** Open the one Sports settings screen at [section]; "Your teams" goes to the first chosen league's teams. */
     private fun openSportsSettings(section: String) {
         if (sportsManager?.opened != true) sportsTeams()
-        val page = if (section == "Your teams") (SportsLeagues.all.firstOrNull { it.id in store.sportsLeagues } ?: SportsLeagues.all.first()).name else section
+        val page = if (section == "Your teams") (SportsLeagues.all.firstOrNull { it.id in store.sportsLeagues && !it.fights } ?: SportsLeagues.all.first()).name else section
         sportsManager?.selectSetting(page); sportsManager?.focusContent()
     }
     private fun openSportsQuality() {
@@ -3126,7 +3133,7 @@ class MainActivity : Activity() {
         if (game.live(System.currentTimeMillis()) && sportsVisible && guideVisible && !sportsPanel.watching) { sportsWarmPriority = game; queueSportsPrefetch() }
     }
     private fun renderGameInfo(game: SportsGame) {
-        programmeInfo.text = "${sportsPanel.scoreText(game)}\n${SportsLeagues.label(game.leagueId)} · ${sportsPanel.statusText(game)}\n" +
+        programmeInfo.text = "${sportsPanel.scoreText(game)}\n${SportsLeagues.label(game)} · ${sportsPanel.statusText(game)}\n" +
             game.networks.joinToString(" · ").ifBlank { "Broadcaster to be announced" } + "\n" +
             (if (game.broadcasts.isNotEmpty() || game.titleMatches.isNotEmpty()) "${game.broadcasts.size + game.titleMatches.size} EPG/title matches · OK Choose channel" else if (game.candidates.isNotEmpty()) "${game.candidates.size} possible network channels · OK Review" else "Channel not matched yet")
     }

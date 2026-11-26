@@ -73,7 +73,13 @@ object SportsCatalog {
         team("NFL", "TEN", "Tennessee Titans", "Titans"),
         team("NFL", "WSH", "Washington Commanders", "Commanders", "Washington Football Team", "WAS"),
     ) + SportsExtraTeams.teams + SportsCollegeTeams.teams }
-    val byId by lazy { teams.associateBy { it.id } }
+    /** Every catalog team by id; a fighter's id (see [SportsFighters]) is read from the id itself. */
+    val byId: Map<String, SportsTeam> by lazy { WithFighters(teams.associateBy { it.id }) }
+    private class WithFighters(private val fixed: Map<String, SportsTeam>) : AbstractMap<String, SportsTeam>() {
+        override val entries get() = fixed.entries
+        override fun get(key: String): SportsTeam? = fixed[key] ?: SportsFighters.team(key)
+        override fun containsKey(key: String) = get(key) != null
+    }
     private val punctuation = Regex("[^a-z0-9]+")
     private val accents = Regex("\\p{M}+")
     fun normalize(value: String): String = punctuation.replace(Normalizer.normalize(value.take(4096), Normalizer.Form.NFD)

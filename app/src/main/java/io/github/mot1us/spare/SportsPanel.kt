@@ -672,7 +672,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
             game.key in replayChecked -> " · REPLAY NOT FOUND"
             else -> ""
         }
-        heroBadge.text = SportsLeagues.label(game.leagueId).uppercase() + "  ·  " + badge(game) + discovery
+        heroBadge.text = SportsLeagues.label(game).uppercase() + "  ·  " + badge(game) + discovery
         heroBadge.setTextColor(if (scorePresentation(game).live(System.currentTimeMillis())) 0xFF8CE5C1.toInt() else if (hasReplay(game)) 0xFFC3E2FF.toInt() else GuideTheme.current.accent)
     }
     private fun refreshHeroScores(game: SportsGame) {
@@ -681,7 +681,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         refreshHeroBadge(game)
         val teams = SportsCardContent.teams(display, hidden)
         setTextChanged(heroTitle, styledTeams(teams, false, false, if (actionsOpen) "  vs  " else "\n"))
-        setTextChanged(heroScore, if (hidden) "Score hidden" else if (display.state == "pre") GuideClock.time(game.start) else if (display.status == SportsScoreDelay.WAITING) "Score delayed" else if (display.scores.isEmpty()) "Score unavailable" else display.teams.joinToString("   :   ") { display.scores[it.id] ?: "–" })
+        setTextChanged(heroScore, if (hidden) "Score hidden" else if (display.state == "pre") GuideClock.time(game.start) else if (display.status == SportsScoreDelay.WAITING) "Score delayed" else if (display.scores.isEmpty() && SportsLeagues.fights(game.leagueId)) (if (display.state == "post") "Final" else "Fight night") else if (display.scores.isEmpty()) "Score unavailable" else display.teams.joinToString("   :   ") { display.scores[it.id] ?: "–" })
         heroScore.setTextColor(if (!hidden && display.live(System.currentTimeMillis())) 0xFFB6F3CE.toInt() else Color.WHITE)
         heroRecords.visibility = GONE
         val situation = SportsCardContent.situation(display, hidden)
@@ -784,9 +784,13 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         liveButton.isSelected = selected == "live"
         myTeamsButton.isSelected = selected == "followed"
         dateButton.isSelected = selected?.startsWith("date:") == true
+        // A fight promotion's Today lists its recent and next fight nights, which are rarely today.
+        val fightLeague = selectedLeague?.let(SportsLeagues::fights) == true
+        val noun = if (fightLeague) "fight night" else "game"
         val schedule = when (selected) {
             "live" -> "Live now"
             "followed" -> "My teams"
+            "today" -> if (fightLeague) "Upcoming and recent" else "Today"
             else -> SportsSchedule.selectedDate(selected)?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d")) ?: "Today"
         }
         dateButton.text = if (dateButton.isSelected) "$schedule ▾" else "Calendar"
@@ -795,7 +799,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val now = System.currentTimeMillis()
         setTextChanged(contextLine, if (scanning && next.isEmpty()) "$schedule · Checking games…"
             else if (hidden > 0) "$schedule · Showing only your teams · ${counted(hidden, "other game")} hidden"
-            else "$schedule · ${counted(next.size, "game")} · ${next.count { it.live(now) }} live")
+            else "$schedule · ${counted(next.size, noun)} · ${next.count { it.live(now) }} live")
         if (scanning && next.isEmpty() && (initialReveal || !changedScope)) {
             if (!watchMode && !actionsOpen) { progress.isIndeterminate = true; progress.isVisible = true; status.text = "Updating sports…" }
             if (initialReveal && browsingGames) { loadingGames = true; showSkeleton() }
@@ -806,6 +810,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         if (!watchMode && !actionsOpen) { progress.visibility = if(scanning) VISIBLE else INVISIBLE; status.text = message }
         empty.text = if (scanning) "Checking games…" else if (hidden > 0) "None of your teams play here. Turn off Show only my teams in Sports settings to see all ${counted(hidden, "game")}." else if (selected == "live") "No live games right now. Choose a league for its upcoming games and results."
             else if (selected == "followed") (if (followed.isEmpty()) "Follow your teams in Leagues and teams to see their games here." else "None of your teams played this past week or play in the coming week.")
+            else if (fightLeague && selected == "today") "No fight nights listed right now."
             else "No games on this date. Try another date or league."
         empty.visibility = if(next.isEmpty() && shownCoverage.isEmpty() && !showRedZone && !watchMode && !actionsOpen) VISIBLE else GONE
         // While the viewer's cursor rests on a card, that card and the cards before it keep their places.
@@ -1125,7 +1130,7 @@ class SportsPanel(context: Context, private val button: (String, () -> Unit) -> 
         val color = if (active) GuideTheme.focusText else Color.WHITE
         holder.teamNames.forEach { it.setTextColor(color) }; holder.teamRecords.forEach { it.setTextColor(if (active) GuideTheme.focusText else 0xFFB6C6D6.toInt()) }
         holder.detail.setTextColor(if (active) GuideTheme.focusText else 0xFFDCE7F1.toInt()); holder.date.setTextColor(if (active) GuideTheme.focusText else 0xFFC3D1DF.toInt()); holder.stream.setTextColor(if (active) GuideTheme.focusText else 0xFFB5C5D3.toInt())
-        if (holder.dateStart != game.start) { holder.dateStart = game.start; holder.dateText = SportsLeagues.label(game.leagueId) + " · " + GuideClock.sportsDate(game.start) }
+        if (holder.dateStart != game.start) { holder.dateStart = game.start; holder.dateText = SportsLeagues.label(game) + " · " + GuideClock.sportsDate(game.start) }
         val situation = SportsCardContent.situation(display, hidden)
         val status = if (display.state != "pre") SportsText.status(display, hidden, System.currentTimeMillis()).removePrefix("LIVE · ") else game.networks.joinToString(" · ").ifBlank { "Broadcast to be announced" }
         setTextChanged(holder.detail, listOf(status, situation).filter { it.isNotBlank() }.joinToString(" · "))

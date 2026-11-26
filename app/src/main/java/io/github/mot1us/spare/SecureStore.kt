@@ -216,7 +216,9 @@ class SecureStore(private val context: Context) {
     fun markEpgRefreshed(source: Source) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putLong("epg-refreshed-${source.id}", System.currentTimeMillis()) } }
     fun refreshError(source: Source) = preferences.getString("refresh-error-${source.id}", "").orEmpty()
     fun refreshError(source: Source, value: String) = synchronized(cacheLock) { if (providerCurrent(source)) preferences.edit { putString("refresh-error-${source.id}", value.take(600)) } }
-    companion object { /** The guide sits over the playing channel at half opacity unless the viewer chooses otherwise. */ const val DEFAULT_GUIDE_OPACITY = 50; private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
+    companion object { /** The guide sits over the playing channel at half opacity unless the viewer chooses otherwise. */ const val DEFAULT_GUIDE_OPACITY = 50
+        /** Every league Spare offered before fight promotions, for TVs that chose leagues before [addNewSportsLeagues] existed. */
+        internal val LEAGUES_BEFORE_FIGHTS = setOf("NFL", "MLB", "NBA", "NHL", "EPL", "MLS", "UCL", "NCAAF", "NCAAM", "NCAAW", "NCAABSB"); private val cacheLock = Any(); private val keyLock = Any(); private val fileLocks = Array(64) { Any() }; private fun fileLock(name: String) = fileLocks[(name.hashCode() and Int.MAX_VALUE) % fileLocks.size] }
     fun catalog(source: Source, kind: String): Pair<Long, List<OnDemand>>? {
         require(kind in setOf("movie", "series"))
         val bytes = synchronized(cacheLock) { if (providerCurrent(source)) read("library-${source.id}-$kind.enc") else null } ?: return null
@@ -363,8 +365,19 @@ class SecureStore(private val context: Context) {
         set(value) { preferences.edit { putStringSet("sports-teams", value.filter { it in SportsCatalog.byId }.toSet()) } }
     var sportsLeagues: Set<String>
         get() = preferences.getStringSet("sports-leagues", SportsLeagues.byId.keys).orEmpty().filter { it in SportsLeagues.byId }.toSet().ifEmpty { SportsLeagues.byId.keys }
-        set(value) { val valid = value.filter { it in SportsLeagues.byId }.toSet(); require(valid.isNotEmpty()); preferences.edit { putStringSet("sports-leagues", valid) } }
+        set(value) { val valid = value.filter { it in SportsLeagues.byId }.toSet(); require(valid.isNotEmpty()); preferences.edit { putStringSet("sports-leagues", valid); putStringSet("sports-leagues-known", SportsLeagues.byId.keys) } }
     val sportsLeaguesChosen get() = preferences.contains("sports-leagues")
+    /**
+     * A league added in a later version (UFC and PFL in 0.60.0) joins the leagues a viewer chose, once. Turning it off
+     * afterwards is kept: only leagues this TV has never offered are added.
+     */
+    fun addNewSportsLeagues() {
+        if (!sportsLeaguesChosen) return
+        val known = preferences.getStringSet("sports-leagues-known", null) ?: LEAGUES_BEFORE_FIGHTS
+        val added = SportsLeagues.byId.keys - known
+        if (added.isEmpty()) return
+        preferences.edit { putStringSet("sports-leagues", sportsLeagues + added); putStringSet("sports-leagues-known", SportsLeagues.byId.keys) }
+    }
     var sportsLastLeague: String
         get() = preferences.getString("sports-last-league", null)?.takeIf { it in sportsLeagues }
             ?: SportsLeagues.all.first { it.id in sportsLeagues }.id

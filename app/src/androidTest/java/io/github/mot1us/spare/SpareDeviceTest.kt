@@ -3339,6 +3339,53 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun fightPromotionsJoinChosenLeaguesOnceAndListTheirNextFightNight() {
+        // A TV that chose its leagues before UFC and PFL existed gets them once; turning one off afterwards is kept.
+        val preferences = SecureStore::class.java.getDeclaredField("preferences").apply { isAccessible = true }.get(store) as android.content.SharedPreferences
+        store.sportsLeagues = setOf("NFL"); preferences.edit().remove("sports-leagues-known").commit()
+        store.addNewSportsLeagues(); assertEquals(setOf("NFL", "UFC", "PFL"), store.sportsLeagues)
+        store.sportsLeagues = setOf("NFL", "PFL"); store.addNewSportsLeagues(); assertEquals(setOf("NFL", "PFL"), store.sportsLeagues)
+        FixtureServer().use { server ->
+            val source = Source(name = "Fight fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id
+            store.sportsLeagues = setOf("NFL", "UFC")
+            val lifecycle = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            val fixture = androidx.test.runner.lifecycle.ActivityLifecycleCallback { activity, stage ->
+                if (activity is MainActivity && stage == androidx.test.runner.lifecycle.Stage.PRE_ON_CREATE) {
+                    activity.liveSportsLoader = {
+                        val now = System.currentTimeMillis()
+                        val fighters = listOf(SportsFighters.id("UFC", "21", "Israel Adesanya")!!, SportsFighters.id("UFC", "22", "Shara Magomedov")!!)
+                        // Five days out: a league that showed only today's games would list nothing.
+                        LiveSportsSnapshot(listOf(LiveEvent("night", fighters.toSet(), now + 5 * 86400000L, "pre", listOf("Paramount+"), status = "Main card 1:00 PM",
+                            league = "UFC", records = mapOf(fighters[0] to "24-6-0"), event = "UFC Fight Night: Adesanya vs. Magomedov"),
+                            LiveEvent("other-live", setOf("nfl:BUF", "nfl:KC"), now - 300000, league = "NFL")), now, setOf("NFL", "UFC"))
+                    }
+                }
+            }
+            lifecycle.addLifecycleCallback(fixture)
+            try {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-mode").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("sports-league:UFC")?.isShown == true }
+                    scenario.onActivity { it.window.decorView.findViewWithTag<View>("sports-league:UFC").performClick() }
+                    waitFor(scenario) { it.window.decorView.findViewWithTag<View>("UFC:night")?.isShown == true }
+                    scenario.onActivity { activity ->
+                        val card = activity.window.decorView.findViewWithTag<View>("UFC:night")
+                        fun texts(view: View): List<String> = if (view is android.view.ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else listOfNotNull((view as? TextView)?.text?.toString())
+                        val shown = texts(card).joinToString(" | ")
+                        assertTrue(shown, "Israel Adesanya" in shown && "Shara Magomedov" in shown && "UFC Fight Night ·" in shown)
+                        assertEquals("One fight night, no other league's games", 1, activity.window.decorView.findViewWithTag<RecyclerView>("sports-games").adapter?.itemCount)
+                        assertEquals("Upcoming and recent · 1 fight night · 0 live", activity.window.decorView.findViewWithTag<TextView>("sports-context").text.toString())
+                    }
+                }
+            } finally {
+                lifecycle.removeLifecycleCallback(fixture)
+                store.saveSources(emptyList()); store.removeCache(source)
+            }
+        }
+    }
+
     @Test fun sportsSaysWhenShowOnlyMyTeamsHidesTheDaysGames() {
         FixtureServer().use { server ->
             val source = Source(name = "My teams fixture", kind = "m3u", url = "${server.base}/playlist.m3u", allowHttp = true)

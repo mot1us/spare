@@ -12,6 +12,8 @@ internal object SportsCardContent {
             hidden -> "Score hidden"
             display.status == SportsScoreDelay.WAITING -> "Score delayed"
             display.state == "pre" -> startTime
+            // A fight night has no score: its status says who is fighting now, or who won the main event.
+            display.scores.isEmpty() && SportsLeagues.fights(display.leagueId) -> display.status.ifBlank { if (display.state == "post") "Final" else "Fight night" }
             display.scores.isEmpty() -> "Score unavailable"
             else -> null
         }

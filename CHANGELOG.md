@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.60.0 — 2026-11-25
+
+- Sports adds UFC and PFL. Each card is one fight night, named for its event ("UFC 324", "UFC Fight Night") and showing the main event's two fighters with their records and where it airs. A league lists its recent and next fight nights rather than only today's, Live now shows a fight night from its first bout, and a finished one says who won the main event. Spare finds a fight night's stream from guide listings and event channels that name both main-event fighters, and offers the broadcaster's channels (Paramount+, ESPN+) as possible streams. On Live now a fight the guide marks live is no longer shown a second time when a fight night already names it. ESPN publishes no boxing schedule, so boxing still appears on Live now when the guide marks a fight live.
+- UFC and PFL join the leagues already chosen on a TV once; turning them off in Leagues and teams is kept.
+
 ## 0.59.0 — 2026-11-25
 
 - Hold Left while watching a channel to see its programmes: the last few days, what is on now and what is next, oldest first with the cursor on the programme on now. Programmes the provider keeps are marked Catch-up and OK plays them; others say No catch-up, and OK on the programme on now returns to live. A short press of Left still goes to the previous channel. For Xtream playlists the list asks the provider for the channel's listings, including programmes it does not archive.
