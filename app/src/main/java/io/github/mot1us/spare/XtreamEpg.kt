@@ -12,7 +12,11 @@ object XtreamEpg {
         val url = Importers.endpoint(source, "player_api.php", "get_short_epg") + "&stream_id=$id&limit=${depth.coerceIn(1, 72)}"
         return parse(Network.get(url, source.allowHttp, 512 * 1024, timeoutMs).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id })
     }
-    fun parse(text: String, channel: String, now: Long = System.currentTimeMillis(), pastDays: Int = 0): List<Programme> {
+    /**
+     * [pastDays] above 0 keeps that many days of past listings, only archived ones unless [keepUnarchived].
+     * [archived] collects the starts of listings the provider archives (or does not say either way).
+     */
+    fun parse(text: String, channel: String, now: Long = System.currentTimeMillis(), pastDays: Int = 0, keepUnarchived: Boolean = false, archived: MutableSet<Long>? = null): List<Programme> {
         val root = JSONObject(text.trimStart('\uFEFF'))
         val entries = when (val raw = root.opt("epg_listings")) {
             is JSONArray -> raw
@@ -22,7 +26,8 @@ object XtreamEpg {
         require(entries.length() <= 2000)
         return (0 until entries.length()).mapNotNull { index ->
             val entry = entries.optJSONObject(index) ?: return@mapNotNull null
-            if (pastDays > 0 && entry.has("has_archive") && entry.optString("has_archive").lowercase() in setOf("0", "false")) return@mapNotNull null
+            val unarchived = entry.has("has_archive") && entry.optString("has_archive").lowercase() in setOf("0", "false")
+            if (pastDays > 0 && unarchived && !keepUnarchived) return@mapNotNull null
             fun epoch(name: String): Long {
                 val raw = entry.optString(name).toLongOrNull() ?: return 0
                 return if (raw in 1_000_000_000L..99_999_999_999L) raw * 1000 else if (raw in 1_000_000_000_000L..99_999_999_999_999L) raw else 0
@@ -30,6 +35,7 @@ object XtreamEpg {
             val start = epoch("start_timestamp")
             val end = epoch("stop_timestamp").takeIf { it > 0 } ?: epoch("end_timestamp")
             if (start <= 0 || end <= start || end <= now - maxOf(3600000L, pastDays.coerceIn(0, 30) * 86400000L) || start >= now + 3 * 86400000L) return@mapNotNull null
+            if (!unarchived) archived?.add(start)
             Programme(channel, decode(entry.optString("title")).take(512).ifBlank { "Untitled" }, start, end, decode(entry.optString("description")).take(2048), listOf("image", "cover", "icon").map { entry.optString(it).take(4096) }.firstOrNull { Network.allowed(it, true) }.orEmpty())
         }.distinctBy { it.start }.sortedBy { it.start }.take(if (pastDays > 0) 2000 else 72)
     }

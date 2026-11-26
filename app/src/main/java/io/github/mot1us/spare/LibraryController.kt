@@ -861,6 +861,49 @@ class LibraryController(private val activity: Activity, private val store: Secur
         request { token -> runCatching { Catchup.load(selected, channel) }.onSuccess { entries -> ui(token) { archiveLoaded?.invoke(selected, channel, entries); show(GuideHistory.merge(cached, entries, channel.catchupDays, System.currentTimeMillis()), "${channel.catchupDays}-day provider archive · Back returns to channels", false); panel.focusRows() } }
             .onFailure { failure -> ui(token) { show(cached, "Using saved guide · ${SourceErrors.message(failure)} · Refresh to retry.", false) } } }
     }
+    /**
+     * Hold Left while watching: this channel's programmes from the last few days through what is next. OK plays a programme
+     * marked Catch-up, returns to live from the one on now, and says why for the others.
+     */
+    fun openHistory(channel: Channel) {
+        selectPlaylist(sourceFor(channel))
+        directCatchup = true
+        detailItem = null; panel.favoriteTitle(null, false); panel.archiveMode(true)
+        pageTask?.cancel(true); ++pageEpoch; activeCatalog = ""; panel.stopCatalog()
+        panel.selectTab("catchup"); panel.seriesArtwork(null)
+        kind = "catchup"; archive = channel; parentSeries = null; panel.resumeImages(); panel.visibility = View.VISIBLE
+        task?.cancel(true); ++epoch
+        val selected = selectedSource() ?: return
+        val title = "${channel.name} · Programmes"
+        val days = ProgrammeHistory.days(channel)
+        fun key(entry: ProgrammeHistory.Entry) = "history:${channel.id}:${entry.programme.start}"
+        fun show(programmes: List<Programme>, archived: Set<Long>?, message: String, busy: Boolean, first: Boolean) {
+            val entries = ProgrammeHistory.entries(channel, programmes, archived, selected.allowHttp, System.currentTimeMillis())
+            panel.page(title, if (entries.isEmpty() && !busy) "The guide has no programmes for this channel." else message, busy)
+            val rows = entries.map { entry ->
+                BrowserRow(key(entry), entry.programme.title, ProgrammeHistory.detail(entry), description = entry.programme.description) {
+                    when (entry.state) {
+                        ProgrammeHistory.State.NOW -> closed()
+                        ProgrammeHistory.State.CATCHUP -> select(OnDemand("catchup:${channel.id}:${entry.programme.start}", entry.programme.title, channel.name, entry.replay.orEmpty(), "catchup", entry.programme.description))
+                        ProgrammeHistory.State.PAST -> panel.page(title, "Not on catch-up · ${entry.programme.title}", false)
+                        ProgrammeHistory.State.LATER -> panel.page(title, "Starts ${GuideClock.dayTime(entry.programme.start)} · ${entry.programme.title}", false)
+                    }
+                }
+            }
+            // The first list starts on the programme on now; a fuller list from the provider keeps the viewer's row.
+            panel.submit(rows, entries.associate { key(it) to it.day }, reset = first, posters = false, focusKey = if (first) ProgrammeHistory.focus(entries)?.let(::key) else null)
+            panel.focusRows()
+        }
+        val cached = guide().programmes[guide().key(channel)].orEmpty()
+        val xtream = selected.kind == "xtream" && channel.nativeId.matches(Regex("xc:[0-9]{1,20}"))
+        show(cached, null, if (xtream) "Loading this channel's programmes…" else HISTORY_HINT, xtream, true)
+        if (!xtream) return
+        request { token ->
+            runCatching { Catchup.history(selected, channel, days) }
+                .onSuccess { (entries, archived) -> ui(token) { show(GuideHistory.merge(cached, entries, days, System.currentTimeMillis()), archived, HISTORY_HINT, false, false) } }
+                .onFailure { failure -> ui(token) { show(cached, null, "Using saved guide · ${SourceErrors.message(failure)}", false, false) } }
+        }
+    }
     /** Library from the main menu: back to the section, rows position, category grid or series you left. */
     fun resume() {
         val series = parentSeries; val before = kind
@@ -917,6 +960,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         const val REFRESH_RETRY = 30 * 60000L
         /** A catalog read from this TV usually opens faster than this; only a slower one shows the loading steps. */
         const val LOADING_DELAY_MS = 300L
+        const val HISTORY_HINT = "OK plays a programme marked Catch-up · OK on Now returns to live"
         /** How long the loading steps wait for a whole Movies or Series list before Library opens a category at a time. */
         const val WHOLE_WAIT_MS = 30_000L
         /** Tests shorten the wait. */

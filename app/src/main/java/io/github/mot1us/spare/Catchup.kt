@@ -49,7 +49,19 @@ object Catchup {
     fun load(source: Source, channel: Channel, timeoutMs: Int = 20000): List<Programme> {
         return load(source, channel, timeoutMs) { url, timeout -> Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeout) }
     }
-    internal fun load(source: Source, channel: Channel, timeoutMs: Int, get: (String, Int) -> ByteArray): List<Programme> {
+    /** Hold Left's list: the provider's listings [days] back, archived or not, and the starts of those it archives. */
+    fun history(source: Source, channel: Channel, days: Int, timeoutMs: Int = 20000): Pair<List<Programme>, Set<Long>> =
+        history(source, channel, days, timeoutMs) { url, timeout -> Network.get(url, source.allowHttp, 4 * 1024 * 1024, timeout) }
+    internal fun history(source: Source, channel: Channel, days: Int, timeoutMs: Int, get: (String, Int) -> ByteArray): Pair<List<Programme>, Set<Long>> {
+        val archived = HashSet<Long>()
+        val entries = table(source, channel, timeoutMs, get) { text ->
+            archived.clear(); XtreamEpg.parse(text, channel.guideId.ifBlank { channel.id }, pastDays = days, keepUnarchived = true, archived = archived)
+        }
+        return entries to archived.toSet()
+    }
+    internal fun load(source: Source, channel: Channel, timeoutMs: Int, get: (String, Int) -> ByteArray): List<Programme> =
+        table(source, channel, timeoutMs, get) { text -> XtreamEpg.parse(text, channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays) }
+    private fun table(source: Source, channel: Channel, timeoutMs: Int, get: (String, Int) -> ByteArray, parse: (String) -> List<Programme>): List<Programme> {
         require(source.kind == "xtream" && channel.nativeId.matches(Regex("xc:[0-9]{1,20}")))
         val deadline = System.nanoTime() + timeoutMs * 1_000_000L
         fun request(action: String): List<Programme> {
@@ -57,7 +69,7 @@ object Catchup {
             val left = ((deadline - System.nanoTime()) / 1_000_000L).coerceAtMost(timeoutMs.toLong()).toInt()
             if (left <= 0) throw java.net.SocketTimeoutException("Archive lookup deadline exceeded")
             val url = Importers.endpoint(source, "player_api.php", action) + "&stream_id=${channel.nativeId.removePrefix("xc:")}"
-            return XtreamEpg.parse(get(url, left).toString(Charsets.UTF_8), channel.guideId.ifBlank { channel.id }, pastDays = channel.catchupDays)
+            return parse(get(url, left).toString(Charsets.UTF_8))
         }
         val primary = runCatching { request("get_simple_data_table") }
         primary.getOrNull()?.takeIf { it.isNotEmpty() }?.let { return it }

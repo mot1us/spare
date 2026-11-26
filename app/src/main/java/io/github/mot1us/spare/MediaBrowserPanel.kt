@@ -329,7 +329,8 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
     fun page(title: String, detail: String, busy: Boolean) { heading.text = title; message.text = detail; loading.isVisible = busy && (archive || nostalgiaLoading && shownRows.isEmpty() && !shelvesShown && !detailPane.isVisible) }
     fun confirmation(value: String) { message.text = value; message.announceForAccessibility(value) }
     @SuppressLint("NotifyDataSetChanged")
-    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true, initialGroup: String? = null, allTitle: String = "All") {
+    /** [focusKey]: the row the cursor starts on. */
+    fun submit(values: List<BrowserRow>, groups: Map<String, String> = emptyMap(), reset: Boolean = true, posters: Boolean = true, initialGroup: String? = null, allTitle: String = "All", focusKey: String? = null) {
         stopCatalog(); showGrid(); shelfPicked = null
         allCategoryTitle = allTitle
         browse()
@@ -337,6 +338,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (posters) seriesSpot = null
         sizeColumns(); spotMode()
         if (reset) { group = null; search.setText(""); rememberedKey = null }
+        if (focusKey != null) rememberedKey = focusKey
         contentsAvailable = true; rows.alpha = 1f
         allRows = values; rowGroups = groups; categoryNames = groups.values.distinct(); categoryLabels = emptyMap()
         if (group !in categoryNames) group = null

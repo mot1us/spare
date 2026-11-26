@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.59.0 — 2026-11-25
+
+- Hold Left while watching a channel to see its programmes: the last few days, what is on now and what is next, oldest first with the cursor on the programme on now. Programmes the provider keeps are marked Catch-up and OK plays them; others say No catch-up, and OK on the programme on now returns to live. A short press of Left still goes to the previous channel. For Xtream playlists the list asks the provider for the channel's listings, including programmes it does not archive.
+
 ## 0.58.2 — 2026-11-25
 
 - Library no longer sits on its loading steps while a very large list downloads. On an onn 4K Plus, a first Movies or Series list of a playlist with about 130,000 movies still took several minutes with 0.58.1, and the screen showed only "Titles" until it was done. Library now waits up to 30 seconds for the whole list; after that it opens one category at a time (each a small download) while the whole list keeps downloading. While Library stays open that download keeps normal priority, and after Library closes it finishes in the background; the next visit shows the usual rows. Before, a viewer who left Library cancelled the download and the next visit started it again from the beginning.

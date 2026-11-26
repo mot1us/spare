@@ -843,6 +843,11 @@ class MainActivity : Activity() {
         }
     }
     private var backLongPressed = false
+    /** Set when holding Left opened the programme list: the rest of that press (repeats, release) does nothing else. */
+    private var leftHeld = false
+    private val leftHold = Runnable {
+        if (!guideVisible && onDemand == null && !details.isVisible && retryPanel.visibility != View.VISIBLE) current?.let { leftHeld = true; openBrowser(true, it, history = true) }
+    }
     private val backHold = Runnable { if (guideVisible && settingsPanel?.opened != true && current != null) { backLongPressed = true; showGuide(false) } }
     private val hideNowPlaying = Runnable { nowPlaying.hide() }
     private val minuteTick = object : Runnable {
@@ -1351,12 +1356,12 @@ class MainActivity : Activity() {
     }
     private fun openLibrary() = openBrowser(false)
     private fun openCatchup(channel: Channel? = null) = openBrowser(true, channel)
-    private fun openBrowser(archive: Boolean, channel: Channel? = null) {
+    private fun openBrowser(archive: Boolean, channel: Channel? = null, history: Boolean = false) {
         showGuide(false); nowPlaying.hide(immediate = true); demandControls.visibility = View.GONE
-        Diagnostics.action(if (archive) "Catch-up opened" else "Library opened")
+        Diagnostics.action(if (history) "Programme list opened" else if (archive) "Catch-up opened" else "Library opened")
         root.bringChildToFront(library.panel)
         if (settingsPanel?.opened == true) settingsPanel?.visibility = View.GONE
-        if (archive) { if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.resume() }
+        if (archive) { if (channel != null && history) library.openHistory(channel) else if (channel != null) library.openCatchup(channel, direct = true) else library.open("catchup") } else { library.selectPlaylist(sources.firstOrNull { it.id == browsePlaylist && it.enabled } ?: source); library.resume() }
         showNavigation(if (archive) "guide-mode" else "library")
         fadeIn(library.panel)
     }
@@ -4165,7 +4170,7 @@ class MainActivity : Activity() {
             }
             "Temporarily hidden channels" -> { panel.page(page, "${unavailable.snapshot().size} channels are temporarily hidden after confirmed missing-stream responses. They return automatically after 15 minutes."); panel.action("Restore channels") { unavailable.clear(); saveUnavailable(); applyFilter(); refresh() } }
             "Refresh playlist & guide" -> { source?.let { renderRefreshSettings(it) } ?: panel.page(page, "Add a playlist first.") }
-            "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage.\n\nSpare is free. To support it, visit ko-fi.com/mot1us"); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
+            "About Spare" -> { panel.page("Spare ${BuildConfig.VERSION_NAME}", "A minimal, free, open-source IPTV player. MIT License · github.com/mot1us/spare\n\nWatching: OK details · Left previous · Hold Left programmes · Back guide\nGuide: Right later · Left earlier / categories · Back live now\nHold OK favorite · Hold Back full screen\n\nNo app accounts, ads, or analytics. Your credentials and guide cache stay in encrypted app storage.\n\nSpare is free. To support it, visit ko-fi.com/mot1us"); panel.action("Performance report") { renderSettingsPage("Performance report"); panel.focusContent() } }
             "Performance report" -> {
                 panel.page(page, "What Spare was doing when it felt slow. Reproduce the slowdown, then open this page. Press Down to scroll through the report. Nothing here leaves this TV.")
                 panel.action("Start over") { Diagnostics.reset(); debugVideoOutput?.reset(); renderSettingsPage("Performance report"); panel.focusContent() }
@@ -4399,6 +4404,11 @@ class MainActivity : Activity() {
             lastInputAt = android.os.SystemClock.elapsedRealtime()
             if (::idleBrowse.isInitialized) idleBrowse.pause()
         }
+        // A hold of Left opened the programme list: its repeats and its release must not also move the cursor there.
+        if (leftHeld && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) leftHeld = false
+            else { if (event.action == KeyEvent.ACTION_UP) leftHeld = false; return true }
+        }
         Diagnostics.key(event)
         onboarding?.takeIf { it.opened }?.let { panel ->
             // Loading the new playlist must not pull the remote out of setup: put it back, and let the press carry on from there.
@@ -4508,7 +4518,12 @@ class MainActivity : Activity() {
                 if (event.action == KeyEvent.ACTION_DOWN) { handler.removeCallbacks(hideDetails); handler.postDelayed(hideDetails, 10000) }
                 return super.dispatchKeyEvent(event)
             }
-            if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) recallPrevious(); return true }
+            // Left goes to the previous channel; holding it opens this channel's programmes (see [leftHold]).
+            if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) { handler.removeCallbacks(leftHold); handler.postDelayed(leftHold, ViewConfiguration.getLongPressTimeout().toLong()) }
+                if (event.action == KeyEvent.ACTION_UP) { handler.removeCallbacks(leftHold); if (!event.isCanceled) recallPrevious() }
+                return true
+            }
             if (event.keyCode == KeyEvent.KEYCODE_INFO) { if (event.action == KeyEvent.ACTION_UP) showDetails(); return true }
             if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP || event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
                 if (event.action == KeyEvent.ACTION_DOWN) zapBy(if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1)

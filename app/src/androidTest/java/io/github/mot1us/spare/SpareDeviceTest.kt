@@ -677,6 +677,46 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun holdingLeftWhileWatchingListsTheChannelsProgrammesWithCatchUpMarked() {
+        FixtureServer(historyListings = true, parallelClients = true).use { server ->
+            val source = Source(name = "History fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
+            fun texts(view: View): List<String> = if (view is android.view.ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) }
+                else listOfNotNull((view as? TextView)?.takeIf { it.isShown }?.text?.toString())
+            /** Each programme row on screen as its texts, in list order. */
+            fun rows(activity: MainActivity): List<Pair<View, String>> = activity.window.decorView.findViewWithTag<RecyclerView>("library-items")?.let { list ->
+                (0 until list.childCount).map(list::getChildAt).sortedBy(list::getChildAdapterPosition).map { it to texts(it).joinToString(" | ") }
+            }.orEmpty()
+            try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && channelList(it)?.isShown != true }
+                var watching: String? = null
+                scenario.onActivity { watching = find<PlayerView>(it.window.decorView)!!.player!!.currentMediaItem!!.mediaId }
+                // Hold Left: the list opens, and the release does not also go to the previous channel.
+                val down = android.os.SystemClock.uptimeMillis()
+                instrumentation.sendKeySync(KeyEvent(down, down, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, 0))
+                Thread.sleep(ViewConfiguration.getLongPressTimeout() + 400L)
+                instrumentation.sendKeySync(KeyEvent(down, android.os.SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_LEFT, 0))
+                // Oldest first: the archived programme, the one the provider does not keep, what is on now, what is later.
+                waitFor(scenario) { a -> rows(a).map { it.second }.let { r -> r.size >= 4 && r.any { "Archived fixture" in it } } }
+                scenario.onActivity { activity ->
+                    val shown = rows(activity).map { it.second }
+                    val archived = shown.indexOfFirst { it.startsWith("Archived fixture") }; val missing = shown.indexOfFirst { it.startsWith("Not archived fixture") }
+                    val now = shown.indexOfFirst { "| Now · " in it }; val later = shown.indexOfFirst { it.startsWith("Later fixture") }
+                    assertTrue("$shown", archived in 0 until missing && missing < now && now < later)
+                    assertTrue(shown[archived], shown[archived].endsWith("· Catch-up")); assertTrue(shown[missing], shown[missing].endsWith("· No catch-up"))
+                    assertEquals("Holding Left keeps the channel", watching, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
+                    assertTrue(Diagnostics.report(), "Programme list opened" in Diagnostics.report())
+                    // The cursor starts on what is on now.
+                    val focused = activity.currentFocus?.let { view -> generateSequence(view) { it.parent as? View }.firstOrNull { (it.tag as? String)?.startsWith("library-item:history:") == true } }
+                    assertEquals("The cursor starts on the programme on now", rows(activity)[now].first, focused)
+                    // OK on a programme marked Catch-up plays it from the archive.
+                    rows(activity)[archived].first.performClick()
+                }
+                waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.currentMediaItem?.localConfiguration?.uri?.path?.startsWith("/timeshift/test/test-secret/60/") == true }
+            } } finally { store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun libraryRowsBelowTheScreenReadTheirTitlesAndPostersAhead() {
         FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true, shelfCategories = 12).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -7400,7 +7440,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0, private val hugeCatalog: Int = 0, private val heldWholeVod: Boolean = false,
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0, private val hugeCatalog: Int = 0, private val heldWholeVod: Boolean = false, private val historyListings: Boolean = false,
         /** An Xtream event category: each slot's name in the lineup and the fresh name its category answers with. */
         private val eventSlots: List<Pair<String, String>>? = null,
         /** Movie 5501 drops its connection 16 seconds in, refuses the first reconnect with 403, then serves byte ranges. */
@@ -7547,6 +7587,8 @@ class SpareDeviceTest {
                                 else if (target.contains("get_vod_info")) """{"info":{"plot":"A provider-supplied film description.","cover_big":"$base/logo.png","releasedate":"2025-01-01","duration":"01:30:00","genre":"Drama"}}""".toByteArray()
                                 else if (target.contains("get_series_info")) """{"episodes":{"1":[{"id":201,"title":"Pilot","episode_num":1,"container_extension":"mp4"},{"id":202,"title":"Second episode","episode_num":2,"container_extension":"mp4"}]}}""".toByteArray()
                                 else if (target.contains("get_series")) """[{"series_id":1,"name":"Fixture series","category_id":"1"}]""".toByteArray()
+                                else if (historyListings && target.contains("get_simple_data_table")) { val time = System.currentTimeMillis() / 1000
+                                    """{"epg_listings":[{"title":"Archived fixture","start_timestamp":${time - 10800},"stop_timestamp":${time - 7200},"has_archive":1},{"title":"Not archived fixture","start_timestamp":${time - 7200},"stop_timestamp":${time - 3600},"has_archive":0},{"title":"Later fixture","start_timestamp":${time + 14400},"stop_timestamp":${time + 18000},"has_archive":0}]}""".toByteArray() }
                                 else if (target.contains("get_simple_data_table")) { val time = System.currentTimeMillis(); """{"epg_listings":[{"title":"${if (archivedSports) "NFL: Seattle Seahawks vs San Francisco 49ers" else "Archived fixture"}","start_timestamp":${(time - 7200000) / 1000},"stop_timestamp":${(time - 3600000) / 1000}}]}""".toByteArray() }
                                 else if (target.contains("get_short_epg")) sportsPayload ?: shortEpg else if (target.contains("get_live_categories")) (if (eventSlots != null) """[{"category_id":"1","category_name":"NBA Events"}]""" else if (regionGroups) """[{"category_id":"us-news","category_name":"USA | News"},{"category_id":"ca","category_name":"CA | News"},{"category_id":"uk","category_name":"UK | News"},{"category_id":"us-sports","category_name":"US | MLB"}]""" else """[{"category_id":"1","category_name":"News"}]""").toByteArray()
                                 else if (eventSlots != null && target.contains("get_live_streams") && target.contains("category_id=")) { releaseEventNames.await(30, java.util.concurrent.TimeUnit.SECONDS); eventStreams(true) }
