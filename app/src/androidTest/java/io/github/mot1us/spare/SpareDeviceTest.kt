@@ -621,6 +621,35 @@ class SpareDeviceTest {
         }
     }
 
+    @Test fun theMoviesListTheLibraryWaitsForDownloadsAtNormalPriority() {
+        // Busy with a 4K channel, an onn 4K Plus gave a background-priority download about 25 KB a second: a first Movies
+        // list never finished. Only a download a screen waits for moves up; search warming and refreshes stay in the background.
+        FixtureServer(parallelClients = true, hugeCatalog = 40_000).use { server ->
+            val source = Source(name = "Large fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
+            store.saveSources(listOf(source)); store.bindProvider(source)
+            val catalog = LibraryCatalog(store)
+            fun importPriorities(): List<Int> = java.io.File("/proc/self/task").listFiles().orEmpty()
+                .filter { runCatching { java.io.File(it, "comm").readText().trim() }.getOrNull() == "spare-catalog-i" }
+                .mapNotNull { it.name.toIntOrNull()?.let { tid -> runCatching { android.os.Process.getThreadPriority(tid) }.getOrNull() } }
+            fun watch(waiting: Boolean, force: Boolean): Set<Int> {
+                val seen = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>(); val done = AtomicBoolean()
+                val load = Thread { try { catalog.load(source, "movie", force = force, waiting = waiting) } finally { done.set(true) } }.apply { start() }
+                // While the list streams in, note the priority of the import thread that is busy with it.
+                while (!done.get()) { val before = server.catalogTargets.size; importPriorities().forEach(seen::add); if (before > 0) Thread.sleep(20) else Thread.sleep(5) }
+                load.join(60000); return seen
+            }
+            try {
+                val waited = watch(waiting = true, force = false)
+                assertTrue("The Library's download runs at normal priority: $waited", android.os.Process.THREAD_PRIORITY_DEFAULT in waited)
+                assertEquals("Afterwards the pool thread is back in the background", setOf(android.os.Process.THREAD_PRIORITY_BACKGROUND), importPriorities().toSet())
+                val unwaited = watch(waiting = false, force = true)
+                assertEquals("A download nobody waits for stays in the background", setOf(android.os.Process.THREAD_PRIORITY_BACKGROUND), unwaited)
+                assertEquals(2, server.catalogTargets.count { "get_vod_streams" in it })
+                assertEquals(40_000, catalog.cached(source, "movie")?.count)
+            } finally { catalog.close(); store.saveSources(emptyList()); store.removeCache(source) }
+        }
+    }
+
     @Test fun libraryRowsBelowTheScreenReadTheirTitlesAndPostersAhead() {
         FixtureServer(libraryCategories = true, longVideo = true, parallelClients = true, shelfCategories = 12).use { server ->
             val source = Source(name = "Library fixture", kind = "xtream", url = server.base, username = "test", password = "test-secret", allowHttp = true)
@@ -7344,7 +7373,7 @@ class SpareDeviceTest {
         }
     }
 
-    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0,
+    private inner class FixtureServer(private val failCategories: Boolean = false, channelCount: Int = 1, private val tsMode: Boolean = false, private val fallbackHls: Boolean = false, private val slowPlaylist: Boolean = false, private val missingStatus: Int = 0, private val regionGroups: Boolean = false, private val stalled: Boolean = false, private val stallSeconds: Int = 14, private val captionsMode: Boolean = false, private val embeddedCaptions: Int = 0, private val embeddedHls: Boolean = false, private val slowSportsGuide: Boolean = false, private val libraryCategories: Boolean = false, private val longVideo: Boolean = false, private val archivedSports: Boolean = false, private val transientSegmentErrors: Int = 0, private val transientSegmentStatus: Int = 503, private val programmeTitle: String = "World News", private val slowVod: Boolean = false, private val ambiguousVod: Boolean = false, private val liveCycles: Int = 16, parallelClients: Boolean = false, private val slowEpisodes: Boolean = false, private val fullGuide: Boolean = false, private val heldPlaylist: Boolean = false, private val liveListing: Pair<Int, String>? = null, private val cutVodOnce: Boolean = false, private val shelfCategories: Int = 0, private val hugeCatalog: Int = 0,
         /** An Xtream event category: each slot's name in the lineup and the fresh name its category answers with. */
         private val eventSlots: List<Pair<String, String>>? = null,
         /** Movie 5501 drops its connection 16 seconds in, refuses the first reconnect with 403, then serves byte ranges. */
@@ -7481,7 +7510,7 @@ class SpareDeviceTest {
                             "/captions.vtt" -> "WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nSpare test captions\n".toByteArray() to "text/vtt"
                             // An event slot after its game: the provider answers with a page, not a playlist.
                             "/ended.m3u8" -> "<html><body>No event</body></html>".toByteArray() to "application/vnd.apple.mpegurl"
-                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (shelfCategories > 0) (1..shelfCategories).joinToString(",", "[", "]") { """{"category_id":"$it","category_name":"Shelf $it"}""" } else if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
+                            "/player_api.php" -> (if (target.contains("get_vod_categories") || target.contains("get_series_categories")) (if (hugeCatalog > 0) (1..300).joinToString(",", "[", "]") { """{"category_id":"$it","category_name":"Category $it"}""" } else if (shelfCategories > 0) (1..shelfCategories).joinToString(",", "[", "]") { """{"category_id":"$it","category_name":"Shelf $it"}""" } else if (libraryCategories) """[{"category_id":"1","category_name":"Fixture cinema"},{"category_id":"2","category_name":"Action"},{"category_id":"3","category_name":"Comedy"}]""" else """[{"category_id":"1","category_name":"Fixture cinema"}]""").toByteArray()
                                 else if (target.contains("get_vod_streams")) when {
                                     slowVod -> slowMovies
                                     libraryCategories && target.contains("category_id=2") -> actionMovies
@@ -7518,13 +7547,21 @@ class SpareDeviceTest {
                             output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); output.flush(); return@use
                         }
                         val status = if (path == "/segment.ts" && (requests[path] ?: 0) <= transientSegmentErrors) "$transientSegmentStatus Temporary" else if (missingStatus != 0 && path in setOf("/live/test/test-secret/2.ts", "/live/test/test-secret/2.m3u8")) "$missingStatus Missing" else if ((failCategories && target.contains("get_live_categories")) || (fallbackHls && path == "/live/test/test-secret/1.ts")) "404 Not Found" else "200 OK"
-                        val length = if (stalled && path == "/channel1.ts") "" else "Content-Length: ${body.size}\r\n"
+                        val length = if (stalled && path == "/channel1.ts" || hugeCatalog > 0 && target.contains("get_vod_streams") && !target.contains("category_id")) "" else "Content-Length: ${body.size}\r\n"
                         output.write("HTTP/1.1 $status\r\nContent-Type: $mime\r\n${length}Connection: close\r\n\r\n".toByteArray())
                         if (stalled && path == "/channel1.ts") {
                             val split = avTransport.size * 2
                             output.write(body, 0, split); output.flush()
                             resumeStream.await(stallSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
                             output.write(body, split, body.size - split); output.flush()
+                        } else if (hugeCatalog > 0 && target.contains("get_vod_streams") && !target.contains("category_id")) {
+                            // A provider-sized movie list, written as it is made rather than held in memory.
+                            val out = java.io.BufferedOutputStream(output, 65536); out.write('['.code)
+                            for (n in 1..hugeCatalog) {
+                                if (n > 1) out.write(','.code)
+                                out.write(("""{"num":$n,"name":"EN - Fixture feature film number $n (${1980 + n % 45})","stream_type":"movie","stream_id":${100000 + n},"stream_icon":"https://image.tmdb.org/t/p/w600_and_h900_bestv2/fixture$n.jpg","rating":"6.${n % 10}","added":"${1600000000 + n}","category_id":"${1 + n % 300}","container_extension":"mkv","direct_source":""}""").toByteArray())
+                            }
+                            out.write(']'.code); out.flush(); return@use
                         } else if (cutVodOnce && target.contains("get_vod_streams") && vodCuts.getAndIncrement() == 0) {
                             // Like a provider that resets a long response: part of the list, then a reset connection.
                             val value = body.toString(Charsets.UTF_8); var cut = 0

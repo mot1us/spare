@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.58.1 — 2026-11-25
+
+- A first Movies or Series list loads while a 4K channel plays. On a fresh install on an onn 4K Plus, Library never finished loading a playlist with about 130,000 movies: the list downloads on a background thread, and while a 4K channel played behind Library, Android gave that thread so little of the processor that the list arrived at about 25 KB a second. A download the Library screen is waiting for now runs at normal priority, and goes back to the background when it is done. On the test emulator with every core kept busy, 60,000 movies took 6.6 s instead of 43 s. Background refreshes of a saved list, and search warming, still run in the background as before.
+
 ## 0.58.0 — 2026-11-25
 
 - Sports has a My teams tab beside Live now and Today. It lists only the teams you follow, across every league: games on now, results from the past week (with the provider's replay when it has one) and games coming up this week, plus each team's next game however far off. Live games come first, then the next games, then the latest results.

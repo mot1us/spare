@@ -255,6 +255,13 @@ class LibraryCatalog(private val store: SecureStore) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<OnDemand>>?) = size > 16
     }
     private data class LoadKey(val source: Source, val mode: String, val scope: String)
+    /**
+     * Downloads the Library's loading screen is waiting on, with how many screens wait. These run at normal priority.
+     * At background priority Android gave the download a sliver of the processor while a 4K channel played behind the
+     * Library: on an onn 4K Plus a first Movies list came in at about 25 KB a second and never finished loading.
+     */
+    private val awaited = java.util.concurrent.ConcurrentHashMap<LoadKey, Int>()
+    internal fun awaitedPriority(waiting: Boolean) = if (waiting) android.os.Process.THREAD_PRIORITY_DEFAULT else android.os.Process.THREAD_PRIORITY_BACKGROUND
     private val jobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(2) { task -> Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "spare-catalog-import") })
     // A category someone is waiting on must never queue behind whole-catalog search warming.
     private val categoryJobs = SharedJobs<LoadKey, Snapshot>(java.util.concurrent.Executors.newFixedThreadPool(3) { task -> Thread(task, "spare-catalog-category") })
@@ -503,12 +510,20 @@ class LibraryCatalog(private val store: SecureStore) {
             .also { store.delete("${prefix}index.enc"); runCatching { store.pruneCatalog(prefix, setOf("${prefix}keys.enc")) } }
     }
     /** Shared by background warming, explicit search and Library; consumers receive useful partial pages. */
-    fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), progress: (Snapshot) -> Unit = {}): Snapshot {
+    /** [waiting]: a screen shows nothing else until this download is saved, so it runs at normal priority. */
+    fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), waiting: Boolean = false, progress: (Snapshot) -> Unit = {}): Snapshot {
         fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && !due(value, System.currentTimeMillis())
         val saved = cached(source, mode, scope)
         if (saved != null) progress(saved)
         if (!force && fresh(saved)) return saved!!
-        return (if (scope.isEmpty()) jobs else categoryJobs).await(LoadKey(source.copy(name = ""), mode, scope), progress) { publish ->
+        val key = LoadKey(source.copy(name = ""), mode, scope)
+        if (waiting) awaited.merge(key, 1, Int::plus)
+        try { return loadShared(key, source, mode, scope, force, labels, progress) }
+        finally { if (waiting) awaited.computeIfPresent(key) { _, count -> (count - 1).takeIf { it > 0 } } }
+    }
+    private fun loadShared(key: LoadKey, source: Source, mode: String, scope: String, force: Boolean, labels: Map<String, String>, progress: (Snapshot) -> Unit): Snapshot {
+        fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && !due(value, System.currentTimeMillis())
+        return (if (scope.isEmpty()) jobs else categoryJobs).await(key, progress) { publish ->
             val latest = cached(source, mode, scope)
             if (!force && fresh(latest)) return@await latest!!
             // Refreshing a complete catalog happens out of sight: Library keeps reading the complete copy in memory until
@@ -518,14 +533,19 @@ class LibraryCatalog(private val store: SecureStore) {
                 val writer = Writer(source, mode, scope = scope, indexOnly = true, quiet = quiet)
                 var published = 0L; var checkpoint = 0L
                 var worked = android.os.SystemClock.currentThreadTimeMillis()
+                // Whole catalogs download on background threads; while a screen waits for this one it runs at normal priority.
+                val whole = scope.isEmpty(); var waited: Boolean? = null
+                fun prioritize() { val now = awaited.containsKey(key); if (whole && now != waited) { waited = now; android.os.Process.setThreadPriority(awaitedPriority(now)) } }
+                prioritize()
                 val capped = try {
                     VodCatalog.stream(source, mode, scope.takeIf { it.isNotEmpty() }, lean = true) { batch ->
+                        prioritize()
                         writer.append(batch)
                         // A refresh nobody is waiting for gives the processor back to a playing channel: it pauses for half the
                         // time it just worked. Waiting on the provider costs no processor time, so it adds no pause. A fixed
                         // 40 ms per 64 titles stretched a 32,000-title download past a minute, and that provider resets any
                         // response still running after about a minute, so the refresh never finished.
-                        if (paced) {
+                        if (paced && waited != true) {
                             val used = android.os.SystemClock.currentThreadTimeMillis() - worked
                             if (used > 1) Thread.sleep(minOf(used / 2, QUIET_PAUSE_MS))
                             worked = android.os.SystemClock.currentThreadTimeMillis()
@@ -546,12 +566,17 @@ class LibraryCatalog(private val store: SecureStore) {
                 }
             }
             val began = android.os.SystemClock.elapsedRealtime()
-            try { download(paced = quiet) } catch (cut: java.io.IOException) {
-                // A provider that cuts off a long response gets one more try straight away, without pauses.
-                if (!quiet || cut is java.io.InterruptedIOException || Thread.currentThread().isInterrupted) throw cut
-                Diagnostics.library("Background check cut off after ${(android.os.SystemClock.elapsedRealtime() - began) / 1000} s · trying again without pauses")
-                download(paced = false)
-            }.also(publish)
+            try {
+                try { download(paced = quiet) } catch (cut: java.io.IOException) {
+                    // A provider that cuts off a long response gets one more try straight away, without pauses.
+                    if (!quiet || cut is java.io.InterruptedIOException || Thread.currentThread().isInterrupted) throw cut
+                    Diagnostics.library("Background check cut off after ${(android.os.SystemClock.elapsedRealtime() - began) / 1000} s · trying again without pauses")
+                    download(paced = false)
+                }.also(publish)
+            } finally {
+                // The pool thread goes back to background priority for whatever it runs next.
+                if (scope.isEmpty()) android.os.Process.setThreadPriority(awaitedPriority(false))
+            }
         }
     }
     inner class Writer(private val source: Source, private val mode: String, private val stamp: Long = System.currentTimeMillis(), private val scope: String = "", @Suppress("unused") private val indexOnly: Boolean = false, private val quiet: Boolean = false) {

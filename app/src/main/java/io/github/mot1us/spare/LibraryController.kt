@@ -302,7 +302,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) {
                 if (calm) ui(token) { handler.removeCallbacks(loading); panel.showLoading(mode, downloading = true); panel.loadingStep(LibraryLoading.Step.TITLES) }
-                runCatching { repository.load(selected, mode, "", force, names) }
+                runCatching { repository.load(selected, mode, "", force, names, waiting = true) }
                     .onFailure { if (it !is InterruptedException && it !is java.io.InterruptedIOException) Diagnostics.library("Catalog download failed · ${SourceErrors.message(it)}") }
             }
             Diagnostics.library("Saved catalog ready")
@@ -508,7 +508,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         } }
         catalogImports[key] = worker.submit {
             // The whole catalog is imported in the background; once it is in memory a category needs no provider request.
-            if (force) runCatching { repository.load(selected, mode, "", true, names) }
+            if (force) runCatching { repository.load(selected, mode, "", true, names, waiting = true) }
             repository.category(selected, mode, scope, names)?.let { whole -> Timings.since("Category", openBegan); deliver(whole, false); return@submit }
             val cached = memory?.takeIf { it.complete } ?: runCatching {
                 // Only reuse an already-parsed full catalog here; decrypting a large saved one first delays the category.
@@ -564,7 +564,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (cached != null) deliver(cached, force || !cached.complete || System.currentTimeMillis() - cached.updated >= 6 * 3600000L)
             if (!force && cached?.complete == true && System.currentTimeMillis() - cached.updated in 0 until 6 * 3600000L) return@submit
             runCatching {
-                repository.load(selected, mode, force = force) { snapshot ->
+                repository.load(selected, mode, force = force, waiting = true) { snapshot ->
                     if (cached == null || snapshot.complete || snapshot.count >= cached.count) deliver(snapshot, !snapshot.complete)
                 }
             }.onSuccess { snapshot ->
