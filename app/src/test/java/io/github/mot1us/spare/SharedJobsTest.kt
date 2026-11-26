@@ -12,11 +12,24 @@ class SharedJobsTest {
         val published = CountDownLatch(1); val joined = CountDownLatch(1); val finish = CountDownLatch(1)
         val work: ((String) -> Unit) -> String = { update -> count.incrementAndGet(); update("partial"); published.countDown(); check(finish.await(5, TimeUnit.SECONDS)); "complete" }
         try {
-            val first = callers.submit<String> { jobs.await("movie", {}, work) }
+            val first = callers.submit<String> { jobs.await("movie", {}, work = work) }
             assertTrue(published.await(5, TimeUnit.SECONDS))
-            val second = callers.submit<String> { jobs.await("movie", { if (it == "partial") joined.countDown() }, work) }
+            val second = callers.submit<String> { jobs.await("movie", { if (it == "partial") joined.countDown() }, work = work) }
             assertTrue(joined.await(5, TimeUnit.SECONDS)); first.cancel(true); finish.countDown()
             assertEquals("complete", second.get(5, TimeUnit.SECONDS)); assertEquals(1, count.get())
+        } finally { finish.countDown(); jobs.close(); callers.shutdownNow() }
+    }
+    @Test fun aConsumerWhoseTimeRunsOutLeavesTheWorkRunningForTheNextOne() {
+        val jobs = SharedJobs<String, String>(Executors.newSingleThreadExecutor())
+        val callers = Executors.newSingleThreadExecutor(); val count = AtomicInteger()
+        val joined = CountDownLatch(1); val finish = CountDownLatch(1)
+        val work: ((String) -> Unit) -> String = { update -> count.incrementAndGet(); update("partial"); check(finish.await(5, TimeUnit.SECONDS)); "complete" }
+        try {
+            try { jobs.await("movie", {}, waitMs = 200, work = work); fail("Expected the wait to run out") } catch (_: TimeoutException) { }
+            // The only consumer left, but its work carries on: the next consumer joins it instead of starting again.
+            val next = callers.submit<String> { jobs.await("movie", { if (it == "partial") joined.countDown() }, work = work) }
+            assertTrue(joined.await(5, TimeUnit.SECONDS)); finish.countDown()
+            assertEquals("complete", next.get(5, TimeUnit.SECONDS)); assertEquals(1, count.get())
         } finally { finish.countDown(); jobs.close(); callers.shutdownNow() }
     }
     @Test fun differentKeysDoNotBlockEachOtherAndFailedWorkCanBeRetried() {

@@ -66,6 +66,9 @@ class LibraryController(private val activity: Activity, private val store: Secur
     init { repository.changed = { handler.removeCallbacks(indexChanged); handler.postDelayed(indexChanged, 250) } }
     /** Old saved catalogs refresh here, one at a time, apart from [worker] so Library's own requests never cancel them. */
     private val refresher = Executors.newSingleThreadExecutor(namedThreads("library-refresh"))
+    /** Keeps a whole list Library stopped waiting for at normal priority while Library stays open (see [keepWhole]). */
+    private val wholeKeeper = Executors.newSingleThreadExecutor(namedThreads("library-whole"))
+    private var keptWhole: java.util.concurrent.Future<*>? = null
     private val refreshing = mutableMapOf<String, java.util.concurrent.Future<*>>()
     private val refreshTried = mutableMapOf<String, Long>()
     /** Counts Library visits: copies held for rows on screen are released when the visit that held them ends. */
@@ -302,11 +305,24 @@ class LibraryController(private val activity: Activity, private val store: Secur
             if (!force && wholeCatalog(selected, mode) == null) runCatching { repository.cached(selected, mode) }
             if (names.isNotEmpty() && (force || wholeCatalog(selected, mode) == null)) {
                 if (calm) ui(token) { handler.removeCallbacks(loading); panel.showLoading(mode, downloading = true); panel.loadingStep(LibraryLoading.Step.TITLES) }
-                runCatching { repository.load(selected, mode, "", force, names, waiting = true) }
+                // A list that takes longer keeps downloading in the background; meanwhile Library opens a category at a time.
+                runCatching { repository.loadWithin(selected, mode, force, names, wholeWaitMs) }
+                    .onSuccess { if (it == null) { Diagnostics.library("Whole list still downloading after ${wholeWaitMs / 1000} s · showing one category at a time meanwhile"); ui(token) { keepWhole(selected, mode, names) } } }
                     .onFailure { if (it !is InterruptedException && it !is java.io.InterruptedIOException) Diagnostics.library("Catalog download failed · ${SourceErrors.message(it)}") }
             }
             Diagnostics.library("Saved catalog ready")
             ui(token) { handler.removeCallbacks(loading); panel.loadingStep(LibraryLoading.Step.ROWS); proceed(names) }
+        }
+    }
+    /**
+     * The whole list Library stopped waiting for keeps normal priority while Library is open, so a 4K channel playing behind
+     * it cannot starve the download again; closing Library returns it to the background, where it still finishes.
+     */
+    private fun keepWhole(selected: Source, mode: String, names: Map<String, String>) {
+        keptWhole?.cancel(true)
+        keptWhole = wholeKeeper.submit {
+            runCatching { repository.loadWithin(selected, mode, false, names, 0L) }
+                .onSuccess { saved -> if (saved != null) Diagnostics.library("Whole list saved while browsing · ${saved.count} titles") }
         }
     }
     private fun wholeCatalog(selected: Source, mode: String) = repository.memory(selected, mode)?.takeIf { it.complete && it.whole && it.count > 0 }
@@ -879,6 +895,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         }
     }
     fun dismiss() {
+        keptWhole?.cancel(true); keptWhole = null
         favoriteTask?.cancel(true); ++favoriteEpoch; checkingFavorites = false
         fromBeginning = false; startEpisode = null; pageTask?.cancel(true); ++pageEpoch
         panel.stopCatalog(); panel.hideKeyboard(); panel.pauseImages(); panel.visibility = View.GONE; task?.cancel(true); ++epoch
@@ -894,12 +911,16 @@ class LibraryController(private val activity: Activity, private val store: Secur
         parentSeries = null; detailItem = null; episodeList = emptyList(); playingEpisodes = emptyList()
         favoriteSource = ""; favoriteState = LibraryFavorites(); refreshTried.keys.removeAll { it.startsWith("$id:") }; repository.invalidate(id)
     }
-    fun destroy() { refresher.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
+    fun destroy() { refresher.shutdownNow(); wholeKeeper.shutdownNow(); repository.close(); cancelStart(); favoriteTask?.cancel(true); favoriteWorker.shutdownNow(); catalogImports.values.forEach { it.cancel(true) }; pageTask?.cancel(true); catalogReader.shutdownNow(); panel.closeImages(); disk.shutdown(); positions.shutdownNow(); destroyed = true; task?.cancel(true); worker.shutdownNow(); handler.removeCallbacksAndMessages(null) }
     companion object {
         /** A failed background refresh is tried again after this long, at the next visit to the rows. */
         const val REFRESH_RETRY = 30 * 60000L
         /** A catalog read from this TV usually opens faster than this; only a slower one shows the loading steps. */
         const val LOADING_DELAY_MS = 300L
+        /** How long the loading steps wait for a whole Movies or Series list before Library opens a category at a time. */
+        const val WHOLE_WAIT_MS = 30_000L
+        /** Tests shorten the wait. */
+        @Volatile internal var wholeWaitMs = WHOLE_WAIT_MS
         /** How old the saved copy on the rows is, and whether a background refresh is checking for new titles. */
         fun savedAge(updated: Long, now: Long, checking: Boolean = false): String {
             val known = updated > 0L && now >= updated

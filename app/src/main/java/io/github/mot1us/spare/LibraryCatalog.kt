@@ -511,19 +511,29 @@ class LibraryCatalog(private val store: SecureStore) {
     }
     /** Shared by background warming, explicit search and Library; consumers receive useful partial pages. */
     /** [waiting]: a screen shows nothing else until this download is saved, so it runs at normal priority. */
-    fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), waiting: Boolean = false, progress: (Snapshot) -> Unit = {}): Snapshot {
+    fun load(source: Source, mode: String, scope: String = "", force: Boolean = false, labels: Map<String, String> = emptyMap(), waiting: Boolean = false, progress: (Snapshot) -> Unit = {}): Snapshot =
+        load(source, mode, scope, force, labels, waiting, 0L, progress)!!
+    /**
+     * The whole list, waiting at most [waitMs] for it at normal priority (0: until it is saved). A list still arriving then
+     * keeps downloading in the background for the next caller, and this returns null. On an onn 4K Plus with a 4K channel playing, about 130,000
+     * movies took several minutes, and Library showed only its loading steps all that time.
+     */
+    fun loadWithin(source: Source, mode: String, force: Boolean, labels: Map<String, String>, waitMs: Long): Snapshot? =
+        load(source, mode, "", force, labels, true, waitMs) {}
+    private fun load(source: Source, mode: String, scope: String, force: Boolean, labels: Map<String, String>, waiting: Boolean, waitMs: Long, progress: (Snapshot) -> Unit): Snapshot? {
         fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && !due(value, System.currentTimeMillis())
         val saved = cached(source, mode, scope)
         if (saved != null) progress(saved)
         if (!force && fresh(saved)) return saved!!
         val key = LoadKey(source.copy(name = ""), mode, scope)
         if (waiting) awaited.merge(key, 1, Int::plus)
-        try { return loadShared(key, source, mode, scope, force, labels, progress) }
+        try { return loadShared(key, source, mode, scope, force, labels, waitMs, progress) }
+        catch (_: java.util.concurrent.TimeoutException) { return null }
         finally { if (waiting) awaited.computeIfPresent(key) { _, count -> (count - 1).takeIf { it > 0 } } }
     }
-    private fun loadShared(key: LoadKey, source: Source, mode: String, scope: String, force: Boolean, labels: Map<String, String>, progress: (Snapshot) -> Unit): Snapshot {
+    private fun loadShared(key: LoadKey, source: Source, mode: String, scope: String, force: Boolean, labels: Map<String, String>, waitMs: Long, progress: (Snapshot) -> Unit): Snapshot {
         fun fresh(value: Snapshot?) = value?.complete == true && value.chunks.all { it.titles.size == it.count } && !due(value, System.currentTimeMillis())
-        return (if (scope.isEmpty()) jobs else categoryJobs).await(key, progress) { publish ->
+        return (if (scope.isEmpty()) jobs else categoryJobs).await(key, progress, waitMs) { publish ->
             val latest = cached(source, mode, scope)
             if (!force && fresh(latest)) return@await latest!!
             // Refreshing a complete catalog happens out of sight: Library keeps reading the complete copy in memory until

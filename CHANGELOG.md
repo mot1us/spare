@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.58.2 — 2026-11-25
+
+- Library no longer sits on its loading steps while a very large list downloads. On an onn 4K Plus, a first Movies or Series list of a playlist with about 130,000 movies still took several minutes with 0.58.1, and the screen showed only "Titles" until it was done. Library now waits up to 30 seconds for the whole list; after that it opens one category at a time (each a small download) while the whole list keeps downloading. While Library stays open that download keeps normal priority, and after Library closes it finishes in the background; the next visit shows the usual rows. Before, a viewer who left Library cancelled the download and the next visit started it again from the beginning.
+
 ## 0.58.1 — 2026-11-25
 
 - A first Movies or Series list loads while a 4K channel plays. On a fresh install on an onn 4K Plus, Library never finished loading a playlist with about 130,000 movies: the list downloads on a background thread, and while a 4K channel played behind Library, Android gave that thread so little of the processor that the list arrived at about 25 KB a second. A download the Library screen is waiting for now runs at normal priority, and goes back to the background when it is done. On the test emulator with every core kept busy, 60,000 movies took 6.6 s instead of 43 s. Background refreshes of a saved list, and search warming, still run in the background as before.
