@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.60.1 — 2026-11-27
+
+- Hold Left's programme list marks each programme with a coloured tag at the start of its row: red Live for the programme on now, with a bar for how far it has run and the minutes left; green Catch-up, with the guide's catch-up clock, for programmes OK plays; grey Aired for programmes that have ended and are not on catch-up, whose row is dimmed; and blue for what is next, saying how soon it starts ("In 49 min"), or Upcoming further ahead. The tags keep their colours under every theme, and their words say the same as the colours.
+
 ## 0.60.0 — 2026-11-25
 
 - Sports adds UFC and PFL. Each card is one fight night, named for its event ("UFC 324", "UFC Fight Night") and showing the main event's two fighters with their records and where it airs. A league lists its recent and next fight nights rather than only today's, Live now shows a fight night from its first bout, and a finished one says who won the main event. Spare finds a fight night's stream from guide listings and event channels that name both main-event fighters, and offers the broadcaster's channels (Paramount+, ESPN+) as possible streams. On Live now a fight the guide marks live is no longer shown a second time when a fight night already names it. ESPN publishes no boxing schedule, so boxing still appears on Live now when the guide marks a fight live.

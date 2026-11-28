@@ -1,8 +1,14 @@
 package io.github.mot1us.spare
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
@@ -26,11 +32,26 @@ internal class PosterGridLayout(context: Context, columns: Int = COLUMNS) : Grid
     }
 }
 
+/**
+ * A programme list row's state: a tag at the start of the row in its tone's colours, and for the programme on now a
+ * bar for how far it has run ([progress] from 0 to 1; below 0 for none). The tag's word is its meaning; colour helps.
+ */
+data class RowStatus(val label: String, val tone: Tone, val progress: Float = -1f) {
+    /** Fixed colours, the same under every theme: [fill] and [ink] are the tag's, [edge] the strip at the row's start. */
+    enum class Tone(val fill: Int, val ink: Int, val edge: Int, val title: Int, val detail: Int, val outline: Int = 0) {
+        LIVE(0xFFD93545.toInt(), Color.WHITE, 0xFFD93545.toInt(), Color.WHITE, 0xFFD5DCE4.toInt()),
+        CATCHUP(0xFF123524.toInt(), 0xFF7EE2A8.toInt(), 0xFF2FBF71.toInt(), Color.WHITE, Color.LTGRAY),
+        /** Over and not on catch-up: the whole row is dimmed, as there is nothing to play. */
+        AIRED(0xFF1C222B.toInt(), 0xFF8B96A5.toInt(), 0xFF4A5361.toInt(), 0xFF7D8794.toInt(), 0xFF66707D.toInt()),
+        UPCOMING(Color.TRANSPARENT, 0xFF9CC8F5.toInt(), 0xFF4D8FD6.toInt(), 0xFFC9D1DB.toInt(), 0xFF8B96A5.toInt(), 0xFF35618F.toInt()),
+    }
+}
+
 internal class LibraryPosterTile(context: Context, private val artworkOnly: Boolean) : LinearLayout(context) {
     constructor(context: Context) : this(context, artworkOnly = false)
 
     enum class Layout { GRID, SHELF, LIST, ROW }
-    data class Content(val title: String, val subtitle: String, val poster: String, val badge: String = "")
+    data class Content(val title: String, val subtitle: String, val poster: String, val badge: String = "", val status: RowStatus? = null)
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun label(size: Float) = TextView(context).apply {
         textSize = size * GuideTheme.textScale
@@ -62,10 +83,19 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     }
     private val title = if (artworkOnly) null else label(12f).apply { maxLines = 2 }
     private val detail = if (artworkOnly) null else label(9f)
+    // A programme list's row state (see RowStatus): the strip and tag before the title, the bar under the times.
+    private val edge = if (artworkOnly) null else View(context).apply { visibility = GONE }
+    private val statusTag = if (artworkOnly) null else label(9f).apply { setPadding(dp(7), dp(3), dp(7), dp(3)); compoundDrawablePadding = dp(4); gravity = Gravity.CENTER_VERTICAL; tag = "library-item-status" }
+    private val statusSlot = if (artworkOnly) null else FrameLayout(context).apply {
+        visibility = GONE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        addView(statusTag, FrameLayout.LayoutParams(-2, -2, Gravity.START or Gravity.CENTER_VERTICAL))
+    }
+    private val progress = if (artworkOnly) null else ProgressLine(context).apply { visibility = GONE; tag = "library-item-progress" }
     private val captions = if (artworkOnly) null else LinearLayout(context).apply {
         orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(4), dp(4), 0)
         addView(title, LayoutParams(-1, -2))
         addView(detail, LayoutParams(-1, -2).apply { topMargin = dp(3) })
+        addView(progress, LayoutParams(-1, dp(3)).apply { topMargin = dp(5); marginEnd = dp(16) })
     }
     private var layout: Layout? = null
     /** Grid tiles under a spotlight drop their text: the spotlight above names the title under the cursor, as on the rows. */
@@ -81,7 +111,9 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     init {
         isFocusableInTouchMode = true; isClickable = true
         setPadding(dp(7), dp(7), dp(7), dp(7))
+        edge?.let(::addView)
         addView(art)
+        statusSlot?.let(::addView)
         if (captions != null) addView(captions)
         if (artworkOnly) configure(Layout.ROW)
         appearance()
@@ -107,6 +139,9 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
         val padding = dp(if (next == Layout.ROW) 5 else 7); setPadding(padding, padding, padding, padding)
         art.layoutParams = if (next == Layout.LIST) LayoutParams(dp(70), -1).apply { marginEnd = dp(8) } else LayoutParams(-1, 0, 1f)
         captions?.layoutParams = if (next == Layout.LIST) LayoutParams(0, -1, 1f) else LayoutParams(-1, dp(43))
+        edge?.layoutParams = LayoutParams(dp(3), -1).apply { marginEnd = dp(9) }
+        statusSlot?.layoutParams = LayoutParams(dp(92), -1).apply { marginEnd = dp(8) }
+        showStatus(bound?.status)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -158,6 +193,7 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
             visibility = if (content.badge.isBlank()) GONE else VISIBLE
         }
         identity = key; bound = content; boundHttp = http; boundDecode = decode
+        if (content.status != previous?.status) showStatus(content.status)
         val request = ++generation
         showPlaceholder(image.drawable == null)
         var requested = false
@@ -176,6 +212,34 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
                 }
             }
         }
+    }
+
+    /** Only list rows show a state; a recycled tile in another layout hides it. */
+    private fun showStatus(status: RowStatus?) {
+        val tag = statusTag ?: return
+        val shown = status?.takeIf { layout == Layout.LIST }
+        edge?.visibility = if (shown != null) VISIBLE else GONE
+        statusSlot?.visibility = if (shown != null) VISIBLE else GONE
+        progress?.visibility = if (shown != null && shown.progress >= 0f) VISIBLE else GONE
+        // The bar takes the second line a long title would use.
+        title?.maxLines = if (shown != null && shown.progress >= 0f) 1 else 2
+        if (shown != null) {
+            val density = resources.displayMetrics.density
+            edge?.setBackgroundColor(shown.tone.edge)
+            tag.text = shown.label; tag.setTextColor(shown.tone.ink); tag.typeface = AppFont.face(true); tag.textSize = 9f * GuideTheme.textScale
+            tag.background = GradientDrawable().apply {
+                cornerRadius = 4 * density; setColor(shown.tone.fill)
+                if (shown.tone.outline != 0) setStroke(dp(1), shown.tone.outline)
+            }
+            val icon: Drawable? = when (shown.tone) {
+                RowStatus.Tone.LIVE -> GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(shown.tone.ink); setSize(dp(6), dp(6)) }
+                RowStatus.Tone.CATCHUP -> ArchiveIcon(shown.tone.ink, density)
+                else -> null
+            }
+            tag.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null)
+            progress?.show(shown.progress, shown.tone.edge)
+        }
+        tint()
     }
 
     private fun showPlaceholder(missing: Boolean) {
@@ -209,9 +273,47 @@ internal class LibraryPosterTile(context: Context, private val artworkOnly: Bool
     }
 
     private fun tint() {
-        title?.setTextColor(if (hasFocus()) GuideTheme.focusText else Color.WHITE)
-        detail?.setTextColor(if (hasFocus()) GuideTheme.focusText else Color.LTGRAY)
+        val tone = bound?.status?.tone?.takeIf { layout == Layout.LIST }
+        title?.setTextColor(if (hasFocus()) GuideTheme.focusText else tone?.title ?: Color.WHITE)
+        detail?.setTextColor(if (hasFocus()) GuideTheme.focusText else tone?.detail ?: Color.LTGRAY)
+        // The bar's track follows the text, so it still shows on a light focused row.
+        progress?.track(ColorUtils.setAlphaComponent(if (hasFocus()) GuideTheme.focusText else Color.WHITE, 0x40))
     }
+}
+
+/** How far the programme on now has run, under its times. */
+private class ProgressLine(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var fraction = 0f
+    private var color = Color.WHITE
+    private var trackColor = 0x40FFFFFF
+    fun show(value: Float, fill: Int) { fraction = value.coerceIn(0f, 1f); color = fill; invalidate() }
+    fun track(value: Int) { if (value != trackColor) { trackColor = value; invalidate() } }
+    override fun onDraw(canvas: Canvas) {
+        val radius = height / 2f
+        paint.color = trackColor; canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, paint)
+        paint.color = color; canvas.drawRoundRect(0f, 0f, width * fraction, height.toFloat(), radius, radius, paint)
+    }
+}
+
+/** The clock the guide draws beside a channel with catch-up, for the Catch-up tag. */
+private class ArchiveIcon(color: Int, private val density: Float) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.25f * density; this.color = color }
+    private val oval = RectF()
+    override fun draw(canvas: Canvas) {
+        val x = bounds.exactCenterX(); val y = bounds.exactCenterY(); val radius = 4.5f * density
+        oval.set(x - radius, y - radius, x + radius, y + radius)
+        canvas.drawArc(oval, -70f, 285f, false, paint)
+        canvas.drawLine(x, y, x, y - 3 * density, paint)
+        canvas.drawLine(x, y, x + 2.5f * density, y + density, paint)
+    }
+    override fun getIntrinsicWidth() = (11 * density).toInt()
+    override fun getIntrinsicHeight() = (11 * density).toInt()
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun getOpacity() = PixelFormat.TRANSLUCENT
 }
 
 /** Height of a grid tile whose poster area is [width] wide: 2:3 artwork, plus the caption block when it has one. */

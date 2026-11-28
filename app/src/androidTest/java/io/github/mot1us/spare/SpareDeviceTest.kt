@@ -683,9 +683,9 @@ class SpareDeviceTest {
             store.saveSources(listOf(source)); store.active = source.id; store.bindProvider(source)
             fun texts(view: View): List<String> = if (view is android.view.ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) }
                 else listOfNotNull((view as? TextView)?.takeIf { it.isShown }?.text?.toString())
-            /** Each programme row on screen as its texts, in list order. */
-            fun rows(activity: MainActivity): List<Pair<View, String>> = activity.window.decorView.findViewWithTag<RecyclerView>("library-items")?.let { list ->
-                (0 until list.childCount).map(list::getChildAt).sortedBy(list::getChildAdapterPosition).map { it to texts(it).joinToString(" | ") }
+            /** Each programme row on screen as its texts (its tag first), in list order. */
+            fun rows(activity: MainActivity): List<Pair<View, List<String>>> = activity.window.decorView.findViewWithTag<RecyclerView>("library-items")?.let { list ->
+                (0 until list.childCount).map(list::getChildAt).sortedBy(list::getChildAdapterPosition).map { it to texts(it) }
             }.orEmpty()
             try { ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 waitFor(scenario) { find<PlayerView>(it.window.decorView)?.player?.isPlaying == true && channelList(it)?.isShown != true }
@@ -700,10 +700,18 @@ class SpareDeviceTest {
                 waitFor(scenario) { a -> rows(a).map { it.second }.let { r -> r.size >= 4 && r.any { "Archived fixture" in it } } }
                 scenario.onActivity { activity ->
                     val shown = rows(activity).map { it.second }
-                    val archived = shown.indexOfFirst { it.startsWith("Archived fixture") }; val missing = shown.indexOfFirst { it.startsWith("Not archived fixture") }
-                    val now = shown.indexOfFirst { "| Now · " in it }; val later = shown.indexOfFirst { it.startsWith("Later fixture") }
+                    val archived = shown.indexOfFirst { "Archived fixture" in it }; val missing = shown.indexOfFirst { "Not archived fixture" in it }
+                    val now = shown.indexOfFirst { it.first() == "Live" }; val later = shown.indexOfFirst { "Later fixture" in it }
                     assertTrue("$shown", archived in 0 until missing && missing < now && now < later)
-                    assertTrue(shown[archived], shown[archived].endsWith("· Catch-up")); assertTrue(shown[missing], shown[missing].endsWith("· No catch-up"))
+                    // Each row starts with a tag for what OK does with it; the next programme says how soon it starts.
+                    assertEquals("$shown", listOf("Catch-up", "Aired", "Live"), listOf(archived, missing, now).map { shown[it].first() })
+                    assertTrue(shown[later].toString(), shown[later].first().startsWith("In "))
+                    assertTrue(shown[missing].toString(), shown[missing].last().endsWith("· No catch-up")); assertTrue(shown[now].toString(), shown[now].last().endsWith(" left"))
+                    val views = rows(activity).map { it.first }
+                    assertTrue("Only the programme on now shows how far it has run", views.withIndex().all { (i, row) -> row.findViewWithTag<View>("library-item-progress").isShown == (i == now) })
+                    fun titleColor(i: Int) = (views[i] as android.view.ViewGroup).let { row -> generateSequence(listOf<View>(row)) { level -> level.flatMap { v -> (v as? android.view.ViewGroup)?.let { g -> (0 until g.childCount).map(g::getChildAt) }.orEmpty() }.takeIf { it.isNotEmpty() } }.flatten() }
+                        .filterIsInstance<TextView>().first { it.text.toString() == shown[i][1] }.currentTextColor
+                    assertNotEquals("A programme with nothing to play is dimmed", titleColor(archived), titleColor(missing))
                     assertEquals("Holding Left keeps the channel", watching, find<PlayerView>(activity.window.decorView)!!.player!!.currentMediaItem!!.mediaId)
                     assertTrue(Diagnostics.report(), "Programme list opened" in Diagnostics.report())
                     // The cursor starts on what is on now.

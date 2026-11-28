@@ -878,10 +878,13 @@ class LibraryController(private val activity: Activity, private val store: Secur
         val days = ProgrammeHistory.days(channel)
         fun key(entry: ProgrammeHistory.Entry) = "history:${channel.id}:${entry.programme.start}"
         fun show(programmes: List<Programme>, archived: Set<Long>?, message: String, busy: Boolean, first: Boolean) {
-            val entries = ProgrammeHistory.entries(channel, programmes, archived, selected.allowHttp, System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            val entries = ProgrammeHistory.entries(channel, programmes, archived, selected.allowHttp, now)
             panel.page(title, if (entries.isEmpty() && !busy) "The guide has no programmes for this channel." else message, busy)
+            val next = entries.firstOrNull { it.state == ProgrammeHistory.State.LATER }
             val rows = entries.map { entry ->
-                BrowserRow(key(entry), entry.programme.title, ProgrammeHistory.detail(entry), description = entry.programme.description) {
+                BrowserRow(key(entry), entry.programme.title, ProgrammeHistory.detail(entry, now), description = entry.programme.description,
+                    status = ProgrammeHistory.status(entry, entry === next, now)) {
                     when (entry.state) {
                         ProgrammeHistory.State.NOW -> closed()
                         ProgrammeHistory.State.CATCHUP -> select(OnDemand("catchup:${channel.id}:${entry.programme.start}", entry.programme.title, channel.name, entry.replay.orEmpty(), "catchup", entry.programme.description))
@@ -960,7 +963,7 @@ class LibraryController(private val activity: Activity, private val store: Secur
         const val REFRESH_RETRY = 30 * 60000L
         /** A catalog read from this TV usually opens faster than this; only a slower one shows the loading steps. */
         const val LOADING_DELAY_MS = 300L
-        const val HISTORY_HINT = "OK plays a programme marked Catch-up · OK on Now returns to live"
+        const val HISTORY_HINT = "OK plays a programme marked Catch-up · OK on Live returns to the channel"
         /** How long the loading steps wait for a whole Movies or Series list before Library opens a category at a time. */
         const val WHOLE_WAIT_MS = 30_000L
         /** Tests shorten the wait. */

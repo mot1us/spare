@@ -22,8 +22,15 @@ class ProgrammeHistoryTest {
         assertTrue("A catch-up programme carries its replay address", entries[0].replay!!.contains("/timeshift/user/pass/60/"))
         assertNull("The programme on now plays live, not from the archive", entries[2].replay)
         assertEquals("The list starts on the programme on now", "On now", ProgrammeHistory.focus(entries)?.programme?.title)
-        assertTrue(ProgrammeHistory.detail(entries[0]).endsWith("· Catch-up")); assertTrue(ProgrammeHistory.detail(entries[1]).endsWith("· No catch-up"))
-        assertTrue(ProgrammeHistory.detail(entries[2]).startsWith("Now · "))
+        // Each row starts with a tag for its state; the next programme says how soon it starts.
+        val tags = entries.map { ProgrammeHistory.status(it, it === entries[3], now) }
+        assertEquals(listOf("Catch-up", "Aired", "Live", "In 30 min"), tags.map { it.label })
+        assertEquals(listOf(RowStatus.Tone.CATCHUP, RowStatus.Tone.AIRED, RowStatus.Tone.LIVE, RowStatus.Tone.UPCOMING), tags.map { it.tone })
+        assertEquals("Half of the programme on now has run", .5f, tags[2].progress, .001f)
+        assertTrue("Only the programme on now has a bar", tags.filterIndexed { i, _ -> i != 2 }.all { it.progress < 0f })
+        assertEquals("Upcoming", ProgrammeHistory.status(entries[3], next = false, now = now).label)
+        assertTrue(ProgrammeHistory.detail(entries[1], now).endsWith("· No catch-up")); assertTrue(ProgrammeHistory.detail(entries[2], now).endsWith("· 30 min left"))
+        assertEquals(listOf("1 min", "49 min", "2 h 12 min", "4 h", "7 h"), listOf(1L, 49 * 60_000L - 5_000, 132 * 60_000L, 240 * 60_000L - 1, 7 * hour + 20 * 60_000L).map(ProgrammeHistory::span))
         assertEquals(setOf("Today"), entries.map { it.day }.toSet())
     }
     @Test fun beforeTheProviderAnswersTheArchiveWindowDecidesAndAChannelWithoutCatchUpOffersNone() {

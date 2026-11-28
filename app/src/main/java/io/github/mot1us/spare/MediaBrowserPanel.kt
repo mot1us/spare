@@ -28,7 +28,9 @@ data class Spotlight(val meta: String, val plot: String, val backdrop: String)
 data class BrowserRow(val key: String, val title: String, val detail: String = "", val poster: String = "", val description: String = "", val requestPoster: (((String) -> Unit) -> Unit)? = null, val longPress: (() -> Unit)? = null,
     val backdrop: String = "",
     /** [detail] is the viewer's own (a resume point, a Watchlist note): the banner keeps it ahead of the provider's facts. */
-    val personal: Boolean = false, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
+    val personal: Boolean = false,
+    /** A programme list's row state: Live, Catch-up, Aired or upcoming, shown as a tag at the row's start. */
+    val status: RowStatus? = null, val select: () -> Unit) { val searchKey: String = ChannelSearch.key(title); val stableId = Channel.stableLongId(key) }
 
 /**
  * Library, laid out like streaming apps: a tab line (Movies, Series, Watchlist…) over a large artwork banner that
@@ -275,9 +277,9 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
                 holder.box.configure(if (grid) LibraryPosterTile.Layout.GRID else LibraryPosterTile.Layout.LIST, captioned = !postersOnly)
                 holder.box.appearance()
                 holder.box.tag = "library-item:${item.key}"
-                holder.box.contentDescription = "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
+                holder.box.contentDescription = item.status?.let { "${it.label}. " }.orEmpty() + "${item.title}. ${item.detail}" + if (favorite) ". In Watchlist" else ""
                 holder.box.bind(item.key, LibraryPosterTile.Content(
-                    (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster, if (favorite && postersOnly) "✓" else "",
+                    (if (favorite) "✓ " else "") + item.title, favoriteLabels[item.key] ?: item.detail, item.poster, if (favorite && postersOnly) "✓" else "", item.status,
                 ), images, artworkHttp, item.requestPoster, tileDecode)
                 holder.box.setOnClickListener { if (contentsAvailable) { hideKeyboard(); shownRows.getOrNull(holder.bindingAdapterPosition)?.select?.invoke() } }
                 holder.box.setOnLongClickListener { shownRows.getOrNull(holder.bindingAdapterPosition)?.longPress?.let { it(); true } ?: false }
@@ -448,7 +450,7 @@ class MediaBrowserPanel(context: Context, button: (String, () -> Unit) -> Button
         if (samePrefix) {
             for (index in old.indices) {
                 val before = old[index]; val after = values[index]
-                if (before.title != after.title || before.detail != after.detail || before.poster != after.poster || before.description != after.description) rows.adapter?.notifyItemChanged(index)
+                if (before.title != after.title || before.detail != after.detail || before.poster != after.poster || before.description != after.description || before.status != after.status) rows.adapter?.notifyItemChanged(index)
             }
             if (values.size > old.size) rows.adapter?.notifyItemRangeInserted(old.size, values.size - old.size)
         } else {

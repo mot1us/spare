@@ -30,13 +30,29 @@ object ProgrammeHistory {
     }
     /** Where the cursor starts: the programme on now, else the latest one that has ended. */
     fun focus(entries: List<Entry>): Entry? = entries.firstOrNull { it.state == State.NOW } ?: entries.lastOrNull { it.state == State.CATCHUP || it.state == State.PAST } ?: entries.firstOrNull()
-    fun detail(entry: Entry): String {
+    /** The row's times; the tag before them ([status]) says what OK does. */
+    fun detail(entry: Entry, now: Long): String {
         val time = "${GuideClock.dayTime(entry.programme.start)}–${GuideClock.time(entry.programme.end)}"
         return when (entry.state) {
-            State.NOW -> "Now · $time"
-            State.CATCHUP -> "$time · Catch-up"
+            State.NOW -> "$time · ${span(entry.programme.end - now)} left"
             State.PAST -> "$time · No catch-up"
-            State.LATER -> time
+            State.CATCHUP, State.LATER -> time
+        }
+    }
+    /** Live with how far it has run, Catch-up, Aired (no catch-up), or upcoming: [next] says how soon it starts. */
+    fun status(entry: Entry, next: Boolean, now: Long): RowStatus = when (entry.state) {
+        State.NOW -> RowStatus("Live", RowStatus.Tone.LIVE, (now - entry.programme.start).toFloat() / (entry.programme.end - entry.programme.start))
+        State.CATCHUP -> RowStatus("Catch-up", RowStatus.Tone.CATCHUP)
+        State.PAST -> RowStatus("Aired", RowStatus.Tone.AIRED)
+        State.LATER -> RowStatus(if (next) "In ${span(entry.programme.start - now)}" else "Upcoming", RowStatus.Tone.UPCOMING)
+    }
+    /** Whole minutes, rounded up: "49 min", "2 h 12 min"; from six hours, hours only. */
+    internal fun span(ms: Long): String {
+        val minutes = ((ms + 59_999) / 60_000).coerceAtLeast(1)
+        return when {
+            minutes < 60 -> "$minutes min"
+            minutes < 360 && minutes % 60 != 0L -> "${minutes / 60} h ${minutes % 60} min"
+            else -> "${minutes / 60} h"
         }
     }
 }
